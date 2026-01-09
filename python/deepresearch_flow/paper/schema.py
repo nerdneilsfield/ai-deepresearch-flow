@@ -46,7 +46,12 @@ def validate_schema(schema: dict[str, Any]) -> Draft7Validator:
     if items.get("type") != "string":
         raise SchemaError("'paper_authors' items must be strings")
 
-    return Draft7Validator(schema)
+    schema_for_validation = dict(schema)
+    if schema_for_validation.get("additionalProperties", True) is False:
+        schema_for_validation = dict(schema_for_validation)
+        schema_for_validation["additionalProperties"] = True
+
+    return Draft7Validator(schema_for_validation)
 
 
 def schema_to_prompt(schema: dict[str, Any]) -> str:

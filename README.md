@@ -34,6 +34,7 @@ Copy `config.example.toml` to `config.toml` and edit providers.
 - Custom templates run in single-stage extraction mode.
 - Built-in schemas require `publication_date` and `publication_venue`.
 - The `simple` template requires `abstract`, `keywords`, and a single-paragraph `summary` that covers the eight-question aspects.
+- Extraction tolerates minor JSON formatting errors and ignores extra top-level fields when required keys validate.
 
 ## Paper extraction
 

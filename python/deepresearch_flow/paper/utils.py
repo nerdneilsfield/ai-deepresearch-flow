@@ -5,8 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import Iterable
 import re
+from typing import Iterable
+
+import json_repair
 
 
 def discover_markdown(inputs: Iterable[str], glob_pattern: str | None) -> list[Path]:
@@ -105,7 +107,13 @@ def parse_json(text: str) -> dict:
         return json.loads(text)
     except json.JSONDecodeError:
         extracted = extract_json_from_text(text)
-        return json.loads(extracted)
+        try:
+            return json.loads(extracted)
+        except json.JSONDecodeError:
+            data = json_repair.loads(extracted, skip_json_loads=True)
+            if not isinstance(data, dict):
+                raise ValueError("Repaired JSON did not produce an object")
+            return data
 
 
 def split_output_name(path: Path) -> str:
