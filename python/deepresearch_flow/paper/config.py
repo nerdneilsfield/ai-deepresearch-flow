@@ -167,6 +167,10 @@ def load_config(path: str) -> PaperConfig:
         if isinstance(headers, dict):
             extra_headers = {str(k): str(v) for k, v in headers.items()}
 
+        model_list = _as_list(provider.get("model_list"))
+        if not model_list:
+            raise ValueError(f"Provider '{name}' must include model_list")
+
         providers.append(
             ProviderConfig(
                 name=name,
@@ -177,7 +181,7 @@ def load_config(path: str) -> PaperConfig:
                 extra_headers=extra_headers,
                 system_prompt=_as_str(provider.get("system_prompt"), None),
                 user_prompt=_as_str(provider.get("user_prompt"), None),
-                model_list=_as_list(provider.get("model_list")) or None,
+                model_list=model_list,
             )
         )
 

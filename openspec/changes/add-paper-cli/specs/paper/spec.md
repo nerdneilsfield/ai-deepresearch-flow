@@ -29,10 +29,14 @@ The system SHALL support restricting discovered files using a glob pattern.
 
 ### Requirement: Config-driven providers
 The system SHALL load providers from a TOML config file (default: `config.toml`) containing one or more `[[providers]]` entries.
-Each provider entry SHALL have a unique `name`.
+Each provider entry SHALL have a unique `name` and a non-empty `model_list`.
 
 #### Scenario: Reject config without providers
 - **WHEN** the config file contains zero `[[providers]]` entries
+- **THEN** the tool fails at startup with a validation error
+
+#### Scenario: Reject provider without model_list
+- **WHEN** a provider entry omits `model_list` or specifies an empty list
 - **THEN** the tool fails at startup with a validation error
 
 ### Requirement: Supported provider types

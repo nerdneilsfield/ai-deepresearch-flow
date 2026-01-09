@@ -21,6 +21,7 @@ type = "ollama"
 base_url = "http://localhost:11434"
 # api_keys is optional for ollama
 api_keys = []
+model_list = ["llama3.1"]
 structured_mode = "json_object" # json_schema | json_object | none
 extra_headers = {}
 
@@ -28,6 +29,7 @@ extra_headers = {}
 name = "dashscope"
 type = "dashscope"
 api_keys = ["env:DASHSCOPE_API_KEY"]
+model_list = ["qwen-max"]
 structured_mode = "none"
 extra_headers = {}
 
@@ -36,5 +38,6 @@ name = "openai"
 type = "openai_compatible"
 base_url = "https://api.openai.com/v1"
 api_keys = ["env:OPENAI_API_KEY"]
+model_list = ["gpt-4o-mini"]
 structured_mode = "json_schema" # json_schema | json_object | none
 extra_headers = { "X-Title" = "deepresearch-flow" }

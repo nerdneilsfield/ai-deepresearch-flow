@@ -20,6 +20,7 @@ Copy `config.example.toml` to `config.toml` and edit providers.
 
 - Providers are configured under `[[providers]]`.
 - Use `api_keys = ["env:OPENAI_API_KEY"]` to read from environment variables.
+- `model_list` is required for each provider and controls allowed `provider/model` values.
 - Explicit model routing is required: `--model provider/model`.
 - Supported provider types: `ollama`, `openai_compatible`, `dashscope`.
 
