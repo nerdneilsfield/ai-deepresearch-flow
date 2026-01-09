@@ -49,6 +49,10 @@ def short_hash(value: str) -> str:
     return hashlib.sha1(value.encode("utf-8", errors="ignore")).hexdigest()[:8]
 
 
+def stable_hash(value: str) -> str:
+    return hashlib.sha1(value.encode("utf-8", errors="ignore")).hexdigest()
+
+
 def truncate_content(
     content: str, max_chars: int, strategy: str
 ) -> tuple[str, dict[str, int | str] | None]:

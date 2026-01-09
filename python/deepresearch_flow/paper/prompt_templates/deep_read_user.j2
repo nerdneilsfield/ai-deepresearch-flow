@@ -1,9 +1,15 @@
 Template: deep_read
 
+{% if stage_name %}
+当前阶段：{{ stage_name }}。
+请仅输出 JSON，包含字段：{{ stage_fields | join(", ") }}。
+如需引用此前结果，可参考以下已完成模块（JSON）：{{ previous_outputs }}
+{% else %}
 注意：本工具是单次输出。请一次性完成所有模块内容，并填入 JSON 字段 module_a, module_b, module_c1..module_c7, module_d, module_e；可选 module_f, module_g, module_h 也请填入（若无法完成则填空字符串）。
 每个模块字段内部使用 Markdown 编排（标题、列表等）。
 禁止第一人称（不出现“我/我们/本人”）。
 关键结论需要注明来自论文的定位（章节/图/表/公式编号）。
+{% endif %}
 
 ---
 
@@ -17,7 +23,7 @@ Template: deep_read
 3. 输出形式：使用 Markdown；不省略推理过程；对关键结论给出“来自论文哪里”的定位（章节/图/表/公式编号）。
 4. 由浅入深：每个模块内按浅层/中层/深层组织。
 
-## 1) 模块表（本次单次输出需要全部完成）
+## 1) 模块表{% if not stage_name %}（本次单次输出需要全部完成）{% endif %}
 - 模块 A：阅读对齐与输入校验
 - 模块 B：第一遍鸟瞰扫描
 - 模块 C1~C7：七个问题逐个回答

@@ -30,7 +30,22 @@ def paper() -> None:
     help="Input markdown file or directory",
 )
 @click.option("-g", "--glob", "glob_pattern", default=None, help="Glob filter when input is a directory")
-@click.option("-s", "--schema", "schema_path", default=None, help="Path to JSON schema")
+@click.option(
+    "-s",
+    "--schema-json",
+    "--schema",
+    "schema_path",
+    default=None,
+    help="Path to JSON schema",
+)
+@click.option("--prompt-system", "prompt_system", default=None, help="Custom system prompt template path")
+@click.option("--prompt-user", "prompt_user", default=None, help="Custom user prompt template path")
+@click.option(
+    "--template-dir",
+    "template_dir",
+    default=None,
+    help="Directory containing system.j2, user.j2, schema.json, render.j2",
+)
 @click.option(
     "--prompt-template",
     "prompt_template",
@@ -62,6 +77,9 @@ def extract(
     schema_path: str | None,
     prompt_template: str,
     output_language: str,
+    prompt_system: str | None,
+    prompt_user: str | None,
+    template_dir: str | None,
     model_ref: str,
     output_path: str | None,
     errors_path: str | None,
@@ -100,12 +118,32 @@ def extract(
         if not resolved:
             raise click.ClickException(f"{provider.type} providers require api_keys")
 
-    if prompt_template != "simple" and (schema_path or config.extract.schema_path):
-        raise click.ClickException("Custom schema cannot be combined with built-in prompt templates")
+    if template_dir and (prompt_system or prompt_user or schema_path):
+        raise click.ClickException("template-dir cannot be combined with custom prompt or schema flags")
+
+    if (prompt_system and not prompt_user) or (prompt_user and not prompt_system):
+        raise click.ClickException("Both --prompt-system and --prompt-user are required")
+
+    custom_prompt = bool(prompt_system or prompt_user or template_dir)
+    if custom_prompt and prompt_template != "simple":
+        raise click.ClickException("Custom prompts cannot be combined with built-in prompt templates")
+
+    schema_override = schema_path or None
+    prompt_system_path = Path(prompt_system) if prompt_system else None
+    prompt_user_path = Path(prompt_user) if prompt_user else None
+    template_dir_path = Path(template_dir) if template_dir else None
+    if template_dir_path:
+        prompt_system_path = template_dir_path / "system.j2"
+        prompt_user_path = template_dir_path / "user.j2"
+        schema_override = str(template_dir_path / "schema.json")
+
+    for prompt_path in (prompt_system_path, prompt_user_path):
+        if prompt_path and not prompt_path.exists():
+            raise click.ClickException(f"Prompt template not found: {prompt_path}")
 
     try:
-        if schema_path:
-            schema = load_schema(schema_path)
+        if schema_override:
+            schema = load_schema(schema_override)
         elif prompt_template:
             schema = load_schema_for_template(prompt_template)
         else:
@@ -137,6 +175,9 @@ def extract(
             max_concurrency_override=max_concurrency,
             prompt_template=prompt_template,
             output_language=output_language,
+            custom_prompt=custom_prompt,
+            prompt_system_path=prompt_system_path,
+            prompt_user_path=prompt_user_path,
         )
     )
 

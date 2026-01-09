@@ -1,5 +1,11 @@
 Template: simple
 
+{% if stage_name %}
+Current stage: {{ stage_name }}.
+Return JSON with keys: {{ stage_fields | join(", ") }}.
+Previously completed outputs (JSON): {{ previous_outputs }}
+{% endif %}
+
 Document content:
 {{ content }}
 

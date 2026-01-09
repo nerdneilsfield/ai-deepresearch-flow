@@ -1,5 +1,10 @@
 Template: three_pass
 
+{% if stage_name %}
+Current stage: {{ stage_name }}.
+Return JSON with keys: {{ stage_fields | join(", ") }}.
+Previously completed outputs (JSON): {{ previous_outputs }}
+{% else %}
 Follow the three-pass reading method. Fill the JSON fields:
 - step1_summary: "Step 1" output (overview + innovation highlights + structure + figures + conclusion + references + open source).
 - step2_analysis: "Step 2" output (content comprehension + experiments + evidence + related work weaknesses).
@@ -28,6 +33,7 @@ Step 3 guidance:
 - Identify failure modes and reasons.
 - Assess strengths/weaknesses and possible fixes.
 - Suggest future research directions.
+{% endif %}
 
 Document content:
 {{ content }}

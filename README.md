@@ -27,6 +27,9 @@ Copy `config.example.toml` to `config.toml` and edit providers.
 - Built-in prompt templates for extraction: `simple`, `deep_read`, `seven_questions`, `three_pass`.
 - Render templates use `paper db render-md --template-name` with the same names.
 - `--language` defaults to `en`; extraction stores it as `output_language` and render uses that field.
+- Complex templates (`deep_read`, `seven_questions`, `three_pass`) run multi-stage extraction and persist per-document stage files under `paper_stage_outputs/`.
+- Custom templates: use `--prompt-system`/`--prompt-user` with `--schema-json`, or `--template-dir` containing `system.j2`, `user.j2`, `schema.json`, `render.j2`.
+- Custom templates run in single-stage extraction mode.
 
 ## Paper extraction
 
@@ -42,6 +45,20 @@ deepresearch-flow paper extract \
   --model openai/gpt-4o-mini \
   --prompt-template deep_read \
   --language zh
+
+# Use custom prompt + schema
+deepresearch-flow paper extract \
+  --input ./docs \
+  --model openai/gpt-4o-mini \
+  --prompt-system ./prompts/system.j2 \
+  --prompt-user ./prompts/user.j2 \
+  --schema-json ./prompts/schema.json
+
+# Use a full template directory
+deepresearch-flow paper extract \
+  --input ./docs \
+  --model openai/gpt-4o-mini \
+  --template-dir ./prompts
 
 # Filter with glob
 deepresearch-flow paper extract \
@@ -84,6 +101,16 @@ deepresearch-flow paper db render-md \
   --input paper_infos.json \
   --template-name deep_read \
   --language zh
+
+# Render with a custom markdown template
+deepresearch-flow paper db render-md \
+  --input paper_infos.json \
+  --markdown-template ./prompts/render.j2
+
+# Render using render.j2 from a template directory
+deepresearch-flow paper db render-md \
+  --input paper_infos.json \
+  --template-dir ./prompts
 
 # Generate tags
 deepresearch-flow paper db generate-tags \

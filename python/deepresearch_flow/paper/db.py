@@ -395,13 +395,25 @@ def register_db_commands(db_group: click.Group) -> None:
     @db_group.command("render-md")
     @click.option("--input", "input_path", required=True, help="Input JSON file path")
     @click.option("--output-dir", "output_dir", default="rendered_md", help="Output directory")
-    @click.option("--template", "template_path", default=None, help="Jinja2 template path")
+    @click.option(
+        "--markdown-template",
+        "--template",
+        "template_path",
+        default=None,
+        help="Jinja2 template path",
+    )
     @click.option(
         "--template-name",
         "template_name",
         default=None,
         type=click.Choice(list_template_names()),
         help="Built-in template name",
+    )
+    @click.option(
+        "--template-dir",
+        "template_dir",
+        default=None,
+        help="Directory containing render.j2",
     )
     @click.option(
         "--language",
@@ -415,13 +427,18 @@ def register_db_commands(db_group: click.Group) -> None:
         output_dir: str,
         template_path: str | None,
         template_name: str | None,
+        template_dir: str | None,
         output_language: str,
     ) -> None:
         papers = load_json(Path(input_path))
         out_dir = Path(output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
-        if template_path and template_name:
-            raise click.ClickException("Use either --template or --template-name, not both")
+        if sum(bool(item) for item in (template_path, template_name, template_dir)) > 1:
+            raise click.ClickException(
+                "Use only one of --markdown-template/--template, --template-name, or --template-dir"
+            )
+        if template_dir:
+            template_path = str(Path(template_dir) / "render.j2")
         if template_path:
             template = Environment(loader=FileSystemLoader(Path(template_path).parent)).get_template(
                 Path(template_path).name

@@ -8,6 +8,7 @@ from typing import Any
 import importlib.resources as resources
 
 from jinja2 import Environment
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -50,9 +51,42 @@ _TEMPLATES: dict[str, TemplateBundle] = {
     ),
 }
 
+_STAGE_KEYS: dict[str, list[str]] = {
+    "deep_read": [
+        "module_a",
+        "module_b",
+        "module_c1",
+        "module_c2",
+        "module_c3",
+        "module_c4",
+        "module_c5",
+        "module_c6",
+        "module_c7",
+        "module_d",
+        "module_e",
+        "module_f",
+        "module_g",
+        "module_h",
+    ],
+    "seven_questions": [
+        "question_1",
+        "question_2",
+        "question_3",
+        "question_4",
+        "question_5",
+        "question_6",
+        "question_7",
+    ],
+    "three_pass": ["step1_summary", "step2_analysis", "step3_analysis"],
+}
+
 
 def list_template_names() -> list[str]:
     return sorted(_TEMPLATES.keys())
+
+
+def get_stage_keys(template_name: str) -> list[str]:
+    return _STAGE_KEYS.get(template_name, [])
 
 
 def get_template_bundle(name: str) -> TemplateBundle:
@@ -76,14 +110,24 @@ def load_prompt_templates(
     content: str,
     schema: str,
     output_language: str,
+    stage_name: str | None = None,
+    stage_fields: list[str] | None = None,
+    previous_outputs: str | None = None,
 ) -> tuple[str, str]:
     bundle = get_template_bundle(name)
     env = Environment()
+    stage_fields = stage_fields or []
+    previous_outputs = previous_outputs or ""
     system_text = _render_prompt_template(
         "deepresearch_flow.paper.prompt_templates",
         bundle.prompt_system,
         env,
-        {"output_language": output_language},
+        {
+            "output_language": output_language,
+            "stage_name": stage_name,
+            "stage_fields": stage_fields,
+            "previous_outputs": previous_outputs,
+        },
     )
     user_text = _render_prompt_template(
         "deepresearch_flow.paper.prompt_templates",
@@ -93,6 +137,9 @@ def load_prompt_templates(
             "content": content,
             "schema": schema,
             "output_language": output_language,
+            "stage_name": stage_name,
+            "stage_fields": stage_fields,
+            "previous_outputs": previous_outputs,
         },
     )
     return system_text, user_text
@@ -105,6 +152,17 @@ def load_render_template(name: str):
     )
     with template_path.open("r", encoding="utf-8") as handle:
         return Environment().from_string(handle.read())
+
+
+def load_custom_prompt_templates(
+    system_path: Path,
+    user_path: Path,
+    context: dict[str, Any],
+) -> tuple[str, str]:
+    env = Environment()
+    system_text = env.from_string(system_path.read_text(encoding="utf-8")).render(**context)
+    user_text = env.from_string(user_path.read_text(encoding="utf-8")).render(**context)
+    return system_text, user_text
 
 
 def _render_prompt_template(
