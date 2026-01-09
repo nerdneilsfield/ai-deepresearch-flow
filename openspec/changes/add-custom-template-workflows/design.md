@@ -14,7 +14,9 @@ The system currently supports built-in template bundles for extract and render. 
 ## Decisions
 - Custom template inputs:
   - `--schema-json PATH` supplies a JSON Schema.
-  - `--prompt-file PATH` points to a directory containing `system.j2` and `user.j2` (separate files).
+  - Prompt templates can be supplied in two ways:
+    - `--prompt-system PATH` + `--prompt-user PATH`
+    - `--prompt-dir PATH` containing `system.j2` and `user.j2`
   - `--markdown-template PATH` supplies a Jinja2 template for render-md.
 - Multi-stage extraction:
   - Only for built-in templates: `deep_read`, `seven_questions`, `three_pass`.

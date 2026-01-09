@@ -1,8 +1,9 @@
 ## 1. Custom templates
-- [ ] 1.1 Add CLI flags: `--schema-json`, `--prompt-file`, `--markdown-template`.
+- [ ] 1.1 Add CLI flags: `--schema-json`, `--prompt-system`, `--prompt-user`, `--prompt-dir`, `--markdown-template`.
 - [ ] 1.2 Implement custom prompt loader from directory (`system.j2`, `user.j2`).
-- [ ] 1.3 Allow custom schema with custom prompt and validate against JSON Schema.
-- [ ] 1.4 Allow render-md to use `--markdown-template`.
+- [ ] 1.3 Allow custom prompt via explicit system/user files.
+- [ ] 1.4 Allow custom schema with custom prompt and validate against JSON Schema.
+- [ ] 1.5 Allow render-md to use `--markdown-template`.
 
 ## 2. Multi-stage extraction
 - [ ] 2.1 Define stage maps for `deep_read`, `seven_questions`, `three_pass`.

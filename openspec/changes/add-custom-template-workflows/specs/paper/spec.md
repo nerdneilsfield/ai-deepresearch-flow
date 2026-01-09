@@ -4,12 +4,17 @@
 The system SHALL allow users to provide custom extraction prompts, JSON Schema, and render templates.
 Custom inputs SHALL be provided via CLI flags:
 - `--schema-json` for a JSON Schema file
-- `--prompt-file` for a directory containing `system.j2` and `user.j2`
+- `--prompt-system` and `--prompt-user` for separate prompt files, or
+- `--prompt-dir` for a directory containing `system.j2` and `user.j2`
 - `--markdown-template` for a Jinja2 render template
 
 #### Scenario: Use custom prompt and schema
-- **WHEN** the user runs `deepresearch-flow paper extract --prompt-file ./prompts --schema-json ./schema.json`
+- **WHEN** the user runs `deepresearch-flow paper extract --prompt-system ./system.j2 --prompt-user ./user.j2 --schema-json ./schema.json`
 - **THEN** the extractor uses the custom prompts and validates output against the provided schema
+
+#### Scenario: Use prompt directory
+- **WHEN** the user runs `deepresearch-flow paper extract --prompt-dir ./prompts`
+- **THEN** the extractor loads `system.j2` and `user.j2` from the directory
 
 #### Scenario: Use custom markdown template
 - **WHEN** the user runs `deepresearch-flow paper db render-md --markdown-template ./render.j2`
