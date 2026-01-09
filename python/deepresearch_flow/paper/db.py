@@ -285,7 +285,13 @@ def register_db_commands(db_group: click.Group) -> None:
             config = load_config(config_path)
             provider, model_name = parse_model_ref(model_ref, config.providers)
             keys = resolve_api_keys(provider.api_keys)
-            if provider.type in {"openai_compatible", "dashscope"} and not keys:
+            if provider.type in {
+                "openai_compatible",
+                "dashscope",
+                "gemini_ai_studio",
+                "azure_openai",
+                "claude",
+            } and not keys:
                 raise click.ClickException(f"{provider.type} providers require api_keys")
 
             papers = load_json(Path(input_path))

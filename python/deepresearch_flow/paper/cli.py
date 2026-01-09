@@ -71,7 +71,13 @@ def extract(
     if max_concurrency is not None and max_concurrency <= 0:
         raise click.ClickException("--max-concurrency must be positive")
 
-    if provider.type in {"openai_compatible", "dashscope"}:
+    if provider.type in {
+        "openai_compatible",
+        "dashscope",
+        "gemini_ai_studio",
+        "azure_openai",
+        "claude",
+    }:
         resolved = resolve_api_keys(provider.api_keys)
         if not resolved:
             raise click.ClickException(f"{provider.type} providers require api_keys")

@@ -41,3 +41,41 @@ api_keys = ["env:OPENAI_API_KEY"]
 model_list = ["gpt-4o-mini"]
 structured_mode = "json_schema" # json_schema | json_object | none
 extra_headers = { "X-Title" = "deepresearch-flow" }
+
+[[providers]]
+name = "gemini_ai_studio"
+type = "gemini_ai_studio"
+api_keys = ["env:GEMINI_API_KEY"]
+model_list = ["gemini-2.0-flash"]
+structured_mode = "none"
+extra_headers = {}
+
+[[providers]]
+name = "gemini_vertex"
+type = "gemini_vertex"
+project_id = "my-gcp-project"
+location = "us-central1"
+# credentials_path = "/path/to/service-account.json"
+model_list = ["gemini-2.0-flash"]
+structured_mode = "none"
+extra_headers = {}
+
+[[providers]]
+name = "azure_openai"
+type = "azure_openai"
+endpoint = "https://my-resource.openai.azure.com"
+api_version = "2024-02-15-preview"
+deployment = "gpt-4o-mini"
+api_keys = ["env:AZURE_OPENAI_API_KEY"]
+model_list = ["gpt-4o-mini"]
+structured_mode = "json_schema"
+extra_headers = {}
+
+[[providers]]
+name = "claude"
+type = "claude"
+api_keys = ["env:ANTHROPIC_API_KEY"]
+anthropic_version = "2024-02-15"
+model_list = ["claude-sonnet-4-5-20250929"]
+structured_mode = "none"
+extra_headers = {}

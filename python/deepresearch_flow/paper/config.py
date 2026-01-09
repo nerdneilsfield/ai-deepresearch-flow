@@ -34,11 +34,17 @@ class ProviderConfig:
     type: str
     base_url: str
     api_keys: list[str]
+    api_version: str | None
+    deployment: str | None
+    project_id: str | None
+    location: str | None
+    credentials_path: str | None
+    anthropic_version: str | None
     structured_mode: str
     extra_headers: dict[str, str]
     system_prompt: str | None
     user_prompt: str | None
-    model_list: list[str] | None
+    model_list: list[str]
 
 
 @dataclass(frozen=True)
@@ -138,15 +144,20 @@ def load_config(path: str) -> PaperConfig:
             raise ValueError("Each provider must include name and type")
 
         base_url = _as_str(provider.get("base_url"))
+        endpoint = _as_str(provider.get("endpoint"))
         if not base_url:
             if provider_type == "ollama":
                 base_url = "http://localhost:11434"
             elif provider_type == "openai_compatible":
                 base_url = "https://api.openai.com/v1"
-            elif provider_type == "dashscope":
+            elif provider_type == "azure_openai" and endpoint:
+                base_url = endpoint
+            elif provider_type in {"dashscope", "gemini_ai_studio", "gemini_vertex", "claude"}:
                 base_url = ""
             else:
                 raise ValueError(f"Provider '{name}' requires base_url")
+        elif provider_type == "azure_openai" and endpoint:
+            base_url = endpoint
 
         api_keys = _as_list(provider.get("api_keys"))
         if not api_keys:
@@ -157,7 +168,7 @@ def load_config(path: str) -> PaperConfig:
         if structured_mode is None:
             if provider_type == "ollama":
                 structured_mode = "json_object"
-            elif provider_type == "dashscope":
+            elif provider_type in {"dashscope", "gemini_ai_studio", "gemini_vertex", "claude"}:
                 structured_mode = "none"
             else:
                 structured_mode = "json_schema"
@@ -171,12 +182,45 @@ def load_config(path: str) -> PaperConfig:
         if not model_list:
             raise ValueError(f"Provider '{name}' must include model_list")
 
+        api_version = _as_str(provider.get("api_version"), None)
+        deployment = _as_str(provider.get("deployment"), None)
+        project_id = _as_str(provider.get("project_id"), None)
+        location = _as_str(provider.get("location"), None)
+        credentials_path = _as_str(provider.get("credentials_path"), None)
+        anthropic_version = _as_str(provider.get("anthropic_version"), None)
+
+        if provider_type == "azure_openai":
+            if not base_url:
+                raise ValueError(f"Provider '{name}' requires endpoint")
+            if not api_version:
+                raise ValueError(f"Provider '{name}' requires api_version")
+            if not deployment:
+                raise ValueError(f"Provider '{name}' requires deployment")
+        if provider_type == "gemini_ai_studio" and not api_keys:
+            raise ValueError(f"Provider '{name}' requires api_keys")
+        if provider_type == "gemini_vertex":
+            if not project_id:
+                raise ValueError(f"Provider '{name}' requires project_id")
+            if not location:
+                raise ValueError(f"Provider '{name}' requires location")
+        if provider_type == "claude":
+            if not api_keys:
+                raise ValueError(f"Provider '{name}' requires api_keys")
+            if not anthropic_version:
+                raise ValueError(f"Provider '{name}' requires anthropic_version")
+
         providers.append(
             ProviderConfig(
                 name=name,
                 type=provider_type,
                 base_url=base_url,
                 api_keys=api_keys,
+                api_version=api_version,
+                deployment=deployment,
+                project_id=project_id,
+                location=location,
+                credentials_path=credentials_path,
+                anthropic_version=anthropic_version,
                 structured_mode=structured_mode,
                 extra_headers=extra_headers,
                 system_prompt=_as_str(provider.get("system_prompt"), None),

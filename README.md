@@ -22,7 +22,8 @@ Copy `config.example.toml` to `config.toml` and edit providers.
 - Use `api_keys = ["env:OPENAI_API_KEY"]` to read from environment variables.
 - `model_list` is required for each provider and controls allowed `provider/model` values.
 - Explicit model routing is required: `--model provider/model`.
-- Supported provider types: `ollama`, `openai_compatible`, `dashscope`.
+- Supported provider types: `ollama`, `openai_compatible`, `dashscope`, `gemini_ai_studio`, `gemini_vertex`, `azure_openai`, `claude`.
+- Provider-specific fields: `azure_openai` requires `endpoint`, `api_version`, `deployment`; `gemini_vertex` requires `project_id`, `location`; `claude` requires `anthropic_version`.
 
 ## Paper extraction
 
