@@ -188,10 +188,23 @@ def extract(
         raise click.ClickException(
             "Use only one of --render-markdown-template/--render-template, --render-template-name, or --render-template-dir"
         )
-    if render_template_path and not Path(render_template_path).exists():
-        raise click.ClickException(f"Render template not found: {render_template_path}")
-    if render_template_dir:
-        render_template_dir_path = Path(render_template_dir)
+    render_template_path_effective = render_template_path
+    render_template_name_effective = render_template_name
+    render_template_dir_effective = render_template_dir
+
+    if render_md and not any(
+        item is not None
+        for item in (render_template_path, render_template_name, render_template_dir)
+    ):
+        if template_dir:
+            render_template_dir_effective = template_dir
+        elif not custom_prompt:
+            render_template_name_effective = prompt_template
+
+    if render_template_path_effective and not Path(render_template_path_effective).exists():
+        raise click.ClickException(f"Render template not found: {render_template_path_effective}")
+    if render_template_dir_effective:
+        render_template_dir_path = Path(render_template_dir_effective)
         render_template_file = render_template_dir_path / "render.j2"
         if not render_template_file.exists():
             raise click.ClickException(f"Render template not found: {render_template_file}")
@@ -237,9 +250,9 @@ def extract(
             prompt_user_path=prompt_user_path,
             render_md=render_md,
             render_output_dir=Path(render_output_dir),
-            render_template_path=render_template_path,
-            render_template_name=render_template_name,
-            render_template_dir=render_template_dir,
+            render_template_path=render_template_path_effective,
+            render_template_name=render_template_name_effective,
+            render_template_dir=render_template_dir_effective,
             verbose=verbose,
         )
     )

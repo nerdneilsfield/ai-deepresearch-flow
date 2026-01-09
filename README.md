@@ -85,6 +85,13 @@ deepresearch-flow paper extract \
   --render-md \
   --render-template-name simple \
   --render-output-dir rendered_md
+
+# Extract + render using the same built-in template (defaults to prompt template)
+deepresearch-flow paper extract \
+  --input ./docs \
+  --model openai/gpt-4o-mini \
+  --prompt-template seven_questions \
+  --render-md
 ```
 
 Outputs:
@@ -99,6 +106,8 @@ Incremental behavior:
 - Use `--force` to re-extract everything.
 - Use `--retry-failed` to retry only failed documents listed in `paper_errors.json`.
 - Use `--verbose` for detailed logs alongside progress bars.
+- Extract-time rendering defaults to the same built-in template as `--prompt-template`.
+- If `--template-dir` is used for prompts, `--render-md` reuses its `render.j2` unless overridden.
 
 ## Paper database commands
 
