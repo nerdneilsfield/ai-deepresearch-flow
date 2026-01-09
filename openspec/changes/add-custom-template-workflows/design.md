@@ -23,8 +23,12 @@ The system currently supports built-in template bundles for extract and render. 
   - Only for built-in templates: `deep_read`, `seven_questions`, `three_pass`.
   - Stage calls are sequential per document; concurrency applies at the stage level across documents.
   - Each stage call receives: prompt template + document content + previously completed module outputs.
+- Per-stage validation:
+  - Each stage must return valid JSON and include stage-specific keys before the pipeline proceeds.
+  - Stage-level retries apply to the per-stage validation result to avoid cascading failures.
 - Persistence:
-  - After each stage, write/update an intermediate JSON file alongside aggregated output (e.g., `paper_stage_outputs.json`).
+  - Persist per-document stage outputs into a dedicated directory (default: `paper_stage_outputs/`).
+  - Each document writes to its own stage file to avoid concurrent writes (e.g., `paper_stage_outputs/<hash>.json`).
   - Each stage entry includes `source_path`, `source_hash`, `prompt_template`, `stage_name`, and `output_language`.
 
 ## Risks / Trade-offs

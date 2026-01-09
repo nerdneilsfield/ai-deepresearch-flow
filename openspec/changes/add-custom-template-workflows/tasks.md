@@ -8,8 +8,9 @@
 ## 2. Multi-stage extraction
 - [ ] 2.1 Define stage maps for `deep_read`, `seven_questions`, `three_pass`.
 - [ ] 2.2 Implement per-stage extraction pipeline with stage-level retries.
-- [ ] 2.3 Persist intermediate stage outputs to a stage-output file.
-- [ ] 2.4 Merge stage outputs into final JSON result.
+- [ ] 2.3 Add per-stage validation (JSON + required stage keys).
+- [ ] 2.4 Persist intermediate stage outputs per document in `paper_stage_outputs/`.
+- [ ] 2.5 Merge stage outputs into final JSON result.
 
 ## 3. Documentation
 - [ ] 3.1 Document custom template flags and stage-output behavior in README.
