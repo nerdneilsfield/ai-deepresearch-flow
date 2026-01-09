@@ -19,13 +19,20 @@ def paper() -> None:
 
 
 @paper.command()
-@click.option("--config", "config_path", default="config.toml", help="Path to config.toml")
-@click.option("--input", "inputs", multiple=True, required=True, help="Input markdown file or directory")
-@click.option("--glob", "glob_pattern", default=None, help="Glob filter when input is a directory")
-@click.option("--schema", "schema_path", default=None, help="Path to JSON schema")
-@click.option("--model", "model_ref", required=True, help="provider/model")
-@click.option("--output", "output_path", default=None, help="Aggregated JSON output path")
-@click.option("--errors", "errors_path", default=None, help="Error JSON output path")
+@click.option("-c", "--config", "config_path", default="config.toml", help="Path to config.toml")
+@click.option(
+    "-i",
+    "--input",
+    "inputs",
+    multiple=True,
+    required=True,
+    help="Input markdown file or directory",
+)
+@click.option("-g", "--glob", "glob_pattern", default=None, help="Glob filter when input is a directory")
+@click.option("-s", "--schema", "schema_path", default=None, help="Path to JSON schema")
+@click.option("-m", "--model", "model_ref", required=True, help="provider/model")
+@click.option("-o", "--output", "output_path", default=None, help="Aggregated JSON output path")
+@click.option("-e", "--errors", "errors_path", default=None, help="Error JSON output path")
 @click.option("--split", is_flag=True, help="Write per-document JSON outputs")
 @click.option("--split-dir", "split_dir", default=None, help="Directory for split outputs")
 @click.option("--force", is_flag=True, help="Force re-extraction")
