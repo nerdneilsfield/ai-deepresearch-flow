@@ -20,6 +20,12 @@ class TemplateBundle:
     render_template: str
 
 
+@dataclass(frozen=True)
+class StageDefinition:
+    name: str
+    fields: list[str]
+
+
 _TEMPLATES: dict[str, TemplateBundle] = {
     "simple": TemplateBundle(
         name="simple",
@@ -35,12 +41,12 @@ _TEMPLATES: dict[str, TemplateBundle] = {
         schema_file="deep_read_schema.json",
         render_template="deep_read.md.j2",
     ),
-    "seven_questions": TemplateBundle(
-        name="seven_questions",
-        prompt_system="seven_questions_system.j2",
-        prompt_user="seven_questions_user.j2",
-        schema_file="seven_questions_schema.json",
-        render_template="seven_questions.md.j2",
+    "eight_questions": TemplateBundle(
+        name="eight_questions",
+        prompt_system="eight_questions_system.j2",
+        prompt_user="eight_questions_user.j2",
+        schema_file="eight_questions_schema.json",
+        render_template="eight_questions.md.j2",
     ),
     "three_pass": TemplateBundle(
         name="three_pass",
@@ -51,33 +57,39 @@ _TEMPLATES: dict[str, TemplateBundle] = {
     ),
 }
 
-_STAGE_KEYS: dict[str, list[str]] = {
+_STAGES: dict[str, list[StageDefinition]] = {
     "deep_read": [
-        "module_a",
-        "module_b",
-        "module_c1",
-        "module_c2",
-        "module_c3",
-        "module_c4",
-        "module_c5",
-        "module_c6",
-        "module_c7",
-        "module_d",
-        "module_e",
-        "module_f",
-        "module_g",
-        "module_h",
+        StageDefinition("module_a", ["module_a"]),
+        StageDefinition("module_b", ["module_b"]),
+        StageDefinition("module_c1", ["module_c1"]),
+        StageDefinition("module_c2", ["module_c2"]),
+        StageDefinition("module_c3", ["module_c3"]),
+        StageDefinition("module_c4", ["module_c4"]),
+        StageDefinition("module_c5", ["module_c5"]),
+        StageDefinition("module_c6", ["module_c6"]),
+        StageDefinition("module_c7", ["module_c7"]),
+        StageDefinition("module_c8", ["module_c8"]),
+        StageDefinition("module_d", ["module_d"]),
+        StageDefinition("module_e", ["module_e"]),
+        StageDefinition("module_f", ["module_f"]),
+        StageDefinition("module_g", ["module_g"]),
+        StageDefinition("module_h", ["module_h"]),
     ],
-    "seven_questions": [
-        "question_1",
-        "question_2",
-        "question_3",
-        "question_4",
-        "question_5",
-        "question_6",
-        "question_7",
+    "eight_questions": [
+        StageDefinition(
+            "questions_1to4",
+            ["question1", "question2", "question3", "question4"],
+        ),
+        StageDefinition(
+            "questions_5to8",
+            ["question5", "question6", "question7", "question8"],
+        ),
     ],
-    "three_pass": ["step1_summary", "step2_analysis", "step3_analysis"],
+    "three_pass": [
+        StageDefinition("step1_summary", ["step1_summary"]),
+        StageDefinition("step2_analysis", ["step2_analysis"]),
+        StageDefinition("step3_analysis", ["step3_analysis"]),
+    ],
 }
 
 
@@ -85,8 +97,8 @@ def list_template_names() -> list[str]:
     return sorted(_TEMPLATES.keys())
 
 
-def get_stage_keys(template_name: str) -> list[str]:
-    return _STAGE_KEYS.get(template_name, [])
+def get_stage_definitions(template_name: str) -> list[StageDefinition]:
+    return _STAGES.get(template_name, [])
 
 
 def get_template_bundle(name: str) -> TemplateBundle:

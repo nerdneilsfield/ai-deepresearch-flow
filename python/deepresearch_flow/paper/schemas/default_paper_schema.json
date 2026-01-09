@@ -4,7 +4,12 @@
   "additionalProperties": false,
   "required": [
     "paper_title",
-    "paper_authors"
+    "paper_authors",
+    "publication_date",
+    "publication_venue",
+    "abstract",
+    "keywords",
+    "summary"
   ],
   "properties": {
     "paper_title": {
@@ -21,6 +26,9 @@
       "type": "string"
     },
     "publication_date": {
+      "type": "string"
+    },
+    "publication_venue": {
       "type": "string"
     },
     "keywords": {

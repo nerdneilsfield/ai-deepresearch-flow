@@ -24,12 +24,15 @@ Copy `config.example.toml` to `config.toml` and edit providers.
 - Explicit model routing is required: `--model provider/model`.
 - Supported provider types: `ollama`, `openai_compatible`, `dashscope`, `gemini_ai_studio`, `gemini_vertex`, `azure_openai`, `claude`.
 - Provider-specific fields: `azure_openai` requires `endpoint`, `api_version`, `deployment`; `gemini_vertex` requires `project_id`, `location`; `claude` requires `anthropic_version`.
-- Built-in prompt templates for extraction: `simple`, `deep_read`, `seven_questions`, `three_pass`.
+- Built-in prompt templates for extraction: `simple`, `deep_read`, `eight_questions`, `three_pass`.
+- Template rename: `seven_questions` is now `eight_questions`.
 - Render templates use `paper db render-md --template-name` with the same names.
 - `--language` defaults to `en`; extraction stores it as `output_language` and render uses that field.
-- Complex templates (`deep_read`, `seven_questions`, `three_pass`) run multi-stage extraction and persist per-document stage files under `paper_stage_outputs/`.
+- Complex templates (`deep_read`, `eight_questions`, `three_pass`) run multi-stage extraction and persist per-document stage files under `paper_stage_outputs/`.
 - Custom templates: use `--prompt-system`/`--prompt-user` with `--schema-json`, or `--template-dir` containing `system.j2`, `user.j2`, `schema.json`, `render.j2`.
 - Custom templates run in single-stage extraction mode.
+- Built-in schemas require `publication_date` and `publication_venue`.
+- The `simple` template requires `abstract`, `keywords`, and a single-paragraph `summary` that covers the eight-question aspects.
 
 ## Paper extraction
 
@@ -90,7 +93,7 @@ deepresearch-flow paper extract \
 deepresearch-flow paper extract \
   --input ./docs \
   --model openai/gpt-4o-mini \
-  --prompt-template seven_questions \
+  --prompt-template eight_questions \
   --render-md
 ```
 

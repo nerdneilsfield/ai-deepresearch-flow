@@ -1,18 +1,21 @@
 # {{ paper_title }}
 
-**Authors:** {{ paper_authors | join(", ") }}
+{% set is_zh = output_language == "zh" %}
+**{{ "作者" if is_zh else "Authors" }}:** {{ paper_authors | join(", ") }}
 
-{% if output_language %}**Output Language:** {{ output_language }}
+{% if output_language %}**{{ "输出语言" if is_zh else "Output Language" }}:** {{ output_language }}
 {% endif %}
-{% if publication_date %}**Publication Date:** {{ publication_date }}
+{% if publication_date %}**{{ "发表日期" if is_zh else "Publication Date" }}:** {{ publication_date }}
 {% endif %}
-{% if keywords %}**Keywords:** {{ keywords | join(", ") }}
+{% if publication_venue %}**{{ "期刊/会议" if is_zh else "Publication Venue" }}:** {{ publication_venue }}
+{% endif %}
+{% if keywords %}**{{ "关键词" if is_zh else "Keywords" }}:** {{ keywords | join(", ") }}
 {% endif %}
 
-{% if abstract %}## Abstract
+{% if abstract %}## {{ "摘要" if is_zh else "Abstract" }}
 {{ abstract }}
 {% endif %}
 
-{% if summary %}## Summary
+{% if summary %}## {{ "总结" if is_zh else "Summary" }}
 {{ summary }}
 {% endif %}

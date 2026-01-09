@@ -5,6 +5,8 @@
   "required": [
     "paper_title",
     "paper_authors",
+    "publication_date",
+    "publication_venue",
     "module_a",
     "module_b",
     "module_c1",
@@ -14,6 +16,7 @@
     "module_c5",
     "module_c6",
     "module_c7",
+    "module_c8",
     "module_d",
     "module_e",
     "module_h"
@@ -21,6 +24,8 @@
   "properties": {
     "paper_title": {"type": "string", "minLength": 1},
     "paper_authors": {"type": "array", "items": {"type": "string"}},
+    "publication_date": {"type": "string"},
+    "publication_venue": {"type": "string"},
     "module_a": {"type": "string"},
     "module_b": {"type": "string"},
     "module_c1": {"type": "string"},
@@ -30,6 +35,7 @@
     "module_c5": {"type": "string"},
     "module_c6": {"type": "string"},
     "module_c7": {"type": "string"},
+    "module_c8": {"type": "string"},
     "module_d": {"type": "string"},
     "module_e": {"type": "string"},
     "module_f": {"type": "string"},

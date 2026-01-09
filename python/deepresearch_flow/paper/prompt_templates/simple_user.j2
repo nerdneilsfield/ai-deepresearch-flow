@@ -4,6 +4,16 @@ Template: simple
 Current stage: {{ stage_name }}.
 Return JSON with keys: {{ stage_fields | join(", ") }}.
 Previously completed outputs (JSON): {{ previous_outputs }}
+{% else %}
+Write a single-paragraph summary that covers:
+- the problem being solved
+- related research context
+- the proposed solution
+- datasets and implementation settings (why chosen, what they validate)
+- metrics and results (what metrics, key results, which innovations they support)
+- further exploration directions
+- real-world scenarios and constraints
+- the main content summary with one core formula/mechanism
 {% endif %}
 
 Document content:

@@ -21,7 +21,7 @@ from deepresearch_flow.paper.prompts import DEFAULT_SYSTEM_PROMPT, DEFAULT_USER_
 from deepresearch_flow.paper.render import render_papers, resolve_render_template
 from deepresearch_flow.paper.schema import schema_to_prompt, validate_schema
 from deepresearch_flow.paper.template_registry import (
-    get_stage_keys,
+    get_stage_definitions,
     load_custom_prompt_templates,
     load_prompt_templates,
 )
@@ -194,22 +194,25 @@ def write_json_atomic(path: Path, data: Any) -> None:
     tmp_path.replace(path)
 
 
-def build_stage_schema(base_schema: dict[str, Any], stage_key: str) -> dict[str, Any]:
+def build_stage_schema(
+    base_schema: dict[str, Any], required_fields: list[str]
+) -> dict[str, Any]:
     properties = base_schema.get("properties", {})
-    stage_prop = properties.get(stage_key) or {"type": "string"}
+    unique_fields: list[str] = []
+    for field in required_fields:
+        if field not in unique_fields:
+            unique_fields.append(field)
+
+    stage_properties: dict[str, Any] = {}
+    for field in unique_fields:
+        stage_properties[field] = properties.get(field, {"type": "string"})
+
     return {
         "$schema": base_schema.get("$schema", "http://json-schema.org/draft-07/schema#"),
         "type": "object",
         "additionalProperties": True,
-        "required": ["paper_title", "paper_authors", stage_key],
-        "properties": {
-            "paper_title": properties.get("paper_title", {"type": "string"}),
-            "paper_authors": properties.get(
-                "paper_authors",
-                {"type": "array", "items": {"type": "string"}},
-            ),
-            stage_key: stage_prop,
-        },
+        "required": unique_fields,
+        "properties": stage_properties,
     }
 
 
@@ -343,8 +346,8 @@ async def extract_documents(
 
     errors: list[ExtractionError] = []
     results: dict[str, dict[str, Any]] = {}
-    stage_keys = get_stage_keys(prompt_template) if not custom_prompt else []
-    multi_stage = bool(stage_keys)
+    stage_definitions = get_stage_definitions(prompt_template) if not custom_prompt else []
+    multi_stage = bool(stage_definitions)
     stage_output_dir = Path("paper_stage_outputs")
     if multi_stage:
         stage_output_dir.mkdir(parents=True, exist_ok=True)
@@ -353,7 +356,7 @@ async def extract_documents(
     stage_bar: tqdm | None = None
     doc_bar = tqdm(total=len(markdown_files), desc="documents", unit="doc", position=0)
     if multi_stage and markdown_files:
-        stage_total = len(markdown_files) * len(stage_keys)
+        stage_total = len(markdown_files) * len(stage_definitions)
         stage_bar = tqdm(
             total=stage_total,
             desc="stages",
@@ -378,7 +381,7 @@ async def extract_documents(
                 if existing_entry and existing_entry.get("source_hash") == source_hash:
                     results[source_path] = existing_entry
                     if stage_bar:
-                        stage_bar.update(len(stage_keys))
+                        stage_bar.update(len(stage_definitions))
                     return
 
             truncated_content, truncation = truncate_content(
@@ -403,14 +406,23 @@ async def extract_documents(
 
             if multi_stage and stage_state is not None and stage_path is not None:
                 stages: dict[str, dict[str, Any]] = stage_state.get("stages", {})
-                for stage_key in stage_keys:
-                    current_stage = stage_key
-                    if stage_key in stages and not force:
+                metadata_fields = [
+                    "paper_title",
+                    "paper_authors",
+                    "publication_date",
+                    "publication_venue",
+                ]
+                for stage_def in stage_definitions:
+                    stage_name = stage_def.name
+                    stage_fields = stage_def.fields
+                    current_stage = stage_name
+                    if stage_name in stages and not force:
                         if stage_bar:
                             stage_bar.update(1)
                         continue
                     try:
-                        stage_schema = build_stage_schema(schema, stage_key)
+                        required_fields = metadata_fields + stage_fields
+                        stage_schema = build_stage_schema(schema, required_fields)
                         stage_validator = validate_schema(stage_schema)
                         previous_outputs = json.dumps(stages, ensure_ascii=False)
                         messages = build_messages(
@@ -422,8 +434,8 @@ async def extract_documents(
                             custom_prompt=False,
                             prompt_system_path=None,
                             prompt_user_path=None,
-                            stage_name=stage_key,
-                            stage_fields=["paper_title", "paper_authors", stage_key],
+                            stage_name=stage_name,
+                            stage_fields=required_fields,
                             previous_outputs=previous_outputs,
                         )
                         async with semaphore:
@@ -441,7 +453,7 @@ async def extract_documents(
                                 client=client,
                                 validator=stage_validator,
                             )
-                        stages[stage_key] = data
+                        stages[stage_name] = data
                         stage_state["stages"] = stages
                         write_json_atomic(stage_path, stage_state)
                     finally:
@@ -449,8 +461,8 @@ async def extract_documents(
                             stage_bar.update(1)
 
                 merged: dict[str, Any] = {}
-                for stage_key in stage_keys:
-                    merged.update(stages.get(stage_key, {}))
+                for stage_def in stage_definitions:
+                    merged.update(stages.get(stage_def.name, {}))
                 errors_in_doc = sorted(validator.iter_errors(merged), key=lambda e: e.path)
                 if errors_in_doc:
                     raise ProviderError(
