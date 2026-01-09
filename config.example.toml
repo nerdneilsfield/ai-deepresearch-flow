@@ -1,0 +1,33 @@
+[extract]
+# If omitted, the built-in schema is used.
+# schema_path = "schemas/paper.json"
+output = "paper_infos.json"
+errors = "paper_errors.json"
+max_concurrency = 6
+max_retries = 3
+backoff_base_seconds = 1.0
+backoff_max_seconds = 20.0
+truncate_strategy = "head_tail" # head | head_tail
+truncate_max_chars = 20000
+cost_estimate = true
+
+[render]
+# If omitted, the built-in markdown template is used.
+# template_path = "templates/paper.md.j2"
+
+[[providers]]
+name = "ollama"
+type = "ollama"
+base_url = "http://localhost:11434"
+# api_keys is optional for ollama
+api_keys = []
+structured_mode = "json_object" # json_schema | json_object | none
+extra_headers = {}
+
+[[providers]]
+name = "openai"
+type = "openai_compatible"
+base_url = "https://api.openai.com/v1"
+api_keys = ["env:OPENAI_API_KEY"]
+structured_mode = "json_schema" # json_schema | json_object | none
+extra_headers = { "X-Title" = "deepresearch-flow" }

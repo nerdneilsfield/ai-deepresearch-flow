@@ -208,3 +208,6 @@ __marimo__/
 
 
 ref/
+config.toml
+paper_infos.json
+paper_errors.json

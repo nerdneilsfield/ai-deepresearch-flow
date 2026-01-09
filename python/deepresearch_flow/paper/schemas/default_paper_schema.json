@@ -1,0 +1,29 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["paper_title", "paper_authors"],
+  "properties": {
+    "paper_title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "paper_authors": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "abstract": {
+      "type": "string"
+    },
+    "publication_date": {
+      "type": "string"
+    },
+    "keywords": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "summary": {
+      "type": "string"
+    }
+  }
+}
