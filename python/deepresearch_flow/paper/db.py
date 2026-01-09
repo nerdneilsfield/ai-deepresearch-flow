@@ -11,15 +11,13 @@ import difflib
 
 import click
 import httpx
-from jinja2 import Environment, FileSystemLoader
-import importlib.resources as resources
 
 from deepresearch_flow.paper.config import load_config, resolve_api_keys
 from deepresearch_flow.paper.extract import parse_model_ref
 from deepresearch_flow.paper.llm import backoff_delay, call_provider
 from deepresearch_flow.paper.providers.base import ProviderError
-from deepresearch_flow.paper.utils import split_output_name, unique_split_name
-from deepresearch_flow.paper.template_registry import list_template_names, load_render_template
+from deepresearch_flow.paper.template_registry import list_template_names
+from deepresearch_flow.paper.render import resolve_render_template, render_papers
 
 try:
     from pybtex.database import parse_file
@@ -63,14 +61,6 @@ def similar_title(a: str, b: str, threshold: float = 0.9) -> bool:
         return False
     ratio = difflib.SequenceMatcher(None, a.lower(), b.lower()).ratio()
     return ratio >= threshold
-
-
-def load_default_template() -> Template:
-    template_path = resources.files("deepresearch_flow.paper.templates").joinpath(
-        "default_paper.md.j2"
-    )
-    with template_path.open("r", encoding="utf-8") as handle:
-        return Environment().from_string(handle.read())
 
 
 async def generate_tags_for_paper(
@@ -147,11 +137,11 @@ def parse_tag_list(text: str) -> list[str]:
     return [str(item) for item in parsed]
 
 
-def register_db_commands(db_group: click.Group) -> None:
+    def register_db_commands(db_group: click.Group) -> None:
     @db_group.command("append-bibtex")
-    @click.option("--input", "input_path", required=True, help="Input JSON file path")
-    @click.option("--bibtex", "bibtex_path", required=True, help="Input BibTeX file path")
-    @click.option("--output", "output_path", required=True, help="Output JSON file path")
+    @click.option("-i", "--input", "input_path", required=True, help="Input JSON file path")
+    @click.option("-b", "--bibtex", "bibtex_path", required=True, help="Input BibTeX file path")
+    @click.option("-o", "--output", "output_path", required=True, help="Output JSON file path")
     def append_bibtex(input_path: str, bibtex_path: str, output_path: str) -> None:
         if not PYBTEX_AVAILABLE:
             raise click.ClickException("pybtex is required for append-bibtex")
@@ -185,8 +175,8 @@ def register_db_commands(db_group: click.Group) -> None:
         click.echo(f"Appended bibtex for {len(appended)} papers")
 
     @db_group.command("sort-papers")
-    @click.option("--input", "input_path", required=True, help="Input JSON file path")
-    @click.option("--output", "output_path", required=True, help="Output JSON file path")
+    @click.option("-i", "--input", "input_path", required=True, help="Input JSON file path")
+    @click.option("-o", "--output", "output_path", required=True, help="Output JSON file path")
     @click.option("--order", type=click.Choice(["asc", "desc"]), default="desc")
     def sort_papers(input_path: str, output_path: str, order: str) -> None:
         papers = load_json(Path(input_path))
@@ -196,8 +186,8 @@ def register_db_commands(db_group: click.Group) -> None:
         click.echo(f"Sorted {len(papers)} papers")
 
     @db_group.command("split-by-tag")
-    @click.option("--input", "input_path", required=True, help="Input JSON file path")
-    @click.option("--output-dir", "output_dir", required=True, help="Output directory")
+    @click.option("-i", "--input", "input_path", required=True, help="Input JSON file path")
+    @click.option("-d", "--output-dir", "output_dir", required=True, help="Output directory")
     def split_by_tag(input_path: str, output_dir: str) -> None:
         papers = load_json(Path(input_path))
         tag_map: dict[str, list[dict[str, Any]]] = {}
@@ -213,10 +203,15 @@ def register_db_commands(db_group: click.Group) -> None:
         click.echo(f"Split into {len(tag_map)} tag files")
 
     @db_group.command("split-database")
-    @click.option("--input", "input_path", required=True, help="Input JSON file path")
-    @click.option("--output-dir", "output_dir", required=True, help="Output directory")
-    @click.option("--criteria", type=click.Choice(["year", "alphabetical", "count"]), default="count")
-    @click.option("--count", "chunk_count", default=100, help="Chunk size for count criteria")
+    @click.option("-i", "--input", "input_path", required=True, help="Input JSON file path")
+    @click.option("-d", "--output-dir", "output_dir", required=True, help="Output directory")
+    @click.option(
+        "-c",
+        "--criteria",
+        type=click.Choice(["year", "alphabetical", "count"]),
+        default="count",
+    )
+    @click.option("-n", "--count", "chunk_count", default=100, help="Chunk size for count criteria")
     def split_database(input_path: str, output_dir: str, criteria: str, chunk_count: int) -> None:
         papers = load_json(Path(input_path))
         out_dir = Path(output_dir)
@@ -249,7 +244,7 @@ def register_db_commands(db_group: click.Group) -> None:
         click.echo(f"Split into {len(chunks)} chunks")
 
     @db_group.command("statistics")
-    @click.option("--input", "input_path", required=True, help="Input JSON file path")
+    @click.option("-i", "--input", "input_path", required=True, help="Input JSON file path")
     def statistics(input_path: str) -> None:
         papers = load_json(Path(input_path))
         year_counts: dict[int | None, int] = {}
@@ -276,11 +271,11 @@ def register_db_commands(db_group: click.Group) -> None:
                 click.echo(f"  {tag}: {count}")
 
     @db_group.command("generate-tags")
-    @click.option("--input", "input_path", required=True, help="Input JSON file path")
-    @click.option("--output", "output_path", required=True, help="Output JSON file path")
-    @click.option("--config", "config_path", default="config.toml", help="Path to config.toml")
-    @click.option("--model", "model_ref", required=True, help="provider/model")
-    @click.option("--workers", "workers", default=4, type=int, help="Concurrent workers")
+    @click.option("-i", "--input", "input_path", required=True, help="Input JSON file path")
+    @click.option("-o", "--output", "output_path", required=True, help="Output JSON file path")
+    @click.option("-c", "--config", "config_path", default="config.toml", help="Path to config.toml")
+    @click.option("-m", "--model", "model_ref", required=True, help="provider/model")
+    @click.option("-w", "--workers", "workers", default=4, type=int, help="Concurrent workers")
     def generate_tags(input_path: str, output_path: str, config_path: str, model_ref: str, workers: int) -> None:
         async def _run() -> None:
             config = load_config(config_path)
@@ -327,13 +322,13 @@ def register_db_commands(db_group: click.Group) -> None:
         asyncio.run(_run())
 
     @db_group.command("filter")
-    @click.option("--input", "input_path", required=True, help="Input JSON file path")
-    @click.option("--output", "output_path", required=True, help="Output JSON file path")
-    @click.option("--tags", default=None, help="Comma-separated tags")
-    @click.option("--years", default=None, help="Year range (e.g. 2018-2024, -2019, 2020-)")
-    @click.option("--authors", default=None, help="Comma-separated author names")
-    @click.option("--limit", default=None, type=int, help="Limit results")
-    @click.option("--order", type=click.Choice(["asc", "desc"]), default="desc")
+    @click.option("-i", "--input", "input_path", required=True, help="Input JSON file path")
+    @click.option("-o", "--output", "output_path", required=True, help="Output JSON file path")
+    @click.option("-t", "--tags", default=None, help="Comma-separated tags")
+    @click.option("-y", "--years", default=None, help="Year range (e.g. 2018-2024, -2019, 2020-)")
+    @click.option("-a", "--authors", default=None, help="Comma-separated author names")
+    @click.option("-l", "--limit", default=None, type=int, help="Limit results")
+    @click.option("-r", "--order", type=click.Choice(["asc", "desc"]), default="desc")
     def filter_papers(
         input_path: str,
         output_path: str,
@@ -383,8 +378,8 @@ def register_db_commands(db_group: click.Group) -> None:
         click.echo(f"Filtered down to {len(filtered)} papers")
 
     @db_group.command("merge")
-    @click.option("--inputs", "input_paths", multiple=True, required=True, help="Input JSON files")
-    @click.option("--output", "output_path", required=True, help="Output JSON file path")
+    @click.option("-i", "--inputs", "input_paths", multiple=True, required=True, help="Input JSON files")
+    @click.option("-o", "--output", "output_path", required=True, help="Output JSON file path")
     def merge_papers(input_paths: Iterable[str], output_path: str) -> None:
         merged: list[dict[str, Any]] = []
         for path in input_paths:
@@ -393,9 +388,10 @@ def register_db_commands(db_group: click.Group) -> None:
         click.echo(f"Merged {len(input_paths)} files into {output_path}")
 
     @db_group.command("render-md")
-    @click.option("--input", "input_path", required=True, help="Input JSON file path")
-    @click.option("--output-dir", "output_dir", default="rendered_md", help="Output directory")
+    @click.option("-i", "--input", "input_path", required=True, help="Input JSON file path")
+    @click.option("-d", "--output-dir", "output_dir", default="rendered_md", help="Output directory")
     @click.option(
+        "-t",
         "--markdown-template",
         "--template",
         "template_path",
@@ -403,6 +399,7 @@ def register_db_commands(db_group: click.Group) -> None:
         help="Jinja2 template path",
     )
     @click.option(
+        "-n",
         "--template-name",
         "template_name",
         default=None,
@@ -410,12 +407,14 @@ def register_db_commands(db_group: click.Group) -> None:
         help="Built-in template name",
     )
     @click.option(
+        "-T",
         "--template-dir",
         "template_dir",
         default=None,
         help="Directory containing render.j2",
     )
     @click.option(
+        "-l",
         "--language",
         "output_language",
         default="en",
@@ -432,32 +431,9 @@ def register_db_commands(db_group: click.Group) -> None:
     ) -> None:
         papers = load_json(Path(input_path))
         out_dir = Path(output_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        if sum(bool(item) for item in (template_path, template_name, template_dir)) > 1:
-            raise click.ClickException(
-                "Use only one of --markdown-template/--template, --template-name, or --template-dir"
-            )
-        if template_dir:
-            template_path = str(Path(template_dir) / "render.j2")
-        if template_path:
-            template = Environment(loader=FileSystemLoader(Path(template_path).parent)).get_template(
-                Path(template_path).name
-            )
-        elif template_name:
-            template = load_render_template(template_name)
-        else:
-            template = load_default_template()
-
-        used: set[str] = set()
-        for paper in papers:
-            source_path = paper.get("source_path")
-            base = paper.get("paper_title") or "paper"
-            if source_path:
-                base = split_output_name(Path(source_path))
-            filename = unique_split_name(base, used, source_path or base)
-            context = dict(paper)
-            if not context.get("output_language"):
-                context["output_language"] = output_language
-            markdown = template.render(**context)
-            (out_dir / f"{filename}.md").write_text(markdown, encoding="utf-8")
-        click.echo(f"Rendered {len(papers)} markdown files")
+        try:
+            template = resolve_render_template(template_path, template_name, template_dir)
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
+        rendered = render_papers(papers, out_dir, template, output_language)
+        click.echo(f"Rendered {rendered} markdown files")

@@ -8,7 +8,7 @@ from pathlib import Path
 import click
 
 from deepresearch_flow.paper.config import load_config, resolve_api_keys
-from deepresearch_flow.paper.extract import extract_documents, parse_model_ref
+from deepresearch_flow.paper.extract import extract_documents, parse_model_ref, configure_logging
 from deepresearch_flow.paper.db import register_db_commands
 from deepresearch_flow.paper.schema import load_schema, validate_schema, SchemaError
 from deepresearch_flow.paper.template_registry import list_template_names, load_schema_for_template
@@ -70,6 +70,34 @@ def paper() -> None:
 @click.option("--retry-failed", is_flag=True, help="Retry only failed documents")
 @click.option("--dry-run", is_flag=True, help="Discover inputs without calling providers")
 @click.option("--max-concurrency", "max_concurrency", type=int, default=None, help="Override max concurrency")
+@click.option("--render-md", "render_md", is_flag=True, help="Render markdown outputs after extraction")
+@click.option(
+    "--render-output-dir",
+    "render_output_dir",
+    default="rendered_md",
+    help="Output directory for rendered markdown",
+)
+@click.option(
+    "--render-markdown-template",
+    "--render-template",
+    "render_template_path",
+    default=None,
+    help="Jinja2 template path for extract-time rendering",
+)
+@click.option(
+    "--render-template-name",
+    "render_template_name",
+    default=None,
+    type=click.Choice(list_template_names()),
+    help="Built-in render template name",
+)
+@click.option(
+    "--render-template-dir",
+    "render_template_dir",
+    default=None,
+    help="Directory containing render.j2 for extract-time rendering",
+)
+@click.option("-v", "--verbose", is_flag=True, help="Enable verbose logging")
 def extract(
     config_path: str,
     inputs: tuple[str, ...],
@@ -89,6 +117,12 @@ def extract(
     retry_failed: bool,
     dry_run: bool,
     max_concurrency: int | None,
+    render_md: bool,
+    render_output_dir: str,
+    render_template_path: str | None,
+    render_template_name: str | None,
+    render_template_dir: str | None,
+    verbose: bool,
 ) -> None:
     """Extract structured information from markdown documents."""
     config = load_config(config_path)
@@ -141,6 +175,27 @@ def extract(
         if prompt_path and not prompt_path.exists():
             raise click.ClickException(f"Prompt template not found: {prompt_path}")
 
+    if not render_md and any(
+        item is not None
+        for item in (render_template_path, render_template_name, render_template_dir)
+    ):
+        raise click.ClickException("Render template options require --render-md")
+    if not render_md and render_output_dir != "rendered_md":
+        raise click.ClickException("--render-output-dir requires --render-md")
+    if render_md and sum(
+        bool(item) for item in (render_template_path, render_template_name, render_template_dir)
+    ) > 1:
+        raise click.ClickException(
+            "Use only one of --render-markdown-template/--render-template, --render-template-name, or --render-template-dir"
+        )
+    if render_template_path and not Path(render_template_path).exists():
+        raise click.ClickException(f"Render template not found: {render_template_path}")
+    if render_template_dir:
+        render_template_dir_path = Path(render_template_dir)
+        render_template_file = render_template_dir_path / "render.j2"
+        if not render_template_file.exists():
+            raise click.ClickException(f"Render template not found: {render_template_file}")
+
     try:
         if schema_override:
             schema = load_schema(schema_override)
@@ -155,6 +210,8 @@ def extract(
     output = Path(output_path or config.extract.output)
     errors = Path(errors_path or config.extract.errors)
     split_out = Path(split_dir) if split_dir else None
+
+    configure_logging(verbose)
 
     asyncio.run(
         extract_documents(
@@ -178,6 +235,12 @@ def extract(
             custom_prompt=custom_prompt,
             prompt_system_path=prompt_system_path,
             prompt_user_path=prompt_user_path,
+            render_md=render_md,
+            render_output_dir=Path(render_output_dir),
+            render_template_path=render_template_path,
+            render_template_name=render_template_name,
+            render_template_dir=render_template_dir,
+            verbose=verbose,
         )
     )
 

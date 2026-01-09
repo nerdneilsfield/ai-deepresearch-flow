@@ -8,13 +8,17 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
+import logging
 
+import coloredlogs
 import click
 import httpx
 from jsonschema import Draft7Validator
+from tqdm import tqdm
 from deepresearch_flow.paper.config import PaperConfig, ProviderConfig, resolve_api_keys
 from deepresearch_flow.paper.llm import backoff_delay, call_provider
 from deepresearch_flow.paper.prompts import DEFAULT_SYSTEM_PROMPT, DEFAULT_USER_PROMPT
+from deepresearch_flow.paper.render import render_papers, resolve_render_template
 from deepresearch_flow.paper.schema import schema_to_prompt, validate_schema
 from deepresearch_flow.paper.template_registry import (
     get_stage_keys,
@@ -58,6 +62,14 @@ class KeyRotator:
             key = self._keys[self._idx % len(self._keys)]
             self._idx += 1
             return key
+
+
+logger = logging.getLogger(__name__)
+
+
+def configure_logging(verbose: bool) -> None:
+    level = "DEBUG" if verbose else "INFO"
+    coloredlogs.install(level=level, fmt="%(asctime)s %(levelname)s %(message)s")
 
 
 def parse_model_ref(model_ref: str, providers: list[ProviderConfig]) -> tuple[ProviderConfig, str]:
@@ -292,6 +304,12 @@ async def extract_documents(
     custom_prompt: bool,
     prompt_system_path: Path | None,
     prompt_user_path: Path | None,
+    render_md: bool,
+    render_output_dir: Path | None,
+    render_template_path: str | None,
+    render_template_name: str | None,
+    render_template_dir: str | None,
+    verbose: bool,
 ) -> None:
     markdown_files = discover_markdown(inputs, glob_pattern)
 
@@ -299,6 +317,9 @@ async def extract_documents(
         error_entries = load_errors(errors_path)
         retry_paths = {Path(entry.get("source_path", "")).resolve() for entry in error_entries}
         markdown_files = [path for path in markdown_files if path in retry_paths]
+        logger.debug("Retrying %d markdown files", len(markdown_files))
+    else:
+        logger.debug("Discovered %d markdown files", len(markdown_files))
 
     if dry_run:
         total_chars = 0
@@ -328,81 +349,104 @@ async def extract_documents(
     if multi_stage:
         stage_output_dir.mkdir(parents=True, exist_ok=True)
 
-    async def process_one(path: Path, client: httpx.AsyncClient) -> None:
-        source_path = str(path.resolve())
-        content = read_text(path)
-        source_hash = compute_source_hash(content)
-        stage_state: dict[str, Any] | None = None
-        stage_path: Path | None = None
-
-        if not force and not retry_failed:
-            existing_entry = existing_by_path.get(source_path)
-            if existing_entry and existing_entry.get("source_hash") == source_hash:
-                results[source_path] = existing_entry
-                return
-
-        truncated_content, truncation = truncate_content(
-            content, config.extract.truncate_max_chars, config.extract.truncate_strategy
+    doc_bar: tqdm | None = None
+    stage_bar: tqdm | None = None
+    doc_bar = tqdm(total=len(markdown_files), desc="documents", unit="doc", position=0)
+    if multi_stage and markdown_files:
+        stage_total = len(markdown_files) * len(stage_keys)
+        stage_bar = tqdm(
+            total=stage_total,
+            desc="stages",
+            unit="stage",
+            position=1,
+            leave=False,
         )
 
-        api_key = await rotator.next_key()
+    async def process_one(path: Path, client: httpx.AsyncClient) -> None:
+        source_path = str(path.resolve())
         current_stage: str | None = None
-
-        if multi_stage:
-            stage_path = stage_output_dir / f"{stable_hash(source_path)}.json"
-            stage_state = load_stage_state(stage_path) if not force else None
-            if stage_state and stage_state.get("source_hash") != source_hash:
-                stage_state = None
-            if stage_state is None:
-                stage_state = {
-                    "source_path": source_path,
-                    "source_hash": source_hash,
-                    "prompt_template": prompt_template,
-                    "output_language": output_language,
-                    "stages": {},
-                }
-
         try:
+            if verbose:
+                logger.debug("Processing %s", source_path)
+            content = read_text(path)
+            source_hash = compute_source_hash(content)
+            stage_state: dict[str, Any] | None = None
+            stage_path: Path | None = None
+
+            if not force and not retry_failed:
+                existing_entry = existing_by_path.get(source_path)
+                if existing_entry and existing_entry.get("source_hash") == source_hash:
+                    results[source_path] = existing_entry
+                    if stage_bar:
+                        stage_bar.update(len(stage_keys))
+                    return
+
+            truncated_content, truncation = truncate_content(
+                content, config.extract.truncate_max_chars, config.extract.truncate_strategy
+            )
+
+            api_key = await rotator.next_key()
+
+            if multi_stage:
+                stage_path = stage_output_dir / f"{stable_hash(source_path)}.json"
+                stage_state = load_stage_state(stage_path) if not force else None
+                if stage_state and stage_state.get("source_hash") != source_hash:
+                    stage_state = None
+                if stage_state is None:
+                    stage_state = {
+                        "source_path": source_path,
+                        "source_hash": source_hash,
+                        "prompt_template": prompt_template,
+                        "output_language": output_language,
+                        "stages": {},
+                    }
+
             if multi_stage and stage_state is not None and stage_path is not None:
                 stages: dict[str, dict[str, Any]] = stage_state.get("stages", {})
                 for stage_key in stage_keys:
                     current_stage = stage_key
                     if stage_key in stages and not force:
+                        if stage_bar:
+                            stage_bar.update(1)
                         continue
-                    stage_schema = build_stage_schema(schema, stage_key)
-                    stage_validator = validate_schema(stage_schema)
-                    previous_outputs = json.dumps(stages, ensure_ascii=False)
-                    messages = build_messages(
-                        truncated_content,
-                        stage_schema,
-                        provider,
-                        prompt_template,
-                        output_language,
-                        custom_prompt=False,
-                        prompt_system_path=None,
-                        prompt_user_path=None,
-                        stage_name=stage_key,
-                        stage_fields=["paper_title", "paper_authors", stage_key],
-                        previous_outputs=previous_outputs,
-                    )
-                    async with semaphore:
-                        data = await call_with_retries(
-                            provider,
-                            model,
-                            messages,
+                    try:
+                        stage_schema = build_stage_schema(schema, stage_key)
+                        stage_validator = validate_schema(stage_schema)
+                        previous_outputs = json.dumps(stages, ensure_ascii=False)
+                        messages = build_messages(
+                            truncated_content,
                             stage_schema,
-                            api_key,
-                            timeout=60.0,
-                            structured_mode=provider.structured_mode,
-                            max_retries=config.extract.max_retries,
-                            backoff_base_seconds=config.extract.backoff_base_seconds,
-                            backoff_max_seconds=config.extract.backoff_max_seconds,
-                            client=client,
-                            validator=stage_validator,
+                            provider,
+                            prompt_template,
+                            output_language,
+                            custom_prompt=False,
+                            prompt_system_path=None,
+                            prompt_user_path=None,
+                            stage_name=stage_key,
+                            stage_fields=["paper_title", "paper_authors", stage_key],
+                            previous_outputs=previous_outputs,
                         )
-                    stages[stage_key] = data
-                    stage_state["stages"] = stages
-                    write_json_atomic(stage_path, stage_state)
+                        async with semaphore:
+                            data = await call_with_retries(
+                                provider,
+                                model,
+                                messages,
+                                stage_schema,
+                                api_key,
+                                timeout=60.0,
+                                structured_mode=provider.structured_mode,
+                                max_retries=config.extract.max_retries,
+                                backoff_base_seconds=config.extract.backoff_base_seconds,
+                                backoff_max_seconds=config.extract.backoff_max_seconds,
+                                client=client,
+                                validator=stage_validator,
+                            )
+                        stages[stage_key] = data
+                        stage_state["stages"] = stages
+                        write_json_atomic(stage_path, stage_state)
+                    finally:
+                        if stage_bar:
+                            stage_bar.update(1)
 
                 merged: dict[str, Any] = {}
                 for stage_key in stage_keys:
@@ -463,6 +507,7 @@ async def extract_documents(
                 )
                 results[source_path] = data
         except ProviderError as exc:
+            logger.warning("Extraction failed for %s: %s", source_path, exc)
             errors.append(
                 ExtractionError(
                     path=path,
@@ -474,6 +519,7 @@ async def extract_documents(
                 )
             )
         except Exception as exc:  # pragma: no cover - safety net
+            logger.exception("Unexpected error while processing %s", source_path)
             errors.append(
                 ExtractionError(
                     path=path,
@@ -484,9 +530,18 @@ async def extract_documents(
                     stage_name=current_stage if multi_stage else None,
                 )
             )
+        finally:
+            if doc_bar:
+                doc_bar.update(1)
 
-    async with httpx.AsyncClient() as client:
-        await asyncio.gather(*(process_one(path, client) for path in markdown_files))
+    try:
+        async with httpx.AsyncClient() as client:
+            await asyncio.gather(*(process_one(path, client) for path in markdown_files))
+    finally:
+        if doc_bar:
+            doc_bar.close()
+        if stage_bar:
+            stage_bar.close()
 
     final_results: list[dict[str, Any]] = []
     seen = set()
@@ -529,6 +584,17 @@ async def extract_documents(
             base_name = split_output_name(Path(source_path))
             file_name = unique_split_name(base_name, used_names, source_path)
             write_json(target_dir / f"{file_name}.json", entry)
+
+    if render_md:
+        try:
+            template = resolve_render_template(
+                render_template_path, render_template_name, render_template_dir
+            )
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
+        render_dir = render_output_dir or Path("rendered_md")
+        rendered = render_papers(final_results, render_dir, template, output_language)
+        click.echo(f"Rendered {rendered} markdown files")
 
     click.echo(f"Processed {len(results)} documents")
     if errors:

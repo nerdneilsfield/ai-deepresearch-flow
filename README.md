@@ -77,18 +77,28 @@ deepresearch-flow paper extract \
   --input ./docs \
   --split \
   --model openai/gpt-4o-mini
+
+# Extract and render markdown outputs in one run
+deepresearch-flow paper extract \
+  --input ./docs \
+  --model openai/gpt-4o-mini \
+  --render-md \
+  --render-template-name simple \
+  --render-output-dir rendered_md
 ```
 
 Outputs:
 
 - Aggregated JSON: `paper_infos.json`
 - Errors: `paper_errors.json`
+- Optional rendered Markdown: `rendered_md/` (use `--render-md`)
 
 Incremental behavior:
 
 - The extractor reuses existing entries when `source_path` and `source_hash` match.
 - Use `--force` to re-extract everything.
 - Use `--retry-failed` to retry only failed documents listed in `paper_errors.json`.
+- Use `--verbose` for detailed logs alongside progress bars.
 
 ## Paper database commands
 
