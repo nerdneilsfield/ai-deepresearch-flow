@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 import logging
+import re
 
 import coloredlogs
 import click
@@ -166,6 +167,54 @@ def append_metadata(
     return payload
 
 
+def _normalized_key(key: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", key.lower())
+
+
+def normalize_response_keys(data: dict[str, Any], schema: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(data, dict):
+        return data
+
+    properties = schema.get("properties")
+    if not isinstance(properties, dict) or not properties:
+        return data
+
+    allow_extra = schema.get("additionalProperties", True)
+    normalized_map: dict[str, str] = {}
+    for prop_key in properties.keys():
+        normalized_map.setdefault(_normalized_key(prop_key), prop_key)
+
+    normalized: dict[str, Any] = {}
+    renamed: list[tuple[str, str]] = []
+    dropped: list[str] = []
+
+    for key, value in data.items():
+        if key in properties:
+            normalized[key] = value
+            continue
+
+        target = normalized_map.get(_normalized_key(key))
+        if target:
+            if target in normalized:
+                dropped.append(key)
+            else:
+                normalized[target] = value
+                renamed.append((key, target))
+            continue
+
+        if allow_extra:
+            normalized[key] = value
+        else:
+            dropped.append(key)
+
+    if renamed:
+        logger.debug("Normalized response keys: %s", renamed)
+    if dropped and not allow_extra:
+        logger.debug("Dropped response keys not in schema: %s", dropped)
+
+    return normalized
+
+
 def load_existing(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
@@ -270,6 +319,8 @@ async def call_with_retries(
                 await asyncio.sleep(backoff_delay(backoff_base_seconds, attempt, backoff_max_seconds))
                 continue
             raise ProviderError(f"JSON parse failed: {exc}", error_type="parse_error") from exc
+
+        data = normalize_response_keys(data, schema)
 
         errors_in_doc = sorted(validator.iter_errors(data), key=lambda e: e.path)
         if errors_in_doc:
