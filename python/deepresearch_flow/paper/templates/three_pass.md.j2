@@ -1,0 +1,14 @@
+# {{ paper_title }}
+
+**Authors:** {{ paper_authors | join(", ") }}
+{% if output_language %}**Output Language:** {{ output_language }}
+{% endif %}
+
+## Step 1: Overview
+{{ step1_summary }}
+
+## Step 2: Content Comprehension
+{{ step2_analysis }}
+
+## Step 3: Deep Analysis
+{{ step3_analysis }}

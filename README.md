@@ -24,6 +24,9 @@ Copy `config.example.toml` to `config.toml` and edit providers.
 - Explicit model routing is required: `--model provider/model`.
 - Supported provider types: `ollama`, `openai_compatible`, `dashscope`, `gemini_ai_studio`, `gemini_vertex`, `azure_openai`, `claude`.
 - Provider-specific fields: `azure_openai` requires `endpoint`, `api_version`, `deployment`; `gemini_vertex` requires `project_id`, `location`; `claude` requires `anthropic_version`.
+- Built-in prompt templates for extraction: `simple`, `deep_read`, `seven_questions`, `three_pass`.
+- Render templates use `paper db render-md --template-name` with the same names.
+- `--language` defaults to `en`; extraction stores it as `output_language` and render uses that field.
 
 ## Paper extraction
 
@@ -32,6 +35,13 @@ Copy `config.example.toml` to `config.toml` and edit providers.
 deepresearch-flow paper extract \
   --input ./docs \
   --model openai/gpt-4o-mini
+
+# Use built-in prompt template and output language
+deepresearch-flow paper extract \
+  --input ./docs \
+  --model openai/gpt-4o-mini \
+  --prompt-template deep_read \
+  --language zh
 
 # Filter with glob
 deepresearch-flow paper extract \
@@ -68,6 +78,12 @@ Incremental behavior:
 ```bash
 # Render Markdown from JSON
 deepresearch-flow paper db render-md --input paper_infos.json
+
+# Render with a built-in template and language fallback
+deepresearch-flow paper db render-md \
+  --input paper_infos.json \
+  --template-name deep_read \
+  --language zh
 
 # Generate tags
 deepresearch-flow paper db generate-tags \

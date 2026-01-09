@@ -1,0 +1,49 @@
+# {{ paper_title }}
+
+**Authors:** {{ paper_authors | join(", ") }}
+{% if output_language %}**Output Language:** {{ output_language }}
+{% endif %}
+
+## Module A: Reading Alignment
+{{ module_a }}
+
+## Module B: First Pass Overview
+{{ module_b }}
+
+## Module C1: Question 1
+{{ module_c1 }}
+
+## Module C2: Question 2
+{{ module_c2 }}
+
+## Module C3: Question 3
+{{ module_c3 }}
+
+## Module C4: Question 4
+{{ module_c4 }}
+
+## Module C5: Question 5
+{{ module_c5 }}
+
+## Module C6: Question 6
+{{ module_c6 }}
+
+## Module C7: Question 7
+{{ module_c7 }}
+
+## Module D: Second Pass
+{{ module_d }}
+
+## Module E: Third Pass
+{{ module_e }}
+
+{% if module_f %}## Module F: Glossary
+{{ module_f }}
+{% endif %}
+
+{% if module_g %}## Module G: Verification
+{{ module_g }}
+{% endif %}
+
+## Module H: Figure/Table Mining
+{{ module_h }}

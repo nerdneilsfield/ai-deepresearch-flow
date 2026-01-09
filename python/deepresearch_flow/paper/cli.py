@@ -11,6 +11,7 @@ from deepresearch_flow.paper.config import load_config, resolve_api_keys
 from deepresearch_flow.paper.extract import extract_documents, parse_model_ref
 from deepresearch_flow.paper.db import register_db_commands
 from deepresearch_flow.paper.schema import load_schema, validate_schema, SchemaError
+from deepresearch_flow.paper.template_registry import list_template_names, load_schema_for_template
 
 
 @click.group()
@@ -30,6 +31,21 @@ def paper() -> None:
 )
 @click.option("-g", "--glob", "glob_pattern", default=None, help="Glob filter when input is a directory")
 @click.option("-s", "--schema", "schema_path", default=None, help="Path to JSON schema")
+@click.option(
+    "--prompt-template",
+    "prompt_template",
+    default="simple",
+    type=click.Choice(list_template_names()),
+    show_default=True,
+    help="Built-in prompt template",
+)
+@click.option(
+    "--language",
+    "output_language",
+    default="en",
+    show_default=True,
+    help="Output language hint for prompts",
+)
 @click.option("-m", "--model", "model_ref", required=True, help="provider/model")
 @click.option("-o", "--output", "output_path", default=None, help="Aggregated JSON output path")
 @click.option("-e", "--errors", "errors_path", default=None, help="Error JSON output path")
@@ -44,6 +60,8 @@ def extract(
     inputs: tuple[str, ...],
     glob_pattern: str | None,
     schema_path: str | None,
+    prompt_template: str,
+    output_language: str,
     model_ref: str,
     output_path: str | None,
     errors_path: str | None,
@@ -82,8 +100,16 @@ def extract(
         if not resolved:
             raise click.ClickException(f"{provider.type} providers require api_keys")
 
+    if prompt_template != "simple" and (schema_path or config.extract.schema_path):
+        raise click.ClickException("Custom schema cannot be combined with built-in prompt templates")
+
     try:
-        schema = load_schema(schema_path or config.extract.schema_path)
+        if schema_path:
+            schema = load_schema(schema_path)
+        elif prompt_template:
+            schema = load_schema_for_template(prompt_template)
+        else:
+            schema = load_schema(config.extract.schema_path)
         validator = validate_schema(schema)
     except SchemaError as exc:
         raise click.ClickException(str(exc)) from exc
@@ -109,6 +135,8 @@ def extract(
             retry_failed=retry_failed,
             dry_run=dry_run,
             max_concurrency_override=max_concurrency,
+            prompt_template=prompt_template,
+            output_language=output_language,
         )
     )
 

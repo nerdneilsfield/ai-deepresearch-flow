@@ -19,6 +19,7 @@ from deepresearch_flow.paper.extract import parse_model_ref
 from deepresearch_flow.paper.llm import backoff_delay, call_provider
 from deepresearch_flow.paper.providers.base import ProviderError
 from deepresearch_flow.paper.utils import split_output_name, unique_split_name
+from deepresearch_flow.paper.template_registry import list_template_names, load_render_template
 
 try:
     from pybtex.database import parse_file
@@ -395,14 +396,38 @@ def register_db_commands(db_group: click.Group) -> None:
     @click.option("--input", "input_path", required=True, help="Input JSON file path")
     @click.option("--output-dir", "output_dir", default="rendered_md", help="Output directory")
     @click.option("--template", "template_path", default=None, help="Jinja2 template path")
-    def render_md(input_path: str, output_dir: str, template_path: str | None) -> None:
+    @click.option(
+        "--template-name",
+        "template_name",
+        default=None,
+        type=click.Choice(list_template_names()),
+        help="Built-in template name",
+    )
+    @click.option(
+        "--language",
+        "output_language",
+        default="en",
+        show_default=True,
+        help="Fallback output language for rendering",
+    )
+    def render_md(
+        input_path: str,
+        output_dir: str,
+        template_path: str | None,
+        template_name: str | None,
+        output_language: str,
+    ) -> None:
         papers = load_json(Path(input_path))
         out_dir = Path(output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
+        if template_path and template_name:
+            raise click.ClickException("Use either --template or --template-name, not both")
         if template_path:
             template = Environment(loader=FileSystemLoader(Path(template_path).parent)).get_template(
                 Path(template_path).name
             )
+        elif template_name:
+            template = load_render_template(template_name)
         else:
             template = load_default_template()
 
@@ -413,6 +438,7 @@ def register_db_commands(db_group: click.Group) -> None:
             if source_path:
                 base = split_output_name(Path(source_path))
             filename = unique_split_name(base, used, source_path or base)
-            markdown = template.render(**paper)
+            render_language = paper.get("output_language") or output_language
+            markdown = template.render(**paper, output_language=render_language)
             (out_dir / f"{filename}.md").write_text(markdown, encoding="utf-8")
         click.echo(f"Rendered {len(papers)} markdown files")

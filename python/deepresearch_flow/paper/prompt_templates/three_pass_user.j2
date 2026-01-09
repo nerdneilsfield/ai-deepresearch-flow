@@ -1,0 +1,36 @@
+Template: three_pass
+
+Follow the three-pass reading method. Fill the JSON fields:
+- step1_summary: "Step 1" output (overview + innovation highlights + structure + figures + conclusion + references + open source).
+- step2_analysis: "Step 2" output (content comprehension + experiments + evidence + related work weaknesses).
+- step3_analysis: "Step 3" output (reconstruction, assumptions, failure modes, strengths/weaknesses, future work).
+Use Markdown inside each field to format lists and sections.
+
+Step 1 guidance:
+- Summarize title/abstract/introduction.
+- List 3-5 innovations.
+- List authors and affiliations if available.
+- List section and subsection titles (translated if needed).
+- Summarize key figures/tables.
+- Summarize conclusions.
+- List key references.
+- State whether code is open-sourced and where.
+
+Step 2 guidance:
+- Explain each innovation: source, prior limitations, and solution details.
+- Analyze experiments: datasets, objectives, baselines, results, ablations.
+- Analyze key figures/tables.
+- Summarize important related work and weaknesses.
+
+Step 3 guidance:
+- Provide a reconstruction outline and pseudocode if possible.
+- Challenge assumptions and statements.
+- Identify failure modes and reasons.
+- Assess strengths/weaknesses and possible fixes.
+- Suggest future research directions.
+
+Document content:
+{{ content }}
+
+JSON Schema:
+{{ schema }}

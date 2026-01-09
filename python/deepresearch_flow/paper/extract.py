@@ -17,6 +17,7 @@ from deepresearch_flow.paper.config import PaperConfig, ProviderConfig, resolve_
 from deepresearch_flow.paper.llm import backoff_delay, call_provider
 from deepresearch_flow.paper.prompts import DEFAULT_SYSTEM_PROMPT, DEFAULT_USER_PROMPT
 from deepresearch_flow.paper.schema import schema_to_prompt
+from deepresearch_flow.paper.template_registry import load_prompt_templates
 from deepresearch_flow.paper.utils import (
     compute_source_hash,
     discover_markdown,
@@ -72,11 +73,24 @@ def build_messages(
     content: str,
     schema: dict[str, Any],
     provider: ProviderConfig,
+    prompt_template: str,
+    output_language: str,
 ) -> list[dict[str, str]]:
-    system_prompt = provider.system_prompt or DEFAULT_SYSTEM_PROMPT
-    user_prompt_template = provider.user_prompt or DEFAULT_USER_PROMPT
     prompt_schema = schema_to_prompt(schema)
-    user_prompt = user_prompt_template.format(content=content, schema=prompt_schema)
+    if prompt_template:
+        system_prompt, user_prompt = load_prompt_templates(
+            prompt_template,
+            content=content,
+            schema=prompt_schema,
+            output_language=output_language,
+        )
+    else:
+        system_prompt = provider.system_prompt or DEFAULT_SYSTEM_PROMPT
+        if output_language:
+            system_prompt = f"{system_prompt} Output language: {output_language}."
+        user_prompt_template = provider.user_prompt or DEFAULT_USER_PROMPT
+        user_prompt = user_prompt_template.format(content=content, schema=prompt_schema)
+
     return [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
@@ -95,11 +109,15 @@ def append_metadata(
     provider: str,
     model: str,
     truncation: dict[str, Any] | None,
+    prompt_template: str,
+    output_language: str,
 ) -> dict[str, Any]:
     payload["source_path"] = source_path
     payload["source_hash"] = source_hash
     payload["provider"] = provider
     payload["model"] = model
+    payload["prompt_template"] = prompt_template
+    payload["output_language"] = output_language
     payload["extracted_at"] = datetime.utcnow().isoformat() + "Z"
     if truncation:
         payload["source_truncated"] = True
@@ -209,6 +227,8 @@ async def extract_documents(
     retry_failed: bool,
     dry_run: bool,
     max_concurrency_override: int | None,
+    prompt_template: str,
+    output_language: str,
 ) -> None:
     markdown_files = discover_markdown(inputs, glob_pattern)
 
@@ -255,7 +275,7 @@ async def extract_documents(
             content, config.extract.truncate_max_chars, config.extract.truncate_strategy
         )
 
-        messages = build_messages(truncated_content, schema, provider)
+        messages = build_messages(truncated_content, schema, provider, prompt_template, output_language)
         api_key = await rotator.next_key()
 
         async with semaphore:
@@ -282,6 +302,8 @@ async def extract_documents(
                     provider=provider.name,
                     model=model,
                     truncation=truncation,
+                    prompt_template=prompt_template,
+                    output_language=output_language,
                 )
                 results[source_path] = data
             except ProviderError as exc:
