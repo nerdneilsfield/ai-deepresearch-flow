@@ -3,10 +3,12 @@ Template: eight_questions
 {% if stage_name %}
 Current stage: {{ stage_name }}.
 Return JSON with keys: {{ stage_fields | join(", ") }}.
+Output language: {{ output_language }}. Use that language in all answers (if zh, use Chinese).
 Previously completed outputs (JSON): {{ previous_outputs }}
 {% else %}
 Answer each question in the corresponding JSON field question1 through question8.
 Use Markdown in each answer if helpful.
+Output language: {{ output_language }}. Use that language in all answers (if zh, use Chinese).
 {% endif %}
 
 Questions:

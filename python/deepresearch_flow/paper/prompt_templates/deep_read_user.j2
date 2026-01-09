@@ -3,6 +3,7 @@ Template: deep_read
 {% if stage_name %}
 当前阶段：{{ stage_name }}。
 请仅输出 JSON，包含字段：{{ stage_fields | join(", ") }}。
+输出语言：{{ output_language }}。请使用该语言输出（zh 时使用中文，保留必要英文术语）。
 如需引用此前结果，可参考以下已完成模块（JSON）：{{ previous_outputs }}
 {% else %}
 注意：本工具是单次输出。请一次性完成所有模块内容，并填入 JSON 字段 module_a, module_b, module_c1..module_c8, module_d, module_e；可选 module_f, module_g, module_h 也请填入（若无法完成则填空字符串）。

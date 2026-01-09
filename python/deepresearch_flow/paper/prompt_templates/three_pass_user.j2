@@ -3,6 +3,7 @@ Template: three_pass
 {% if stage_name %}
 Current stage: {{ stage_name }}.
 Return JSON with keys: {{ stage_fields | join(", ") }}.
+Output language: {{ output_language }}. Use that language in all answers (if zh, use Chinese).
 Previously completed outputs (JSON): {{ previous_outputs }}
 {% else %}
 Follow the three-pass reading method. Fill the JSON fields:
@@ -10,6 +11,7 @@ Follow the three-pass reading method. Fill the JSON fields:
 - step2_analysis: "Step 2" output (content comprehension + experiments + evidence + related work weaknesses).
 - step3_analysis: "Step 3" output (reconstruction, assumptions, failure modes, strengths/weaknesses, future work).
 Use Markdown inside each field to format lists and sections.
+Output language: {{ output_language }}. Use that language in all answers (if zh, use Chinese).
 
 Step 1 guidance:
 - Summarize title/abstract/introduction.
