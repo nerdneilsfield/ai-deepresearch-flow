@@ -455,7 +455,9 @@ def register_db_commands(db_group: click.Group) -> None:
             if source_path:
                 base = split_output_name(Path(source_path))
             filename = unique_split_name(base, used, source_path or base)
-            render_language = paper.get("output_language") or output_language
-            markdown = template.render(**paper, output_language=render_language)
+            context = dict(paper)
+            if not context.get("output_language"):
+                context["output_language"] = output_language
+            markdown = template.render(**context)
             (out_dir / f"{filename}.md").write_text(markdown, encoding="utf-8")
         click.echo(f"Rendered {len(papers)} markdown files")
