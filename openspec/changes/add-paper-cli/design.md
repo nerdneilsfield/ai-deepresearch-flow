@@ -6,6 +6,7 @@ The existing scripts under `ref/` implement two Click-based CLIs:
 This change integrates both CLIs into this repo as a cohesive `deepresearch-flow paper ...` command group and expands provider support to:
 - Ollama native API (`/api/chat`)
 - OpenAI-compatible HTTP APIs (OpenAI/OpenRouter/DeepSeek-style endpoints)
+- DashScope SDK (Qwen models)
 
 ## Goals / Non-Goals
 - Goals:
@@ -40,6 +41,7 @@ This change integrates both CLIs into this repo as a cohesive `deepresearch-flow
 - Providers:
   - `ollama`: call native `/api/chat` with model name and messages.
   - `openai_compatible`: call `/v1/chat/completions`-style endpoints via async HTTP.
+  - `dashscope`: call DashScope SDK with message-based requests.
   - Providers may include extra headers and multiple API keys; choose keys round-robin.
   - Providers and/or the orchestrator enforce bounded concurrency and retry/backoff on rate limits.
 - Extraction strategy:

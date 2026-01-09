@@ -64,10 +64,10 @@ def extract(
     if max_concurrency is not None and max_concurrency <= 0:
         raise click.ClickException("--max-concurrency must be positive")
 
-    if provider.type == "openai_compatible":
+    if provider.type in {"openai_compatible", "dashscope"}:
         resolved = resolve_api_keys(provider.api_keys)
         if not resolved:
-            raise click.ClickException("openai_compatible providers require api_keys")
+            raise click.ClickException(f"{provider.type} providers require api_keys")
 
     try:
         schema = load_schema(schema_path or config.extract.schema_path)

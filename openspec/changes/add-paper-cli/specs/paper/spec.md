@@ -39,10 +39,15 @@ Each provider entry SHALL have a unique `name`.
 The system SHALL support at least the following provider types:
 - `ollama` using the native Ollama API
 - `openai_compatible` using an OpenAI-compatible HTTP API
+- `dashscope` using the DashScope SDK API
 
 #### Scenario: Select ollama provider explicitly
 - **WHEN** the user passes `--model ollama/llama3.1`
 - **THEN** the tool routes requests to the provider named `ollama` using model `llama3.1`
+
+#### Scenario: Select dashscope provider explicitly
+- **WHEN** the user passes `--model dashscope/qwen-max`
+- **THEN** the tool routes requests to the provider named `dashscope` using model `qwen-max`
 
 ### Requirement: API key resolution
 For providers that require API keys, the system SHALL support:

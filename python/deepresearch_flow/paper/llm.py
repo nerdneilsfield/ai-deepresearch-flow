@@ -7,6 +7,7 @@ import httpx
 
 from deepresearch_flow.paper.config import ProviderConfig
 from deepresearch_flow.paper.providers.base import ProviderError
+from deepresearch_flow.paper.providers.dashscope import chat as dashscope_chat
 from deepresearch_flow.paper.providers.ollama import chat as ollama_chat
 from deepresearch_flow.paper.providers.openai_compatible import chat as openai_chat
 
@@ -40,6 +41,11 @@ async def call_provider(
             headers,
             timeout,
         )
+
+    if provider.type == "dashscope":
+        if not api_key:
+            raise ProviderError("dashscope provider requires api_key")
+        return await dashscope_chat(api_key=api_key, model=model, messages=messages)
 
     if provider.type == "openai_compatible":
         return await openai_chat(

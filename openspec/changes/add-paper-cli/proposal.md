@@ -21,6 +21,7 @@ We want to make it a first-class part of this project and expand provider suppor
 - Add a provider system driven by `config.toml`:
   - `ollama` provider using the native Ollama API.
   - `openai_compatible` provider for OpenAI/OpenRouter/DeepSeek-like endpoints.
+  - `dashscope` provider for DashScope (Qwen) SDK usage.
   - API key resolution supports both literal keys and `env:VAR` indirection.
 - Adopt JSON Schema as the primary extraction schema format; validate required keys at config load time.
 - Provide a built-in default extraction schema and a built-in Markdown template for quick start.

@@ -14,7 +14,8 @@
 - [ ] 3.1 Implement `ollama` provider (native `/api/chat`)
 - [ ] 3.2 Implement `openai_compatible` provider (async HTTP via `httpx`)
 - [ ] 3.3 Support extra headers and multiple API keys per provider (round-robin)
-- [ ] 3.4 Implement retry + backoff for rate limits and transient errors
+- [ ] 3.4 Implement `dashscope` provider (DashScope SDK)
+- [ ] 3.5 Implement retry + backoff for rate limits and transient errors
 
 ## 4. Paper extraction
 - [ ] 4.1 Implement input discovery: file/dir recursion + `--glob` filtering

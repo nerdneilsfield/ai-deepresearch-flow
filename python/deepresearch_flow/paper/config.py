@@ -143,6 +143,8 @@ def load_config(path: str) -> PaperConfig:
                 base_url = "http://localhost:11434"
             elif provider_type == "openai_compatible":
                 base_url = "https://api.openai.com/v1"
+            elif provider_type == "dashscope":
+                base_url = ""
             else:
                 raise ValueError(f"Provider '{name}' requires base_url")
 
@@ -153,7 +155,12 @@ def load_config(path: str) -> PaperConfig:
 
         structured_mode = _as_str(provider.get("structured_mode"), None)
         if structured_mode is None:
-            structured_mode = "json_object" if provider_type == "ollama" else "json_schema"
+            if provider_type == "ollama":
+                structured_mode = "json_object"
+            elif provider_type == "dashscope":
+                structured_mode = "none"
+            else:
+                structured_mode = "json_schema"
 
         extra_headers: dict[str, str] = {}
         headers = provider.get("extra_headers")

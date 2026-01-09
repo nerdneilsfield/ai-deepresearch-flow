@@ -25,6 +25,13 @@ structured_mode = "json_object" # json_schema | json_object | none
 extra_headers = {}
 
 [[providers]]
+name = "dashscope"
+type = "dashscope"
+api_keys = ["env:DASHSCOPE_API_KEY"]
+structured_mode = "none"
+extra_headers = {}
+
+[[providers]]
 name = "openai"
 type = "openai_compatible"
 base_url = "https://api.openai.com/v1"
