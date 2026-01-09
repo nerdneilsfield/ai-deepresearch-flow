@@ -137,7 +137,7 @@ def parse_tag_list(text: str) -> list[str]:
     return [str(item) for item in parsed]
 
 
-    def register_db_commands(db_group: click.Group) -> None:
+def register_db_commands(db_group: click.Group) -> None:
     @db_group.command("append-bibtex")
     @click.option("-i", "--input", "input_path", required=True, help="Input JSON file path")
     @click.option("-b", "--bibtex", "bibtex_path", required=True, help="Input BibTeX file path")
