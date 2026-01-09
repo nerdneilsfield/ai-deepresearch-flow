@@ -96,13 +96,21 @@ deepresearch-flow paper extract \
   --model openai/gpt-4o-mini \
   --prompt-template eight_questions \
   --render-md
+
+# Render output defaults to the --output parent directory
+deepresearch-flow paper extract \
+  --input ./docs \
+  --model openai/gpt-4o-mini \
+  --output ./out/papers.json \
+  --prompt-template eight_questions \
+  --render-md
 ```
 
 Outputs:
 
 - Aggregated JSON: `paper_infos.json`
 - Errors: `paper_errors.json`
-- Optional rendered Markdown: `rendered_md/` (use `--render-md`)
+- Optional rendered Markdown: `rendered_md/` by default (use `--render-md`)
 
 Incremental behavior:
 
@@ -112,6 +120,7 @@ Incremental behavior:
 - Use `--verbose` for detailed logs alongside progress bars.
 - Extract-time rendering defaults to the same built-in template as `--prompt-template`.
 - If `--template-dir` is used for prompts, `--render-md` reuses its `render.j2` unless overridden.
+- When `--output` is provided, render output defaults to the parent directory of that file unless `--render-output-dir` is set.
 
 ## Paper database commands
 

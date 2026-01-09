@@ -74,8 +74,8 @@ def paper() -> None:
 @click.option(
     "--render-output-dir",
     "render_output_dir",
-    default="rendered_md",
-    help="Output directory for rendered markdown",
+    default=None,
+    help="Output directory for rendered markdown (defaults to --output parent when provided)",
 )
 @click.option(
     "--render-markdown-template",
@@ -180,7 +180,7 @@ def extract(
         for item in (render_template_path, render_template_name, render_template_dir)
     ):
         raise click.ClickException("Render template options require --render-md")
-    if not render_md and render_output_dir != "rendered_md":
+    if not render_md and render_output_dir is not None:
         raise click.ClickException("--render-output-dir requires --render-md")
     if render_md and sum(
         bool(item) for item in (render_template_path, render_template_name, render_template_dir)
@@ -191,6 +191,7 @@ def extract(
     render_template_path_effective = render_template_path
     render_template_name_effective = render_template_name
     render_template_dir_effective = render_template_dir
+    render_output_dir_effective: Path | None = None
 
     if render_md and not any(
         item is not None
@@ -200,6 +201,13 @@ def extract(
             render_template_dir_effective = template_dir
         elif not custom_prompt:
             render_template_name_effective = prompt_template
+    if render_md:
+        if render_output_dir is not None:
+            render_output_dir_effective = Path(render_output_dir)
+        elif output_path is not None:
+            render_output_dir_effective = Path(output_path).parent
+        else:
+            render_output_dir_effective = Path("rendered_md")
 
     if render_template_path_effective and not Path(render_template_path_effective).exists():
         raise click.ClickException(f"Render template not found: {render_template_path_effective}")
@@ -249,7 +257,7 @@ def extract(
             prompt_system_path=prompt_system_path,
             prompt_user_path=prompt_user_path,
             render_md=render_md,
-            render_output_dir=Path(render_output_dir),
+            render_output_dir=render_output_dir_effective,
             render_template_path=render_template_path_effective,
             render_template_name=render_template_name_effective,
             render_template_dir=render_template_dir_effective,
