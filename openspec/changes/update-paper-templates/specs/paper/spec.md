@@ -37,10 +37,11 @@ The `eight_questions` workflow SHALL group questions 1-4 and 5-8 into two extrac
 
 ### Requirement: Localized render headings
 Render templates SHALL localize section headings based on `output_language` for zh/en.
+When `output_language` is `zh`, headings SHALL include both Chinese and English labels.
 
 #### Scenario: Render headings in zh
 - **WHEN** `output_language` is `zh`
-- **THEN** rendered headings use Chinese labels
+- **THEN** rendered headings include Chinese and English labels
 
 #### Scenario: Render headings in en
 - **WHEN** `output_language` is `en`

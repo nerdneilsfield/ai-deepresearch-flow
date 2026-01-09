@@ -28,6 +28,7 @@ Copy `config.example.toml` to `config.toml` and edit providers.
 - Template rename: `seven_questions` is now `eight_questions`.
 - Render templates use `paper db render-md --template-name` with the same names.
 - `--language` defaults to `en`; extraction stores it as `output_language` and render uses that field.
+- When `output_language` is `zh`, render headings include both Chinese and English.
 - Complex templates (`deep_read`, `eight_questions`, `three_pass`) run multi-stage extraction and persist per-document stage files under `paper_stage_outputs/`.
 - Custom templates: use `--prompt-system`/`--prompt-user` with `--schema-json`, or `--template-dir` containing `system.j2`, `user.j2`, `schema.json`, `render.j2`.
 - Custom templates run in single-stage extraction mode.
