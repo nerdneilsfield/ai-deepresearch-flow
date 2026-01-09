@@ -24,3 +24,7 @@ where = ["python"]
 
 [tool.setuptools.package-dir]
 "" = "python"
+
+[tool.setuptools.package-data]
+"deepresearch_flow.paper.schemas" = ["*.json"]
+"deepresearch_flow.paper.templates" = ["*.j2"]
