@@ -240,7 +240,7 @@ async def extract_documents(
     errors: list[ExtractionError] = []
     results: dict[str, dict[str, Any]] = {}
 
-    async def process_one(path: Path) -> None:
+    async def process_one(path: Path, client: httpx.AsyncClient) -> None:
         source_path = str(path.resolve())
         content = read_text(path)
         source_hash = compute_source_hash(content)
@@ -306,7 +306,7 @@ async def extract_documents(
                 )
 
     async with httpx.AsyncClient() as client:
-        await asyncio.gather(*(process_one(path) for path in markdown_files))
+        await asyncio.gather(*(process_one(path, client) for path in markdown_files))
 
     final_results: list[dict[str, Any]] = []
     seen = set()
