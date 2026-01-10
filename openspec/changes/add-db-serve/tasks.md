@@ -1,0 +1,11 @@
+## 1. Implementation
+- [ ] 1.1 Add web server dependencies (fastapi, uvicorn) and update `uv.lock`
+- [ ] 1.2 Add `paper db serve` command and CLI options (host/port/input)
+- [ ] 1.3 Implement database loader + in-memory indexes for filters
+- [ ] 1.4 Implement `GET /api/papers` with pagination + filters
+- [ ] 1.5 Implement list page with infinite scrolling
+- [ ] 1.6 Implement paper detail page with template-based Markdown rendering
+- [ ] 1.7 Add Mermaid + KaTeX support in served pages
+- [ ] 1.8 Implement stats aggregation + `/api/stats`
+- [ ] 1.9 Implement stats page using ECharts
+- [ ] 1.10 Update README with serve usage
