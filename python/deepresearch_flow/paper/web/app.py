@@ -787,6 +787,10 @@ def _page_shell(title: str, body_html: str, extra_head: str = "", extra_scripts:
       .muted {{ color: #57606a; font-size: 13px; }}
       .pill {{ display: inline-block; padding: 2px 8px; border-radius: 999px; border: 1px solid #d0d7de; margin-right: 6px; font-size: 12px; }}
       .warning {{ background: #fff4ce; border: 1px solid #ffd089; padding: 10px; border-radius: 10px; margin: 12px 0; }}
+      .tabs {{ display: flex; gap: 8px; flex-wrap: wrap; }}
+      .tab {{ display: inline-block; padding: 6px 12px; border-radius: 999px; border: 1px solid #d0d7de; background: #f6f8fa; color: #0969da; text-decoration: none; font-size: 13px; }}
+      .tab:hover {{ background: #eef1f4; }}
+      .tab.active {{ background: #0969da; border-color: #0969da; color: #fff; }}
       pre {{ overflow: auto; padding: 10px; background: #0b1220; color: #e6edf3; border-radius: 10px; }}
       code {{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }}
       a {{ color: #0969da; }}
@@ -1024,11 +1028,18 @@ async def _paper_detail(request: Request) -> HTMLResponse:
     paper = index.papers[idx]
     view = request.query_params.get("view", "summary")
 
+    def nav_link(label: str, v: str) -> str:
+        active = " active" if view == v else ""
+        return (
+            f'<a class="tab{active}" href="/paper/{html.escape(source_hash)}?view={html.escape(v)}">'
+            f"{html.escape(label)}</a>"
+        )
+
     nav = f"""
-<div style="margin: 8px 0 14px;">
-  <a href="/paper/{html.escape(source_hash)}?view=summary">Summary</a>
-  <a href="/paper/{html.escape(source_hash)}?view=source">Source</a>
-  <a href="/paper/{html.escape(source_hash)}?view=pdf">PDF</a>
+<div class="tabs" style="margin: 8px 0 14px;">
+  {nav_link("Summary", "summary")}
+  {nav_link("Source", "source")}
+  {nav_link("PDF", "pdf")}
 </div>
 """
 
@@ -1111,7 +1122,7 @@ let pdfDoc = null;
 let pageNum = 1;
 let pageRendering = false;
 let pageNumPending = null;
-let zoom = 1.0;
+let zoomLevel = 1.0;
 const canvas = document.getElementById('the-canvas');
 const ctx = canvas.getContext('2d');
 
@@ -1121,7 +1132,7 @@ function renderPage(num) {{
     const baseViewport = page.getViewport({{scale: 1}});
     const containerWidth = canvas.clientWidth || baseViewport.width;
     const fitScale = containerWidth / baseViewport.width;
-    const scale = fitScale * zoom;
+    const scale = fitScale * zoomLevel;
 
     const viewport = page.getViewport({{scale}});
     const outputScale = window.devicePixelRatio || 1;
@@ -1166,15 +1177,15 @@ function onNextPage() {{
   queueRenderPage(pageNum);
 }}
 
-function zoom(delta) {{
-  zoom = Math.max(0.5, Math.min(3.0, zoom + delta));
+function adjustZoom(delta) {{
+  zoomLevel = Math.max(0.5, Math.min(3.0, zoomLevel + delta));
   queueRenderPage(pageNum);
 }}
 
 document.getElementById('prev').addEventListener('click', onPrevPage);
 document.getElementById('next').addEventListener('click', onNextPage);
-document.getElementById('zoomOut').addEventListener('click', () => zoom(-0.1));
-document.getElementById('zoomIn').addEventListener('click', () => zoom(0.1));
+document.getElementById('zoomOut').addEventListener('click', () => adjustZoom(-0.1));
+document.getElementById('zoomIn').addEventListener('click', () => adjustZoom(0.1));
 
 pdfjsLib.getDocument(url).promise.then((pdfDoc_) => {{
   pdfDoc = pdfDoc_;
