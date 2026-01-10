@@ -20,10 +20,16 @@ The paper list UI SHALL support infinite scrolling using paginated API requests.
 The detail view SHALL render paper content from JSON using a render template.
 The default template selection SHALL use the paper's `prompt_template` when present.
 The rendered output SHALL support Mermaid diagrams and KaTeX math.
+If the selected template cannot be resolved, the renderer SHALL fall back to the built-in default template and display a warning in the UI.
+The HTML output SHALL be rendered safely by default by disabling raw HTML in Markdown and/or sanitizing the HTML.
 
 #### Scenario: Detail view uses per-paper template
 - **WHEN** a paper record has `prompt_template: eight_questions`
 - **THEN** the detail view uses the matching render template
+
+#### Scenario: Missing template falls back
+- **WHEN** a paper record has a missing or unknown template name
+- **THEN** the detail view renders using the built-in default template and indicates the fallback
 
 ### Requirement: Statistics dashboard
 The web UI SHALL provide a stats page that visualizes the database using charts.

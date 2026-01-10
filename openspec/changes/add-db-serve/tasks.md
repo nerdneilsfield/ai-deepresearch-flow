@@ -5,7 +5,10 @@
 - [ ] 1.4 Implement `GET /api/papers` with pagination + filters
 - [ ] 1.5 Implement list page with infinite scrolling
 - [ ] 1.6 Implement paper detail page with template-based Markdown rendering
-- [ ] 1.7 Add Mermaid + KaTeX support in served pages
-- [ ] 1.8 Implement stats aggregation + `/api/stats`
-- [ ] 1.9 Implement stats page using ECharts
-- [ ] 1.10 Update README with serve usage
+- [ ] 1.7 Add template fallback + UI warning when template missing
+- [ ] 1.8 Add safe HTML rendering (disable raw HTML and/or sanitize)
+- [ ] 1.9 Add Mermaid + KaTeX support in served pages (CDN by default)
+- [ ] 1.10 Implement stats aggregation + `/api/stats`
+- [ ] 1.11 Implement stats page using ECharts (CDN by default)
+- [ ] 1.12 (Optional) Add `paper db download-assets` for offline cache
+- [ ] 1.13 Update README with serve usage

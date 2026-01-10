@@ -26,10 +26,14 @@ Constraints:
   - Determine template per paper:
     - Default: use paper's `prompt_template`.
     - Allow override by query parameter (future) or CLI (optional).
+  - Fallback:
+    - If the template name is missing/unknown, fall back to the built-in default template and surface a warning in the UI.
   - Render Markdown using existing Jinja2 templates.
-  - Convert Markdown to HTML server-side (e.g., markdown-it-py) and enable Mermaid/KaTeX client-side.
+  - Convert Markdown to HTML server-side (e.g., markdown-it-py) with raw HTML disabled and/or HTML sanitized.
+  - Enable Mermaid/KaTeX client-side.
 - Assets:
-  - Include ECharts, Mermaid, and KaTeX as static assets (vendored) to avoid runtime network dependency.
+  - Default: load ECharts, Mermaid, and KaTeX via CDN to keep wheel size small.
+  - Optional offline mode: provide `paper db download-assets` to download assets to a local cache (e.g., `~/.deepresearch-flow/assets`) and serve them locally.
 
 ## Routes (proposed)
 - `GET /` list page (infinite scroll)
@@ -39,8 +43,9 @@ Constraints:
 - `GET /api/stats` stats JSON
 
 ## Risks / Trade-offs
-- Vendoring JS assets increases repo size.
-- Markdown-to-HTML conversion must be safe; we should avoid executing arbitrary HTML from untrusted data by default.
+- CDN mode requires network access at runtime.
+- Offline caching adds implementation complexity.
+- Markdown-to-HTML conversion must be safe; disable raw HTML and/or sanitize output to mitigate XSS risks.
 
 ## Migration Plan
 - Add dependencies and minimal web module.
