@@ -311,6 +311,8 @@ async def call_with_retries(
     use_structured = structured_mode
     while attempt < max_retries:
         attempt += 1
+        if throttle:
+            await throttle.tick()
         try:
             response_text = await call_provider(
                 provider,
@@ -323,8 +325,6 @@ async def call_with_retries(
                 client,
             )
         except ProviderError as exc:
-            if throttle:
-                await throttle.tick()
             if exc.structured_error and use_structured != "none":
                 use_structured = "none"
                 continue
@@ -332,9 +332,6 @@ async def call_with_retries(
                 await asyncio.sleep(backoff_delay(backoff_base_seconds, attempt, backoff_max_seconds))
                 continue
             raise
-        else:
-            if throttle:
-                await throttle.tick()
 
         try:
             data = parse_json(response_text)
