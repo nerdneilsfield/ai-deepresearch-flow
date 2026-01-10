@@ -1,20 +1,35 @@
 # ai-deepresearch-flow
 
-Paper/document extraction and database tooling for the DeepResearch flow.
+DeepResearch Flow command-line tools for document extraction and paper database operations.
 
-## Requirements
-
-- Python >= 3.12
-
-## Setup
+## Quick Start
 
 ```bash
 pip install -e .
 # or
 uv pip install -e .
+
+cp config.example.toml config.toml
+
+# Extract from a docs folder
+uv run deepresearch-flow paper extract \
+  --input ./docs \
+  --model openai/gpt-4o-mini
+
+# Serve a local UI
+uv run deepresearch-flow paper db serve \
+  --input ./paper_infos_simple.json \
+  --host 127.0.0.1 \
+  --port 8000
 ```
 
-## Configuration
+## Commands
+
+`deepresearch-flow` is the top-level CLI. The current workflow lives under the `paper` subcommand.
+Use `deepresearch-flow --help` and `deepresearch-flow paper --help` to explore flags.
+
+<details>
+<summary>Configuration details</summary>
 
 Copy `config.example.toml` to `config.toml` and edit providers.
 
@@ -36,10 +51,7 @@ Copy `config.example.toml` to `config.toml` and edit providers.
 - The `simple` template requires `abstract`, `keywords`, and a single-paragraph `summary` that covers the eight-question aspects.
 - Extraction tolerates minor JSON formatting errors and ignores extra top-level fields when required keys validate.
 
-## Commands
-
-`deepresearch-flow` exposes multiple subcommands; the `paper` workflow is one of them.
-The details below live in collapsible sections so the README stays compact.
+</details>
 
 <details>
 <summary>paper extract — structured extraction from markdown</summary>
@@ -201,5 +213,40 @@ Other database helpers:
 - `split-database`
 - `statistics`
 - `merge`
+
+</details>
+
+<details>
+<summary>Data formats (examples)</summary>
+
+Aggregated extraction output is a JSON list:
+
+```json
+[
+  {
+    "paper_title": "Example Paper",
+    "paper_authors": ["Author A", "Author B"],
+    "publication_date": "2024-01-01",
+    "publication_venue": "ExampleConf",
+    "source_path": "/abs/path/to/doc.md"
+  }
+]
+```
+
+`db serve` expects each input to be an object with a `template_tag` and a `papers` list:
+
+```json
+{
+  "template_tag": "simple",
+  "papers": [
+    {
+      "paper_title": "Example Paper",
+      "paper_authors": ["Author A"],
+      "publication_date": "2024-01-01",
+      "publication_venue": "ExampleConf"
+    }
+  ]
+}
+```
 
 </details>
