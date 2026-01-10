@@ -70,6 +70,8 @@ def paper() -> None:
 @click.option("--retry-failed", is_flag=True, help="Retry only failed documents")
 @click.option("--dry-run", is_flag=True, help="Discover inputs without calling providers")
 @click.option("--max-concurrency", "max_concurrency", type=int, default=None, help="Override max concurrency")
+@click.option("--sleep-every", "sleep_every", type=int, default=None, help="Sleep after every N requests")
+@click.option("--sleep-time", "sleep_time", type=float, default=None, help="Sleep duration in seconds")
 @click.option("--render-md", "render_md", is_flag=True, help="Render markdown outputs after extraction")
 @click.option(
     "--render-output-dir",
@@ -117,6 +119,8 @@ def extract(
     retry_failed: bool,
     dry_run: bool,
     max_concurrency: int | None,
+    sleep_every: int | None,
+    sleep_time: float | None,
     render_md: bool,
     render_output_dir: str,
     render_template_path: str | None,
@@ -140,6 +144,12 @@ def extract(
         raise click.ClickException("max_retries must be positive")
     if max_concurrency is not None and max_concurrency <= 0:
         raise click.ClickException("--max-concurrency must be positive")
+    if sleep_every is not None and sleep_every <= 0:
+        raise click.ClickException("--sleep-every must be positive")
+    if sleep_time is not None and sleep_time <= 0:
+        raise click.ClickException("--sleep-time must be positive")
+    if (sleep_every is None) != (sleep_time is None):
+        raise click.ClickException("Both --sleep-every and --sleep-time are required")
 
     if provider.type in {
         "openai_compatible",
@@ -261,6 +271,8 @@ def extract(
             render_template_path=render_template_path_effective,
             render_template_name=render_template_name_effective,
             render_template_dir=render_template_dir_effective,
+            sleep_every=sleep_every,
+            sleep_time=sleep_time,
             verbose=verbose,
         )
     )

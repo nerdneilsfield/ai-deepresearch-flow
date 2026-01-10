@@ -276,6 +276,22 @@ def load_stage_state(path: Path) -> dict[str, Any] | None:
         return None
 
 
+class RequestThrottle:
+    def __init__(self, sleep_every: int, sleep_time: float) -> None:
+        if sleep_every <= 0 or sleep_time <= 0:
+            raise ValueError("sleep_every and sleep_time must be positive")
+        self.sleep_every = sleep_every
+        self.sleep_time = sleep_time
+        self._count = 0
+        self._lock = asyncio.Lock()
+
+    async def tick(self) -> None:
+        async with self._lock:
+            self._count += 1
+            if self._count % self.sleep_every == 0:
+                await asyncio.sleep(self.sleep_time)
+
+
 async def call_with_retries(
     provider: ProviderConfig,
     model: str,
@@ -289,6 +305,7 @@ async def call_with_retries(
     backoff_max_seconds: float,
     client: httpx.AsyncClient,
     validator: Draft7Validator,
+    throttle: RequestThrottle | None = None,
 ) -> dict[str, Any]:
     attempt = 0
     use_structured = structured_mode
@@ -306,6 +323,8 @@ async def call_with_retries(
                 client,
             )
         except ProviderError as exc:
+            if throttle:
+                await throttle.tick()
             if exc.structured_error and use_structured != "none":
                 use_structured = "none"
                 continue
@@ -313,6 +332,9 @@ async def call_with_retries(
                 await asyncio.sleep(backoff_delay(backoff_base_seconds, attempt, backoff_max_seconds))
                 continue
             raise
+        else:
+            if throttle:
+                await throttle.tick()
 
         try:
             data = parse_json(response_text)
@@ -365,6 +387,8 @@ async def extract_documents(
     render_template_path: str | None,
     render_template_name: str | None,
     render_template_dir: str | None,
+    sleep_every: int | None,
+    sleep_time: float | None,
     verbose: bool,
 ) -> None:
     markdown_files = discover_markdown(inputs, glob_pattern)
@@ -404,6 +428,12 @@ async def extract_documents(
     stage_output_dir = Path("paper_stage_outputs")
     if multi_stage:
         stage_output_dir.mkdir(parents=True, exist_ok=True)
+
+    throttle = None
+    if sleep_every is not None or sleep_time is not None:
+        if not sleep_every or not sleep_time:
+            raise ValueError("--sleep-every and --sleep-time must be set together")
+        throttle = RequestThrottle(sleep_every, float(sleep_time))
 
     doc_bar: tqdm | None = None
     stage_bar: tqdm | None = None
@@ -505,6 +535,7 @@ async def extract_documents(
                                 backoff_max_seconds=config.extract.backoff_max_seconds,
                                 client=client,
                                 validator=stage_validator,
+                                throttle=throttle,
                             )
                         stages[stage_name] = data
                         stage_state["stages"] = stages
@@ -558,6 +589,7 @@ async def extract_documents(
                         backoff_max_seconds=config.extract.backoff_max_seconds,
                         client=client,
                         validator=validator,
+                        throttle=throttle,
                     )
 
                 data = append_metadata(

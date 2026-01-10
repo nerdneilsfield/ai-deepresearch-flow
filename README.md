@@ -83,6 +83,13 @@ deepresearch-flow paper extract \
   --dry-run \
   --model openai/gpt-4o-mini
 
+# Throttle requests
+deepresearch-flow paper extract \
+  --input ./docs \
+  --model openai/gpt-4o-mini \
+  --sleep-every 10 \
+  --sleep-time 60
+
 # Split per-document outputs
 deepresearch-flow paper extract \
   --input ./docs \
