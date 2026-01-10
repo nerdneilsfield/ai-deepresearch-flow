@@ -360,7 +360,7 @@ def _render_markdown_with_math_placeholders(md: MarkdownIt, text: str) -> str:
         html_out = html_out.replace(key, html.escape(value))
     for key, value in table_placeholders.items():
         safe_html = _sanitize_table_html(value)
-        html_out = re.sub(rf"<p>\s*{re.escape(key)}\s*</p>", safe_html, html_out)
+        html_out = re.sub(rf"<p>\s*{re.escape(key)}\s*</p>", lambda _: safe_html, html_out)
     return html_out
 
 
