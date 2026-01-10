@@ -162,6 +162,11 @@ deepresearch-flow paper db filter \
   --input paper_infos.json \
   --output filtered.json \
   --tags hardware_acceleration,fpga
+
+# Statistics (rich tables)
+deepresearch-flow paper db statistics \
+  --input paper_infos.json \
+  --top-n 20
 ```
 
 Other commands:

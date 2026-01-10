@@ -15,6 +15,7 @@ dependencies = [
     "jinja2>=3.1.3",
     "json-repair>=0.31.0",
     "jsonschema>=4.21.1",
+    "rich>=13.7.1",
     "tqdm>=4.66.4",
 ]
 
@@ -35,3 +36,4 @@ where = ["python"]
 "deepresearch_flow.paper.schemas" = ["*.json"]
 "deepresearch_flow.paper.templates" = ["*.j2"]
 "deepresearch_flow.paper.prompt_templates" = ["*.j2"]
+"deepresearch_flow.paper.examples" = ["*.toml"]

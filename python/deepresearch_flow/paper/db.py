@@ -11,6 +11,9 @@ import difflib
 
 import click
 import httpx
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
 
 from deepresearch_flow.paper.config import load_config, resolve_api_keys
 from deepresearch_flow.paper.extract import parse_model_ref
@@ -54,6 +57,139 @@ def parse_publication_year(paper: dict[str, Any]) -> int | None:
         return None
     match = re.search(r"(19|20)\d{2}", str(date_str))
     return int(match.group(0)) if match else None
+
+
+MONTH_NAMES = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+]
+MONTH_LOOKUP = {
+    "january": "Jan",
+    "february": "Feb",
+    "march": "Mar",
+    "april": "Apr",
+    "may": "May",
+    "june": "Jun",
+    "july": "Jul",
+    "august": "Aug",
+    "september": "Sep",
+    "october": "Oct",
+    "november": "Nov",
+    "december": "Dec",
+    "jan": "Jan",
+    "feb": "Feb",
+    "mar": "Mar",
+    "apr": "Apr",
+    "jun": "Jun",
+    "jul": "Jul",
+    "aug": "Aug",
+    "sep": "Sep",
+    "sept": "Sep",
+    "oct": "Oct",
+    "nov": "Nov",
+    "dec": "Dec",
+}
+
+
+def normalize_month(value: str | int | None) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, int):
+        if 1 <= value <= 12:
+            return MONTH_NAMES[value - 1]
+        return None
+    raw = str(value).strip().lower()
+    if not raw:
+        return None
+    if raw.isdigit():
+        return normalize_month(int(raw))
+    if raw in MONTH_LOOKUP:
+        return MONTH_LOOKUP[raw]
+    return None
+
+
+def parse_year_month(date_str: str | None) -> tuple[str | None, str | None]:
+    if not date_str:
+        return None, None
+    text = str(date_str).strip()
+    year_match = re.search(r"(19|20)\d{2}", text)
+    year = year_match.group(0) if year_match else None
+
+    numeric_match = re.search(r"(19|20)\d{2}[-/](\d{1,2})", text)
+    if numeric_match:
+        month = normalize_month(int(numeric_match.group(2)))
+        return year, month
+
+    month_word = re.search(
+        r"(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|"
+        r"january|february|march|april|june|july|august|september|october|november|december)",
+        text.lower(),
+    )
+    if month_word:
+        return year, normalize_month(month_word.group(0))
+
+    return year, None
+
+
+def clean_journal_name(name: str | None) -> str:
+    if not name:
+        return "Unknown"
+    value = re.sub(r"\([^)]*\)", "", name)
+    value = re.sub(r"vol\.\s*\d+", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"volume\s*\d+", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"no\.\s*\d+", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"number\s*\d+", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"pp\.\s*\d+[-–]\d+", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"pages\s*\d+[-–]\d+", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"\b(19|20)\d{2}\b", "", value)
+    value = re.sub(r"[,:.;]+\s*$", "", value)
+    value = re.sub(r"\s+", " ", value).strip()
+    value = value.replace("{", "").replace("}", "")
+    return value if value else "Unknown"
+
+
+def clean_conference_name(name: str | None) -> str:
+    if not name:
+        return "Unknown"
+    value = re.sub(r"\b(19|20)\d{2}\b", "", name)
+    value = re.sub(r"\b\d+(st|nd|rd|th)\b", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"proceedings\s+of\s+the\s+", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"proceedings\s+of\s+", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"[,:.;]+\s*$", "", value)
+    value = re.sub(r"\s+", " ", value).strip()
+    value = value.replace("{", "").replace("}", "")
+    return value if value else "Unknown"
+
+
+def classify_venue(name: str | None) -> str:
+    if not name:
+        return "unknown"
+    lowered = name.lower()
+    if any(keyword in lowered for keyword in ["journal", "transactions", "letters", "review"]):
+        return "journal"
+    if any(
+        keyword in lowered
+        for keyword in ["conference", "proceedings", "symposium", "workshop", "meeting"]
+    ):
+        return "conference"
+    return "other"
+
+
+def format_distribution(count: int, max_count: int, width: int = 20) -> str:
+    if max_count <= 0:
+        return ""
+    filled = max(1, int(round(width * (count / max_count)))) if count else 0
+    return "#" * filled
 
 
 def similar_title(a: str, b: str, threshold: float = 0.9) -> bool:
@@ -245,30 +381,178 @@ def register_db_commands(db_group: click.Group) -> None:
 
     @db_group.command("statistics")
     @click.option("-i", "--input", "input_path", required=True, help="Input JSON file path")
-    def statistics(input_path: str) -> None:
+    @click.option("--top-n", "top_n", default=20, type=int, show_default=True, help="Top N rows to show")
+    def statistics(input_path: str, top_n: int) -> None:
         papers = load_json(Path(input_path))
-        year_counts: dict[int | None, int] = {}
+        console = Console()
+        console.print(Panel(f"Statistics for {input_path}", title="Paper Statistics"))
+
+        year_counts: dict[str, int] = {}
+        month_counts: dict[str, int] = {}
         author_counts: dict[str, int] = {}
         tag_counts: dict[str, int] = {}
+        journal_counts: dict[str, int] = {}
+        conference_counts: dict[str, int] = {}
+        other_venue_counts: dict[str, int] = {}
         for paper in papers:
-            year = parse_publication_year(paper)
-            year_counts[year] = year_counts.get(year, 0) + 1
+            bibtex_fields = {}
+            bibtex_type = None
+            if isinstance(paper.get("bibtex"), dict):
+                bibtex_fields = paper.get("bibtex", {}).get("fields", {}) or {}
+                bibtex_type = (paper.get("bibtex", {}).get("type") or "").lower()
+
+            year_value = None
+            if bibtex_fields.get("year"):
+                year_value = str(bibtex_fields.get("year"))
+            if not year_value:
+                year_value, _ = parse_year_month(str(paper.get("publication_date") or ""))
+            year_key = year_value or "Unknown"
+            year_counts[year_key] = year_counts.get(year_key, 0) + 1
+
+            month_value = normalize_month(bibtex_fields.get("month"))
+            if not month_value:
+                _, month_value = parse_year_month(str(paper.get("publication_date") or ""))
+            month_key = month_value or "Unknown"
+            month_counts[month_key] = month_counts.get(month_key, 0) + 1
+
             for author in normalize_authors(paper.get("paper_authors")):
                 author_counts[author] = author_counts.get(author, 0) + 1
             for tag in paper.get("ai_generated_tags") or []:
                 tag_counts[tag] = tag_counts.get(tag, 0) + 1
-        click.echo(f"Total papers: {len(papers)}")
-        click.echo(f"Years: {len([y for y in year_counts if y])}")
+
+            venue = None
+            if bibtex_type in {"article"}:
+                venue = bibtex_fields.get("journal")
+                journal_counts[clean_journal_name(venue)] = journal_counts.get(
+                    clean_journal_name(venue),
+                    0,
+                ) + 1
+            elif bibtex_type in {"inproceedings", "conference", "proceedings"}:
+                venue = bibtex_fields.get("booktitle")
+                conference_counts[clean_conference_name(venue)] = conference_counts.get(
+                    clean_conference_name(venue),
+                    0,
+                ) + 1
+            else:
+                extracted_venue = paper.get("publication_venue")
+                venue_kind = classify_venue(extracted_venue)
+                if venue_kind == "journal":
+                    journal_counts[clean_journal_name(extracted_venue)] = journal_counts.get(
+                        clean_journal_name(extracted_venue),
+                        0,
+                    ) + 1
+                elif venue_kind == "conference":
+                    conference_counts[clean_conference_name(extracted_venue)] = conference_counts.get(
+                        clean_conference_name(extracted_venue),
+                        0,
+                    ) + 1
+                elif extracted_venue:
+                    other_venue_counts[clean_conference_name(extracted_venue)] = other_venue_counts.get(
+                        clean_conference_name(extracted_venue),
+                        0,
+                    ) + 1
+
+        total = len(papers)
+        console.print(f"Total papers: {total}")
+
+        year_table = Table(title="Publication Year Statistics")
+        year_table.add_column("Year", style="cyan")
+        year_table.add_column("Count", style="green", justify="right")
+        year_table.add_column("Percentage", style="yellow", justify="right")
+        year_table.add_column("Distribution", style="magenta")
+
+        max_year = max(year_counts.values()) if year_counts else 0
+        def year_sort_key(item: tuple[str, int]) -> tuple[int, int]:
+            label = item[0]
+            if label == "Unknown":
+                return (1, 0)
+            if label.isdigit():
+                return (0, -int(label))
+            return (0, 0)
+
+        for year, count in sorted(year_counts.items(), key=year_sort_key):
+            percentage = (count / total * 100) if total else 0
+            year_table.add_row(
+                year,
+                str(count),
+                f"{percentage:.1f}%",
+                format_distribution(count, max_year),
+            )
+        console.print(year_table)
+
+        month_table = Table(title="Publication Month Statistics")
+        month_table.add_column("Month", style="cyan")
+        month_table.add_column("Count", style="green", justify="right")
+        month_table.add_column("Percentage", style="yellow", justify="right")
+        month_table.add_column("Distribution", style="magenta")
+
+        max_month = max(month_counts.values()) if month_counts else 0
+        def month_sort_key(item: tuple[str, int]) -> int:
+            if item[0] == "Unknown":
+                return 99
+            if item[0] in MONTH_NAMES:
+                return MONTH_NAMES.index(item[0])
+            return 98
+
+        for month, count in sorted(month_counts.items(), key=month_sort_key):
+            percentage = (count / total * 100) if total else 0
+            month_table.add_row(
+                month,
+                str(count),
+                f"{percentage:.1f}%",
+                format_distribution(count, max_month),
+            )
+        console.print(month_table)
+
+        if journal_counts:
+            journal_table = Table(title=f"Top {top_n} Journals")
+            journal_table.add_column("Journal", style="cyan")
+            journal_table.add_column("Count", style="green", justify="right")
+            journal_table.add_column("Percentage", style="yellow", justify="right")
+            for journal, count in sorted(journal_counts.items(), key=lambda item: item[1], reverse=True)[:top_n]:
+                percentage = (count / total * 100) if total else 0
+                journal_table.add_row(journal, str(count), f"{percentage:.1f}%")
+            console.print(journal_table)
+
+        if conference_counts:
+            conference_table = Table(title=f"Top {top_n} Conferences")
+            conference_table.add_column("Conference", style="cyan")
+            conference_table.add_column("Count", style="green", justify="right")
+            conference_table.add_column("Percentage", style="yellow", justify="right")
+            for conference, count in sorted(conference_counts.items(), key=lambda item: item[1], reverse=True)[:top_n]:
+                percentage = (count / total * 100) if total else 0
+                conference_table.add_row(conference, str(count), f"{percentage:.1f}%")
+            console.print(conference_table)
+
+        if other_venue_counts:
+            other_table = Table(title=f"Top {top_n} Other Venues")
+            other_table.add_column("Venue", style="cyan")
+            other_table.add_column("Count", style="green", justify="right")
+            other_table.add_column("Percentage", style="yellow", justify="right")
+            for venue, count in sorted(other_venue_counts.items(), key=lambda item: item[1], reverse=True)[:top_n]:
+                percentage = (count / total * 100) if total else 0
+                other_table.add_row(venue, str(count), f"{percentage:.1f}%")
+            console.print(other_table)
+
         if author_counts:
-            top_authors = sorted(author_counts.items(), key=lambda item: item[1], reverse=True)[:10]
-            click.echo("Top authors:")
-            for author, count in top_authors:
-                click.echo(f"  {author}: {count}")
+            author_table = Table(title=f"Top {top_n} Authors")
+            author_table.add_column("Author", style="cyan")
+            author_table.add_column("Papers", style="green", justify="right")
+            author_table.add_column("Percentage", style="yellow", justify="right")
+            for author, count in sorted(author_counts.items(), key=lambda item: item[1], reverse=True)[:top_n]:
+                percentage = (count / total * 100) if total else 0
+                author_table.add_row(author, str(count), f"{percentage:.1f}%")
+            console.print(author_table)
+
         if tag_counts:
-            top_tags = sorted(tag_counts.items(), key=lambda item: item[1], reverse=True)[:10]
-            click.echo("Top tags:")
-            for tag, count in top_tags:
-                click.echo(f"  {tag}: {count}")
+            tag_table = Table(title=f"Top {top_n} Tags")
+            tag_table.add_column("Tag", style="cyan")
+            tag_table.add_column("Count", style="green", justify="right")
+            tag_table.add_column("Percentage", style="yellow", justify="right")
+            for tag, count in sorted(tag_counts.items(), key=lambda item: item[1], reverse=True)[:top_n]:
+                percentage = (count / total * 100) if total else 0
+                tag_table.add_row(tag, str(count), f"{percentage:.1f}%")
+            console.print(tag_table)
 
     @db_group.command("generate-tags")
     @click.option("-i", "--input", "input_path", required=True, help="Input JSON file path")
