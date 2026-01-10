@@ -941,17 +941,28 @@ let pdfDoc = null;
 let pageNum = 1;
 let pageRendering = false;
 let pageNumPending = null;
-let scale = 1.2;
+let zoom = 1.0;
 const canvas = document.getElementById('the-canvas');
 const ctx = canvas.getContext('2d');
 
 function renderPage(num) {{
   pageRendering = true;
   pdfDoc.getPage(num).then((page) => {{
+    const baseViewport = page.getViewport({{scale: 1}});
+    const containerWidth = canvas.clientWidth || baseViewport.width;
+    const fitScale = containerWidth / baseViewport.width;
+    const scale = fitScale * zoom;
+
     const viewport = page.getViewport({{scale}});
-    canvas.height = viewport.height;
-    canvas.width = viewport.width;
-    const renderContext = {{ canvasContext: ctx, viewport }};
+    const outputScale = window.devicePixelRatio || 1;
+
+    canvas.width = Math.floor(viewport.width * outputScale);
+    canvas.height = Math.floor(viewport.height * outputScale);
+    canvas.style.width = Math.floor(viewport.width) + 'px';
+    canvas.style.height = Math.floor(viewport.height) + 'px';
+
+    const transform = outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : null;
+    const renderContext = {{ canvasContext: ctx, viewport, transform }};
     const renderTask = page.render(renderContext);
     renderTask.promise.then(() => {{
       pageRendering = false;
@@ -986,7 +997,7 @@ function onNextPage() {{
 }}
 
 function zoom(delta) {{
-  scale = Math.max(0.5, Math.min(3.0, scale + delta));
+  zoom = Math.max(0.5, Math.min(3.0, zoom + delta));
   queueRenderPage(pageNum);
 }}
 
@@ -999,6 +1010,13 @@ pdfjsLib.getDocument(url).promise.then((pdfDoc_) => {{
   pdfDoc = pdfDoc_;
   document.getElementById('page_count').textContent = String(pdfDoc.numPages);
   renderPage(pageNum);
+}});
+
+let resizeTimer = null;
+window.addEventListener('resize', () => {{
+  if (!pdfDoc) return;
+  if (resizeTimer) clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => queueRenderPage(pageNum), 150);
 }});
 </script>
 """
