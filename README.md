@@ -44,6 +44,12 @@ deepresearch-flow paper extract \
   --input ./docs \
   --model openai/gpt-4o-mini
 
+# Scan multiple inputs in one run
+deepresearch-flow paper extract \
+  --input ./docs \
+  --input ./more-docs \
+  --model openai/gpt-4o-mini
+
 # Use built-in prompt template and output language
 deepresearch-flow paper extract \
   --input ./docs \

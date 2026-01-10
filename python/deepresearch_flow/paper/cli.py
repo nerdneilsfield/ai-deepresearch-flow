@@ -27,7 +27,7 @@ def paper() -> None:
     "inputs",
     multiple=True,
     required=True,
-    help="Input markdown file or directory",
+    help="Input markdown file or directory (repeatable)",
 )
 @click.option("-g", "--glob", "glob_pattern", default=None, help="Glob filter when input is a directory")
 @click.option(
