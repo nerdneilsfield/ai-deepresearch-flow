@@ -31,3 +31,10 @@ The system SHALL allow Summary rendering to switch among the templates available
 #### Scenario: Summary template dropdown
 - **WHEN** a paper has multiple templates available
 - **THEN** Summary displays a dropdown listing only those templates and renders the selected template
+
+### Requirement: db serve cache directory
+The system SHALL accept an optional `--cache-dir` for `paper db serve` to reuse merged inputs across runs, and SHALL accept `--no-cache` to bypass cache reads and writes.
+
+#### Scenario: Cache reused across runs
+- **WHEN** the user runs `paper db serve` with `--cache-dir` and unchanged input files
+- **THEN** the server reuses cached merged inputs instead of rebuilding them

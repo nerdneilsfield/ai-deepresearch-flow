@@ -415,6 +415,71 @@ def _infer_template_tag(papers: list[dict[str, Any]], path: Path) -> str:
     return best_tag
 
 
+def _build_cache_meta(db_paths: list[Path], bibtex_path: Path | None) -> dict[str, Any]:
+    def file_meta(path: Path) -> dict[str, Any]:
+        try:
+            stats = path.stat()
+        except OSError as exc:
+            raise ValueError(f"Failed to read input metadata for cache: {path}") from exc
+        return {"path": str(path), "mtime": stats.st_mtime, "size": stats.st_size}
+
+    meta = {
+        "version": 1,
+        "inputs": [file_meta(path) for path in db_paths],
+        "bibtex": file_meta(bibtex_path) if bibtex_path else None,
+    }
+    return meta
+
+
+def _load_cached_papers(cache_dir: Path, meta: dict[str, Any]) -> list[dict[str, Any]] | None:
+    meta_path = cache_dir / "db_serve_cache.meta.json"
+    data_path = cache_dir / "db_serve_cache.papers.json"
+    if not meta_path.exists() or not data_path.exists():
+        return None
+    try:
+        cached_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        if cached_meta != meta:
+            return None
+        cached_papers = json.loads(data_path.read_text(encoding="utf-8"))
+        if not isinstance(cached_papers, list):
+            return None
+        return cached_papers
+    except Exception:
+        return None
+
+
+def _write_cached_papers(cache_dir: Path, meta: dict[str, Any], papers: list[dict[str, Any]]) -> None:
+    meta_path = cache_dir / "db_serve_cache.meta.json"
+    data_path = cache_dir / "db_serve_cache.papers.json"
+    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    data_path.write_text(json.dumps(papers, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _load_or_merge_papers(
+    db_paths: list[Path],
+    bibtex_path: Path | None,
+    cache_dir: Path | None,
+    use_cache: bool,
+) -> list[dict[str, Any]]:
+    cache_meta = None
+    if cache_dir and use_cache:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_meta = _build_cache_meta(db_paths, bibtex_path)
+        cached = _load_cached_papers(cache_dir, cache_meta)
+        if cached is not None:
+            return cached
+
+    inputs = _load_paper_inputs(db_paths)
+    if bibtex_path is not None:
+        for bundle in inputs:
+            enrich_with_bibtex(bundle["papers"], bibtex_path)
+    papers = _merge_paper_inputs(inputs)
+
+    if cache_dir and use_cache and cache_meta is not None:
+        _write_cached_papers(cache_dir, cache_meta, papers)
+    return papers
+
+
 def _md_renderer() -> MarkdownIt:
     return MarkdownIt("commonmark", {"html": False, "linkify": True})
 
@@ -422,7 +487,7 @@ def _md_renderer() -> MarkdownIt:
 def _normalize_merge_title(value: str | None) -> str | None:
     if not value:
         return None
-    return str(value).strip().lower()
+    return str(value).replace("{", "").replace("}", "").strip().lower()
 
 
 def _extract_bibtex_title(paper: dict[str, Any]) -> str | None:
@@ -492,16 +557,49 @@ def _add_merge_titles(group: dict[str, Any], paper: dict[str, Any]) -> None:
 def _merge_paper_inputs(inputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     merged: list[dict[str, Any]] = []
     threshold = 0.95
+    prefix_len = 5
+    bibtex_exact: dict[str, set[int]] = {}
+    bibtex_prefix: dict[str, set[int]] = {}
+    paper_exact: dict[str, set[int]] = {}
+    paper_prefix: dict[str, set[int]] = {}
+
+    def prefix_key(value: str) -> str:
+        return value[:prefix_len] if len(value) >= prefix_len else value
+
+    def add_index(
+        value: str,
+        exact_index: dict[str, set[int]],
+        prefix_index: dict[str, set[int]],
+        idx: int,
+    ) -> None:
+        exact_index.setdefault(value, set()).add(idx)
+        prefix_index.setdefault(prefix_key(value), set()).add(idx)
+
+    def candidate_ids(bib_title: str | None, paper_title: str | None) -> list[int]:
+        ids: set[int] = set()
+        if bib_title:
+            ids |= bibtex_exact.get(bib_title, set())
+            ids |= bibtex_prefix.get(prefix_key(bib_title), set())
+        if paper_title:
+            ids |= paper_exact.get(paper_title, set())
+            ids |= paper_prefix.get(prefix_key(paper_title), set())
+        return sorted(ids)
+
     for bundle in inputs:
         template_tag = bundle.get("template_tag")
         papers = bundle.get("papers") or []
         for paper in papers:
             if not isinstance(paper, dict):
                 raise ValueError("Input papers must be objects")
+            bib_title = _extract_bibtex_title(paper)
+            paper_title = _extract_paper_title(paper)
             match = None
-            for candidate in merged:
+            match_idx = None
+            for idx in candidate_ids(bib_title, paper_title):
+                candidate = merged[idx]
                 if _titles_match(candidate, paper, threshold=threshold):
                     match = candidate
+                    match_idx = idx
                     break
             if match is None:
                 group = {
@@ -510,6 +608,11 @@ def _merge_paper_inputs(inputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 }
                 _add_merge_titles(group, paper)
                 merged.append(group)
+                group_idx = len(merged) - 1
+                if bib_title:
+                    add_index(bib_title, bibtex_exact, bibtex_prefix, group_idx)
+                if paper_title:
+                    add_index(paper_title, paper_exact, paper_prefix, group_idx)
             else:
                 templates = match.setdefault("templates", {})
                 templates[template_tag] = paper
@@ -517,6 +620,11 @@ def _merge_paper_inputs(inputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 if template_tag not in order:
                     order.append(template_tag)
                 _add_merge_titles(match, paper)
+                if match_idx is not None:
+                    if bib_title:
+                        add_index(bib_title, bibtex_exact, bibtex_prefix, match_idx)
+                    if paper_title:
+                        add_index(paper_title, paper_exact, paper_prefix, match_idx)
 
     for group in merged:
         templates = group.get("templates") or {}
@@ -527,6 +635,8 @@ def _merge_paper_inputs(inputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
             base = templates[default_tag]
             for key, value in base.items():
                 group[key] = value
+        group.pop("_merge_bibtex_titles", None)
+        group.pop("_merge_paper_titles", None)
     return merged
 
 
@@ -1603,12 +1713,10 @@ def create_app(
     bibtex_path: Path | None = None,
     md_roots: list[Path] | None = None,
     pdf_roots: list[Path] | None = None,
+    cache_dir: Path | None = None,
+    use_cache: bool = True,
 ) -> Starlette:
-    inputs = _load_paper_inputs(db_paths)
-    if bibtex_path is not None:
-        for bundle in inputs:
-            enrich_with_bibtex(bundle["papers"], bibtex_path)
-    papers = _merge_paper_inputs(inputs)
+    papers = _load_or_merge_papers(db_paths, bibtex_path, cache_dir, use_cache)
 
     md_roots = md_roots or []
     pdf_roots = pdf_roots or []

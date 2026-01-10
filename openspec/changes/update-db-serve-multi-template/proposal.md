@@ -9,6 +9,7 @@ Users want to serve multiple extraction outputs at once, merge the same paper ac
 - Infer missing `template_tag` by comparing paper keys to template schema keys.
 - Merge papers across inputs by title similarity (>= 0.95), preferring BibTeX title when available and falling back to `paper_title`.
 - Add a Summary template selector per paper; default to `simple` or the first available template by input order; Source/PDF views stay unchanged.
+- Add optional `--cache-dir`/`--no-cache` flags to reuse merged inputs between runs.
 
 ## Impact
 - Affected specs: `paper`

@@ -180,6 +180,7 @@ deepresearch-flow paper db statistics \
 deepresearch-flow paper db serve \
   --input paper_infos_simple.json \
   --input paper_infos_deep_read.json \
+  --cache-dir .cache/db-serve \
   --host 127.0.0.1 \
   --port 8000
 
@@ -191,8 +192,12 @@ deepresearch-flow paper db serve \
   --md-root ./docs \
   --md-root ./more_docs \
   --pdf-root ./pdfs \
+  --cache-dir .cache/db-serve \
   --host 127.0.0.1 \
   --port 8000
+
+# Disable cache (optional)
+# deepresearch-flow paper db serve --input paper_infos_simple.json --no-cache
 ```
 
 Web search syntax (Scholar-style):

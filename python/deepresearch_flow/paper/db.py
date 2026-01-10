@@ -558,6 +558,8 @@ def register_db_commands(db_group: click.Group) -> None:
         default=(),
         help="Optional PDF root directory (repeatable) for in-page PDF viewing",
     )
+    @click.option("--cache-dir", "cache_dir", default=None, help="Cache directory for merged inputs")
+    @click.option("--no-cache", "no_cache", is_flag=True, help="Disable cache for db serve")
     @click.option("--host", default="127.0.0.1", show_default=True, help="Bind host")
     @click.option("--port", default=8000, type=int, show_default=True, help="Bind port")
     @click.option(
@@ -572,6 +574,8 @@ def register_db_commands(db_group: click.Group) -> None:
         bibtex_path: str | None,
         md_roots: tuple[str, ...],
         pdf_roots: tuple[str, ...],
+        cache_dir: str | None,
+        no_cache: bool,
         host: str,
         port: int,
         fallback_language: str,
@@ -587,6 +591,8 @@ def register_db_commands(db_group: click.Group) -> None:
                 bibtex_path=Path(bibtex_path) if bibtex_path else None,
                 md_roots=[Path(root) for root in md_roots],
                 pdf_roots=[Path(root) for root in pdf_roots],
+                cache_dir=Path(cache_dir) if cache_dir else None,
+                use_cache=not no_cache,
             )
         except Exception as exc:
             raise click.ClickException(str(exc)) from exc
