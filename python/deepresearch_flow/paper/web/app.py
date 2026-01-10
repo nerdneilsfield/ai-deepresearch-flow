@@ -10,12 +10,19 @@ import re
 from markdown_it import MarkdownIt
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse
+from starlette.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 
 from deepresearch_flow.paper.render import load_default_template
 from deepresearch_flow.paper.template_registry import load_render_template
 from deepresearch_flow.paper.utils import stable_hash
+from deepresearch_flow.paper.web.query import Query, QueryTerm, parse_query
+
+try:
+    from pybtex.database import parse_file
+    PYBTEX_AVAILABLE = True
+except Exception:
+    PYBTEX_AVAILABLE = False
 
 
 _CDN_ECHARTS = "https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"
@@ -23,6 +30,8 @@ _CDN_MERMAID = "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"
 _CDN_KATEX = "https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css"
 _CDN_KATEX_JS = "https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"
 _CDN_KATEX_AUTO = "https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+_CDN_PDFJS = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.2.67/build/pdf.min.js"
+_CDN_PDFJS_WORKER = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.2.67/build/pdf.worker.min.js"
 
 
 @dataclass(frozen=True)
@@ -36,6 +45,8 @@ class PaperIndex:
     by_month: dict[str, set[int]]
     by_venue: dict[str, set[int]]
     stats: dict[str, Any]
+    md_path_by_hash: dict[str, Path]
+    pdf_path_by_hash: dict[str, Path]
 
 
 def _split_csv(values: list[str]) -> list[str]:
@@ -177,13 +188,24 @@ def _extract_venue(paper: dict[str, Any]) -> str:
     return str(paper.get("publication_venue") or "")
 
 
-def build_index(papers: list[dict[str, Any]]) -> PaperIndex:
+def build_index(
+    papers: list[dict[str, Any]],
+    *,
+    md_roots: list[Path] | None = None,
+    pdf_roots: list[Path] | None = None,
+) -> PaperIndex:
     id_by_hash: dict[str, int] = {}
     by_tag: dict[str, set[int]] = {}
     by_author: dict[str, set[int]] = {}
     by_year: dict[str, set[int]] = {}
     by_month: dict[str, set[int]] = {}
     by_venue: dict[str, set[int]] = {}
+
+    md_path_by_hash: dict[str, Path] = {}
+    pdf_path_by_hash: dict[str, Path] = {}
+
+    md_file_index = _build_file_index(md_roots or [], suffixes={".md"})
+    pdf_file_index = _build_file_index(pdf_roots or [], suffixes={".pdf"})
 
     year_counts: dict[str, int] = {}
     month_counts: dict[str, int] = {}
@@ -249,6 +271,17 @@ def build_index(papers: list[dict[str, Any]]) -> PaperIndex:
             add_index(by_tag, key, idx)
             tag_counts[tag] = tag_counts.get(tag, 0) + 1
 
+        search_parts = [title, venue, " ".join(authors), " ".join(tags)]
+        paper["_search_lc"] = " ".join(part for part in search_parts if part).lower()
+
+        source_hash_str = str(source_hash) if source_hash else str(idx)
+        md_path = _resolve_source_md(paper, md_file_index)
+        if md_path is not None:
+            md_path_by_hash[source_hash_str] = md_path
+        pdf_path = _resolve_pdf(paper, pdf_file_index)
+        if pdf_path is not None:
+            pdf_path_by_hash[source_hash_str] = pdf_path
+
     def year_sort_key(item: tuple[int, dict[str, Any]]) -> tuple[int, int, str]:
         idx, paper = item
         year_label = str(paper.get("_year") or "Unknown")
@@ -278,6 +311,8 @@ def build_index(papers: list[dict[str, Any]]) -> PaperIndex:
         by_month=by_month,
         by_venue=by_venue,
         stats=stats,
+        md_path_by_hash=md_path_by_hash,
+        pdf_path_by_hash=pdf_path_by_hash,
     )
 
 
@@ -336,6 +371,126 @@ def _render_paper_markdown(paper: dict[str, Any], fallback_language: str) -> tup
     return template.render(**context), str(template_name), warning
 
 
+def _build_file_index(roots: list[Path], *, suffixes: set[str]) -> dict[str, list[Path]]:
+    index: dict[str, list[Path]] = {}
+    for root in roots:
+        try:
+            if not root.exists() or not root.is_dir():
+                continue
+        except OSError:
+            continue
+        for path in root.rglob("*"):
+            try:
+                if not path.is_file():
+                    continue
+            except OSError:
+                continue
+            if path.suffix.lower() not in suffixes:
+                continue
+            index.setdefault(path.name.lower(), []).append(path.resolve())
+    return index
+
+
+def _resolve_source_md(paper: dict[str, Any], md_index: dict[str, list[Path]]) -> Path | None:
+    source_path = paper.get("source_path")
+    if not source_path:
+        return None
+    name = Path(str(source_path)).name.lower()
+    candidates = md_index.get(name, [])
+    return candidates[0] if candidates else None
+
+
+def _guess_pdf_names(paper: dict[str, Any]) -> list[str]:
+    source_path = paper.get("source_path")
+    if not source_path:
+        return []
+    name = Path(str(source_path)).name
+    match = re.match(r"(?i)(.+\\.pdf)(?:-[0-9a-f\\-]{8,})?\\.md$", name)
+    if match:
+        return [Path(match.group(1)).name]
+    if ".pdf-" in name.lower():
+        base = name[: name.lower().rfind(".pdf-") + 4]
+        return [Path(base).name]
+    if name.lower().endswith(".pdf.md"):
+        return [name[:-3]]
+    return []
+
+
+def _resolve_pdf(paper: dict[str, Any], pdf_index: dict[str, list[Path]]) -> Path | None:
+    for filename in _guess_pdf_names(paper):
+        candidates = pdf_index.get(filename.lower(), [])
+        if candidates:
+            return candidates[0]
+    return None
+
+
+def _ensure_under_roots(path: Path, roots: list[Path]) -> bool:
+    resolved = path.resolve()
+    for root in roots:
+        try:
+            resolved.relative_to(root.resolve())
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def _apply_query(index: PaperIndex, query: Query) -> set[int]:
+    all_ids = set(index.ordered_ids)
+
+    def ids_for_term(term: QueryTerm, base: set[int]) -> set[int]:
+        value_lc = term.value.lower()
+        if term.field is None:
+            return {idx for idx in base if value_lc in str(index.papers[idx].get("_search_lc") or "")}
+        if term.field == "title":
+            return {idx for idx in base if value_lc in str(index.papers[idx].get("_title_lc") or "")}
+        if term.field == "venue":
+            return {idx for idx in base if value_lc in str(index.papers[idx].get("_venue") or "").lower()}
+        if term.field == "tag":
+            exact = index.by_tag.get(value_lc)
+            if exact is not None:
+                return exact & base
+            return {idx for idx in base if any(value_lc in t.lower() for t in (index.papers[idx].get("_tags") or []))}
+        if term.field == "author":
+            exact = index.by_author.get(value_lc)
+            if exact is not None:
+                return exact & base
+            return {idx for idx in base if any(value_lc in a.lower() for a in (index.papers[idx].get("_authors") or []))}
+        if term.field == "month":
+            exact = index.by_month.get(value_lc)
+            if exact is not None:
+                return exact & base
+            return {idx for idx in base if value_lc == str(index.papers[idx].get("_month") or "").lower()}
+        if term.field == "year":
+            if ".." in term.value:
+                start_str, end_str = term.value.split("..", 1)
+                if start_str.strip().isdigit() and end_str.strip().isdigit():
+                    start = int(start_str.strip())
+                    end = int(end_str.strip())
+                    ids: set[int] = set()
+                    for y in range(min(start, end), max(start, end) + 1):
+                        ids |= index.by_year.get(str(y), set())
+                    return ids & base
+            exact = index.by_year.get(value_lc)
+            if exact is not None:
+                return exact & base
+            return {idx for idx in base if value_lc in str(index.papers[idx].get("_year") or "").lower()}
+        return set()
+
+    result: set[int] = set()
+    for group in query.groups:
+        group_ids = set(all_ids)
+        for term in group:
+            matched = ids_for_term(term, group_ids if not term.negated else all_ids)
+            if term.negated:
+                group_ids -= matched
+            else:
+                group_ids &= matched
+        result |= group_ids
+
+    return result
+
+
 def _page_shell(title: str, body_html: str, extra_head: str = "", extra_scripts: str = "") -> str:
     return f"""<!doctype html>
 <html lang="en">
@@ -379,13 +534,32 @@ async def _index_page(request: Request) -> HTMLResponse:
             "Paper DB",
             """
 <h2>Paper Database</h2>
-<div class="filters">
-  <input id="q" placeholder="Title contains..." />
-  <input id="tag" placeholder="Tag (comma separated)" />
-  <input id="author" placeholder="Author (comma separated)" />
-  <input id="year" placeholder="Year (e.g. 2024)" />
-  <input id="month" placeholder="Month (01-12)" />
-  <input id="venue" placeholder="Venue contains..." />
+<div class="card">
+  <div class="muted">Search (Scholar-style): <code>tag:fpga year:2023..2025 -survey</code> · Use quotes for phrases and <code>OR</code> for alternatives.</div>
+  <div style="display:flex; gap:8px; margin-top:8px;">
+    <input id="query" placeholder='Search... e.g. title:"nearest neighbor" tag:fpga year:2023..2025' style="flex:1; padding:10px; border:1px solid #d0d7de; border-radius:8px;" />
+    <select id="openView" style="padding:10px; border:1px solid #d0d7de; border-radius:8px;">
+      <option value="summary" selected>Open: Summary</option>
+      <option value="source">Open: Source</option>
+      <option value="pdf">Open: PDF</option>
+    </select>
+  </div>
+  <details style="margin-top:10px;">
+    <summary>Advanced search</summary>
+    <div style="margin-top:10px;" class="muted">Build a query:</div>
+    <div class="filters" style="grid-template-columns: repeat(3, 1fr);">
+      <input id="advTitle" placeholder="title contains..." />
+      <input id="advAuthor" placeholder="author contains..." />
+      <input id="advTag" placeholder="tag (comma separated)" />
+      <input id="advYear" placeholder="year (e.g. 2020..2024)" />
+      <input id="advMonth" placeholder="month (01-12)" />
+      <input id="advVenue" placeholder="venue contains..." />
+    </div>
+    <div style="display:flex; gap:8px; align-items:center; margin-top:8px;">
+      <button id="buildQuery" style="padding:8px 12px; border-radius:8px; border:1px solid #d0d7de; background:#f6f8fa; cursor:pointer;">Build</button>
+      <div class="muted">Generated: <code id="generated"></code></div>
+    </div>
+  </details>
 </div>
 <div id="results"></div>
 <div id="loading" class="muted">Loading...</div>
@@ -398,18 +572,8 @@ function currentParams(nextPage) {
   const params = new URLSearchParams();
   params.set("page", String(nextPage));
   params.set("page_size", "30");
-  const q = document.getElementById("q").value.trim();
-  const tag = document.getElementById("tag").value.trim();
-  const author = document.getElementById("author").value.trim();
-  const year = document.getElementById("year").value.trim();
-  const month = document.getElementById("month").value.trim();
-  const venue = document.getElementById("venue").value.trim();
+  const q = document.getElementById("query").value.trim();
   if (q) params.set("q", q);
-  if (tag) params.set("tag", tag);
-  if (author) params.set("author", author);
-  if (year) params.set("year", year);
-  if (month) params.set("month", month);
-  if (venue) params.set("venue", venue);
   return params;
 }
 
@@ -423,12 +587,18 @@ function renderItem(item) {
   const tags = (item.tags || []).map(t => `<span class="pill">${escapeHtml(t)}</span>`).join("");
   const authors = (item.authors || []).slice(0, 6).map(a => escapeHtml(a)).join(", ");
   const meta = `${escapeHtml(item.year || "")}-${escapeHtml(item.month || "")} · ${escapeHtml(item.venue || "")}`;
+  const view = document.getElementById("openView").value;
+  const viewSuffix = view ? `?view=${encodeURIComponent(view)}` : "";
+  const badges = [
+    item.has_source ? `<span class="pill">source</span>` : "",
+    item.has_pdf ? `<span class="pill">pdf</span>` : "",
+  ].join("");
   return `
     <div class="card">
-      <div><a href="/paper/${encodeURIComponent(item.source_hash)}">${escapeHtml(item.title || "")}</a></div>
+      <div><a href="/paper/${encodeURIComponent(item.source_hash)}${viewSuffix}">${escapeHtml(item.title || "")}</a></div>
       <div class="muted">${authors}</div>
       <div class="muted">${meta}</div>
-      <div style="margin-top:6px">${tags}</div>
+      <div style="margin-top:6px">${badges} ${tags}</div>
     </div>
   `;
 }
@@ -460,9 +630,39 @@ function resetAndLoad() {
   loadMore();
 }
 
-for (const id of ["q", "tag", "author", "year", "month", "venue"]) {
-  document.getElementById(id).addEventListener("change", resetAndLoad);
-}
+document.getElementById("query").addEventListener("change", resetAndLoad);
+document.getElementById("openView").addEventListener("change", resetAndLoad);
+
+document.getElementById("buildQuery").addEventListener("click", () => {
+  function add(field, value) {
+    value = value.trim();
+    if (!value) return "";
+    if (value.includes(" ")) return `${field}:"${value}"`;
+    return `${field}:${value}`;
+  }
+  const parts = [];
+  const t = document.getElementById("advTitle").value.trim();
+  const a = document.getElementById("advAuthor").value.trim();
+  const tag = document.getElementById("advTag").value.trim();
+  const y = document.getElementById("advYear").value.trim();
+  const m = document.getElementById("advMonth").value.trim();
+  const v = document.getElementById("advVenue").value.trim();
+  if (t) parts.push(add("title", t));
+  if (a) parts.push(add("author", a));
+  if (tag) {
+    for (const item of tag.split(",")) {
+      const val = item.trim();
+      if (val) parts.push(add("tag", val));
+    }
+  }
+  if (y) parts.push(add("year", y));
+  if (m) parts.push(add("month", m));
+  if (v) parts.push(add("venue", v));
+  const q = parts.join(" ");
+  document.getElementById("generated").textContent = q;
+  document.getElementById("query").value = q;
+  resetAndLoad();
+});
 
 window.addEventListener("scroll", () => {
   if ((window.innerHeight + window.scrollY) >= (document.body.offsetHeight - 600)) {
@@ -485,21 +685,11 @@ def _parse_filters(request: Request) -> dict[str, list[str] | str | int]:
     page_size = min(max(1, page_size), 200)
 
     q = qp.get("q", "").strip()
-    tag = _split_csv(qp.getlist("tag"))
-    author = _split_csv(qp.getlist("author"))
-    year = _split_csv(qp.getlist("year"))
-    month = _split_csv(qp.getlist("month"))
-    venue = _split_csv(qp.getlist("venue"))
 
     return {
         "page": page,
         "page_size": page_size,
         "q": q,
-        "tag": tag,
-        "author": author,
-        "year": year,
-        "month": month,
-        "venue": venue,
     }
 
 
@@ -508,43 +698,9 @@ async def _api_papers(request: Request) -> JSONResponse:
     filters = _parse_filters(request)
     page = int(filters["page"])
     page_size = int(filters["page_size"])
-    q = str(filters["q"]).lower()
-
-    def union_ids(mapping: dict[str, set[int]], values: list[str]) -> set[int]:
-        out: set[int] = set()
-        for value in values:
-            key = _normalize_key(value)
-            out |= mapping.get(key, set())
-        return out
-
-    candidate: set[int] | None = None
-    for mapping, values in (
-        (index.by_tag, filters["tag"]),
-        (index.by_author, filters["author"]),
-        (index.by_year, filters["year"]),
-        (index.by_month, filters["month"]),
-    ):
-        values_list = list(values)  # type: ignore[arg-type]
-        if not values_list:
-            continue
-        ids = union_ids(mapping, values_list)
-        candidate = ids if candidate is None else (candidate & ids)
-
-    venue_values = list(filters["venue"])  # type: ignore[arg-type]
-    if venue_values:
-        ids: set[int] = set()
-        for idx in index.ordered_ids:
-            venue = str(index.papers[idx].get("_venue") or "").lower()
-            if any(v.lower() in venue for v in venue_values):
-                ids.add(idx)
-        candidate = ids if candidate is None else (candidate & ids)
-
-    if candidate is None:
-        candidate = set(index.ordered_ids)
-
-    if q:
-        candidate = {idx for idx in candidate if q in str(index.papers[idx].get("_title_lc") or "")}
-
+    q = str(filters["q"])
+    query = parse_query(q)
+    candidate = _apply_query(index, query)
     ordered = [idx for idx in index.ordered_ids if idx in candidate]
     total = len(ordered)
     start = (page - 1) * page_size
@@ -554,15 +710,18 @@ async def _api_papers(request: Request) -> JSONResponse:
     items: list[dict[str, Any]] = []
     for idx in page_ids:
         paper = index.papers[idx]
+        source_hash = str(paper.get("source_hash") or stable_hash(str(paper.get("source_path") or idx)))
         items.append(
             {
-                "source_hash": paper.get("source_hash") or stable_hash(str(paper.get("source_path") or idx)),
+                "source_hash": source_hash,
                 "title": paper.get("paper_title") or "",
                 "authors": paper.get("_authors") or [],
                 "year": paper.get("_year") or "",
                 "month": paper.get("_month") or "",
                 "venue": paper.get("_venue") or "",
                 "tags": paper.get("_tags") or [],
+                "has_source": source_hash in index.md_path_by_hash,
+                "has_pdf": source_hash in index.pdf_path_by_hash,
             }
         )
 
@@ -585,6 +744,124 @@ async def _paper_detail(request: Request) -> HTMLResponse:
     if idx is None:
         return RedirectResponse("/")
     paper = index.papers[idx]
+    view = request.query_params.get("view", "summary")
+
+    nav = f"""
+<div style="margin: 8px 0 14px;">
+  <a href="/paper/{html.escape(source_hash)}?view=summary">Summary</a>
+  <a href="/paper/{html.escape(source_hash)}?view=source">Source</a>
+  <a href="/paper/{html.escape(source_hash)}?view=pdf">PDF</a>
+</div>
+"""
+
+    if view == "source":
+        source_path = index.md_path_by_hash.get(source_hash)
+        if not source_path:
+            body = nav + '<div class="warning">Source markdown not found. Provide --md-root to enable source viewing.</div>'
+            return HTMLResponse(_page_shell("Source", body))
+        try:
+            raw = source_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            raw = source_path.read_text(encoding="latin-1")
+        body = (
+            nav
+            + f"<h2>{html.escape(str(paper.get('paper_title') or 'Paper'))}</h2>"
+            + f'<div class="muted">{html.escape(str(source_path))}</div>'
+            + f"<pre><code>{html.escape(raw)}</code></pre>"
+        )
+        return HTMLResponse(_page_shell("Source", body))
+
+    if view == "pdf":
+        pdf_path = index.pdf_path_by_hash.get(source_hash)
+        if not pdf_path:
+            body = nav + '<div class="warning">PDF not found. Provide --pdf-root to enable PDF viewing.</div>'
+            return HTMLResponse(_page_shell("PDF", body))
+        pdf_url = f"/api/pdf/{html.escape(source_hash)}"
+        body = nav + f"""
+<h2>{html.escape(str(paper.get('paper_title') or 'Paper'))}</h2>
+<div class="muted">{html.escape(str(pdf_path.name))}</div>
+<div style="display:flex; gap:8px; align-items:center; margin: 10px 0;">
+  <button id="prev" style="padding:6px 10px; border-radius:8px; border:1px solid #d0d7de; background:#f6f8fa; cursor:pointer;">Prev</button>
+  <button id="next" style="padding:6px 10px; border-radius:8px; border:1px solid #d0d7de; background:#f6f8fa; cursor:pointer;">Next</button>
+  <span class="muted">Page <span id="page_num">1</span> / <span id="page_count">?</span></span>
+  <span style="flex:1"></span>
+  <button id="zoomOut" style="padding:6px 10px; border-radius:8px; border:1px solid #d0d7de; background:#f6f8fa; cursor:pointer;">-</button>
+  <button id="zoomIn" style="padding:6px 10px; border-radius:8px; border:1px solid #d0d7de; background:#f6f8fa; cursor:pointer;">+</button>
+</div>
+<canvas id="the-canvas" style="width: 100%; border: 1px solid #d0d7de; border-radius: 10px;"></canvas>
+"""
+        extra_scripts = f"""
+<script src="{_CDN_PDFJS}"></script>
+<script>
+const url = {json.dumps(pdf_url)};
+pdfjsLib.GlobalWorkerOptions.workerSrc = {json.dumps(_CDN_PDFJS_WORKER)};
+let pdfDoc = null;
+let pageNum = 1;
+let pageRendering = false;
+let pageNumPending = null;
+let scale = 1.2;
+const canvas = document.getElementById('the-canvas');
+const ctx = canvas.getContext('2d');
+
+function renderPage(num) {{
+  pageRendering = true;
+  pdfDoc.getPage(num).then((page) => {{
+    const viewport = page.getViewport({{scale}});
+    canvas.height = viewport.height;
+    canvas.width = viewport.width;
+    const renderContext = {{ canvasContext: ctx, viewport }};
+    const renderTask = page.render(renderContext);
+    renderTask.promise.then(() => {{
+      pageRendering = false;
+      document.getElementById('page_num').textContent = String(pageNum);
+      if (pageNumPending !== null) {{
+        const next = pageNumPending;
+        pageNumPending = null;
+        renderPage(next);
+      }}
+    }});
+  }});
+}}
+
+function queueRenderPage(num) {{
+  if (pageRendering) {{
+    pageNumPending = num;
+  }} else {{
+    renderPage(num);
+  }}
+}}
+
+function onPrevPage() {{
+  if (pageNum <= 1) return;
+  pageNum--;
+  queueRenderPage(pageNum);
+}}
+
+function onNextPage() {{
+  if (pageNum >= pdfDoc.numPages) return;
+  pageNum++;
+  queueRenderPage(pageNum);
+}}
+
+function zoom(delta) {{
+  scale = Math.max(0.5, Math.min(3.0, scale + delta));
+  queueRenderPage(pageNum);
+}}
+
+document.getElementById('prev').addEventListener('click', onPrevPage);
+document.getElementById('next').addEventListener('click', onNextPage);
+document.getElementById('zoomOut').addEventListener('click', () => zoom(-0.1));
+document.getElementById('zoomIn').addEventListener('click', () => zoom(0.1));
+
+pdfjsLib.getDocument(url).promise.then((pdfDoc_) => {{
+  pdfDoc = pdfDoc_;
+  document.getElementById('page_count').textContent = String(pdfDoc.numPages);
+  renderPage(pageNum);
+}});
+</script>
+"""
+        return HTMLResponse(_page_shell("PDF", body, extra_scripts=extra_scripts))
+
     markdown, template_name, warning = _render_paper_markdown(paper, request.app.state.fallback_language)
     rendered_html = md.render(markdown)
 
@@ -594,6 +871,7 @@ async def _paper_detail(request: Request) -> HTMLResponse:
 <h2>{html.escape(title)}</h2>
 <div class="muted">Template: {html.escape(template_name)}</div>
 {warning_html}
+{nav}
 <div id="content">{rendered_html}</div>
 """
 
@@ -634,6 +912,18 @@ if (window.renderMathInElement) {{
 async def _api_stats(request: Request) -> JSONResponse:
     index: PaperIndex = request.app.state.index
     return JSONResponse(index.stats)
+
+
+async def _api_pdf(request: Request) -> Response:
+    index: PaperIndex = request.app.state.index
+    source_hash = request.path_params["source_hash"]
+    pdf_path = index.pdf_path_by_hash.get(source_hash)
+    if not pdf_path:
+        return Response("PDF not found", status_code=404)
+    allowed_roots: list[Path] = request.app.state.pdf_roots
+    if allowed_roots and not _ensure_under_roots(pdf_path, allowed_roots):
+        return Response("Forbidden", status_code=403)
+    return FileResponse(pdf_path)
 
 
 async def _stats_page(request: Request) -> HTMLResponse:
@@ -678,9 +968,89 @@ main();
     return HTMLResponse(_page_shell("Stats", body, extra_scripts=scripts))
 
 
-def create_app(*, db_path: Path, fallback_language: str = "en") -> Starlette:
+def _normalize_bibtex_title(title: str) -> str:
+    value = title.replace("{", "").replace("}", "")
+    value = re.sub(r"[^a-z0-9]+", " ", value.lower())
+    return re.sub(r"\\s+", " ", value).strip()
+
+
+def _title_similarity(a: str, b: str) -> float:
+    import difflib
+
+    if not a or not b:
+        return 0.0
+    return difflib.SequenceMatcher(None, a.lower(), b.lower()).ratio()
+
+
+def enrich_with_bibtex(papers: list[dict[str, Any]], bibtex_path: Path) -> None:
+    if not PYBTEX_AVAILABLE:
+        raise RuntimeError("pybtex is required for --bibtex support")
+
+    bib_data = parse_file(str(bibtex_path))
+    entries: list[dict[str, Any]] = []
+    by_prefix: dict[str, list[int]] = {}
+    for key, entry in bib_data.entries.items():
+        fields = dict(entry.fields)
+        title = str(fields.get("title") or "").strip()
+        title_norm = _normalize_bibtex_title(title)
+        if not title_norm:
+            continue
+        record = {
+            "key": key,
+            "type": entry.type,
+            "fields": fields,
+            "persons": {role: [str(p) for p in persons] for role, persons in entry.persons.items()},
+            "_title_norm": title_norm,
+        }
+        idx = len(entries)
+        entries.append(record)
+        prefix = title_norm[:16]
+        by_prefix.setdefault(prefix, []).append(idx)
+
+    for paper in papers:
+        if isinstance(paper.get("bibtex"), dict):
+            continue
+        title = str(paper.get("paper_title") or "").strip()
+        if not title:
+            continue
+        norm = _normalize_bibtex_title(title)
+        if not norm:
+            continue
+
+        candidates = []
+        prefix = norm[:16]
+        for cand_idx in by_prefix.get(prefix, []):
+            candidates.append(entries[cand_idx])
+        if not candidates:
+            candidates = entries
+
+        best = None
+        best_score = 0.0
+        for entry in candidates:
+            score = _title_similarity(norm, entry["_title_norm"])
+            if score > best_score:
+                best_score = score
+                best = entry
+
+        if best is not None and best_score >= 0.9:
+            paper["bibtex"] = {k: v for k, v in best.items() if not k.startswith("_")}
+
+
+def create_app(
+    *,
+    db_path: Path,
+    fallback_language: str = "en",
+    bibtex_path: Path | None = None,
+    md_roots: list[Path] | None = None,
+    pdf_roots: list[Path] | None = None,
+) -> Starlette:
     papers = _load_papers(db_path)
-    index = build_index(papers)
+    if bibtex_path is not None:
+        enrich_with_bibtex(papers, bibtex_path)
+
+    md_roots = md_roots or []
+    pdf_roots = pdf_roots or []
+    index = build_index(papers, md_roots=md_roots, pdf_roots=pdf_roots)
     md = _md_renderer()
     routes = [
         Route("/", _index_page, methods=["GET"]),
@@ -688,9 +1058,11 @@ def create_app(*, db_path: Path, fallback_language: str = "en") -> Starlette:
         Route("/paper/{source_hash:str}", _paper_detail, methods=["GET"]),
         Route("/api/papers", _api_papers, methods=["GET"]),
         Route("/api/stats", _api_stats, methods=["GET"]),
+        Route("/api/pdf/{source_hash:str}", _api_pdf, methods=["GET"]),
     ]
     app = Starlette(routes=routes)
     app.state.index = index
     app.state.md = md
     app.state.fallback_language = fallback_language
+    app.state.pdf_roots = pdf_roots
     return app

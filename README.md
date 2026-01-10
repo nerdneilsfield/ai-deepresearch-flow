@@ -173,7 +173,26 @@ deepresearch-flow paper db serve \
   --input paper_infos.json \
   --host 127.0.0.1 \
   --port 8000
+
+# Serve with optional BibTeX enrichment and source roots
+deepresearch-flow paper db serve \
+  --input paper_infos.json \
+  --bibtex ./refs/library.bib \
+  --md-root ./docs \
+  --md-root ./more_docs \
+  --pdf-root ./pdfs \
+  --host 127.0.0.1 \
+  --port 8000
 ```
+
+Web search syntax (Scholar-style):
+
+- Default is AND: `fpga kNN`
+- Quoted phrases: `title:"nearest neighbor"`
+- OR: `fpga OR asic`
+- Negation: `-survey` or `-tag:survey`
+- Fields: `title:`, `author:`, `tag:`, `venue:`, `year:`, `month:`
+- Year range: `year:2020..2024`
 
 Other commands:
 

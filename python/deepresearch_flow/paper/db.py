@@ -543,6 +543,21 @@ def register_db_commands(db_group: click.Group) -> None:
 
     @db_group.command("serve")
     @click.option("-i", "--input", "input_path", required=True, help="Input JSON file path")
+    @click.option("-b", "--bibtex", "bibtex_path", default=None, help="Optional BibTeX file path")
+    @click.option(
+        "--md-root",
+        "md_roots",
+        multiple=True,
+        default=(),
+        help="Optional markdown root directory (repeatable) for source viewing",
+    )
+    @click.option(
+        "--pdf-root",
+        "pdf_roots",
+        multiple=True,
+        default=(),
+        help="Optional PDF root directory (repeatable) for in-page PDF viewing",
+    )
     @click.option("--host", default="127.0.0.1", show_default=True, help="Bind host")
     @click.option("--port", default=8000, type=int, show_default=True, help="Bind port")
     @click.option(
@@ -552,12 +567,29 @@ def register_db_commands(db_group: click.Group) -> None:
         show_default=True,
         help="Fallback output language for rendering",
     )
-    def serve(input_path: str, host: str, port: int, fallback_language: str) -> None:
+    def serve(
+        input_path: str,
+        bibtex_path: str | None,
+        md_roots: tuple[str, ...],
+        pdf_roots: tuple[str, ...],
+        host: str,
+        port: int,
+        fallback_language: str,
+    ) -> None:
         """Serve a local, read-only web UI for a paper database JSON file."""
         from deepresearch_flow.paper.web.app import create_app
         import uvicorn
 
-        app = create_app(db_path=Path(input_path), fallback_language=fallback_language)
+        try:
+            app = create_app(
+                db_path=Path(input_path),
+                fallback_language=fallback_language,
+                bibtex_path=Path(bibtex_path) if bibtex_path else None,
+                md_roots=[Path(root) for root in md_roots],
+                pdf_roots=[Path(root) for root in pdf_roots],
+            )
+        except Exception as exc:
+            raise click.ClickException(str(exc)) from exc
         click.echo(f"Serving on http://{host}:{port} (Ctrl+C to stop)")
         uvicorn.run(app, host=host, port=port, log_level="info")
 
