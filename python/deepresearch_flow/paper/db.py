@@ -298,7 +298,7 @@ def register_db_commands(db_group: click.Group) -> None:
         click.echo(f"Appended bibtex for {len(appended)} papers")
 
     @db_group.command("sort-papers")
-    @click.option("-i", "--input", "input_path", required=True, help="Input JSON file path")
+    @click.option("-i", "--input", "input_paths", multiple=True, required=True, help="Input JSON file path")
     @click.option("-o", "--output", "output_path", required=True, help="Output JSON file path")
     @click.option("--order", type=click.Choice(["asc", "desc"]), default="desc")
     def sort_papers(input_path: str, output_path: str, order: str) -> None:
