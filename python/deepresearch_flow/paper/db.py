@@ -262,7 +262,7 @@ def parse_tag_list(text: str) -> list[str]:
 
 def register_db_commands(db_group: click.Group) -> None:
     @db_group.command("append-bibtex")
-    @click.option("-i", "--input", "input_paths", multiple=True, required=True, help="Input JSON file path")
+    @click.option("-i", "--input", "input_path", required=True, help="Input JSON file path")
     @click.option("-b", "--bibtex", "bibtex_path", required=True, help="Input BibTeX file path")
     @click.option("-o", "--output", "output_path", required=True, help="Output JSON file path")
     def append_bibtex(input_path: str, bibtex_path: str, output_path: str) -> None:
@@ -298,7 +298,7 @@ def register_db_commands(db_group: click.Group) -> None:
         click.echo(f"Appended bibtex for {len(appended)} papers")
 
     @db_group.command("sort-papers")
-    @click.option("-i", "--input", "input_paths", multiple=True, required=True, help="Input JSON file path")
+    @click.option("-i", "--input", "input_path", required=True, help="Input JSON file path")
     @click.option("-o", "--output", "output_path", required=True, help="Output JSON file path")
     @click.option("--order", type=click.Choice(["asc", "desc"]), default="desc")
     def sort_papers(input_path: str, output_path: str, order: str) -> None:
@@ -309,7 +309,7 @@ def register_db_commands(db_group: click.Group) -> None:
         click.echo(f"Sorted {len(papers)} papers")
 
     @db_group.command("split-by-tag")
-    @click.option("-i", "--input", "input_paths", multiple=True, required=True, help="Input JSON file path")
+    @click.option("-i", "--input", "input_path", required=True, help="Input JSON file path")
     @click.option("-d", "--output-dir", "output_dir", required=True, help="Output directory")
     def split_by_tag(input_path: str, output_dir: str) -> None:
         papers = load_json(Path(input_path))
@@ -542,7 +542,7 @@ def register_db_commands(db_group: click.Group) -> None:
             console.print(tag_table)
 
     @db_group.command("serve")
-    @click.option("-i", "--input", "input_path", required=True, help="Input JSON file path")
+    @click.option("-i", "--input", "input_paths", multiple=True, required=True, help="Input JSON file path")
     @click.option("-b", "--bibtex", "bibtex_path", default=None, help="Optional BibTeX file path")
     @click.option(
         "--md-root",
