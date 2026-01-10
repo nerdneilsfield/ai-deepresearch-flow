@@ -15,7 +15,11 @@ from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Redire
 from starlette.routing import Route
 
 from deepresearch_flow.paper.render import load_default_template
-from deepresearch_flow.paper.template_registry import load_render_template
+from deepresearch_flow.paper.template_registry import (
+    list_template_names_in_registry_order,
+    load_render_template,
+    load_schema_for_template,
+)
 from deepresearch_flow.paper.utils import stable_hash
 from deepresearch_flow.paper.web.query import Query, QueryTerm, parse_query
 
@@ -344,12 +348,186 @@ def _sorted_month_counts(counts: dict[str, int]) -> list[dict[str, Any]]:
     return [{"label": k, "count": v} for k, v in items]
 
 
-def _load_papers(path: Path) -> list[dict[str, Any]]:
-    return json.loads(path.read_text(encoding="utf-8"))
+_TEMPLATE_INFER_IGNORE_KEYS = {
+    "source_path",
+    "source_hash",
+    "provider",
+    "model",
+    "extracted_at",
+    "truncation",
+    "output_language",
+    "prompt_template",
+}
+
+
+def _load_paper_inputs(paths: list[Path]) -> list[dict[str, Any]]:
+    inputs: list[dict[str, Any]] = []
+    for path in paths:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(payload, list):
+            raise ValueError(
+                f"Input JSON must be an object with template_tag and papers (got array): {path}"
+            )
+        if not isinstance(payload, dict):
+            raise ValueError(f"Input JSON must be an object: {path}")
+        papers = payload.get("papers")
+        if not isinstance(papers, list):
+            raise ValueError(f"Input JSON missing papers list: {path}")
+        template_tag = payload.get("template_tag")
+        if not template_tag:
+            template_tag = _infer_template_tag(papers, path)
+        inputs.append({"template_tag": str(template_tag), "papers": papers})
+    return inputs
+
+
+def _infer_template_tag(papers: list[dict[str, Any]], path: Path) -> str:
+    prompt_tags = {
+        str(paper.get("prompt_template"))
+        for paper in papers
+        if isinstance(paper, dict) and paper.get("prompt_template")
+    }
+    if len(prompt_tags) == 1:
+        return prompt_tags.pop()
+
+    sample = next((paper for paper in papers if isinstance(paper, dict)), None)
+    if sample is None:
+        raise ValueError(f"Input JSON has no paper objects to infer template_tag: {path}")
+
+    paper_keys = {key for key in sample.keys() if key not in _TEMPLATE_INFER_IGNORE_KEYS}
+    if not paper_keys:
+        raise ValueError(f"Input JSON papers have no keys to infer template_tag: {path}")
+
+    best_tag = None
+    best_score = -1
+    for name in list_template_names_in_registry_order():
+        schema = load_schema_for_template(name)
+        schema_keys = set((schema.get("properties") or {}).keys())
+        score = len(paper_keys & schema_keys)
+        if score > best_score:
+            best_score = score
+            best_tag = name
+        elif score == best_score:
+            if best_tag != "simple" and name == "simple":
+                best_tag = name
+
+    if not best_tag:
+        raise ValueError(f"Unable to infer template_tag from input JSON: {path}")
+    return best_tag
 
 
 def _md_renderer() -> MarkdownIt:
     return MarkdownIt("commonmark", {"html": False, "linkify": True})
+
+
+def _normalize_merge_title(value: str | None) -> str | None:
+    if not value:
+        return None
+    return str(value).strip().lower()
+
+
+def _extract_bibtex_title(paper: dict[str, Any]) -> str | None:
+    if not isinstance(paper.get("bibtex"), dict):
+        return None
+    fields = paper.get("bibtex", {}).get("fields", {}) or {}
+    return _normalize_merge_title(fields.get("title"))
+
+
+def _extract_paper_title(paper: dict[str, Any]) -> str | None:
+    return _normalize_merge_title(paper.get("paper_title"))
+
+
+def _available_templates(paper: dict[str, Any]) -> list[str]:
+    templates = paper.get("templates")
+    if not isinstance(templates, dict):
+        return []
+    order = paper.get("template_order") or list(templates.keys())
+    seen: set[str] = set()
+    available: list[str] = []
+    for tag in order:
+        if tag in templates and tag not in seen:
+            available.append(tag)
+            seen.add(tag)
+    for tag in templates:
+        if tag not in seen:
+            available.append(tag)
+            seen.add(tag)
+    return available
+
+
+def _select_template_tag(
+    paper: dict[str, Any], requested: str | None
+) -> tuple[str | None, list[str]]:
+    available = _available_templates(paper)
+    if not available:
+        return None, []
+    default_tag = paper.get("default_template")
+    if not default_tag:
+        default_tag = "simple" if "simple" in available else available[0]
+    selected = requested if requested in available else default_tag
+    return selected, available
+
+
+def _titles_match(group: dict[str, Any], paper: dict[str, Any], *, threshold: float) -> bool:
+    bib_title = _extract_bibtex_title(paper)
+    group_bib = group.get("_merge_bibtex_titles") or set()
+    if bib_title and group_bib:
+        return any(_title_similarity(bib_title, existing) >= threshold for existing in group_bib)
+
+    paper_title = _extract_paper_title(paper)
+    group_titles = group.get("_merge_paper_titles") or set()
+    if paper_title and group_titles:
+        return any(_title_similarity(paper_title, existing) >= threshold for existing in group_titles)
+    return False
+
+
+def _add_merge_titles(group: dict[str, Any], paper: dict[str, Any]) -> None:
+    bib_title = _extract_bibtex_title(paper)
+    if bib_title:
+        group.setdefault("_merge_bibtex_titles", set()).add(bib_title)
+    paper_title = _extract_paper_title(paper)
+    if paper_title:
+        group.setdefault("_merge_paper_titles", set()).add(paper_title)
+
+
+def _merge_paper_inputs(inputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    threshold = 0.95
+    for bundle in inputs:
+        template_tag = bundle.get("template_tag")
+        papers = bundle.get("papers") or []
+        for paper in papers:
+            if not isinstance(paper, dict):
+                raise ValueError("Input papers must be objects")
+            match = None
+            for candidate in merged:
+                if _titles_match(candidate, paper, threshold=threshold):
+                    match = candidate
+                    break
+            if match is None:
+                group = {
+                    "templates": {template_tag: paper},
+                    "template_order": [template_tag],
+                }
+                _add_merge_titles(group, paper)
+                merged.append(group)
+            else:
+                templates = match.setdefault("templates", {})
+                templates[template_tag] = paper
+                order = match.setdefault("template_order", [])
+                if template_tag not in order:
+                    order.append(template_tag)
+                _add_merge_titles(match, paper)
+
+    for group in merged:
+        templates = group.get("templates") or {}
+        order = group.get("template_order") or list(templates.keys())
+        default_tag = "simple" if "simple" in order else (order[0] if order else None)
+        group["default_template"] = default_tag
+        if default_tag and default_tag in templates:
+            base = templates[default_tag]
+            for key, value in base.items():
+                group[key] = value
+    return merged
 
 
 def _render_markdown_with_math_placeholders(md: MarkdownIt, text: str) -> str:
@@ -628,8 +806,18 @@ def _extract_html_table_placeholders(text: str) -> tuple[str, dict[str, str]]:
     return "".join(out), placeholders
 
 
-def _render_paper_markdown(paper: dict[str, Any], fallback_language: str) -> tuple[str, str, str | None]:
-    template_name = paper.get("prompt_template")
+def _render_paper_markdown(
+    paper: dict[str, Any],
+    fallback_language: str,
+    *,
+    template_tag: str | None = None,
+) -> tuple[str, str, str | None]:
+    selected_tag, _ = _select_template_tag(paper, template_tag)
+    selected_paper = paper
+    if selected_tag:
+        selected_paper = (paper.get("templates") or {}).get(selected_tag, paper)
+
+    template_name = selected_tag or selected_paper.get("prompt_template")
     warning = None
     if template_name:
         try:
@@ -643,7 +831,7 @@ def _render_paper_markdown(paper: dict[str, Any], fallback_language: str) -> tup
         warning = "Rendered using default template (no template specified)."
         template_name = "default_paper"
 
-    context = dict(paper)
+    context = dict(selected_paper)
     if not context.get("output_language"):
         context["output_language"] = fallback_language
     return template.render(**context), str(template_name), warning
@@ -1027,6 +1215,7 @@ async def _paper_detail(request: Request) -> HTMLResponse:
         return RedirectResponse("/")
     paper = index.papers[idx]
     view = request.query_params.get("view", "summary")
+    template_param = request.query_params.get("template")
 
     def nav_link(label: str, v: str) -> str:
         active = " active" if view == v else ""
@@ -1203,14 +1392,44 @@ window.addEventListener('resize', () => {{
 """
         return HTMLResponse(_page_shell("PDF", body, extra_scripts=extra_scripts))
 
-    markdown, template_name, warning = _render_paper_markdown(paper, request.app.state.fallback_language)
+    selected_tag, available_templates = _select_template_tag(paper, template_param)
+    markdown, template_name, warning = _render_paper_markdown(
+        paper,
+        request.app.state.fallback_language,
+        template_tag=selected_tag,
+    )
     rendered_html = _render_markdown_with_math_placeholders(md, markdown)
 
     warning_html = f'<div class="warning">{html.escape(warning)}</div>' if warning else ""
     title = str(paper.get("paper_title") or "Paper")
+    template_controls = f'<div class="muted">Template: {html.escape(template_name)}</div>'
+    if available_templates:
+        options = "\n".join(
+            f'<option value="{html.escape(tag)}"{" selected" if tag == selected_tag else ""}>{html.escape(tag)}</option>'
+            for tag in available_templates
+        )
+        template_controls = f"""
+<div class="muted" style="margin: 6px 0;">
+  Template:
+  <select id="templateSelect" style="padding:6px 8px; border:1px solid #d0d7de; border-radius:6px;">
+    {options}
+  </select>
+</div>
+<script>
+const templateSelect = document.getElementById('templateSelect');
+if (templateSelect) {{
+  templateSelect.addEventListener('change', () => {{
+    const params = new URLSearchParams(window.location.search);
+    params.set('view', 'summary');
+    params.set('template', templateSelect.value);
+    window.location.search = params.toString();
+  }});
+}}
+</script>
+"""
     body = f"""
 <h2>{html.escape(title)}</h2>
-<div class="muted">Template: {html.escape(template_name)}</div>
+{template_controls}
 {warning_html}
 {nav}
 <div id="content">{rendered_html}</div>
@@ -1379,15 +1598,17 @@ def enrich_with_bibtex(papers: list[dict[str, Any]], bibtex_path: Path) -> None:
 
 def create_app(
     *,
-    db_path: Path,
+    db_paths: list[Path],
     fallback_language: str = "en",
     bibtex_path: Path | None = None,
     md_roots: list[Path] | None = None,
     pdf_roots: list[Path] | None = None,
 ) -> Starlette:
-    papers = _load_papers(db_path)
+    inputs = _load_paper_inputs(db_paths)
     if bibtex_path is not None:
-        enrich_with_bibtex(papers, bibtex_path)
+        for bundle in inputs:
+            enrich_with_bibtex(bundle["papers"], bibtex_path)
+    papers = _merge_paper_inputs(inputs)
 
     md_roots = md_roots or []
     pdf_roots = pdf_roots or []

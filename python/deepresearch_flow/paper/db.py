@@ -262,7 +262,7 @@ def parse_tag_list(text: str) -> list[str]:
 
 def register_db_commands(db_group: click.Group) -> None:
     @db_group.command("append-bibtex")
-    @click.option("-i", "--input", "input_path", required=True, help="Input JSON file path")
+    @click.option("-i", "--input", "input_paths", multiple=True, required=True, help="Input JSON file path")
     @click.option("-b", "--bibtex", "bibtex_path", required=True, help="Input BibTeX file path")
     @click.option("-o", "--output", "output_path", required=True, help="Output JSON file path")
     def append_bibtex(input_path: str, bibtex_path: str, output_path: str) -> None:
@@ -568,7 +568,7 @@ def register_db_commands(db_group: click.Group) -> None:
         help="Fallback output language for rendering",
     )
     def serve(
-        input_path: str,
+        input_paths: tuple[str, ...],
         bibtex_path: str | None,
         md_roots: tuple[str, ...],
         pdf_roots: tuple[str, ...],
@@ -582,7 +582,7 @@ def register_db_commands(db_group: click.Group) -> None:
 
         try:
             app = create_app(
-                db_path=Path(input_path),
+                db_paths=[Path(path) for path in input_paths],
                 fallback_language=fallback_language,
                 bibtex_path=Path(bibtex_path) if bibtex_path else None,
                 md_roots=[Path(root) for root in md_roots],

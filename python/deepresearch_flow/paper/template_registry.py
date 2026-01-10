@@ -97,6 +97,10 @@ def list_template_names() -> list[str]:
     return sorted(_TEMPLATES.keys())
 
 
+def list_template_names_in_registry_order() -> list[str]:
+    return list(_TEMPLATES.keys())
+
+
 def get_stage_definitions(template_name: str) -> list[StageDefinition]:
     return _STAGES.get(template_name, [])
 

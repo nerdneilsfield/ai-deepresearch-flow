@@ -169,14 +169,17 @@ deepresearch-flow paper db statistics \
   --top-n 20
 
 # Serve a local read-only web UI (loads charts/libs via CDN)
+# Each input JSON must be: {"template_tag": "simple", "papers": [...]}
 deepresearch-flow paper db serve \
-  --input paper_infos.json \
+  --input paper_infos_simple.json \
+  --input paper_infos_deep_read.json \
   --host 127.0.0.1 \
   --port 8000
 
 # Serve with optional BibTeX enrichment and source roots
 deepresearch-flow paper db serve \
-  --input paper_infos.json \
+  --input paper_infos_simple.json \
+  --input paper_infos_deep_read.json \
   --bibtex ./refs/library.bib \
   --md-root ./docs \
   --md-root ./more_docs \
