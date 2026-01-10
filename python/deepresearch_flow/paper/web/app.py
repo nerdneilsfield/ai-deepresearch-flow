@@ -30,8 +30,9 @@ _CDN_MERMAID = "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"
 _CDN_KATEX = "https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css"
 _CDN_KATEX_JS = "https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"
 _CDN_KATEX_AUTO = "https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
-_CDN_PDFJS = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.2.67/build/pdf.min.js"
-_CDN_PDFJS_WORKER = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.2.67/build/pdf.worker.min.js"
+# Use legacy builds to ensure `pdfjsLib` is available as a global.
+_CDN_PDFJS = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.min.js"
+_CDN_PDFJS_WORKER = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.worker.min.js"
 
 
 @dataclass(frozen=True)
@@ -348,6 +349,113 @@ def _load_papers(path: Path) -> list[dict[str, Any]]:
 
 def _md_renderer() -> MarkdownIt:
     return MarkdownIt("commonmark", {"html": False, "linkify": True})
+
+
+def _render_markdown_with_math_placeholders(md: MarkdownIt, text: str) -> str:
+    rendered, placeholders = _extract_math_placeholders(text)
+    html_out = md.render(rendered)
+    for key, value in placeholders.items():
+        html_out = html_out.replace(key, html.escape(value))
+    return html_out
+
+
+def _extract_math_placeholders(text: str) -> tuple[str, dict[str, str]]:
+    placeholders: dict[str, str] = {}
+    out: list[str] = []
+    idx = 0
+    in_fence = False
+    fence_char = ""
+    fence_len = 0
+    inline_delim_len = 0
+
+    def next_placeholder(value: str) -> str:
+        key = f"@@MATH_{len(placeholders)}@@"
+        placeholders[key] = value
+        return key
+
+    while idx < len(text):
+        at_line_start = idx == 0 or text[idx - 1] == "\n"
+
+        if inline_delim_len == 0 and at_line_start:
+            line_end = text.find("\n", idx)
+            if line_end == -1:
+                line_end = len(text)
+            line = text[idx:line_end]
+            stripped = line.lstrip(" ")
+            leading_spaces = len(line) - len(stripped)
+            if leading_spaces <= 3 and stripped:
+                first = stripped[0]
+                if first in {"`", "~"}:
+                    run_len = 0
+                    while run_len < len(stripped) and stripped[run_len] == first:
+                        run_len += 1
+                    if run_len >= 3:
+                        if not in_fence:
+                            in_fence = True
+                            fence_char = first
+                            fence_len = run_len
+                        elif first == fence_char and run_len >= fence_len:
+                            in_fence = False
+                            fence_char = ""
+                            fence_len = 0
+                        out.append(line)
+                        idx = line_end
+                        continue
+
+        if in_fence:
+            out.append(text[idx])
+            idx += 1
+            continue
+
+        if inline_delim_len > 0:
+            delim = "`" * inline_delim_len
+            if text.startswith(delim, idx):
+                out.append(delim)
+                idx += inline_delim_len
+                inline_delim_len = 0
+                continue
+            out.append(text[idx])
+            idx += 1
+            continue
+
+        ch = text[idx]
+        if ch == "`":
+            run_len = 0
+            while idx + run_len < len(text) and text[idx + run_len] == "`":
+                run_len += 1
+            inline_delim_len = run_len
+            out.append("`" * run_len)
+            idx += run_len
+            continue
+
+        # Block math: $$...$$ (can span lines)
+        if text.startswith("$$", idx) and (idx == 0 or text[idx - 1] != "\\"):
+            search_from = idx + 2
+            end = text.find("$$", search_from)
+            while end != -1 and text[end - 1] == "\\":
+                search_from = end + 2
+                end = text.find("$$", search_from)
+            if end != -1:
+                out.append(next_placeholder(text[idx : end + 2]))
+                idx = end + 2
+                continue
+
+        # Inline math: $...$ (single-line)
+        if ch == "$" and not text.startswith("$$", idx) and (idx == 0 or text[idx - 1] != "\\"):
+            search_from = idx + 1
+            end = text.find("$", search_from)
+            while end != -1 and text[end - 1] == "\\":
+                search_from = end + 1
+                end = text.find("$", search_from)
+            if end != -1:
+                out.append(next_placeholder(text[idx : end + 1]))
+                idx = end + 1
+                continue
+
+        out.append(ch)
+        idx += 1
+
+    return "".join(out), placeholders
 
 
 def _render_paper_markdown(paper: dict[str, Any], fallback_language: str) -> tuple[str, str, str | None]:
@@ -763,13 +871,47 @@ async def _paper_detail(request: Request) -> HTMLResponse:
             raw = source_path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             raw = source_path.read_text(encoding="latin-1")
+        rendered = _render_markdown_with_math_placeholders(md, raw)
         body = (
             nav
             + f"<h2>{html.escape(str(paper.get('paper_title') or 'Paper'))}</h2>"
             + f'<div class="muted">{html.escape(str(source_path))}</div>'
-            + f"<pre><code>{html.escape(raw)}</code></pre>"
+            + '<div class="muted" style="margin-top:10px;">Rendered from source markdown:</div>'
+            + f'<div id="content">{rendered}</div>'
+            + "<details style='margin-top:12px;'><summary>Raw markdown</summary>"
+            + f"<pre><code>{html.escape(raw)}</code></pre></details>"
         )
-        return HTMLResponse(_page_shell("Source", body))
+        extra_head = f'<link rel="stylesheet" href="{_CDN_KATEX}" />'
+        extra_scripts = f"""
+<script src="{_CDN_MERMAID}"></script>
+<script src="{_CDN_KATEX_JS}"></script>
+<script src="{_CDN_KATEX_AUTO}"></script>
+<script>
+document.querySelectorAll('code.language-mermaid').forEach((code) => {{
+  const pre = code.parentElement;
+  const div = document.createElement('div');
+  div.className = 'mermaid';
+  div.textContent = code.textContent;
+  pre.replaceWith(div);
+}});
+if (window.mermaid) {{
+  mermaid.initialize({{ startOnLoad: false }});
+  mermaid.run();
+}}
+if (window.renderMathInElement) {{
+  renderMathInElement(document.getElementById('content'), {{
+    delimiters: [
+      {{left: '$$', right: '$$', display: true}},
+      {{left: '$', right: '$', display: false}},
+      {{left: '\\\\(', right: '\\\\)', display: false}},
+      {{left: '\\\\[', right: '\\\\]', display: true}}
+    ],
+    throwOnError: false
+  }});
+}}
+</script>
+"""
+        return HTMLResponse(_page_shell("Source", body, extra_head=extra_head, extra_scripts=extra_scripts))
 
     if view == "pdf":
         pdf_path = index.pdf_path_by_hash.get(source_hash)
@@ -863,7 +1005,7 @@ pdfjsLib.getDocument(url).promise.then((pdfDoc_) => {{
         return HTMLResponse(_page_shell("PDF", body, extra_scripts=extra_scripts))
 
     markdown, template_name, warning = _render_paper_markdown(paper, request.app.state.fallback_language)
-    rendered_html = md.render(markdown)
+    rendered_html = _render_markdown_with_math_placeholders(md, markdown)
 
     warning_html = f'<div class="warning">{html.escape(warning)}</div>' if warning else ""
     title = str(paper.get("paper_title") or "Paper")
