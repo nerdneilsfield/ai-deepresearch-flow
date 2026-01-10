@@ -59,45 +59,32 @@ def parse_publication_year(paper: dict[str, Any]) -> int | None:
     return int(match.group(0)) if match else None
 
 
-MONTH_NAMES = [
-    "Jan",
-    "Feb",
-    "Mar",
-    "Apr",
-    "May",
-    "Jun",
-    "Jul",
-    "Aug",
-    "Sep",
-    "Oct",
-    "Nov",
-    "Dec",
-]
+MONTH_NAMES = [f"{idx:02d}" for idx in range(1, 13)]
 MONTH_LOOKUP = {
-    "january": "Jan",
-    "february": "Feb",
-    "march": "Mar",
-    "april": "Apr",
-    "may": "May",
-    "june": "Jun",
-    "july": "Jul",
-    "august": "Aug",
-    "september": "Sep",
-    "october": "Oct",
-    "november": "Nov",
-    "december": "Dec",
-    "jan": "Jan",
-    "feb": "Feb",
-    "mar": "Mar",
-    "apr": "Apr",
-    "jun": "Jun",
-    "jul": "Jul",
-    "aug": "Aug",
-    "sep": "Sep",
-    "sept": "Sep",
-    "oct": "Oct",
-    "nov": "Nov",
-    "dec": "Dec",
+    "january": "01",
+    "february": "02",
+    "march": "03",
+    "april": "04",
+    "may": "05",
+    "june": "06",
+    "july": "07",
+    "august": "08",
+    "september": "09",
+    "october": "10",
+    "november": "11",
+    "december": "12",
+    "jan": "01",
+    "feb": "02",
+    "mar": "03",
+    "apr": "04",
+    "jun": "06",
+    "jul": "07",
+    "aug": "08",
+    "sep": "09",
+    "sept": "09",
+    "oct": "10",
+    "nov": "11",
+    "dec": "12",
 }
 
 
@@ -106,7 +93,7 @@ def normalize_month(value: str | int | None) -> str | None:
         return None
     if isinstance(value, int):
         if 1 <= value <= 12:
-            return MONTH_NAMES[value - 1]
+            return f"{value:02d}"
         return None
     raw = str(value).strip().lower()
     if not raw:
