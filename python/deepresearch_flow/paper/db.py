@@ -309,7 +309,7 @@ def register_db_commands(db_group: click.Group) -> None:
         click.echo(f"Sorted {len(papers)} papers")
 
     @db_group.command("split-by-tag")
-    @click.option("-i", "--input", "input_path", required=True, help="Input JSON file path")
+    @click.option("-i", "--input", "input_paths", multiple=True, required=True, help="Input JSON file path")
     @click.option("-d", "--output-dir", "output_dir", required=True, help="Output directory")
     def split_by_tag(input_path: str, output_dir: str) -> None:
         papers = load_json(Path(input_path))
