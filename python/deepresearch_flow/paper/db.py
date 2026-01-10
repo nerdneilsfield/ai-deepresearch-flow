@@ -541,6 +541,26 @@ def register_db_commands(db_group: click.Group) -> None:
                 tag_table.add_row(tag, str(count), f"{percentage:.1f}%")
             console.print(tag_table)
 
+    @db_group.command("serve")
+    @click.option("-i", "--input", "input_path", required=True, help="Input JSON file path")
+    @click.option("--host", default="127.0.0.1", show_default=True, help="Bind host")
+    @click.option("--port", default=8000, type=int, show_default=True, help="Bind port")
+    @click.option(
+        "--language",
+        "fallback_language",
+        default="en",
+        show_default=True,
+        help="Fallback output language for rendering",
+    )
+    def serve(input_path: str, host: str, port: int, fallback_language: str) -> None:
+        """Serve a local, read-only web UI for a paper database JSON file."""
+        from deepresearch_flow.paper.web.app import create_app
+        import uvicorn
+
+        app = create_app(db_path=Path(input_path), fallback_language=fallback_language)
+        click.echo(f"Serving on http://{host}:{port} (Ctrl+C to stop)")
+        uvicorn.run(app, host=host, port=port, log_level="info")
+
     @db_group.command("generate-tags")
     @click.option("-i", "--input", "input_path", required=True, help="Input JSON file path")
     @click.option("-o", "--output", "output_path", required=True, help="Output JSON file path")

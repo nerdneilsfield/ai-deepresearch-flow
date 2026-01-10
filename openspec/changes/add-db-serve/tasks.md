@@ -1,14 +1,14 @@
 ## 1. Implementation
-- [ ] 1.1 Add web server dependencies (starlette, uvicorn) and update `uv.lock`
-- [ ] 1.2 Add `paper db serve` command and CLI options (host/port/input)
-- [ ] 1.3 Implement database loader + in-memory indexes for filters
-- [ ] 1.4 Implement `GET /api/papers` with pagination + filters
-- [ ] 1.5 Implement list page with infinite scrolling
-- [ ] 1.6 Implement paper detail page with template-based Markdown rendering
-- [ ] 1.7 Add template fallback + UI warning when template missing
-- [ ] 1.8 Add safe HTML rendering (disable raw HTML and/or sanitize)
-- [ ] 1.9 Add Mermaid + KaTeX support in served pages (CDN by default)
-- [ ] 1.10 Implement stats aggregation + `/api/stats`
-- [ ] 1.11 Implement stats page using ECharts (CDN by default)
+- [x] 1.1 Add web server dependencies (starlette, uvicorn) and update `uv.lock`
+- [x] 1.2 Add `paper db serve` command and CLI options (host/port/input)
+- [x] 1.3 Implement database loader + in-memory indexes for filters
+- [x] 1.4 Implement `GET /api/papers` with pagination + filters
+- [x] 1.5 Implement list page with infinite scrolling
+- [x] 1.6 Implement paper detail page with template-based Markdown rendering
+- [x] 1.7 Add template fallback + UI warning when template missing
+- [x] 1.8 Add safe HTML rendering (disable raw HTML and/or sanitize)
+- [x] 1.9 Add Mermaid + KaTeX support in served pages (CDN by default)
+- [x] 1.10 Implement stats aggregation + `/api/stats`
+- [x] 1.11 Implement stats page using ECharts (CDN by default)
 - [ ] 1.12 (Optional) Add `paper db download-assets` for offline cache
-- [ ] 1.13 Update README with serve usage
+- [x] 1.13 Update README with serve usage

@@ -167,6 +167,12 @@ deepresearch-flow paper db filter \
 deepresearch-flow paper db statistics \
   --input paper_infos.json \
   --top-n 20
+
+# Serve a local read-only web UI (loads charts/libs via CDN)
+deepresearch-flow paper db serve \
+  --input paper_infos.json \
+  --host 127.0.0.1 \
+  --port 8000
 ```
 
 Other commands:
