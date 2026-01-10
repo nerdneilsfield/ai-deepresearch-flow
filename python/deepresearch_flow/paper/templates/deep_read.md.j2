@@ -2,56 +2,78 @@
 
 {% set is_zh = output_language == "zh" %}
 **{{ "作者 / Authors" if is_zh else "Authors" }}:** {{ paper_authors | join(", ") }}
-{% if output_language %}**{{ "输出语言 / Output Language" if is_zh else "Output Language" }}:** {{ output_language }}
+
+{% if output_language %}
+**{{ "输出语言 / Output Language" if is_zh else "Output Language" }}:** {{ output_language }}
 {% endif %}
-{% if publication_date %}**{{ "发表日期 / Publication Date" if is_zh else "Publication Date" }}:** {{ publication_date }}
+
+{% if publication_date %}
+**{{ "发表日期 / Publication Date" if is_zh else "Publication Date" }}:** {{ publication_date }}
 {% endif %}
-{% if publication_venue %}**{{ "期刊/会议 / Publication Venue" if is_zh else "Publication Venue" }}:** {{ publication_venue }}
+
+{% if publication_venue %}
+**{{ "期刊/会议 / Publication Venue" if is_zh else "Publication Venue" }}:** {{ publication_venue }}
 {% endif %}
 
 ## {{ "模块 A：阅读对齐与输入校验 / Module A: Reading Alignment and Input Check" if is_zh else "Module A: Reading Alignment and Input Check" }}
+
 {{ module_a }}
 
 ## {{ "模块 B：第一遍鸟瞰扫描（类别/上下文/正确性/贡献/清晰度） / Module B: First Pass Overview (category, context, correctness, contribution, clarity)" if is_zh else "Module B: First Pass Overview (category, context, correctness, contribution, clarity)" }}
+
 {{ module_b }}
 
 ## {{ "模块 C1：论文试图解决什么问题？ / Module C1: What problem does the paper try to solve?" if is_zh else "Module C1: What problem does the paper try to solve?" }}
+
 {{ module_c1 }}
 
 ## {{ "模块 C2：有哪些相关研究？（最强基线/最相近思路/正交方向） / Module C2: What related research exists? (strongest baseline, closest approach, orthogonal directions)" if is_zh else "Module C2: What related research exists? (strongest baseline, closest approach, orthogonal directions)" }}
+
 {{ module_c2 }}
 
 ## {{ "模块 C3：论文如何解决这个问题？（流程图文字版） / Module C3: How does the paper solve the problem? (include a text flowchart)" if is_zh else "Module C3: How does the paper solve the problem? (include a text flowchart)" }}
+
 {{ module_c3 }}
 
 ## {{ "模块 C4：实验数据集与实现设置（数据集/场景、为何选择、验证哪些关键特性） / Module C4: Datasets and implementation settings (what datasets/scenarios, why chosen, what they validate)" if is_zh else "Module C4: Datasets and implementation settings (what datasets/scenarios, why chosen, what they validate)" }}
+
 {{ module_c4 }}
 
 ## {{ "模块 C5：指标与结果（指标、结果、各指标对应的创新点） / Module C5: Metrics and results (metrics, results, which innovations each metric reflects)" if is_zh else "Module C5: Metrics and results (metrics, results, which innovations each metric reflects)" }}
+
 {{ module_c5 }}
 
 ## {{ "模块 C6：有什么可以进一步探索的点？（理论/工程/数据/评测） / Module C6: What can be further explored? (theory/engineering/data/evaluation)" if is_zh else "Module C6: What can be further explored? (theory/engineering/data/evaluation)" }}
+
 {{ module_c6 }}
 
 ## {{ "模块 C7：现实场景如何体现/实现？（部署约束、算力、延迟、鲁棒性） / Module C7: How would this work in real-world scenarios? (deployment constraints, compute, latency, robustness)" if is_zh else "Module C7: How would this work in real-world scenarios? (deployment constraints, compute, latency, robustness)" }}
+
 {{ module_c7 }}
 
 ## {{ "模块 C8：总结主要内容（一段摘要 + 5 条要点 + 1 个核心公式/机制） / Module C8: Summarize the main content (one paragraph + 5 bullets + one core formula/mechanism)." if is_zh else "Module C8: Summarize the main content (one paragraph + 5 bullets + one core formula/mechanism)." }}
+
 {{ module_c8 }}
 
 ## {{ "模块 D：第二遍内容理解（方法结构/关键图表/实验） / Module D: Second Pass (method structure, key figures, experiments)" if is_zh else "Module D: Second Pass (method structure, key figures, experiments)" }}
+
 {{ module_d }}
 
 ## {{ "模块 E：第三遍深度审视（重建/假设/失败模式/审稿意见） / Module E: Third Pass (reconstruction, assumptions, failure modes, review)" if is_zh else "Module E: Third Pass (reconstruction, assumptions, failure modes, review)" }}
+
 {{ module_e }}
 
 {% if module_f %}## {{ "模块 F：术语表与概念依赖图 / Module F: Glossary and Concept Map" if is_zh else "Module F: Glossary and Concept Map" }}
+
 {{ module_f }}
+
 {% endif %}
 
 {% if module_g %}## {{ "模块 G：联网核验与引用校对 / Module G: Verification and Citation Check" if is_zh else "Module G: Verification and Citation Check" }}
+
 {{ module_g }}
 {% endif %}
 
 ## {{ "模块 H：图表与表格抽取（索引/打分/深读） / Module H: Figure/Table Mining (index, scoring, top deep dive)" if is_zh else "Module H: Figure/Table Mining (index, scoring, top deep dive)" }}
+
 {{ module_h }}
