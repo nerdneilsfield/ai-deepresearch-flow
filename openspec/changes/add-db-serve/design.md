@@ -17,7 +17,7 @@ Constraints:
   - Multi-user auth or deployment hardening.
 
 ## Decisions
-- Backend: FastAPI (ASGI) with Uvicorn.
+- Backend: Starlette (ASGI) with Uvicorn.
 - Data loading:
   - Load `paper_infos.json` into memory on startup.
   - Build indexes for filters: year, month, tags, authors, venue.

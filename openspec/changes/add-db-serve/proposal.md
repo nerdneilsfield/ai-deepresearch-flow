@@ -21,3 +21,4 @@ Users want a read-only local web UI to browse and visualize `paper_infos.json`, 
 ## Impact
 - Affected specs: `paper`
 - Affected code: `python/deepresearch_flow/paper/db.py` (+ new web module/files), `pyproject.toml`, `uv.lock`, `README.md`
+- Web framework: `starlette` (preferred) + `uvicorn`
