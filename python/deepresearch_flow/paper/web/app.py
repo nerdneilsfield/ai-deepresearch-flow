@@ -11,7 +11,6 @@ import re
 from urllib.parse import urlencode, quote
 
 from markdown_it import MarkdownIt
-from markdown_it.extensions.tables import tables
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -490,8 +489,17 @@ def _load_or_merge_papers(
 
 def _md_renderer() -> MarkdownIt:
     md = MarkdownIt("commonmark", {"html": False, "linkify": True})
-    md.use(tables)
+    md.enable("table")
     return md
+
+
+def _strip_paragraph_wrapped_tables(text: str) -> str:
+    lines = text.splitlines()
+    for idx, line in enumerate(lines):
+        line = re.sub(r"^\s*<p>\s*\|", "|", line)
+        line = re.sub(r"\|\s*</p>\s*$", "|", line)
+        lines[idx] = line
+    return "\n".join(lines)
 
 
 def _normalize_merge_title(value: str | None) -> str | None:
@@ -651,6 +659,7 @@ def _merge_paper_inputs(inputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _render_markdown_with_math_placeholders(md: MarkdownIt, text: str) -> str:
+    text = _strip_paragraph_wrapped_tables(text)
     rendered, table_placeholders = _extract_html_table_placeholders(text)
     rendered, img_placeholders = _extract_html_img_placeholders(rendered)
     rendered, placeholders = _extract_math_placeholders(rendered)
