@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Workflow tools for paper extraction, review, and research automation."
 readme = { file = "README.md", content-type = "text/markdown" }
 license = { file = "LICENSE" }
+authors = [{ name = "DengQi", email = "dengqi935@gmail.com" }]
 requires-python = ">=3.12"
 dependencies = [
     "anthropic>=0.28.0",
@@ -32,6 +33,7 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
     "Topic :: Scientific/Engineering :: Information Analysis",
 ]
+urls = { Homepage = "https://github.com/nerdneilsfield/ai-deepresearch-flow", Repository = "https://github.com/nerdneilsfield/ai-deepresearch-flow", Issues = "https://github.com/nerdneilsfield/ai-deepresearch-flow/issues" }
 
 [project.scripts]
 deepresearch-flow = "deepresearch_flow.cli:main"
