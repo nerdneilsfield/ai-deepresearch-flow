@@ -642,10 +642,14 @@ def _merge_paper_inputs(inputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _render_markdown_with_math_placeholders(md: MarkdownIt, text: str) -> str:
     rendered, table_placeholders = _extract_html_table_placeholders(text)
+    rendered, img_placeholders = _extract_html_img_placeholders(rendered)
     rendered, placeholders = _extract_math_placeholders(rendered)
     html_out = md.render(rendered)
     for key, value in placeholders.items():
         html_out = html_out.replace(key, html.escape(value))
+    for key, value in img_placeholders.items():
+        html_out = re.sub(rf"<p>\s*{re.escape(key)}\s*</p>", lambda _: value, html_out)
+        html_out = html_out.replace(key, value)
     for key, value in table_placeholders.items():
         safe_html = _sanitize_table_html(value)
         html_out = re.sub(rf"<p>\s*{re.escape(key)}\s*</p>", lambda _: safe_html, html_out)
@@ -826,6 +830,110 @@ def _sanitize_table_html(raw: str) -> str:
     except Exception:
         return f"<pre><code>{html.escape(raw)}</code></pre>"
     return parser.get_html()
+
+
+def _sanitize_img_html(raw: str) -> str | None:
+    attrs = {}
+    for match in re.finditer(r"(\w+)\s*=\s*(\"[^\"]*\"|'[^']*'|[^\s>]+)", raw):
+        name = match.group(1).lower()
+        value = match.group(2).strip()
+        if value and value[0] in {"\"", "'"} and value[-1] == value[0]:
+            value = value[1:-1]
+        attrs[name] = value
+
+    src = attrs.get("src", "")
+    src_lower = src.lower()
+    if not src_lower.startswith("data:image/") or ";base64," not in src_lower:
+        return None
+
+    alt = attrs.get("alt", "")
+    alt_attr = f' alt="{html.escape(alt, quote=True)}"' if alt else ""
+    return f'<img src="{html.escape(src, quote=True)}"{alt_attr} />'
+
+
+def _extract_html_img_placeholders(text: str) -> tuple[str, dict[str, str]]:
+    placeholders: dict[str, str] = {}
+    out: list[str] = []
+    idx = 0
+    in_fence = False
+    fence_char = ""
+    fence_len = 0
+    inline_delim_len = 0
+
+    def next_placeholder(value: str) -> str:
+        key = f"@@HTML_IMG_{len(placeholders)}@@"
+        placeholders[key] = value
+        return key
+
+    lower = text.lower()
+    while idx < len(text):
+        at_line_start = idx == 0 or text[idx - 1] == "\n"
+
+        if inline_delim_len == 0 and at_line_start:
+            line_end = text.find("\n", idx)
+            if line_end == -1:
+                line_end = len(text)
+            line = text[idx:line_end]
+            stripped = line.lstrip(" ")
+            leading_spaces = len(line) - len(stripped)
+            if leading_spaces <= 3 and stripped:
+                first = stripped[0]
+                if first in {"`", "~"}:
+                    run_len = 0
+                    while run_len < len(stripped) and stripped[run_len] == first:
+                        run_len += 1
+                    if run_len >= 3:
+                        if not in_fence:
+                            in_fence = True
+                            fence_char = first
+                            fence_len = run_len
+                        elif first == fence_char and run_len >= fence_len:
+                            in_fence = False
+                            fence_char = ""
+                            fence_len = 0
+                        out.append(line)
+                        idx = line_end
+                        continue
+
+        if in_fence:
+            out.append(text[idx])
+            idx += 1
+            continue
+
+        if inline_delim_len > 0:
+            delim = "`" * inline_delim_len
+            if text.startswith(delim, idx):
+                out.append(delim)
+                idx += inline_delim_len
+                inline_delim_len = 0
+                continue
+            out.append(text[idx])
+            idx += 1
+            continue
+
+        if text[idx] == "`":
+            run_len = 0
+            while idx + run_len < len(text) and text[idx + run_len] == "`":
+                run_len += 1
+            inline_delim_len = run_len
+            out.append("`" * run_len)
+            idx += run_len
+            continue
+
+        if lower.startswith("<img", idx):
+            end = text.find(">", idx)
+            if end != -1:
+                raw = text[idx : end + 1]
+                safe_html = _sanitize_img_html(raw)
+                if safe_html:
+                    out.append(next_placeholder(safe_html))
+                    idx = end + 1
+                    continue
+
+        out.append(text[idx])
+        idx += 1
+
+    return "".join(out), placeholders
 
 
 def _extract_html_table_placeholders(text: str) -> tuple[str, dict[str, str]]:
