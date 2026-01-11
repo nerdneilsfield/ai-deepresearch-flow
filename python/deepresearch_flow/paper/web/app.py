@@ -1583,6 +1583,9 @@ async def _paper_detail(request: Request) -> HTMLResponse:
 """
         extra_head = """
 <style>
+.container {
+  max-width: 100%;
+}
 .split-controls {
   display: flex;
   gap: 16px;
