@@ -1,6 +1,6 @@
 # ai-deepresearch-flow
 
-DeepResearch Flow command-line tools for document extraction and paper database operations.
+DeepResearch Flow command-line tools for document extraction, OCR post-processing, and paper database operations.
 
 ## Quick Start
 
@@ -25,8 +25,8 @@ uv run deepresearch-flow paper db serve \
 
 ## Commands
 
-`deepresearch-flow` is the top-level CLI. The current workflow lives under the `paper` subcommand.
-Use `deepresearch-flow --help` and `deepresearch-flow paper --help` to explore flags.
+`deepresearch-flow` is the top-level CLI. Workflows live under `paper` and `recognize`.
+Use `deepresearch-flow --help`, `deepresearch-flow paper --help`, and `deepresearch-flow recognize --help` to explore flags.
 
 <details>
 <summary>Configuration details</summary>
@@ -213,6 +213,77 @@ Other database helpers:
 - `split-database`
 - `statistics`
 - `merge`
+
+</details>
+
+<details>
+<summary>recognize md — embed or unpack markdown images</summary>
+
+`recognize md embed` replaces local image links in markdown with `data:image/...;base64,` URLs.
+`recognize md unpack` extracts embedded images into `images/` and updates markdown links.
+
+Key options:
+
+- `--input` (repeatable): file or directory input.
+- `--recursive`: recurse into directories.
+- `--output`: output directory (flattened outputs).
+- `--enable-http`: allow embedding HTTP(S) images (embed only).
+- `--workers`: concurrent workers (default: 4).
+
+Examples:
+
+```bash
+# Embed local images (flatten outputs)
+deepresearch-flow recognize md embed \
+  --input ./docs \
+  --recursive \
+  --output ./out_md
+
+# Embed HTTP images (with browser User-Agent)
+deepresearch-flow recognize md embed \
+  --input ./docs \
+  --enable-http \
+  --output ./out_md
+
+# Unpack embedded images into output/images/
+deepresearch-flow recognize md unpack \
+  --input ./docs \
+  --recursive \
+  --output ./out_md
+```
+
+</details>
+
+<details>
+<summary>recognize organize — flatten OCR outputs</summary>
+
+Organize OCR outputs (layout: `mineru`) into flat markdown files, with optional image embedding.
+
+Key options:
+
+- `--layout`: OCR layout type (currently `mineru`).
+- `--input` (repeatable): directories containing `full.md` + `images/`.
+- `--recursive`: search for layout folders.
+- `--output-simple`: copy markdown + images to output (shared `images/`).
+- `--output-base64`: embed images into markdown.
+- `--workers`: concurrent workers (default: 4).
+
+Examples:
+
+```bash
+# Copy markdown + images into a flat output directory
+deepresearch-flow recognize organize \
+  --layout mineru \
+  --input ./ocr_results \
+  --recursive \
+  --output-simple ./out_simple
+
+# Embed images into markdown
+deepresearch-flow recognize organize \
+  --layout mineru \
+  --input ./ocr_results \
+  --output-base64 ./out_base64
+```
 
 </details>
 
