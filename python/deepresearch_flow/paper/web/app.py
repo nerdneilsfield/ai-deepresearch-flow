@@ -11,6 +11,7 @@ import re
 from urllib.parse import urlencode, quote
 
 from markdown_it import MarkdownIt
+from markdown_it.extensions.tables import tables
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -488,7 +489,9 @@ def _load_or_merge_papers(
 
 
 def _md_renderer() -> MarkdownIt:
-    return MarkdownIt("commonmark", {"html": False, "linkify": True})
+    md = MarkdownIt("commonmark", {"html": False, "linkify": True})
+    md.use(tables)
+    return md
 
 
 def _normalize_merge_title(value: str | None) -> str | None:
