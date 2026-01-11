@@ -1,13 +1,16 @@
-# ai-deepresearch-flow
+# deepresearch-flow
 
 DeepResearch Flow command-line tools for document extraction, OCR post-processing, and paper database operations.
 
 ## Quick Start
 
 ```bash
-pip install -e .
+pip install deepresearch-flow
 # or
-uv pip install -e .
+uv pip install deepresearch-flow
+
+# Development install
+pip install -e .
 
 cp config.example.toml config.toml
 
@@ -21,6 +24,14 @@ uv run deepresearch-flow paper db serve \
   --input ./paper_infos_simple.json \
   --host 127.0.0.1 \
   --port 8000
+```
+
+Docker images:
+
+```bash
+docker run --rm -it nerdneils/deepresearch-flow --help
+# or
+docker run --rm -it ghcr.io/nerdneilsfield/deepresearch-flow --help
 ```
 
 ## Commands

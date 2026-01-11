@@ -1,5 +1,5 @@
 [project]
-name = "ai-deepresearch-flow"
+name = "deepresearch-flow"
 version = "0.1.0"
 description = "Workflow tools for paper extraction, review, and research automation."
 readme = { file = "README.md", content-type = "text/markdown" }
