@@ -1565,6 +1565,9 @@ async def _paper_detail(request: Request) -> HTMLResponse:
       {left_options}
     </select>
   </div>
+  <div class="split-swap">
+    <button id="splitSwap" type="button" title="Swap panes">⇄</button>
+  </div>
   <div>
     <div class="muted">Right pane</div>
     <select id="splitRight">
@@ -1584,13 +1587,15 @@ async def _paper_detail(request: Request) -> HTMLResponse:
         extra_head = """
 <style>
 .container {
-  max-width: 100%;
+  max-width: min(1600px, calc(100vw - 48px));
+  width: 100%;
+  margin: 0 auto;
 }
 .split-controls {
-  display: flex;
-  gap: 16px;
-  align-items: center;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 12px;
+  align-items: end;
   margin: 10px 0 14px;
 }
 .split-controls select {
@@ -1599,6 +1604,19 @@ async def _paper_detail(request: Request) -> HTMLResponse:
   border: 1px solid #d0d7de;
   background: #fff;
   min-width: 160px;
+}
+.split-swap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+}
+.split-swap button {
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid #d0d7de;
+  background: #f6f8fa;
+  cursor: pointer;
 }
 .split-layout {
   display: flex;
@@ -1626,6 +1644,9 @@ async def _paper_detail(request: Request) -> HTMLResponse:
   .split-pane {
     height: 70vh;
   }
+  .split-controls {
+    grid-template-columns: 1fr;
+  }
 }
 </style>
 """
@@ -1633,6 +1654,7 @@ async def _paper_detail(request: Request) -> HTMLResponse:
 <script>
 const leftSelect = document.getElementById('splitLeft');
 const rightSelect = document.getElementById('splitRight');
+const swapButton = document.getElementById('splitSwap');
 function updateSplit() {
   const params = new URLSearchParams(window.location.search);
   params.set('view', 'split');
@@ -1642,6 +1664,12 @@ function updateSplit() {
 }
 leftSelect.addEventListener('change', updateSplit);
 rightSelect.addEventListener('change', updateSplit);
+swapButton.addEventListener('click', () => {
+  const leftValue = leftSelect.value;
+  leftSelect.value = rightSelect.value;
+  rightSelect.value = leftValue;
+  updateSplit();
+});
 </script>
 """
         return HTMLResponse(_page_shell("Split View", body, extra_head=extra_head, extra_scripts=extra_scripts))
