@@ -3,6 +3,7 @@
 import click
 
 from deepresearch_flow.paper.cli import paper
+from deepresearch_flow.recognize.cli import recognize
 
 
 @click.group()
@@ -11,6 +12,7 @@ def cli() -> None:
 
 
 cli.add_command(paper)
+cli.add_command(recognize)
 
 
 def main() -> None:
