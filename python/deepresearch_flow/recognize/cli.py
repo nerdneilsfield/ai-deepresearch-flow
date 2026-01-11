@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from pathlib import Path
 from typing import Awaitable, Callable, Iterable
 
@@ -19,6 +20,7 @@ from deepresearch_flow.recognize.markdown import (
     DEFAULT_USER_AGENT,
     HTTP_TIMEOUT_SECONDS,
     NameRegistry,
+    count_markdown_images,
     embed_markdown_images,
     read_text,
     sanitize_filename,
@@ -54,9 +56,9 @@ def _warn_if_not_empty(output_dir: Path) -> None:
 
 
 def _print_summary(title: str, rows: list[tuple[str, str]]) -> None:
-    table = Table(title=title, header_style="bold")
-    table.add_column("Item")
-    table.add_column("Value", overflow="fold")
+    table = Table(title=title, header_style="bold cyan", title_style="bold magenta")
+    table.add_column("Item", style="cyan", no_wrap=True)
+    table.add_column("Value", style="white", overflow="fold")
     for key, value in rows:
         table.add_row(key, value)
     Console().print(table)
@@ -84,6 +86,26 @@ def _map_output_files(paths: Iterable[Path], output_dirs: list[Path]) -> dict[Pa
         base = path.stem
         mapping[path] = _unique_output_filename(base, output_dirs, used)
     return mapping
+
+
+def _aggregate_image_counts(paths: Iterable[Path]) -> dict[str, int]:
+    totals = {"total": 0, "data": 0, "http": 0, "local": 0}
+    for path in paths:
+        content = read_text(path)
+        counts = count_markdown_images(content)
+        for key in totals:
+            totals[key] += counts.get(key, 0)
+    return totals
+
+
+def _format_duration(seconds: float) -> str:
+    if seconds < 60:
+        return f"{seconds:.2f}s"
+    minutes, remainder = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{int(minutes)}m {remainder:.1f}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{int(hours)}h {int(minutes)}m {remainder:.1f}s"
 
 
 async def _run_with_workers(
@@ -215,6 +237,7 @@ def embed(
 ) -> None:
     """Embed images into markdown as data URLs."""
     configure_logging(verbose)
+    start_time = time.monotonic()
     if workers <= 0:
         raise click.ClickException("--workers must be positive")
     output_path = Path(output_dir)
@@ -226,14 +249,22 @@ def embed(
         click.echo("No markdown files discovered")
         return
     output_map = _map_output_files(paths, [output_path])
+    image_counts = _aggregate_image_counts(paths)
+    embed_count = image_counts["local"] + (image_counts["http"] if enable_http else 0)
     if dry_run:
         _print_summary(
             "recognize md embed (dry-run)",
             [
                 ("Inputs", str(len(paths))),
                 ("Outputs", str(len(output_map))),
+                ("Images total", str(image_counts["total"])),
+                ("Images to embed", str(embed_count)),
+                ("Images data", str(image_counts["data"])),
+                ("Images http", str(image_counts["http"])),
+                ("Images local", str(image_counts["local"])),
                 ("Output dir", _relative_path(output_path)),
                 ("HTTP enabled", "yes" if enable_http else "no"),
+                ("Duration", _format_duration(time.monotonic() - start_time)),
             ],
         )
         return
@@ -248,8 +279,14 @@ def embed(
         [
             ("Inputs", str(len(paths))),
             ("Outputs", str(len(output_map))),
+            ("Images total", str(image_counts["total"])),
+            ("Images to embed", str(embed_count)),
+            ("Images data", str(image_counts["data"])),
+            ("Images http", str(image_counts["http"])),
+            ("Images local", str(image_counts["local"])),
             ("Output dir", _relative_path(output_path)),
             ("HTTP enabled", "yes" if enable_http else "no"),
+            ("Duration", _format_duration(time.monotonic() - start_time)),
         ],
     )
 
@@ -278,6 +315,7 @@ def unpack(
 ) -> None:
     """Extract embedded data URLs into image files."""
     configure_logging(verbose)
+    start_time = time.monotonic()
     if workers <= 0:
         raise click.ClickException("--workers must be positive")
     output_path = Path(output_dir)
@@ -289,13 +327,19 @@ def unpack(
         click.echo("No markdown files discovered")
         return
     output_map = _map_output_files(paths, [output_path])
+    image_counts = _aggregate_image_counts(paths)
     if dry_run:
         _print_summary(
             "recognize md unpack (dry-run)",
             [
                 ("Inputs", str(len(paths))),
                 ("Outputs", str(len(output_map))),
+                ("Images total", str(image_counts["total"])),
+                ("Images embedded", str(image_counts["data"])),
+                ("Images http", str(image_counts["http"])),
+                ("Images local", str(image_counts["local"])),
                 ("Output dir", _relative_path(output_path)),
+                ("Duration", _format_duration(time.monotonic() - start_time)),
             ],
         )
         return
@@ -310,7 +354,12 @@ def unpack(
         [
             ("Inputs", str(len(paths))),
             ("Outputs", str(len(output_map))),
+            ("Images total", str(image_counts["total"])),
+            ("Images embedded", str(image_counts["data"])),
+            ("Images http", str(image_counts["http"])),
+            ("Images local", str(image_counts["local"])),
             ("Output dir", _relative_path(output_path)),
+            ("Duration", _format_duration(time.monotonic() - start_time)),
         ],
     )
 
@@ -350,6 +399,7 @@ def organize(
 ) -> None:
     """Organize OCR outputs into markdown files."""
     configure_logging(verbose)
+    start_time = time.monotonic()
     if workers <= 0:
         raise click.ClickException("--workers must be positive")
     if output_simple is None and output_base64 is None:
@@ -373,13 +423,19 @@ def organize(
         return
 
     output_map = _map_output_files(layout_dirs, output_dirs)
+    image_counts = _aggregate_image_counts([path / "full.md" for path in layout_dirs])
     if dry_run:
         rows = [
             ("Layout", layout),
             ("Inputs", str(len(layout_dirs))),
             ("Outputs", str(len(output_map))),
+            ("Images total", str(image_counts["total"])),
+            ("Images data", str(image_counts["data"])),
+            ("Images http", str(image_counts["http"])),
+            ("Images local", str(image_counts["local"])),
             ("Output simple", _relative_path(output_simple_path) if output_simple_path else "-"),
             ("Output base64", _relative_path(output_base64_path) if output_base64_path else "-"),
+            ("Duration", _format_duration(time.monotonic() - start_time)),
         ]
         _print_summary("recognize organize (dry-run)", rows)
         return
@@ -402,7 +458,12 @@ def organize(
         ("Layout", layout),
         ("Inputs", str(len(layout_dirs))),
         ("Outputs", str(len(output_map))),
+        ("Images total", str(image_counts["total"])),
+        ("Images data", str(image_counts["data"])),
+        ("Images http", str(image_counts["http"])),
+        ("Images local", str(image_counts["local"])),
         ("Output simple", _relative_path(output_simple_path) if output_simple_path else "-"),
         ("Output base64", _relative_path(output_base64_path) if output_base64_path else "-"),
+        ("Duration", _format_duration(time.monotonic() - start_time)),
     ]
     _print_summary("recognize organize", rows)

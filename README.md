@@ -236,9 +236,9 @@ Key options:
 - `--dry-run`: report planned outputs without writing files.
 - `--verbose`: enable detailed logs for image resolution/HTTP fetches.
 
-Notes:
+ Notes:
 
-- Progress bars report completion; a rich summary table lists counts and output locations.
+- Progress bars report completion; a rich summary table lists counts, image totals, duration, and output locations.
 - Summary paths are shown relative to the current working directory when possible.
 - If the output directory is not empty, the command logs a warning before writing files.
 
@@ -282,11 +282,11 @@ Key options:
 - `--dry-run`: report planned outputs without writing files.
 - `--verbose`: enable detailed logs for layout discovery and file copying.
 
-Notes:
+ Notes:
 
 - Use `--recursive` when the input directory contains nested layout folders (otherwise no layouts are discovered).
 - If output directories are not empty, the command logs a warning before writing files.
-- A summary table lists counts and output locations after completion.
+- A summary table lists counts, image totals, duration, and output locations after completion.
 - Summary paths are shown relative to the current working directory when possible.
 
 Examples:

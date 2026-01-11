@@ -8,12 +8,18 @@ The system SHALL display a progress indicator for `recognize md embed`, `recogni
 - **THEN** the command displays a progress bar that advances as each markdown file finishes
 
 ### Requirement: Recognize summary output
-The system SHALL print a completion summary for recognize commands that includes total items, successes, failures, and output locations.
+The system SHALL print a completion summary for recognize commands that includes total items and output locations.
 The summary SHALL report output locations as relative paths when possible.
+The summary SHALL include total duration.
+For `recognize md embed`, `recognize md unpack`, and `recognize organize`, the summary SHALL include image counts (total/data/http/local) and derived action counts where applicable.
 
 #### Scenario: Summary includes counts
 - **WHEN** a recognize command finishes processing
 - **THEN** it prints a summary table with totals and outcome counts
+
+#### Scenario: Summary includes image counts
+- **WHEN** the user runs `deepresearch-flow recognize md embed -i ./docs --output ./out`
+- **THEN** the summary includes image totals for data/http/local and the number of images to embed
 
 ### Requirement: Recognize dry-run mode
 The system SHALL support a `--dry-run` flag for recognize commands to report planned outputs without writing files.

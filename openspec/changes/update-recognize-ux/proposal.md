@@ -5,7 +5,7 @@ Recognize commands can process large OCR batches. Users need visible progress, a
 
 ## What Changes
 - Add progress bars for `recognize md embed`, `recognize md unpack`, and `recognize organize`.
-- Add end-of-run summaries using Rich tables (counts + relative output locations).
+- Add end-of-run summaries using Rich tables (counts, image totals, duration, relative output locations).
 - Add `--dry-run` mode and warnings when output directories are non-empty.
 - Add `--verbose` logging to recognize commands using existing logging dependencies.
 

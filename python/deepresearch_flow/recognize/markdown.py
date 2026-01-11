@@ -184,6 +184,23 @@ async def rewrite_markdown_images(
     return "".join(output)
 
 
+def count_markdown_images(content: str) -> dict[str, int]:
+    counts = {"total": 0, "data": 0, "http": 0, "local": 0}
+    for match in IMAGE_PATTERN.finditer(content):
+        counts["total"] += 1
+        raw_link = match.group(2)
+        target, _, _, _ = split_link_target(raw_link)
+        if not target:
+            continue
+        if is_data_url(target):
+            counts["data"] += 1
+        elif is_http_url(target):
+            counts["http"] += 1
+        else:
+            counts["local"] += 1
+    return counts
+
+
 async def embed_markdown_images(
     content: str,
     md_path: Path,
