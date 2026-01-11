@@ -528,9 +528,13 @@ async def extract_documents(
         docs_per_min = (doc_count / duration) * 60 if duration > 0 else 0.0
         tokens_per_sec = (total_tokens / duration) if duration > 0 else 0.0
 
-        table = Table(title="paper extract summary (dry-run)", header_style="bold")
-        table.add_column("Metric")
-        table.add_column("Value", overflow="fold")
+        table = Table(
+            title="paper extract summary (dry-run)",
+            header_style="bold cyan",
+            title_style="bold magenta",
+        )
+        table.add_column("Metric", style="cyan", no_wrap=True)
+        table.add_column("Value", style="white", overflow="fold")
         table.add_row("Documents", str(doc_count))
         table.add_row("Duration", _format_duration(duration))
         table.add_row("Avg time/doc", _format_duration(avg_time))
@@ -841,9 +845,13 @@ async def extract_documents(
     docs_per_min = (doc_count / duration) * 60 if duration > 0 else 0.0
     tokens_per_sec = (total_tokens / duration) if duration > 0 else 0.0
 
-    table = Table(title="paper extract summary", header_style="bold")
-    table.add_column("Metric")
-    table.add_column("Value", overflow="fold")
+    table = Table(
+        title="paper extract summary",
+        header_style="bold cyan",
+        title_style="bold magenta",
+    )
+    table.add_column("Metric", style="cyan", no_wrap=True)
+    table.add_column("Value", style="white", overflow="fold")
     table.add_row("Documents", f"{doc_count} total")
     table.add_row("Successful", str(doc_count - len(errors)))
     table.add_row("Errors", str(len(errors)))
