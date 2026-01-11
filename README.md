@@ -68,6 +68,7 @@ Key options:
 - `--sleep-every` / `--sleep-time`: throttle request initiation.
 - `--max-concurrency`: override concurrency.
 - `--render-md`: render markdown output as part of extraction.
+- `--dry-run`: scan inputs and show summary metrics without calling providers.
 
 Outputs:
 
@@ -82,6 +83,8 @@ Incremental behavior:
 - Use `--retry-failed` to retry only failed documents listed in `paper_errors.json`.
 - Use `--verbose` for detailed logs alongside progress bars.
 - Extract-time rendering defaults to the same built-in template as `--prompt-template`.
+- A summary table prints input/prompt/output character totals, token estimates, and throughput after each run.
+- Progress bars include a live prompt/completion/total token ticker.
 
 Examples:
 

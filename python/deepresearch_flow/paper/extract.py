@@ -4,17 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 import logging
 import re
+import time
 
 import coloredlogs
 import click
 import httpx
 from jsonschema import Draft7Validator
+from rich.console import Console
+from rich.table import Table
 from tqdm import tqdm
 from deepresearch_flow.paper.config import PaperConfig, ProviderConfig, resolve_api_keys
 from deepresearch_flow.paper.llm import backoff_delay, call_provider
@@ -72,6 +75,69 @@ def configure_logging(verbose: bool) -> None:
     level = "DEBUG" if verbose else "INFO"
     coloredlogs.install(level=level, fmt="%(asctime)s %(levelname)s %(message)s")
 
+
+def _count_prompt_chars(messages: list[dict[str, str]]) -> int:
+    return sum(len(message.get("content") or "") for message in messages)
+
+
+def _estimate_tokens_for_chars(char_count: int) -> int:
+    if char_count <= 0:
+        return 0
+    return estimate_tokens(char_count)
+
+
+def _format_duration(seconds: float) -> str:
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes, remainder = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{int(minutes)}m {remainder:.1f}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{int(hours)}h {int(minutes)}m {remainder:.1f}s"
+
+
+def _format_rate(value: float, unit: str) -> str:
+    if value <= 0:
+        return f"0 {unit}"
+    return f"{value:.2f} {unit}"
+
+
+@dataclass
+class ExtractionStats:
+    doc_bar: tqdm | None
+    input_chars: int = 0
+    prompt_chars: int = 0
+    output_chars: int = 0
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    async def add_input_chars(self, count: int) -> None:
+        if count <= 0:
+            return
+        async with self.lock:
+            self.input_chars += count
+            self._update_bar()
+
+    async def add_prompt_chars(self, count: int) -> None:
+        if count <= 0:
+            return
+        async with self.lock:
+            self.prompt_chars += count
+            self._update_bar()
+
+    async def add_output_chars(self, count: int) -> None:
+        if count <= 0:
+            return
+        async with self.lock:
+            self.output_chars += count
+            self._update_bar()
+
+    def _update_bar(self) -> None:
+        if not self.doc_bar:
+            return
+        prompt_tokens = _estimate_tokens_for_chars(self.prompt_chars)
+        completion_tokens = _estimate_tokens_for_chars(self.output_chars)
+        total_tokens = prompt_tokens + completion_tokens
+        self.doc_bar.set_postfix_str(f"tok p/c/t {prompt_tokens}/{completion_tokens}/{total_tokens}")
 
 def parse_model_ref(model_ref: str, providers: list[ProviderConfig]) -> tuple[ProviderConfig, str]:
     if "/" not in model_ref:
@@ -306,13 +372,17 @@ async def call_with_retries(
     client: httpx.AsyncClient,
     validator: Draft7Validator,
     throttle: RequestThrottle | None = None,
+    stats: ExtractionStats | None = None,
 ) -> dict[str, Any]:
     attempt = 0
     use_structured = structured_mode
+    prompt_chars = _count_prompt_chars(messages)
     while attempt < max_retries:
         attempt += 1
         if throttle:
             await throttle.tick()
+        if stats:
+            await stats.add_prompt_chars(prompt_chars)
         try:
             response_text = await call_provider(
                 provider,
@@ -324,6 +394,8 @@ async def call_with_retries(
                 use_structured,
                 client,
             )
+            if stats:
+                await stats.add_output_chars(len(response_text))
         except ProviderError as exc:
             if exc.structured_error and use_structured != "none":
                 use_structured = "none"
@@ -388,6 +460,7 @@ async def extract_documents(
     sleep_time: float | None,
     verbose: bool,
 ) -> None:
+    start_time = time.monotonic()
     markdown_files = discover_markdown(inputs, glob_pattern, recursive=True)
 
     if retry_failed:
@@ -399,12 +472,77 @@ async def extract_documents(
         logger.debug("Discovered %d markdown files", len(markdown_files))
 
     if dry_run:
-        total_chars = 0
+        input_chars = 0
+        prompt_chars = 0
+        stage_definitions = get_stage_definitions(prompt_template) if not custom_prompt else []
+        multi_stage = bool(stage_definitions)
+        metadata_fields = [
+            "paper_title",
+            "paper_authors",
+            "publication_date",
+            "publication_venue",
+        ]
         for path in markdown_files:
-            total_chars += len(read_text(path))
-        click.echo(f"Discovered {len(markdown_files)} markdown files")
-        if config.extract.cost_estimate:
-            click.echo(f"Approx chars: {total_chars}, estimated tokens: {estimate_tokens(total_chars)}")
+            content = read_text(path)
+            input_chars += len(content)
+            truncated_content, _ = truncate_content(
+                content, config.extract.truncate_max_chars, config.extract.truncate_strategy
+            )
+            if multi_stage:
+                for stage_def in stage_definitions:
+                    required_fields = metadata_fields + stage_def.fields
+                    stage_schema = build_stage_schema(schema, required_fields)
+                    messages = build_messages(
+                        truncated_content,
+                        stage_schema,
+                        provider,
+                        prompt_template,
+                        output_language,
+                        custom_prompt=False,
+                        prompt_system_path=None,
+                        prompt_user_path=None,
+                        stage_name=stage_def.name,
+                        stage_fields=required_fields,
+                        previous_outputs="{}",
+                    )
+                    prompt_chars += _count_prompt_chars(messages)
+            else:
+                messages = build_messages(
+                    truncated_content,
+                    schema,
+                    provider,
+                    prompt_template if not custom_prompt else "custom",
+                    output_language,
+                    custom_prompt=custom_prompt,
+                    prompt_system_path=prompt_system_path,
+                    prompt_user_path=prompt_user_path,
+                )
+                prompt_chars += _count_prompt_chars(messages)
+
+        duration = time.monotonic() - start_time
+        prompt_tokens = _estimate_tokens_for_chars(prompt_chars)
+        completion_tokens = 0
+        total_tokens = prompt_tokens
+        doc_count = len(markdown_files)
+        avg_time = duration / doc_count if doc_count else 0.0
+        docs_per_min = (doc_count / duration) * 60 if duration > 0 else 0.0
+        tokens_per_sec = (total_tokens / duration) if duration > 0 else 0.0
+
+        table = Table(title="paper extract summary (dry-run)", header_style="bold")
+        table.add_column("Metric")
+        table.add_column("Value", overflow="fold")
+        table.add_row("Documents", str(doc_count))
+        table.add_row("Duration", _format_duration(duration))
+        table.add_row("Avg time/doc", _format_duration(avg_time))
+        table.add_row("Throughput", _format_rate(docs_per_min, "docs/min"))
+        table.add_row("Input chars", str(input_chars))
+        table.add_row("Prompt chars", str(prompt_chars))
+        table.add_row("Output chars", "0")
+        table.add_row("Est prompt tokens", str(prompt_tokens))
+        table.add_row("Est completion tokens", str(completion_tokens))
+        table.add_row("Est total tokens", str(total_tokens))
+        table.add_row("Est tokens/sec", _format_rate(tokens_per_sec, "tok/s"))
+        Console().print(table)
         return
 
     existing = load_existing(output_path)
@@ -444,6 +582,7 @@ async def extract_documents(
             position=1,
             leave=False,
         )
+    stats = ExtractionStats(doc_bar=doc_bar)
 
     async def process_one(path: Path, client: httpx.AsyncClient) -> None:
         source_path = str(path.resolve())
@@ -452,6 +591,7 @@ async def extract_documents(
             if verbose:
                 logger.debug("Processing %s", source_path)
             content = read_text(path)
+            await stats.add_input_chars(len(content))
             source_hash = compute_source_hash(content)
             stage_state: dict[str, Any] | None = None
             stage_path: Path | None = None
@@ -533,6 +673,7 @@ async def extract_documents(
                                 client=client,
                                 validator=stage_validator,
                                 throttle=throttle,
+                                stats=stats,
                             )
                         stages[stage_name] = data
                         stage_state["stages"] = stages
@@ -587,6 +728,7 @@ async def extract_documents(
                         client=client,
                         validator=validator,
                         throttle=throttle,
+                        stats=stats,
                     )
 
                 data = append_metadata(
@@ -690,6 +832,31 @@ async def extract_documents(
         rendered = render_papers(final_results, render_dir, template, output_language)
         click.echo(f"Rendered {rendered} markdown files")
 
-    click.echo(f"Processed {len(results)} documents")
-    if errors:
-        click.echo(f"Errors: {len(errors)} (see {errors_path})")
+    duration = time.monotonic() - start_time
+    prompt_tokens = _estimate_tokens_for_chars(stats.prompt_chars)
+    completion_tokens = _estimate_tokens_for_chars(stats.output_chars)
+    total_tokens = prompt_tokens + completion_tokens
+    doc_count = len(markdown_files)
+    avg_time = duration / doc_count if doc_count else 0.0
+    docs_per_min = (doc_count / duration) * 60 if duration > 0 else 0.0
+    tokens_per_sec = (total_tokens / duration) if duration > 0 else 0.0
+
+    table = Table(title="paper extract summary", header_style="bold")
+    table.add_column("Metric")
+    table.add_column("Value", overflow="fold")
+    table.add_row("Documents", f"{doc_count} total")
+    table.add_row("Successful", str(doc_count - len(errors)))
+    table.add_row("Errors", str(len(errors)))
+    table.add_row("Output JSON", str(output_path))
+    table.add_row("Errors JSON", str(errors_path))
+    table.add_row("Duration", _format_duration(duration))
+    table.add_row("Avg time/doc", _format_duration(avg_time))
+    table.add_row("Throughput", _format_rate(docs_per_min, "docs/min"))
+    table.add_row("Input chars", str(stats.input_chars))
+    table.add_row("Prompt chars", str(stats.prompt_chars))
+    table.add_row("Output chars", str(stats.output_chars))
+    table.add_row("Est prompt tokens", str(prompt_tokens))
+    table.add_row("Est completion tokens", str(completion_tokens))
+    table.add_row("Est total tokens", str(total_tokens))
+    table.add_row("Est tokens/sec", _format_rate(tokens_per_sec, "tok/s"))
+    Console().print(table)
