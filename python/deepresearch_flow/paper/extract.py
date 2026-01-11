@@ -285,9 +285,14 @@ def load_existing(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return []
+    if isinstance(data, dict) and isinstance(data.get("papers"), list):
+        return data["papers"]
+    if isinstance(data, list):
+        return data
+    return []
 
 
 def load_errors(path: Path) -> list[dict[str, Any]]:
@@ -462,6 +467,7 @@ async def extract_documents(
 ) -> None:
     start_time = time.monotonic()
     markdown_files = discover_markdown(inputs, glob_pattern, recursive=True)
+    template_tag = prompt_template if not custom_prompt else "custom"
 
     if retry_failed:
         error_entries = load_errors(errors_path)
@@ -798,7 +804,8 @@ async def extract_documents(
         if path not in seen:
             final_results.append(entry)
 
-    write_json(output_path, final_results)
+    output_payload = {"template_tag": template_tag, "papers": final_results}
+    write_json(output_path, output_payload)
 
     error_payload = [
         {
@@ -823,7 +830,7 @@ async def extract_documents(
                 continue
             base_name = split_output_name(Path(source_path))
             file_name = unique_split_name(base_name, used_names, source_path)
-            write_json(target_dir / f"{file_name}.json", entry)
+            write_json(target_dir / f"{file_name}.json", {"template_tag": template_tag, "papers": [entry]})
 
     if render_md:
         try:

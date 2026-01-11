@@ -30,7 +30,12 @@ except ImportError:
 
 
 def load_json(path: Path) -> list[dict[str, Any]]:
-    return json.loads(path.read_text(encoding="utf-8"))
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(data, dict) and isinstance(data.get("papers"), list):
+        return data["papers"]
+    if isinstance(data, list):
+        return data
+    raise click.ClickException("Input JSON must be a list or {template_tag, papers}")
 
 
 def write_json(path: Path, data: Any) -> None:

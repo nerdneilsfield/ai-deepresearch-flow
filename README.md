@@ -94,6 +94,7 @@ Incremental behavior:
 - Use `--retry-failed` to retry only failed documents listed in `paper_errors.json`.
 - Use `--verbose` for detailed logs alongside progress bars.
 - Extract-time rendering defaults to the same built-in template as `--prompt-template`.
+- Output JSON is written as `{"template_tag": "...", "papers": [...]}`.
 - A summary table prints input/prompt/output character totals, token estimates, and throughput after each run.
 - Progress bars include a live prompt/completion/total token ticker.
 
@@ -149,9 +150,9 @@ Render outputs, compute stats, and serve a local web UI over paper JSON.
 
 JSON input formats:
 
-- For `db render-md`, `db statistics`, `db filter`, and `db generate-tags`, the input is the aggregated JSON list.
+- For `db render-md`, `db statistics`, `db filter`, and `db generate-tags`, the input can be either an aggregated JSON list or `{"template_tag": "...", "papers": [...]}` (the commands operate on `papers`).
 - For `db serve`, each input JSON must be an object: `{"template_tag": "simple", "papers": [...]}`.
-  When `template_tag` is missing, the server attempts to infer it as a fallback.
+  When `template_tag` is missing, the server attempts to infer it as a fallback (legacy list-only inputs are rejected).
 
 Web UI highlights:
 
@@ -159,6 +160,8 @@ Web UI highlights:
 - Split view: choose left/right panes independently (summary/source/pdf/pdf viewer) via URL params.
 - Summary view includes a collapsible outline panel (top-left) and a back-to-top control (bottom-left).
 - Summary template dropdown shows only available templates per paper.
+- Homepage filters: PDF/Source/Summary availability and template tags, plus a filter syntax input (`tmpl:...`, `has:pdf`, `no:source`).
+- Homepage stats: total and filtered counts for PDF/Source/Summary plus per-template totals.
 - Source view renders Markdown and supports embedded HTML tables plus `data:image/...;base64` `<img>` tags.
 - PDF Viewer is served locally (PDF.js viewer assets) to avoid cross-origin issues with local PDFs.
 - Merge behavior for multi-input serve: title similarity (>= 0.95), preferring `bibtex.fields.title` and falling back to `paper_title`.
@@ -220,7 +223,7 @@ Web search syntax (Scholar-style):
 - Quoted phrases: `title:"nearest neighbor"`
 - OR: `fpga OR asic`
 - Negation: `-survey` or `-tag:survey`
-- Fields: `title:`, `author:`, `tag:`, `venue:`, `year:`, `month:`
+- Fields: `title:`, `author:`, `tag:`, `venue:`, `year:`, `month:` (content tags only)
 - Year range: `year:2020..2024`
 
 Other database helpers:

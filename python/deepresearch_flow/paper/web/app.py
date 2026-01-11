@@ -60,6 +60,7 @@ class PaperIndex:
     stats: dict[str, Any]
     md_path_by_hash: dict[str, Path]
     pdf_path_by_hash: dict[str, Path]
+    template_tags: list[str]
 
 
 def _split_csv(values: list[str]) -> list[str]:
@@ -189,6 +190,31 @@ def _extract_tags(paper: dict[str, Any]) -> list[str]:
     return []
 
 
+_SUMMARY_FIELDS = (
+    "summary",
+    "abstract",
+    "keywords",
+    "question1",
+    "question2",
+    "question3",
+    "question4",
+    "question5",
+    "question6",
+    "question7",
+    "question8",
+)
+
+
+def _has_summary(paper: dict[str, Any], template_tags: list[str]) -> bool:
+    if template_tags:
+        return True
+    for key in _SUMMARY_FIELDS:
+        value = paper.get(key)
+        if isinstance(value, str) and value.strip():
+            return True
+    return False
+
+
 def _extract_venue(paper: dict[str, Any]) -> str:
     if isinstance(paper.get("bibtex"), dict):
         bib = paper.get("bibtex") or {}
@@ -225,6 +251,7 @@ def build_index(
     tag_counts: dict[str, int] = {}
     author_counts: dict[str, int] = {}
     venue_counts: dict[str, int] = {}
+    template_tag_counts: dict[str, int] = {}
 
     def add_index(index: dict[str, set[int]], key: str, idx: int) -> None:
         index.setdefault(key, set()).add(idx)
@@ -284,6 +311,17 @@ def build_index(
             add_index(by_tag, key, idx)
             tag_counts[tag] = tag_counts.get(tag, 0) + 1
 
+        template_tags = _available_templates(paper)
+        if not template_tags:
+            fallback_tag = paper.get("template_tag") or paper.get("prompt_template")
+            if fallback_tag:
+                template_tags = [str(fallback_tag)]
+        paper["_template_tags"] = template_tags
+        paper["_template_tags_lc"] = [tag.lower() for tag in template_tags]
+        paper["_has_summary"] = _has_summary(paper, template_tags)
+        for tag in template_tags:
+            template_tag_counts[tag] = template_tag_counts.get(tag, 0) + 1
+
         search_parts = [title, venue, " ".join(authors), " ".join(tags)]
         paper["_search_lc"] = " ".join(part for part in search_parts if part).lower()
 
@@ -314,6 +352,8 @@ def build_index(
         "venues": _sorted_counts(venue_counts),
     }
 
+    template_tags = sorted(template_tag_counts.keys(), key=lambda item: item.lower())
+
     return PaperIndex(
         papers=papers,
         id_by_hash=id_by_hash,
@@ -326,6 +366,7 @@ def build_index(
         stats=stats,
         md_path_by_hash=md_path_by_hash,
         pdf_path_by_hash=pdf_path_by_hash,
+        template_tags=template_tags,
     )
 
 
@@ -1138,6 +1179,146 @@ def _ensure_under_roots(path: Path, roots: list[Path]) -> bool:
     return False
 
 
+_BOOL_TRUE = {"1", "true", "yes", "with", "has"}
+_BOOL_FALSE = {"0", "false", "no", "without"}
+
+
+def _tokenize_filter_query(text: str) -> list[str]:
+    out: list[str] = []
+    buf: list[str] = []
+    in_quote = False
+
+    for ch in text:
+        if ch == '"':
+            in_quote = not in_quote
+            continue
+        if not in_quote and ch.isspace():
+            token = "".join(buf).strip()
+            if token:
+                out.append(token)
+            buf = []
+            continue
+        buf.append(ch)
+
+    token = "".join(buf).strip()
+    if token:
+        out.append(token)
+    return out
+
+
+def _normalize_presence_value(value: str) -> str | None:
+    token = value.strip().lower()
+    if token in _BOOL_TRUE:
+        return "with"
+    if token in _BOOL_FALSE:
+        return "without"
+    return None
+
+
+def _parse_filter_query(text: str) -> dict[str, set[str]]:
+    parsed = {
+        "pdf": set(),
+        "source": set(),
+        "summary": set(),
+        "template": set(),
+    }
+    for token in _tokenize_filter_query(text):
+        if ":" not in token:
+            continue
+        key, raw_value = token.split(":", 1)
+        key = key.strip().lower()
+        raw_value = raw_value.strip()
+        if not raw_value:
+            continue
+        if key in {"tmpl", "template"}:
+            for part in raw_value.split(","):
+                tag = part.strip()
+                if tag:
+                    parsed["template"].add(tag.lower())
+            continue
+        if key in {"pdf", "source", "summary"}:
+            for part in raw_value.split(","):
+                normalized = _normalize_presence_value(part)
+                if normalized:
+                    parsed[key].add(normalized)
+            continue
+        if key in {"has", "no"}:
+            targets = [part.strip().lower() for part in raw_value.split(",") if part.strip()]
+            for target in targets:
+                if target not in {"pdf", "source", "summary"}:
+                    continue
+                parsed[target].add("with" if key == "has" else "without")
+    return parsed
+
+
+def _presence_filter(values: list[str]) -> set[str] | None:
+    normalized = set()
+    for value in values:
+        token = _normalize_presence_value(value)
+        if token:
+            normalized.add(token)
+    if not normalized or normalized == {"with", "without"}:
+        return None
+    return normalized
+
+
+def _merge_filter_set(primary: set[str] | None, secondary: set[str] | None) -> set[str] | None:
+    if not primary:
+        return secondary
+    if not secondary:
+        return primary
+    return primary & secondary
+
+
+def _matches_presence(allowed: set[str] | None, has_value: bool) -> bool:
+    if not allowed:
+        return True
+    if has_value and "with" in allowed:
+        return True
+    if not has_value and "without" in allowed:
+        return True
+    return False
+
+
+def _template_tag_map(index: PaperIndex) -> dict[str, str]:
+    return {tag.lower(): tag for tag in index.template_tags}
+
+
+def _compute_counts(index: PaperIndex, ids: set[int]) -> dict[str, Any]:
+    template_order = list(index.template_tags)
+    template_counts = {tag: 0 for tag in template_order}
+    pdf_count = 0
+    source_count = 0
+    summary_count = 0
+    tag_map = _template_tag_map(index)
+
+    for idx in ids:
+        paper = index.papers[idx]
+        source_hash = str(paper.get("source_hash") or stable_hash(str(paper.get("source_path") or idx)))
+        has_source = source_hash in index.md_path_by_hash
+        has_pdf = source_hash in index.pdf_path_by_hash
+        has_summary = bool(paper.get("_has_summary"))
+        if has_source:
+            source_count += 1
+        if has_pdf:
+            pdf_count += 1
+        if has_summary:
+            summary_count += 1
+        for tag_lc in paper.get("_template_tags_lc") or []:
+            display = tag_map.get(tag_lc)
+            if display:
+                template_counts[display] = template_counts.get(display, 0) + 1
+
+    return {
+        "total": len(ids),
+        "pdf": pdf_count,
+        "source": source_count,
+        "summary": summary_count,
+        "templates": template_counts,
+        "template_order": template_order,
+    }
+
+
 def _apply_query(index: PaperIndex, query: Query) -> set[int]:
     all_ids = set(index.ordered_ids)
 
@@ -1194,7 +1375,30 @@ def _apply_query(index: PaperIndex, query: Query) -> set[int]:
     return result
 
 
-def _page_shell(title: str, body_html: str, extra_head: str = "", extra_scripts: str = "") -> str:
+def _page_shell(
+    title: str,
+    body_html: str,
+    extra_head: str = "",
+    extra_scripts: str = "",
+    header_title: str | None = None,
+) -> str:
+    header_html = """
+    <header>
+      <a href="/">Papers</a>
+      <a href="/stats">Stats</a>
+    </header>
+"""
+    if header_title:
+        safe_title = html.escape(header_title)
+        header_html = f"""
+    <header class="detail-header">
+      <div class="header-row">
+        <a class="header-back" href="/">← Papers</a>
+        <span class="header-title" title="{safe_title}">{safe_title}</span>
+        <a class="header-link" href="/stats">Stats</a>
+      </div>
+    </header>
+"""
     return f"""<!doctype html>
 <html lang="en">
   <head>
@@ -1205,28 +1409,82 @@ def _page_shell(title: str, body_html: str, extra_head: str = "", extra_scripts:
       body {{ font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 0; }}
       header {{ position: sticky; top: 0; background: #0b1220; color: #fff; padding: 12px 16px; z-index: 10; }}
       header a {{ color: #cfe3ff; text-decoration: none; margin-right: 12px; }}
+      .detail-header .header-row {{ display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; }}
+      .detail-header .header-title {{ text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+      .detail-header .header-back {{ margin-right: 0; }}
+      .detail-header .header-link {{ margin-right: 0; }}
       .container {{ max-width: 1100px; margin: 0 auto; padding: 16px; }}
       .filters {{ display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; margin: 12px 0 16px; }}
       .filters input {{ width: 100%; padding: 8px; border: 1px solid #d0d7de; border-radius: 6px; }}
+      .filters select {{ width: 100%; border: 1px solid #d0d7de; border-radius: 6px; background: #fff; font-size: 13px; }}
+      .filters select:not([multiple]) {{ padding: 6px 8px; }}
+      .filters select[multiple] {{ padding: 2px; line-height: 1.25; min-height: 72px; font-size: 13px; }}
+      .filters select[multiple] option {{ padding: 2px 6px; line-height: 1.25; }}
+      .filters label {{ font-size: 12px; color: #57606a; }}
+      .filter-group {{ display: flex; flex-direction: column; gap: 4px; }}
       .card {{ border: 1px solid #d0d7de; border-radius: 10px; padding: 12px; margin: 10px 0; }}
       .muted {{ color: #57606a; font-size: 13px; }}
       .pill {{ display: inline-block; padding: 2px 8px; border-radius: 999px; border: 1px solid #d0d7de; margin-right: 6px; font-size: 12px; }}
+      .pill.template {{ border-color: #8a92a5; color: #243b53; background: #f6f8fa; }}
       .warning {{ background: #fff4ce; border: 1px solid #ffd089; padding: 10px; border-radius: 10px; margin: 12px 0; }}
       .tabs {{ display: flex; gap: 8px; flex-wrap: wrap; }}
       .tab {{ display: inline-block; padding: 6px 12px; border-radius: 999px; border: 1px solid #d0d7de; background: #f6f8fa; color: #0969da; text-decoration: none; font-size: 13px; }}
       .tab:hover {{ background: #eef1f4; }}
       .tab.active {{ background: #0969da; border-color: #0969da; color: #fff; }}
+      .detail-shell {{ display: flex; flex-direction: column; gap: 12px; min-height: calc(100vh - 120px); }}
+      .detail-toolbar {{ display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 12px; padding: 6px 8px 10px; border-bottom: 1px solid #e5e7eb; box-sizing: border-box; }}
+      .detail-toolbar .tabs {{ margin: 0; }}
+      .toolbar-actions {{ display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-left: auto; padding-right: 16px; }}
+      .split-inline {{ display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }}
+      .split-inline select {{ padding: 6px 8px; border-radius: 8px; border: 1px solid #d0d7de; background: #fff; min-width: 140px; }}
+      .split-actions {{ display: flex; align-items: center; justify-content: center; gap: 8px; }}
+      .split-actions button {{ padding: 6px 10px; border-radius: 999px; border: 1px solid #d0d7de; background: #f6f8fa; cursor: pointer; min-width: 36px; }}
+      .fullscreen-actions {{ display: flex; align-items: center; gap: 6px; }}
+      .fullscreen-actions button {{ padding: 6px 10px; border-radius: 8px; border: 1px solid #d0d7de; background: #f6f8fa; cursor: pointer; }}
+      .fullscreen-exit {{ display: none; }}
+      body.detail-fullscreen {{ overflow: hidden; --outline-top: 16px; }}
+      body.detail-fullscreen header {{ display: none; }}
+      body.detail-fullscreen .container {{ max-width: 100%; padding: 0; }}
+      body.detail-fullscreen .detail-shell {{
+        position: fixed;
+        inset: 0;
+        padding: 12px 16px;
+        background: #fff;
+        z-index: 40;
+        overflow: auto;
+      }}
+      body.detail-fullscreen .detail-toolbar {{ position: sticky; top: 0; background: #fff; z-index: 41; }}
+      body.detail-fullscreen .fullscreen-enter {{ display: none; }}
+      body.detail-fullscreen .fullscreen-exit {{ display: inline-flex; }}
+      .detail-body {{ display: flex; flex-direction: column; gap: 8px; flex: 1; min-height: 0; }}
+      .help-icon {{ display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%; border: 1px solid #d0d7de; color: #57606a; font-size: 12px; cursor: default; position: relative; }}
+      .help-icon::after {{ content: attr(data-tip); display: none; position: absolute; top: 24px; right: 0; background: #0b1220; color: #e6edf3; padding: 8px 10px; border-radius: 8px; font-size: 12px; white-space: pre-line; width: 260px; z-index: 20; }}
+      .help-icon:hover::after {{ display: block; }}
+      .stats {{ margin: 12px 0 6px; }}
+      .stats-row {{ display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }}
+      .stats-label {{ font-weight: 600; color: #0b1220; margin-right: 4px; }}
+      .pill.stat {{ background: #f6f8fa; border-color: #c7d2e0; color: #1f2a37; }}
       pre {{ overflow: auto; padding: 10px; background: #0b1220; color: #e6edf3; border-radius: 10px; }}
       code {{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }}
       a {{ color: #0969da; }}
+      @media (max-width: 768px) {{
+        .detail-toolbar {{
+          flex-wrap: nowrap;
+          overflow-x: auto;
+          padding-bottom: 8px;
+        }}
+        .detail-toolbar::-webkit-scrollbar {{ height: 6px; }}
+        .detail-toolbar::-webkit-scrollbar-thumb {{ background: #c7d2e0; border-radius: 999px; }}
+        .detail-toolbar .tabs,
+        .toolbar-actions {{
+          flex: 0 0 auto;
+        }}
+      }}
     </style>
     {extra_head}
   </head>
   <body>
-    <header>
-      <a href="/">Papers</a>
-      <a href="/stats">Stats</a>
-    </header>
+    {header_html}
     <div class="container">
       {body_html}
     </div>
@@ -1266,10 +1524,22 @@ def _build_pdfjs_viewer_url(pdf_url: str) -> str:
 
 
 async def _index_page(request: Request) -> HTMLResponse:
-    return HTMLResponse(
-        _page_shell(
-            "Paper DB",
-            """
+    index: PaperIndex = request.app.state.index
+    template_options = "".join(
+        f'<option value="{html.escape(tag)}">{html.escape(tag)}</option>'
+        for tag in index.template_tags
+    )
+    if not template_options:
+        template_options = '<option value="" disabled>(no templates)</option>'
+    filter_help = (
+        "Filters syntax:\\n"
+        "pdf:yes|no source:yes|no summary:yes|no\\n"
+        "tmpl:<tag> or template:<tag>\\n"
+        "has:pdf / no:source aliases\\n"
+        "Content tags still use the search box (tag:fpga)."
+    )
+    filter_help_attr = html.escape(filter_help).replace("\n", "&#10;")
+    body_html = """
 <h2>Paper Database</h2>
 <div class="card">
   <div class="muted">Search (Scholar-style): <code>tag:fpga year:2023..2025 -survey</code> · Use quotes for phrases and <code>OR</code> for alternatives.</div>
@@ -1282,6 +1552,39 @@ async def _index_page(request: Request) -> HTMLResponse:
       <option value="pdfjs">Open: PDF Viewer</option>
       <option value="split">Open: Split</option>
     </select>
+  </div>
+  <div class="filters" style="grid-template-columns: repeat(4, 1fr); margin-top:10px;">
+    <div class="filter-group">
+      <label>PDF</label>
+      <select id="filterPdf" multiple size="2">
+        <option value="with">With</option>
+        <option value="without">Without</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <label>Source</label>
+      <select id="filterSource" multiple size="2">
+        <option value="with">With</option>
+        <option value="without">Without</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <label>Summary</label>
+      <select id="filterSummary" multiple size="2">
+        <option value="with">With</option>
+        <option value="without">Without</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <label>Template</label>
+      <select id="filterTemplate" multiple size="4">
+        __TEMPLATE_OPTIONS__
+      </select>
+    </div>
+  </div>
+  <div style="display:flex; gap:8px; align-items:center; margin-top:8px;">
+    <input id="filterQuery" placeholder='Filters... e.g. pdf:yes tmpl:simple' style="flex:1; padding:10px; border:1px solid #d0d7de; border-radius:8px;" />
+    <span class="help-icon" data-tip="__FILTER_HELP__">?</span>
   </div>
   <details style="margin-top:10px;">
     <summary>Advanced search</summary>
@@ -1300,6 +1603,10 @@ async def _index_page(request: Request) -> HTMLResponse:
     </div>
   </details>
 </div>
+<div id="stats" class="stats">
+  <div id="statsTotal" class="stats-row"></div>
+  <div id="statsFiltered" class="stats-row" style="margin-top:6px;"></div>
+</div>
 <div id="results"></div>
 <div id="loading" class="muted">Loading...</div>
 <script>
@@ -1313,6 +1620,19 @@ function currentParams(nextPage) {
   params.set("page_size", "30");
   const q = document.getElementById("query").value.trim();
   if (q) params.set("q", q);
+  const fq = document.getElementById("filterQuery").value.trim();
+  if (fq) params.set("fq", fq);
+  function addMulti(id, key) {
+    const el = document.getElementById(id);
+    const values = Array.from(el.selectedOptions).map(opt => opt.value).filter(Boolean);
+    for (const value of values) {
+      params.append(key, value);
+    }
+  }
+  addMulti("filterPdf", "pdf");
+  addMulti("filterSource", "source");
+  addMulti("filterSummary", "summary");
+  addMulti("filterTemplate", "template");
   return params;
 }
 
@@ -1342,6 +1662,7 @@ function viewSuffixForItem(item) {
 
 function renderItem(item) {
   const tags = (item.tags || []).map(t => `<span class="pill">${escapeHtml(t)}</span>`).join("");
+  const templateTags = (item.template_tags || []).map(t => `<span class="pill template">tmpl:${escapeHtml(t)}</span>`).join("");
   const authors = (item.authors || []).slice(0, 6).map(a => escapeHtml(a)).join(", ");
   const meta = `${escapeHtml(item.year || "")}-${escapeHtml(item.month || "")} · ${escapeHtml(item.venue || "")}`;
   const viewSuffix = viewSuffixForItem(item);
@@ -1354,9 +1675,32 @@ function renderItem(item) {
       <div><a href="/paper/${encodeURIComponent(item.source_hash)}${viewSuffix}">${escapeHtml(item.title || "")}</a></div>
       <div class="muted">${authors}</div>
       <div class="muted">${meta}</div>
-      <div style="margin-top:6px">${badges} ${tags}</div>
+      <div style="margin-top:6px">${badges} ${templateTags} ${tags}</div>
     </div>
   `;
+}
+
+function renderStatsRow(targetId, label, counts) {
+  const row = document.getElementById(targetId);
+  if (!row || !counts) return;
+  const pills = [];
+  pills.push(`<span class="stats-label">${escapeHtml(label)}</span>`);
+  pills.push(`<span class="pill stat">Count ${counts.total}</span>`);
+  pills.push(`<span class="pill stat">PDF ${counts.pdf}</span>`);
+  pills.push(`<span class="pill stat">Source ${counts.source}</span>`);
+  pills.push(`<span class="pill stat">Summary ${counts.summary}</span>`);
+  const order = counts.template_order || Object.keys(counts.templates || {});
+  for (const tag of order) {
+    const count = (counts.templates && counts.templates[tag]) || 0;
+    pills.push(`<span class="pill stat">tmpl:${escapeHtml(tag)} ${count}</span>`);
+  }
+  row.innerHTML = pills.join("");
+}
+
+function updateStats(stats) {
+  if (!stats) return;
+  renderStatsRow("statsTotal", "Total", stats.all);
+  renderStatsRow("statsFiltered", "Filtered", stats.filtered);
 }
 
 async function loadMore() {
@@ -1365,6 +1709,9 @@ async function loadMore() {
   document.getElementById("loading").textContent = "Loading...";
   const res = await fetch(`/api/papers?${currentParams(page).toString()}`);
   const data = await res.json();
+  if (data.stats) {
+    updateStats(data.stats);
+  }
   const results = document.getElementById("results");
   for (const item of data.items) {
     results.insertAdjacentHTML("beforeend", renderItem(item));
@@ -1388,6 +1735,11 @@ function resetAndLoad() {
 
 document.getElementById("query").addEventListener("change", resetAndLoad);
 document.getElementById("openView").addEventListener("change", resetAndLoad);
+document.getElementById("filterQuery").addEventListener("change", resetAndLoad);
+document.getElementById("filterPdf").addEventListener("change", resetAndLoad);
+document.getElementById("filterSource").addEventListener("change", resetAndLoad);
+document.getElementById("filterSummary").addEventListener("change", resetAndLoad);
+document.getElementById("filterTemplate").addEventListener("change", resetAndLoad);
 
 document.getElementById("buildQuery").addEventListener("click", () => {
   function add(field, value) {
@@ -1428,9 +1780,10 @@ window.addEventListener("scroll", () => {
 
 loadMore();
 </script>
-""",
-        )
-    )
+"""
+    body_html = body_html.replace("__TEMPLATE_OPTIONS__", template_options)
+    body_html = body_html.replace("__FILTER_HELP__", filter_help_attr)
+    return HTMLResponse(_page_shell("Paper DB", body_html))
 
 
 def _parse_filters(request: Request) -> dict[str, list[str] | str | int]:
@@ -1441,11 +1794,21 @@ def _parse_filters(request: Request) -> dict[str, list[str] | str | int]:
     page_size = min(max(1, page_size), 200)
 
     q = qp.get("q", "").strip()
+    filter_query = qp.get("fq", "").strip()
+    pdf_filters = [item for item in qp.getlist("pdf") if item]
+    source_filters = [item for item in qp.getlist("source") if item]
+    summary_filters = [item for item in qp.getlist("summary") if item]
+    template_filters = [item for item in qp.getlist("template") if item]
 
     return {
         "page": page,
         "page_size": page_size,
         "q": q,
+        "filter_query": filter_query,
+        "pdf": pdf_filters,
+        "source": source_filters,
+        "summary": summary_filters,
+        "template": template_filters,
     }
 
 
@@ -1455,13 +1818,55 @@ async def _api_papers(request: Request) -> JSONResponse:
     page = int(filters["page"])
     page_size = int(filters["page_size"])
     q = str(filters["q"])
+    filter_query = str(filters["filter_query"])
     query = parse_query(q)
     candidate = _apply_query(index, query)
+    filter_terms = _parse_filter_query(filter_query)
+    pdf_filter = _merge_filter_set(_presence_filter(filters["pdf"]), _presence_filter(list(filter_terms["pdf"])))
+    source_filter = _merge_filter_set(
+        _presence_filter(filters["source"]), _presence_filter(list(filter_terms["source"]))
+    )
+    summary_filter = _merge_filter_set(
+        _presence_filter(filters["summary"]), _presence_filter(list(filter_terms["summary"]))
+    )
+    template_selected = {item.lower() for item in filters["template"] if item}
+    template_filter = _merge_filter_set(
+        template_selected or None,
+        filter_terms["template"] or None,
+    )
+
+    if candidate:
+        filtered: set[int] = set()
+        for idx in candidate:
+            paper = index.papers[idx]
+            source_hash = str(paper.get("source_hash") or stable_hash(str(paper.get("source_path") or idx)))
+            has_source = source_hash in index.md_path_by_hash
+            has_pdf = source_hash in index.pdf_path_by_hash
+            has_summary = bool(paper.get("_has_summary"))
+            if not _matches_presence(pdf_filter, has_pdf):
+                continue
+            if not _matches_presence(source_filter, has_source):
+                continue
+            if not _matches_presence(summary_filter, has_summary):
+                continue
+            if template_filter:
+                tags = paper.get("_template_tags_lc") or []
+                if not any(tag in template_filter for tag in tags):
+                    continue
+            filtered.add(idx)
+        candidate = filtered
     ordered = [idx for idx in index.ordered_ids if idx in candidate]
     total = len(ordered)
     start = (page - 1) * page_size
     end = min(start + page_size, total)
     page_ids = ordered[start:end]
+    stats_payload = None
+    if page == 1:
+        all_ids = set(index.ordered_ids)
+        stats_payload = {
+            "all": _compute_counts(index, all_ids),
+            "filtered": _compute_counts(index, candidate),
+        }
 
     items: list[dict[str, Any]] = []
     for idx in page_ids:
@@ -1476,8 +1881,10 @@ async def _api_papers(request: Request) -> JSONResponse:
                 "month": paper.get("_month") or "",
                 "venue": paper.get("_venue") or "",
                 "tags": paper.get("_tags") or [],
+                "template_tags": paper.get("_template_tags") or [],
                 "has_source": source_hash in index.md_path_by_hash,
                 "has_pdf": source_hash in index.pdf_path_by_hash,
+                "has_summary": bool(paper.get("_has_summary")),
             }
         )
 
@@ -1488,6 +1895,7 @@ async def _api_papers(request: Request) -> JSONResponse:
             "total": total,
             "has_more": end < total,
             "items": items,
+            "stats": stats_payload,
         }
     )
 
@@ -1500,6 +1908,7 @@ async def _paper_detail(request: Request) -> HTMLResponse:
     if idx is None:
         return RedirectResponse("/")
     paper = index.papers[idx]
+    page_title = str(paper.get("paper_title") or "Paper")
     view = request.query_params.get("view", "summary")
     template_param = request.query_params.get("template")
     embed = request.query_params.get("embed") == "1"
@@ -1508,7 +1917,6 @@ async def _paper_detail(request: Request) -> HTMLResponse:
 
     pdf_path = index.pdf_path_by_hash.get(source_hash)
     pdf_url = f"/api/pdf/{source_hash}"
-    shell = _embed_shell if embed else _page_shell
     source_available = source_hash in index.md_path_by_hash
     allowed_views = {"summary", "source", "pdf", "pdfjs"}
 
@@ -1523,6 +1931,11 @@ async def _paper_detail(request: Request) -> HTMLResponse:
     left = normalize_view(left_param, "summary") if left_param else "summary"
     right = normalize_view(right_param, default_right) if right_param else default_right
 
+    def render_page(title: str, body: str, extra_head: str = "", extra_scripts: str = "") -> HTMLResponse:
+        if embed:
+            return HTMLResponse(_embed_shell(title, body, extra_head, extra_scripts))
+        return HTMLResponse(_page_shell(title, body, extra_head, extra_scripts, header_title=page_title))
+
     def nav_link(label: str, v: str) -> str:
         active = " active" if view == v else ""
         params: dict[str, str] = {"view": v}
@@ -1534,8 +1947,8 @@ async def _paper_detail(request: Request) -> HTMLResponse:
         href = f"/paper/{source_hash}?{urlencode(params)}"
         return f'<a class="tab{active}" href="{html.escape(href)}">{html.escape(label)}</a>'
 
-    nav = f"""
-<div class="tabs" style="margin: 8px 0 14px;">
+    tabs_html = f"""
+<div class="tabs">
   {nav_link("Summary", "summary")}
   {nav_link("Source", "source")}
   {nav_link("PDF", "pdf")}
@@ -1543,7 +1956,62 @@ async def _paper_detail(request: Request) -> HTMLResponse:
   {nav_link("Split", "split")}
 </div>
 """
-    nav_html = "" if embed else nav
+    fullscreen_controls = """
+<div class="fullscreen-actions">
+  <button id="fullscreenEnter" class="fullscreen-enter" type="button" title="Enter fullscreen">Fullscreen</button>
+  <button id="fullscreenExit" class="fullscreen-exit" type="button" title="Exit fullscreen">Exit Fullscreen</button>
+</div>
+"""
+
+    def detail_toolbar(extra_controls: str = "") -> str:
+        if embed:
+            return ""
+        controls = extra_controls.strip()
+        toolbar_controls = f"{controls}{fullscreen_controls}" if controls else fullscreen_controls
+        return f"""
+<div class="detail-toolbar">
+  {tabs_html}
+  <div class="toolbar-actions">
+    {toolbar_controls}
+  </div>
+</div>
+"""
+
+    def wrap_detail(content: str, toolbar_html: str | None = None) -> str:
+        if embed:
+            return content
+        toolbar = detail_toolbar() if toolbar_html is None else toolbar_html
+        return f"""
+<div class="detail-shell">
+  {toolbar}
+  <div class="detail-body">
+    {content}
+  </div>
+</div>
+"""
+
+    fullscreen_script = ""
+    if not embed:
+        fullscreen_script = """
+<script>
+const fullscreenEnter = document.getElementById('fullscreenEnter');
+const fullscreenExit = document.getElementById('fullscreenExit');
+function setFullscreen(enable) {
+  document.body.classList.toggle('detail-fullscreen', enable);
+}
+if (fullscreenEnter) {
+  fullscreenEnter.addEventListener('click', () => setFullscreen(true));
+}
+if (fullscreenExit) {
+  fullscreenExit.addEventListener('click', () => setFullscreen(false));
+}
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && document.body.classList.contains('detail-fullscreen')) {
+    setFullscreen(false);
+  }
+});
+</script>
+"""
 
     if view == "split":
         def pane_src(pane_view: str) -> str:
@@ -1570,28 +2038,25 @@ async def _paper_detail(request: Request) -> HTMLResponse:
             f'<option value="{value}"{" selected" if value == right else ""}>{label}</option>'
             for value, label in options
         )
-        body = f"""
-<h2>{html.escape(str(paper.get('paper_title') or 'Paper'))}</h2>
-{nav}
-<div class="split-controls">
-  <div>
-    <div class="muted">Left pane</div>
-    <select id="splitLeft">
-      {left_options}
-    </select>
-  </div>
+        split_controls = f"""
+<div class="split-inline">
+  <span class="muted">Left</span>
+  <select id="splitLeft">
+    {left_options}
+  </select>
   <div class="split-actions">
     <button id="splitTighten" type="button" title="Tighten width">-</button>
     <button id="splitSwap" type="button" title="Swap panes">⇄</button>
     <button id="splitWiden" type="button" title="Widen width">+</button>
   </div>
-  <div>
-    <div class="muted">Right pane</div>
-    <select id="splitRight">
-      {right_options}
-    </select>
-  </div>
+  <span class="muted">Right</span>
+  <select id="splitRight">
+    {right_options}
+  </select>
 </div>
+"""
+        toolbar_html = detail_toolbar(split_controls)
+        split_layout = f"""
 <div class="split-layout">
   <div class="split-pane">
     <iframe id="leftPane" src="{html.escape(left_src)}" title="Left pane"></iframe>
@@ -1601,6 +2066,7 @@ async def _paper_detail(request: Request) -> HTMLResponse:
   </div>
 </div>
 """
+        body = wrap_detail(split_layout, toolbar_html=toolbar_html)
         extra_head = """
 <style>
 .container {
@@ -1608,43 +2074,14 @@ async def _paper_detail(request: Request) -> HTMLResponse:
   width: 100%;
   margin: 0 auto;
 }
-.split-controls {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  gap: 12px;
-  align-items: end;
-  margin: 10px 0 14px;
-}
-.split-controls select {
-  padding: 6px 8px;
-  border-radius: 8px;
-  border: 1px solid #d0d7de;
-  background: #fff;
-  min-width: 160px;
-}
-.split-actions {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  height: 100%;
-}
-.split-actions button {
-  padding: 6px 10px;
-  border-radius: 999px;
-  border: 1px solid #d0d7de;
-  background: #f6f8fa;
-  cursor: pointer;
-  min-width: 36px;
-}
 .split-layout {
   display: flex;
   gap: 12px;
   width: 100%;
-  max-width: min(100%, var(--split-max-width, 100%));
+  max-width: var(--split-max-width, 100%);
   margin: 0 auto;
-  height: calc(100vh - 260px);
-  min-height: 420px;
+  flex: 1;
+  min-height: 440px;
 }
 .split-pane {
   flex: 1;
@@ -1661,13 +2098,10 @@ async def _paper_detail(request: Request) -> HTMLResponse:
 @media (max-width: 900px) {
   .split-layout {
     flex-direction: column;
-    height: auto;
+    min-height: 0;
   }
   .split-pane {
     height: 70vh;
-  }
-  .split-controls {
-    grid-template-columns: 1fr;
   }
 }
 </style>
@@ -1729,26 +2163,34 @@ widenButton.addEventListener('click', () => {
 applySplitWidth();
 </script>
 """
-        return HTMLResponse(_page_shell("Split View", body, extra_head=extra_head, extra_scripts=extra_scripts))
+        return render_page(
+            "Split View",
+            body,
+            extra_head=extra_head,
+            extra_scripts=extra_scripts + fullscreen_script,
+        )
 
     if view == "source":
         source_path = index.md_path_by_hash.get(source_hash)
         if not source_path:
-            body = nav_html + '<div class="warning">Source markdown not found. Provide --md-root to enable source viewing.</div>'
-            return HTMLResponse(shell("Source", body))
+            body = wrap_detail(
+                '<div class="warning">Source markdown not found. Provide --md-root to enable source viewing.</div>'
+            )
+            return render_page("Source", body, extra_scripts=fullscreen_script)
         try:
             raw = source_path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             raw = source_path.read_text(encoding="latin-1")
         rendered = _render_markdown_with_math_placeholders(md, raw)
-        body = (
-            nav_html
-            + f"<h2>{html.escape(str(paper.get('paper_title') or 'Paper'))}</h2>"
-            + f'<div class="muted">{html.escape(str(source_path))}</div>'
-            + '<div class="muted" style="margin-top:10px;">Rendered from source markdown:</div>'
-            + f'<div id="content">{rendered}</div>'
-            + "<details style='margin-top:12px;'><summary>Raw markdown</summary>"
-            + f"<pre><code>{html.escape(raw)}</code></pre></details>"
+        body = wrap_detail(
+            f"""
+<div class="muted">{html.escape(str(source_path))}</div>
+<div class="muted" style="margin-top:10px;">Rendered from source markdown:</div>
+<div id="content">{rendered}</div>
+<details style="margin-top:12px;"><summary>Raw markdown</summary>
+  <pre><code>{html.escape(raw)}</code></pre>
+</details>
+"""
         )
         extra_head = f'<link rel="stylesheet" href="{_CDN_KATEX}" />'
         extra_scripts = f"""
@@ -1780,14 +2222,14 @@ if (window.renderMathInElement) {{
 }}
 </script>
 """
-        return HTMLResponse(shell("Source", body, extra_head=extra_head, extra_scripts=extra_scripts))
+        return render_page("Source", body, extra_head=extra_head, extra_scripts=extra_scripts + fullscreen_script)
 
     if view == "pdf":
         if not pdf_path:
-            body = nav_html + '<div class="warning">PDF not found. Provide --pdf-root to enable PDF viewing.</div>'
-            return HTMLResponse(shell("PDF", body))
-        body = nav_html + f"""
-<h2>{html.escape(str(paper.get('paper_title') or 'Paper'))}</h2>
+            body = wrap_detail('<div class="warning">PDF not found. Provide --pdf-root to enable PDF viewing.</div>')
+            return render_page("PDF", body, extra_scripts=fullscreen_script)
+        body = wrap_detail(
+            f"""
 <div class="muted">{html.escape(str(pdf_path.name))}</div>
 <div style="display:flex; gap:8px; align-items:center; margin: 10px 0;">
   <button id="prev" style="padding:6px 10px; border-radius:8px; border:1px solid #d0d7de; background:#f6f8fa; cursor:pointer;">Prev</button>
@@ -1799,6 +2241,7 @@ if (window.renderMathInElement) {{
 </div>
 <canvas id="the-canvas" style="width: 100%; border: 1px solid #d0d7de; border-radius: 10px;"></canvas>
 """
+        )
         extra_scripts = f"""
 <script src="{_CDN_PDFJS}"></script>
 <script>
@@ -1887,25 +2330,20 @@ window.addEventListener('resize', () => {{
 }});
 </script>
 """
-        return HTMLResponse(shell("PDF", body, extra_scripts=extra_scripts))
+        return render_page("PDF", body, extra_scripts=extra_scripts + fullscreen_script)
 
     if view == "pdfjs":
         if not pdf_path:
-            body = nav_html + '<div class="warning">PDF not found. Provide --pdf-root to enable PDF viewing.</div>'
-            return HTMLResponse(shell("PDF Viewer", body))
+            body = wrap_detail('<div class="warning">PDF not found. Provide --pdf-root to enable PDF viewing.</div>')
+            return render_page("PDF Viewer", body, extra_scripts=fullscreen_script)
         viewer_url = _build_pdfjs_viewer_url(pdf_url)
-        header_html = ""
-        if not embed:
-            header_html = (
-                f"<h2>{html.escape(str(paper.get('paper_title') or 'Paper'))}</h2>"
-                + f'<div class="muted">{html.escape(str(pdf_path.name))}</div>'
-            )
-        frame_height = "calc(100vh - 220px)" if not embed else "calc(100vh - 32px)"
-        body = f"""
-{nav_html}
-{header_html}
+        frame_height = "calc(100vh - 32px)" if embed else "100%"
+        body = wrap_detail(
+            f"""
+<div class="muted">{html.escape(str(pdf_path.name))}</div>
 <iframe class="pdfjs-frame" src="{html.escape(viewer_url)}" title="PDF.js Viewer"></iframe>
 """
+        )
         extra_head = f"""
 <style>
 .pdfjs-frame {{
@@ -1913,10 +2351,11 @@ window.addEventListener('resize', () => {{
   height: {frame_height};
   border: 1px solid #d0d7de;
   border-radius: 10px;
+  flex: 1;
 }}
 </style>
 """
-        return HTMLResponse(shell("PDF Viewer", body, extra_head=extra_head))
+        return render_page("PDF Viewer", body, extra_head=extra_head, extra_scripts=fullscreen_script)
 
     selected_tag, available_templates = _select_template_tag(paper, template_param)
     markdown, template_name, warning = _render_paper_markdown(
@@ -1927,7 +2366,6 @@ window.addEventListener('resize', () => {{
     rendered_html = _render_markdown_with_math_placeholders(md, markdown)
 
     warning_html = f'<div class="warning">{html.escape(warning)}</div>' if warning else ""
-    title = str(paper.get("paper_title") or "Paper")
     outline_top = "72px" if not embed else "16px"
     template_controls = f'<div class="muted">Template: {html.escape(template_name)}</div>'
     if available_templates:
@@ -1962,14 +2400,13 @@ if (templateSelect) {{
 </div>
 <button id="backToTop" class="back-to-top" title="Back to top">↑</button>
 """
-    body = f"""
-<h2>{html.escape(title)}</h2>
+    content_html = f"""
 {template_controls}
 {warning_html}
-{nav_html}
 {outline_html}
 <div id="content">{rendered_html}</div>
 """
+    body = wrap_detail(content_html)
 
     extra_head = f"""
 <link rel="stylesheet" href="{_CDN_KATEX}" />
@@ -2144,7 +2581,7 @@ window.addEventListener('scroll', toggleBackToTop);
 toggleBackToTop();
 </script>
 """
-    return HTMLResponse(shell(title, body, extra_head=extra_head, extra_scripts=extra_scripts))
+    return render_page(page_title, body, extra_head=extra_head, extra_scripts=extra_scripts + fullscreen_script)
 
 
 async def _api_stats(request: Request) -> JSONResponse:
