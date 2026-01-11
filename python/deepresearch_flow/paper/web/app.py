@@ -1115,6 +1115,38 @@ def _render_paper_markdown(
     return template.render(**context), str(template_name), warning
 
 
+def _normalize_title_key(title: str) -> str:
+    value = title.replace("{", "").replace("}", "")
+    value = value.replace("_", " ")
+    value = re.sub(r"[^a-z0-9]+", " ", value.lower())
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _strip_pdf_hash_suffix(name: str) -> str:
+    return re.sub(r"(?i)(\.pdf)(?:-[0-9a-f\-]{8,})$", r"\1", name)
+
+
+def _extract_title_from_filename(name: str) -> str:
+    base = name
+    lower = base.lower()
+    if lower.endswith(".md"):
+        base = base[:-3]
+        lower = base.lower()
+    if ".pdf-" in lower:
+        base = _strip_pdf_hash_suffix(base)
+        lower = base.lower()
+    if lower.endswith(".pdf"):
+        base = base[:-4]
+    base = base.replace("_", " ").strip()
+    match = re.match(r"\s*\d{4}\s*-\s*(.+)$", base)
+    if match:
+        return match.group(1).strip()
+    match = re.match(r"\s*.+?\s*-\s*\d{4}\s*-\s*(.+)$", base)
+    if match:
+        return match.group(1).strip()
+    return base.strip()
+
+
 def _build_file_index(roots: list[Path], *, suffixes: set[str]) -> dict[str, list[Path]]:
     index: dict[str, list[Path]] = {}
     for root in roots:
@@ -1129,18 +1161,37 @@ def _build_file_index(roots: list[Path], *, suffixes: set[str]) -> dict[str, lis
                     continue
             except OSError:
                 continue
-            if path.suffix.lower() not in suffixes:
-                continue
-            index.setdefault(path.name.lower(), []).append(path.resolve())
+            suffix = path.suffix.lower()
+            if suffix not in suffixes:
+                name_lower = path.name.lower()
+                if suffixes == {".pdf"} and ".pdf-" in name_lower and suffix != ".md":
+                    pass
+                else:
+                    continue
+            resolved = path.resolve()
+            name_key = path.name.lower()
+            index.setdefault(name_key, []).append(resolved)
+            title_candidate = _extract_title_from_filename(path.name)
+            title_key = _normalize_title_key(title_candidate)
+            if title_key and title_key != name_key:
+                index.setdefault(title_key, []).append(resolved)
     return index
 
 
 def _resolve_source_md(paper: dict[str, Any], md_index: dict[str, list[Path]]) -> Path | None:
     source_path = paper.get("source_path")
     if not source_path:
+        source_path = ""
+    if source_path:
+        name = Path(str(source_path)).name.lower()
+        candidates = md_index.get(name, [])
+        if candidates:
+            return candidates[0]
+    title = str(paper.get("paper_title") or "")
+    title_key = _normalize_title_key(title)
+    if not title_key:
         return None
-    name = Path(str(source_path)).name.lower()
-    candidates = md_index.get(name, [])
+    candidates = md_index.get(title_key, [])
     return candidates[0] if candidates else None
 
 
@@ -1155,6 +1206,8 @@ def _guess_pdf_names(paper: dict[str, Any]) -> list[str]:
     if ".pdf-" in name.lower():
         base = name[: name.lower().rfind(".pdf-") + 4]
         return [Path(base).name]
+    if name.lower().endswith(".pdf"):
+        return [name]
     if name.lower().endswith(".pdf.md"):
         return [name[:-3]]
     return []
@@ -1165,6 +1218,13 @@ def _resolve_pdf(paper: dict[str, Any], pdf_index: dict[str, list[Path]]) -> Pat
         candidates = pdf_index.get(filename.lower(), [])
         if candidates:
             return candidates[0]
+    title = str(paper.get("paper_title") or "")
+    title_key = _normalize_title_key(title)
+    if not title_key:
+        return None
+    candidates = pdf_index.get(title_key, [])
+    if candidates:
+        return candidates[0]
     return None
 
 
