@@ -1118,6 +1118,7 @@ def _render_paper_markdown(
 _TITLE_PREFIX_LEN = 16
 _TITLE_MIN_CHARS = 24
 _TITLE_MIN_TOKENS = 4
+_AUTHOR_YEAR_MIN_SIMILARITY = 0.8
 
 
 def _normalize_title_key(title: str) -> str:
@@ -1151,6 +1152,40 @@ def _extract_title_from_filename(name: str) -> str:
         return match.group(1).strip()
     return base.strip()
 
+
+def _extract_year_author_from_filename(name: str) -> tuple[str | None, str | None]:
+    base = name
+    lower = base.lower()
+    if lower.endswith(".md"):
+        base = base[:-3]
+        lower = base.lower()
+    if ".pdf-" in lower:
+        base = _strip_pdf_hash_suffix(base)
+        lower = base.lower()
+    if lower.endswith(".pdf"):
+        base = base[:-4]
+    match = re.match(r"\s*(.+?)\s*-\s*((?:19|20)\d{2})\s*-\s*", base)
+    if match:
+        return match.group(2), match.group(1).strip()
+    match = re.match(r"\s*((?:19|20)\d{2})\s*-\s*", base)
+    if match:
+        return match.group(1), None
+    return None, None
+
+
+def _normalize_author_key(name: str) -> str:
+    raw = name.lower().strip()
+    raw = raw.replace("et al.", "").replace("et al", "")
+    if "," in raw:
+        raw = raw.split(",", 1)[0]
+    raw = re.sub(r"[^a-z0-9]+", " ", raw)
+    raw = re.sub(r"\s+", " ", raw).strip()
+    if not raw:
+        return ""
+    parts = raw.split()
+    return parts[-1] if parts else raw
+
+
 def _title_prefix_key(title_key: str) -> str | None:
     if len(title_key.split()) < _TITLE_MIN_TOKENS:
         return None
@@ -1173,10 +1208,14 @@ def _title_overlap_match(a: str, b: str) -> bool:
     return False
 
 
-def _resolve_by_title(title: str, file_index: dict[str, list[Path]]) -> Path | None:
+def _resolve_by_title_and_meta(
+    paper: dict[str, Any],
+    file_index: dict[str, list[Path]],
+) -> Path | None:
+    title = str(paper.get("paper_title") or "")
     title_key = _normalize_title_key(title)
     if not title_key:
-        return None
+        title_key = ""
     candidates = file_index.get(title_key, [])
     if candidates:
         return candidates[0]
@@ -1199,6 +1238,34 @@ def _resolve_by_title(title: str, file_index: dict[str, list[Path]]) -> Path | N
             best_score = score
             best_path = path
     if best_path is not None and best_score >= 0.86:
+        return best_path
+    year = str(paper.get("_year") or "").strip()
+    if not year.isdigit():
+        return None
+    author_key = ""
+    authors = paper.get("_authors") or []
+    if authors:
+        author_key = _normalize_author_key(str(authors[0]))
+    candidates = []
+    if author_key:
+        candidates = file_index.get(f"authoryear:{year}:{author_key}", [])
+    if not candidates:
+        candidates = file_index.get(f"year:{year}", [])
+    if not candidates:
+        return None
+    if len(candidates) == 1 and not title_key:
+        return candidates[0]
+    best_path = None
+    best_score = 0.0
+    for path in candidates:
+        candidate_title = _normalize_title_key(_extract_title_from_filename(path.name))
+        if title_key and _title_overlap_match(title_key, candidate_title):
+            return path
+        score = _title_similarity(title_key, candidate_title)
+        if score > best_score:
+            best_score = score
+            best_path = path
+    if best_path is not None and best_score >= _AUTHOR_YEAR_MIN_SIMILARITY:
         return best_path
     return None
 
@@ -1235,6 +1302,13 @@ def _build_file_index(roots: list[Path], *, suffixes: set[str]) -> dict[str, lis
                 prefix_key = _title_prefix_key(title_key)
                 if prefix_key:
                     index.setdefault(prefix_key, []).append(resolved)
+            year_hint, author_hint = _extract_year_author_from_filename(path.name)
+            if year_hint:
+                index.setdefault(f"year:{year_hint}", []).append(resolved)
+                if author_hint:
+                    author_key = _normalize_author_key(author_hint)
+                    if author_key:
+                        index.setdefault(f"authoryear:{year_hint}:{author_key}", []).append(resolved)
     return index
 
 
@@ -1247,7 +1321,7 @@ def _resolve_source_md(paper: dict[str, Any], md_index: dict[str, list[Path]]) -
         candidates = md_index.get(name, [])
         if candidates:
             return candidates[0]
-    return _resolve_by_title(str(paper.get("paper_title") or ""), md_index)
+    return _resolve_by_title_and_meta(paper, md_index)
 
 
 def _guess_pdf_names(paper: dict[str, Any]) -> list[str]:
@@ -1273,7 +1347,7 @@ def _resolve_pdf(paper: dict[str, Any], pdf_index: dict[str, list[Path]]) -> Pat
         candidates = pdf_index.get(filename.lower(), [])
         if candidates:
             return candidates[0]
-    return _resolve_by_title(str(paper.get("paper_title") or ""), pdf_index)
+    return _resolve_by_title_and_meta(paper, pdf_index)
 
 
 def _ensure_under_roots(path: Path, roots: list[Path]) -> bool:
