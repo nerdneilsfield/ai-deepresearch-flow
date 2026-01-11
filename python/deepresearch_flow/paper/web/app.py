@@ -7,12 +7,14 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 import re
+from urllib.parse import urlencode, quote
 
 from markdown_it import MarkdownIt
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
-from starlette.routing import Route
+from starlette.routing import Mount, Route
+from starlette.staticfiles import StaticFiles
 
 from deepresearch_flow.paper.render import load_default_template
 from deepresearch_flow.paper.template_registry import (
@@ -38,6 +40,8 @@ _CDN_KATEX_AUTO = "https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-
 # Use legacy builds to ensure `pdfjsLib` is available as a global.
 _CDN_PDFJS = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.min.js"
 _CDN_PDFJS_WORKER = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.worker.min.js"
+_PDFJS_VIEWER_PATH = "/pdfjs/web/viewer.html"
+_PDFJS_STATIC_DIR = Path(__file__).resolve().parent / "pdfjs"
 
 
 @dataclass(frozen=True)
@@ -1216,6 +1220,36 @@ def _page_shell(title: str, body_html: str, extra_head: str = "", extra_scripts:
 </html>"""
 
 
+def _embed_shell(title: str, body_html: str, extra_head: str = "", extra_scripts: str = "") -> str:
+    return f"""<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{html.escape(title)}</title>
+    <style>
+      body {{ font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 0; padding: 16px; }}
+      h1, h2, h3, h4 {{ margin-top: 1.2em; }}
+      .muted {{ color: #57606a; font-size: 13px; }}
+      .warning {{ background: #fff4ce; border: 1px solid #ffd089; padding: 10px; border-radius: 10px; margin: 12px 0; }}
+      pre {{ overflow: auto; padding: 10px; background: #0b1220; color: #e6edf3; border-radius: 10px; }}
+      code {{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }}
+      a {{ color: #0969da; }}
+    </style>
+    {extra_head}
+  </head>
+  <body>
+    {body_html}
+    {extra_scripts}
+  </body>
+</html>"""
+
+
+def _build_pdfjs_viewer_url(pdf_url: str) -> str:
+    encoded = quote(pdf_url, safe="")
+    return f"{_PDFJS_VIEWER_PATH}?file={encoded}"
+
+
 async def _index_page(request: Request) -> HTMLResponse:
     return HTMLResponse(
         _page_shell(
@@ -1230,6 +1264,8 @@ async def _index_page(request: Request) -> HTMLResponse:
       <option value="summary" selected>Open: Summary</option>
       <option value="source">Open: Source</option>
       <option value="pdf">Open: PDF</option>
+      <option value="pdfjs">Open: PDF Viewer</option>
+      <option value="split">Open: Split</option>
     </select>
   </div>
   <details style="margin-top:10px;">
@@ -1271,12 +1307,29 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
+function viewSuffixForItem(item) {
+  const view = document.getElementById("openView").value;
+  if (!view || view === "summary") return "";
+  const params = new URLSearchParams();
+  params.set("view", view);
+  if (view === "split") {
+    params.set("left", "summary");
+    if (item.has_pdf) {
+      params.set("right", "pdfjs");
+    } else if (item.has_source) {
+      params.set("right", "source");
+    } else {
+      params.set("right", "summary");
+    }
+  }
+  return `?${params.toString()}`;
+}
+
 function renderItem(item) {
   const tags = (item.tags || []).map(t => `<span class="pill">${escapeHtml(t)}</span>`).join("");
   const authors = (item.authors || []).slice(0, 6).map(a => escapeHtml(a)).join(", ");
   const meta = `${escapeHtml(item.year || "")}-${escapeHtml(item.month || "")} · ${escapeHtml(item.venue || "")}`;
-  const view = document.getElementById("openView").value;
-  const viewSuffix = view ? `?view=${encodeURIComponent(view)}` : "";
+  const viewSuffix = viewSuffixForItem(item);
   const badges = [
     item.has_source ? `<span class="pill">source</span>` : "",
     item.has_pdf ? `<span class="pill">pdf</span>` : "",
@@ -1434,34 +1487,174 @@ async def _paper_detail(request: Request) -> HTMLResponse:
     paper = index.papers[idx]
     view = request.query_params.get("view", "summary")
     template_param = request.query_params.get("template")
+    embed = request.query_params.get("embed") == "1"
+    if view == "split":
+        embed = False
+
+    pdf_path = index.pdf_path_by_hash.get(source_hash)
+    pdf_url = f"/api/pdf/{source_hash}"
+    shell = _embed_shell if embed else _page_shell
+    source_available = source_hash in index.md_path_by_hash
+    allowed_views = {"summary", "source", "pdf", "pdfjs"}
+
+    def normalize_view(value: str | None, default: str) -> str:
+        if value in allowed_views:
+            return value
+        return default
+
+    default_right = "pdfjs" if pdf_path else ("source" if source_available else "summary")
+    left_param = request.query_params.get("left")
+    right_param = request.query_params.get("right")
+    left = normalize_view(left_param, "summary") if left_param else "summary"
+    right = normalize_view(right_param, default_right) if right_param else default_right
 
     def nav_link(label: str, v: str) -> str:
         active = " active" if view == v else ""
-        return (
-            f'<a class="tab{active}" href="/paper/{html.escape(source_hash)}?view={html.escape(v)}">'
-            f"{html.escape(label)}</a>"
-        )
+        params: dict[str, str] = {"view": v}
+        if v == "summary" and template_param:
+            params["template"] = str(template_param)
+        if v == "split":
+            params["left"] = left
+            params["right"] = right
+        href = f"/paper/{source_hash}?{urlencode(params)}"
+        return f'<a class="tab{active}" href="{html.escape(href)}">{html.escape(label)}</a>'
 
     nav = f"""
 <div class="tabs" style="margin: 8px 0 14px;">
   {nav_link("Summary", "summary")}
   {nav_link("Source", "source")}
   {nav_link("PDF", "pdf")}
+  {nav_link("PDF Viewer", "pdfjs")}
+  {nav_link("Split", "split")}
 </div>
 """
+    nav_html = "" if embed else nav
+
+    if view == "split":
+        def pane_src(pane_view: str) -> str:
+            if pane_view == "pdfjs" and pdf_path:
+                return _build_pdfjs_viewer_url(pdf_url)
+            params: dict[str, str] = {"view": pane_view, "embed": "1"}
+            if pane_view == "summary" and template_param:
+                params["template"] = str(template_param)
+            return f"/paper/{source_hash}?{urlencode(params)}"
+
+        left_src = pane_src(left)
+        right_src = pane_src(right)
+        options = [
+            ("summary", "Summary"),
+            ("source", "Source"),
+            ("pdf", "PDF"),
+            ("pdfjs", "PDF Viewer"),
+        ]
+        left_options = "\n".join(
+            f'<option value="{value}"{" selected" if value == left else ""}>{label}</option>'
+            for value, label in options
+        )
+        right_options = "\n".join(
+            f'<option value="{value}"{" selected" if value == right else ""}>{label}</option>'
+            for value, label in options
+        )
+        body = f"""
+<h2>{html.escape(str(paper.get('paper_title') or 'Paper'))}</h2>
+{nav}
+<div class="split-controls">
+  <div>
+    <div class="muted">Left pane</div>
+    <select id="splitLeft">
+      {left_options}
+    </select>
+  </div>
+  <div>
+    <div class="muted">Right pane</div>
+    <select id="splitRight">
+      {right_options}
+    </select>
+  </div>
+</div>
+<div class="split-layout">
+  <div class="split-pane">
+    <iframe id="leftPane" src="{html.escape(left_src)}" title="Left pane"></iframe>
+  </div>
+  <div class="split-pane">
+    <iframe id="rightPane" src="{html.escape(right_src)}" title="Right pane"></iframe>
+  </div>
+</div>
+"""
+        extra_head = """
+<style>
+.split-controls {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 10px 0 14px;
+}
+.split-controls select {
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid #d0d7de;
+  background: #fff;
+  min-width: 160px;
+}
+.split-layout {
+  display: flex;
+  gap: 12px;
+  height: calc(100vh - 260px);
+  min-height: 420px;
+}
+.split-pane {
+  flex: 1;
+  border: 1px solid #d0d7de;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #fff;
+}
+.split-pane iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+@media (max-width: 900px) {
+  .split-layout {
+    flex-direction: column;
+    height: auto;
+  }
+  .split-pane {
+    height: 70vh;
+  }
+}
+</style>
+"""
+        extra_scripts = """
+<script>
+const leftSelect = document.getElementById('splitLeft');
+const rightSelect = document.getElementById('splitRight');
+function updateSplit() {
+  const params = new URLSearchParams(window.location.search);
+  params.set('view', 'split');
+  params.set('left', leftSelect.value);
+  params.set('right', rightSelect.value);
+  window.location.search = params.toString();
+}
+leftSelect.addEventListener('change', updateSplit);
+rightSelect.addEventListener('change', updateSplit);
+</script>
+"""
+        return HTMLResponse(_page_shell("Split View", body, extra_head=extra_head, extra_scripts=extra_scripts))
 
     if view == "source":
         source_path = index.md_path_by_hash.get(source_hash)
         if not source_path:
-            body = nav + '<div class="warning">Source markdown not found. Provide --md-root to enable source viewing.</div>'
-            return HTMLResponse(_page_shell("Source", body))
+            body = nav_html + '<div class="warning">Source markdown not found. Provide --md-root to enable source viewing.</div>'
+            return HTMLResponse(shell("Source", body))
         try:
             raw = source_path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             raw = source_path.read_text(encoding="latin-1")
         rendered = _render_markdown_with_math_placeholders(md, raw)
         body = (
-            nav
+            nav_html
             + f"<h2>{html.escape(str(paper.get('paper_title') or 'Paper'))}</h2>"
             + f'<div class="muted">{html.escape(str(source_path))}</div>'
             + '<div class="muted" style="margin-top:10px;">Rendered from source markdown:</div>'
@@ -1499,15 +1692,13 @@ if (window.renderMathInElement) {{
 }}
 </script>
 """
-        return HTMLResponse(_page_shell("Source", body, extra_head=extra_head, extra_scripts=extra_scripts))
+        return HTMLResponse(shell("Source", body, extra_head=extra_head, extra_scripts=extra_scripts))
 
     if view == "pdf":
-        pdf_path = index.pdf_path_by_hash.get(source_hash)
         if not pdf_path:
-            body = nav + '<div class="warning">PDF not found. Provide --pdf-root to enable PDF viewing.</div>'
-            return HTMLResponse(_page_shell("PDF", body))
-        pdf_url = f"/api/pdf/{html.escape(source_hash)}"
-        body = nav + f"""
+            body = nav_html + '<div class="warning">PDF not found. Provide --pdf-root to enable PDF viewing.</div>'
+            return HTMLResponse(shell("PDF", body))
+        body = nav_html + f"""
 <h2>{html.escape(str(paper.get('paper_title') or 'Paper'))}</h2>
 <div class="muted">{html.escape(str(pdf_path.name))}</div>
 <div style="display:flex; gap:8px; align-items:center; margin: 10px 0;">
@@ -1608,7 +1799,36 @@ window.addEventListener('resize', () => {{
 }});
 </script>
 """
-        return HTMLResponse(_page_shell("PDF", body, extra_scripts=extra_scripts))
+        return HTMLResponse(shell("PDF", body, extra_scripts=extra_scripts))
+
+    if view == "pdfjs":
+        if not pdf_path:
+            body = nav_html + '<div class="warning">PDF not found. Provide --pdf-root to enable PDF viewing.</div>'
+            return HTMLResponse(shell("PDF Viewer", body))
+        viewer_url = _build_pdfjs_viewer_url(pdf_url)
+        header_html = ""
+        if not embed:
+            header_html = (
+                f"<h2>{html.escape(str(paper.get('paper_title') or 'Paper'))}</h2>"
+                + f'<div class="muted">{html.escape(str(pdf_path.name))}</div>'
+            )
+        frame_height = "calc(100vh - 220px)" if not embed else "calc(100vh - 32px)"
+        body = f"""
+{nav_html}
+{header_html}
+<iframe class="pdfjs-frame" src="{html.escape(viewer_url)}" title="PDF.js Viewer"></iframe>
+"""
+        extra_head = f"""
+<style>
+.pdfjs-frame {{
+  width: 100%;
+  height: {frame_height};
+  border: 1px solid #d0d7de;
+  border-radius: 10px;
+}}
+</style>
+"""
+        return HTMLResponse(shell("PDF Viewer", body, extra_head=extra_head))
 
     selected_tag, available_templates = _select_template_tag(paper, template_param)
     markdown, template_name, warning = _render_paper_markdown(
@@ -1620,6 +1840,7 @@ window.addEventListener('resize', () => {{
 
     warning_html = f'<div class="warning">{html.escape(warning)}</div>' if warning else ""
     title = str(paper.get("paper_title") or "Paper")
+    outline_top = "72px" if not embed else "16px"
     template_controls = f'<div class="muted">Template: {html.escape(template_name)}</div>'
     if available_templates:
         options = "\n".join(
@@ -1645,15 +1866,98 @@ if (templateSelect) {{
 }}
 </script>
 """
+    outline_html = """
+<button id="outlineToggle" class="outline-toggle" title="Toggle outline">☰</button>
+<div id="outlinePanel" class="outline-panel collapsed">
+  <div class="outline-title">Outline</div>
+  <div id="outlineList" class="outline-list"></div>
+</div>
+<button id="backToTop" class="back-to-top" title="Back to top">↑</button>
+"""
     body = f"""
 <h2>{html.escape(title)}</h2>
 {template_controls}
 {warning_html}
-{nav}
+{nav_html}
+{outline_html}
 <div id="content">{rendered_html}</div>
 """
 
-    extra_head = f'<link rel="stylesheet" href="{_CDN_KATEX}" />'
+    extra_head = f"""
+<link rel="stylesheet" href="{_CDN_KATEX}" />
+<style>
+:root {{
+  --outline-top: {outline_top};
+}}
+.outline-toggle {{
+  position: fixed;
+  top: var(--outline-top);
+  left: 16px;
+  z-index: 20;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid #d0d7de;
+  background: #f6f8fa;
+  cursor: pointer;
+}}
+.outline-panel {{
+  position: fixed;
+  top: calc(var(--outline-top) + 42px);
+  left: 16px;
+  width: 240px;
+  max-height: 60vh;
+  overflow: auto;
+  border: 1px solid #d0d7de;
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 10px;
+  z-index: 20;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
+}}
+.outline-panel.collapsed {{
+  display: none;
+}}
+.outline-title {{
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #57606a;
+  margin-bottom: 8px;
+}}
+.outline-list a {{
+  display: block;
+  color: #0969da;
+  text-decoration: none;
+  padding: 4px 0;
+}}
+.outline-list a:hover {{
+  text-decoration: underline;
+}}
+.back-to-top {{
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid #d0d7de;
+  background: #ffffff;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+  z-index: 20;
+}}
+.back-to-top.visible {{
+  opacity: 1;
+  pointer-events: auto;
+}}
+@media (max-width: 900px) {{
+  .outline-panel {{
+    width: 200px;
+  }}
+}}
+</style>
+"""
     extra_scripts = f"""
 <script src="{_CDN_MERMAID}"></script>
 <script src="{_CDN_KATEX_JS}"></script>
@@ -1682,9 +1986,77 @@ if (window.renderMathInElement) {{
     throwOnError: false
   }});
 }}
+const outlineToggle = document.getElementById('outlineToggle');
+const outlinePanel = document.getElementById('outlinePanel');
+const outlineList = document.getElementById('outlineList');
+const backToTop = document.getElementById('backToTop');
+
+function slugify(text) {{
+  return text.toLowerCase().trim()
+    .replace(/[^a-z0-9\\s-]/g, '')
+    .replace(/\\s+/g, '-')
+    .replace(/-+/g, '-');
+}}
+
+function buildOutline() {{
+  if (!outlineList) return;
+  const content = document.getElementById('content');
+  if (!content) return;
+  const headings = content.querySelectorAll('h1, h2, h3, h4');
+  if (!headings.length) {{
+    outlineList.innerHTML = '<div class="muted">No headings</div>';
+    return;
+  }}
+  const used = new Set();
+  outlineList.innerHTML = '';
+  headings.forEach((heading) => {{
+    let id = heading.id;
+    if (!id) {{
+      const base = slugify(heading.textContent || 'section') || 'section';
+      id = base;
+      let i = 1;
+      while (used.has(id) || document.getElementById(id)) {{
+        id = `${{base}}-${{i++}}`;
+      }}
+      heading.id = id;
+    }}
+    used.add(id);
+    const level = parseInt(heading.tagName.slice(1), 10) || 1;
+    const link = document.createElement('a');
+    link.href = `#${{id}}`;
+    link.textContent = heading.textContent || '';
+    link.style.paddingLeft = `${{(level - 1) * 12}}px`;
+    outlineList.appendChild(link);
+  }});
+}}
+
+function toggleBackToTop() {{
+  if (!backToTop) return;
+  if (window.scrollY > 300) {{
+    backToTop.classList.add('visible');
+  }} else {{
+    backToTop.classList.remove('visible');
+  }}
+}}
+
+if (outlineToggle && outlinePanel) {{
+  outlineToggle.addEventListener('click', () => {{
+    outlinePanel.classList.toggle('collapsed');
+  }});
+}}
+
+if (backToTop) {{
+  backToTop.addEventListener('click', () => {{
+    window.scrollTo({{ top: 0, behavior: 'smooth' }});
+  }});
+}}
+
+buildOutline();
+window.addEventListener('scroll', toggleBackToTop);
+toggleBackToTop();
 </script>
 """
-    return HTMLResponse(_page_shell(title, body, extra_head=extra_head, extra_scripts=extra_scripts))
+    return HTMLResponse(shell(title, body, extra_head=extra_head, extra_scripts=extra_scripts))
 
 
 async def _api_stats(request: Request) -> JSONResponse:
@@ -1838,6 +2210,14 @@ def create_app(
         Route("/api/stats", _api_stats, methods=["GET"]),
         Route("/api/pdf/{source_hash:str}", _api_pdf, methods=["GET"]),
     ]
+    if _PDFJS_STATIC_DIR.exists():
+        routes.append(
+            Mount(
+                "/pdfjs",
+                app=StaticFiles(directory=str(_PDFJS_STATIC_DIR), html=True),
+                name="pdfjs",
+            )
+        )
     app = Starlette(routes=routes)
     app.state.index = index
     app.state.md = md

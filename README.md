@@ -144,9 +144,12 @@ JSON input formats:
 
 Web UI highlights:
 
-- Summary/Source/PDF views with tab navigation.
+- Summary/Source/PDF/PDF Viewer views with tab navigation.
+- Split view: choose left/right panes independently (summary/source/pdf/pdf viewer) via URL params.
+- Summary view includes a collapsible outline panel (top-left) and a back-to-top control (bottom-left).
 - Summary template dropdown shows only available templates per paper.
 - Source view renders Markdown and supports embedded HTML tables plus `data:image/...;base64` `<img>` tags.
+- PDF Viewer is served locally (PDF.js viewer assets) to avoid cross-origin issues with local PDFs.
 - Merge behavior for multi-input serve: title similarity (>= 0.95), preferring `bibtex.fields.title` and falling back to `paper_title`.
 - Cache merged inputs with `--cache-dir`; bypass with `--no-cache`.
 
