@@ -230,6 +230,14 @@ Key options:
 - `--output`: output directory (flattened outputs).
 - `--enable-http`: allow embedding HTTP(S) images (embed only).
 - `--workers`: concurrent workers (default: 4).
+- `--dry-run`: report planned outputs without writing files.
+- `--verbose`: enable detailed logs for image resolution/HTTP fetches.
+
+Notes:
+
+- Progress bars report completion; a rich summary table lists counts and output locations.
+- Summary paths are shown relative to the current working directory when possible.
+- If the output directory is not empty, the command logs a warning before writing files.
 
 Examples:
 
@@ -268,6 +276,15 @@ Key options:
 - `--output-simple`: copy markdown + images to output (shared `images/`).
 - `--output-base64`: embed images into markdown.
 - `--workers`: concurrent workers (default: 4).
+- `--dry-run`: report planned outputs without writing files.
+- `--verbose`: enable detailed logs for layout discovery and file copying.
+
+Notes:
+
+- Use `--recursive` when the input directory contains nested layout folders (otherwise no layouts are discovered).
+- If output directories are not empty, the command logs a warning before writing files.
+- A summary table lists counts and output locations after completion.
+- Summary paths are shown relative to the current working directory when possible.
 
 Examples:
 
