@@ -1,8 +1,9 @@
 [project]
 name = "ai-deepresearch-flow"
 version = "0.1.0"
-description = "Add your description here"
-readme = "README.md"
+description = "Workflow tools for paper extraction, review, and research automation."
+readme = { file = "README.md", content-type = "text/markdown" }
+license = { file = "LICENSE" }
 requires-python = ">=3.12"
 dependencies = [
     "anthropic>=0.28.0",
@@ -22,6 +23,15 @@ dependencies = [
     "tqdm>=4.66.4",
     "uvicorn>=0.27.1",
 ]
+keywords = ["research", "papers", "pdf", "ocr", "llm", "workflow"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+]
 
 [project.scripts]
 deepresearch-flow = "deepresearch_flow.cli:main"
@@ -32,6 +42,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["python"]
+
+[tool.setuptools]
+include-package-data = true
 
 [tool.setuptools.package-dir]
 "" = "python"

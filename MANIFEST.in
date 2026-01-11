@@ -1,0 +1,7 @@
+include LICENSE
+include README.md
+recursive-include python/deepresearch_flow/paper/schemas *.json
+recursive-include python/deepresearch_flow/paper/templates *.j2
+recursive-include python/deepresearch_flow/paper/prompt_templates *.j2
+recursive-include python/deepresearch_flow/paper/examples *.toml
+recursive-include python/deepresearch_flow/paper/web/pdfjs *
