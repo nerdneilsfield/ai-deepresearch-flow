@@ -143,6 +143,7 @@ Web UI highlights:
 
 - Summary/Source/PDF views with tab navigation.
 - Summary template dropdown shows only available templates per paper.
+- Source view renders Markdown and supports embedded HTML tables plus `data:image/...;base64` `<img>` tags.
 - Merge behavior for multi-input serve: title similarity (>= 0.95), preferring `bibtex.fields.title` and falling back to `paper_title`.
 - Cache merged inputs with `--cache-dir`; bypass with `--no-cache`.
 
