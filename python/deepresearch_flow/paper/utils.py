@@ -11,7 +11,11 @@ from typing import Iterable
 import json_repair
 
 
-def discover_markdown(inputs: Iterable[str], glob_pattern: str | None) -> list[Path]:
+def discover_markdown(
+    inputs: Iterable[str],
+    glob_pattern: str | None,
+    recursive: bool = True,
+) -> list[Path]:
     files: set[Path] = set()
     for raw in inputs:
         path = Path(raw)
@@ -23,9 +27,9 @@ def discover_markdown(inputs: Iterable[str], glob_pattern: str | None) -> list[P
 
         if path.is_dir():
             if glob_pattern:
-                matches = path.glob(glob_pattern)
+                matches = path.rglob(glob_pattern) if recursive else path.glob(glob_pattern)
             else:
-                matches = path.rglob("*.md")
+                matches = path.rglob("*.md") if recursive else path.glob("*.md")
             for match in matches:
                 if match.is_file():
                     files.add(match.resolve())

@@ -388,7 +388,7 @@ async def extract_documents(
     sleep_time: float | None,
     verbose: bool,
 ) -> None:
-    markdown_files = discover_markdown(inputs, glob_pattern)
+    markdown_files = discover_markdown(inputs, glob_pattern, recursive=True)
 
     if retry_failed:
         error_entries = load_errors(errors_path)
