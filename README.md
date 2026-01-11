@@ -264,7 +264,7 @@ Key options:
 
 - `--layout`: OCR layout type (currently `mineru`).
 - `--input` (repeatable): directories containing `full.md` + `images/`.
-- `--recursive`: search for layout folders.
+- `--recursive`: search for layout folders (required when inputs contain nested result directories).
 - `--output-simple`: copy markdown + images to output (shared `images/`).
 - `--output-base64`: embed images into markdown.
 - `--workers`: concurrent workers (default: 4).
