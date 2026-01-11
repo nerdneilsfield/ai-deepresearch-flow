@@ -1115,6 +1115,11 @@ def _render_paper_markdown(
     return template.render(**context), str(template_name), warning
 
 
+_TITLE_PREFIX_LEN = 16
+_TITLE_MIN_CHARS = 24
+_TITLE_MIN_TOKENS = 4
+
+
 def _normalize_title_key(title: str) -> str:
     value = title.replace("{", "").replace("}", "")
     value = value.replace("_", " ")
@@ -1146,6 +1151,57 @@ def _extract_title_from_filename(name: str) -> str:
         return match.group(1).strip()
     return base.strip()
 
+def _title_prefix_key(title_key: str) -> str | None:
+    if len(title_key.split()) < _TITLE_MIN_TOKENS:
+        return None
+    prefix = title_key[:_TITLE_PREFIX_LEN]
+    if not prefix:
+        return None
+    return f"prefix:{prefix}"
+
+
+def _title_overlap_match(a: str, b: str) -> bool:
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    shorter, longer = (a, b) if len(a) <= len(b) else (b, a)
+    token_count = len(shorter.split())
+    if len(shorter) >= _TITLE_MIN_CHARS or token_count >= _TITLE_MIN_TOKENS:
+        if longer.startswith(shorter) or shorter in longer:
+            return True
+    return False
+
+
+def _resolve_by_title(title: str, file_index: dict[str, list[Path]]) -> Path | None:
+    title_key = _normalize_title_key(title)
+    if not title_key:
+        return None
+    candidates = file_index.get(title_key, [])
+    if candidates:
+        return candidates[0]
+    prefix_key = _title_prefix_key(title_key)
+    if not prefix_key:
+        return None
+    candidates = file_index.get(prefix_key, [])
+    if not candidates:
+        return None
+    best_path = None
+    best_score = 0.0
+    for path in candidates:
+        candidate_title = _normalize_title_key(_extract_title_from_filename(path.name))
+        if not candidate_title:
+            continue
+        if _title_overlap_match(title_key, candidate_title):
+            return path
+        score = _title_similarity(title_key, candidate_title)
+        if score > best_score:
+            best_score = score
+            best_path = path
+    if best_path is not None and best_score >= 0.86:
+        return best_path
+    return None
+
 
 def _build_file_index(roots: list[Path], *, suffixes: set[str]) -> dict[str, list[Path]]:
     index: dict[str, list[Path]] = {}
@@ -1173,8 +1229,12 @@ def _build_file_index(roots: list[Path], *, suffixes: set[str]) -> dict[str, lis
             index.setdefault(name_key, []).append(resolved)
             title_candidate = _extract_title_from_filename(path.name)
             title_key = _normalize_title_key(title_candidate)
-            if title_key and title_key != name_key:
-                index.setdefault(title_key, []).append(resolved)
+            if title_key:
+                if title_key != name_key:
+                    index.setdefault(title_key, []).append(resolved)
+                prefix_key = _title_prefix_key(title_key)
+                if prefix_key:
+                    index.setdefault(prefix_key, []).append(resolved)
     return index
 
 
@@ -1187,12 +1247,7 @@ def _resolve_source_md(paper: dict[str, Any], md_index: dict[str, list[Path]]) -
         candidates = md_index.get(name, [])
         if candidates:
             return candidates[0]
-    title = str(paper.get("paper_title") or "")
-    title_key = _normalize_title_key(title)
-    if not title_key:
-        return None
-    candidates = md_index.get(title_key, [])
-    return candidates[0] if candidates else None
+    return _resolve_by_title(str(paper.get("paper_title") or ""), md_index)
 
 
 def _guess_pdf_names(paper: dict[str, Any]) -> list[str]:
@@ -1218,14 +1273,7 @@ def _resolve_pdf(paper: dict[str, Any], pdf_index: dict[str, list[Path]]) -> Pat
         candidates = pdf_index.get(filename.lower(), [])
         if candidates:
             return candidates[0]
-    title = str(paper.get("paper_title") or "")
-    title_key = _normalize_title_key(title)
-    if not title_key:
-        return None
-    candidates = pdf_index.get(title_key, [])
-    if candidates:
-        return candidates[0]
-    return None
+    return _resolve_by_title(str(paper.get("paper_title") or ""), pdf_index)
 
 
 def _ensure_under_roots(path: Path, roots: list[Path]) -> bool:
