@@ -1565,8 +1565,10 @@ async def _paper_detail(request: Request) -> HTMLResponse:
       {left_options}
     </select>
   </div>
-  <div class="split-swap">
+  <div class="split-actions">
+    <button id="splitTighten" type="button" title="Tighten width">-</button>
     <button id="splitSwap" type="button" title="Swap panes">⇄</button>
+    <button id="splitWiden" type="button" title="Widen width">+</button>
   </div>
   <div>
     <div class="muted">Right pane</div>
@@ -1587,7 +1589,7 @@ async def _paper_detail(request: Request) -> HTMLResponse:
         extra_head = """
 <style>
 .container {
-  max-width: min(1600px, calc(100vw - 48px));
+  max-width: min(var(--split-max-width, 1600px), calc(100vw - 48px));
   width: 100%;
   margin: 0 auto;
 }
@@ -1605,18 +1607,20 @@ async def _paper_detail(request: Request) -> HTMLResponse:
   background: #fff;
   min-width: 160px;
 }
-.split-swap {
+.split-actions {
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 8px;
   height: 100%;
 }
-.split-swap button {
+.split-actions button {
   padding: 6px 10px;
   border-radius: 999px;
   border: 1px solid #d0d7de;
   background: #f6f8fa;
   cursor: pointer;
+  min-width: 36px;
 }
 .split-layout {
   display: flex;
@@ -1655,6 +1659,8 @@ async def _paper_detail(request: Request) -> HTMLResponse:
 const leftSelect = document.getElementById('splitLeft');
 const rightSelect = document.getElementById('splitRight');
 const swapButton = document.getElementById('splitSwap');
+const tightenButton = document.getElementById('splitTighten');
+const widenButton = document.getElementById('splitWiden');
 function updateSplit() {
   const params = new URLSearchParams(window.location.search);
   params.set('view', 'split');
@@ -1670,6 +1676,39 @@ swapButton.addEventListener('click', () => {
   rightSelect.value = leftValue;
   updateSplit();
 });
+const widthSteps = [1200, 1400, 1600, 1800, 2000];
+let widthIndex = 2;
+try {
+  const stored = localStorage.getItem('splitWidthIndex');
+  if (stored !== null) {
+    const parsed = Number.parseInt(stored, 10);
+    if (!Number.isNaN(parsed)) {
+      widthIndex = Math.max(0, Math.min(widthSteps.length - 1, parsed));
+    }
+  }
+} catch (err) {
+  // Ignore storage errors (e.g. private mode)
+}
+
+function applySplitWidth() {
+  const value = `${widthSteps[widthIndex]}px`;
+  document.documentElement.style.setProperty('--split-max-width', value);
+  try {
+    localStorage.setItem('splitWidthIndex', String(widthIndex));
+  } catch (err) {
+    // Ignore storage errors
+  }
+}
+
+tightenButton.addEventListener('click', () => {
+  widthIndex = Math.max(0, widthIndex - 1);
+  applySplitWidth();
+});
+widenButton.addEventListener('click', () => {
+  widthIndex = Math.min(widthSteps.length - 1, widthIndex + 1);
+  applySplitWidth();
+});
+applySplitWidth();
 </script>
 """
         return HTMLResponse(_page_shell("Split View", body, extra_head=extra_head, extra_scripts=extra_scripts))
