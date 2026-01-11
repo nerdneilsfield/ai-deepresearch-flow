@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import json
+import logging
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
@@ -42,6 +43,8 @@ _CDN_PDFJS = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.
 _CDN_PDFJS_WORKER = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.worker.min.js"
 _PDFJS_VIEWER_PATH = "/pdfjs/web/viewer.html"
 _PDFJS_STATIC_DIR = Path(__file__).resolve().parent / "pdfjs"
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -1589,7 +1592,7 @@ async def _paper_detail(request: Request) -> HTMLResponse:
         extra_head = """
 <style>
 .container {
-  max-width: min(var(--split-max-width, 1600px), calc(100vw - 48px));
+  max-width: 100%;
   width: 100%;
   margin: 0 auto;
 }
@@ -1625,6 +1628,9 @@ async def _paper_detail(request: Request) -> HTMLResponse:
 .split-layout {
   display: flex;
   gap: 12px;
+  width: 100%;
+  max-width: min(100%, var(--split-max-width, 100%));
+  margin: 0 auto;
   height: calc(100vh - 260px);
   min-height: 420px;
 }
@@ -1676,8 +1682,8 @@ swapButton.addEventListener('click', () => {
   rightSelect.value = leftValue;
   updateSplit();
 });
-const widthSteps = [1200, 1400, 1600, 1800, 2000];
-let widthIndex = 2;
+const widthSteps = ["1200px", "1400px", "1600px", "1800px", "2000px", "100%"];
+let widthIndex = widthSteps.length - 1;
 try {
   const stored = localStorage.getItem('splitWidthIndex');
   if (stored !== null) {
@@ -1691,7 +1697,7 @@ try {
 }
 
 function applySplitWidth() {
-  const value = `${widthSteps[widthIndex]}px`;
+  const value = widthSteps[widthIndex];
   document.documentElement.style.setProperty('--split-max-width', value);
   try {
     localStorage.setItem('splitWidthIndex', String(widthIndex));
@@ -2287,6 +2293,11 @@ def create_app(
                 app=StaticFiles(directory=str(_PDFJS_STATIC_DIR), html=True),
                 name="pdfjs",
             )
+        )
+    elif pdf_roots:
+        logger.warning(
+            "PDF.js viewer assets not found at %s; PDF Viewer mode will be unavailable.",
+            _PDFJS_STATIC_DIR,
         )
     app = Starlette(routes=routes)
     app.state.index = index
