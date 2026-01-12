@@ -12,6 +12,7 @@ import re
 from urllib.parse import urlencode, quote
 
 from markdown_it import MarkdownIt
+from mdit_py_plugins.footnote import footnote
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -637,6 +638,7 @@ def _load_or_merge_papers(
 
 def _md_renderer() -> MarkdownIt:
     md = MarkdownIt("commonmark", {"html": False, "linkify": True})
+    md.use(footnote)
     md.enable("table")
     return md
 
@@ -2116,6 +2118,35 @@ def _page_shell(
       .stats-row {{ display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }}
       .stats-label {{ font-weight: 600; color: #0b1220; margin-right: 4px; }}
       .pill.stat {{ background: #f6f8fa; border-color: #c7d2e0; color: #1f2a37; }}
+      .footnotes {{ border-top: 1px solid #e5e7eb; margin-top: 16px; padding-top: 12px; color: #57606a; }}
+      .footnotes ol {{ padding-left: 20px; }}
+      .footnotes li {{ margin-bottom: 6px; }}
+      .footnote-ref {{ font-size: 0.85em; }}
+      .footnote-tip {{ position: relative; display: inline-block; }}
+      .footnote-tip::after {{
+        content: attr(data-footnote);
+        position: absolute;
+        left: 50%;
+        bottom: 130%;
+        transform: translateX(-50%);
+        width: min(320px, 70vw);
+        padding: 8px 10px;
+        border-radius: 8px;
+        background: #0b1220;
+        color: #e6edf3;
+        font-size: 12px;
+        line-height: 1.35;
+        white-space: pre-line;
+        box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
+        opacity: 0;
+        pointer-events: none;
+        z-index: 30;
+        transition: opacity 0.12s ease-in-out;
+      }}
+      .footnote-tip:hover::after,
+      .footnote-tip:focus::after {{
+        opacity: 1;
+      }}
       pre {{ overflow: auto; padding: 10px; background: #0b1220; color: #e6edf3; border-radius: 10px; }}
       code {{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }}
       a {{ color: #0969da; }}
@@ -3181,6 +3212,24 @@ if (window.renderMathInElement) {{
     throwOnError: false
   }});
 }}
+if (document.querySelector('.footnotes')) {{
+  const notes = {{}};
+  document.querySelectorAll('.footnotes li[id]').forEach((li) => {{
+    const id = li.getAttribute('id');
+    if (!id) return;
+    const clone = li.cloneNode(true);
+    clone.querySelectorAll('a.footnote-backref').forEach((el) => el.remove());
+    const text = (clone.textContent || '').replace(/\\s+/g, ' ').trim();
+    if (text) notes['#' + id] = text.length > 400 ? text.slice(0, 397) + '…' : text;
+  }});
+  document.querySelectorAll('.footnote-ref a[href^="#fn"]').forEach((link) => {{
+    const ref = link.getAttribute('href');
+    const text = notes[ref];
+    if (!text) return;
+    link.dataset.footnote = text;
+    link.classList.add('footnote-tip');
+  }});
+}}
 {outline_js}
 </script>
 """
@@ -3249,6 +3298,24 @@ if (window.renderMathInElement) {{
       {{left: '\\\\[', right: '\\\\]', display: true}}
     ],
     throwOnError: false
+  }});
+}}
+if (document.querySelector('.footnotes')) {{
+  const notes = {{}};
+  document.querySelectorAll('.footnotes li[id]').forEach((li) => {{
+    const id = li.getAttribute('id');
+    if (!id) return;
+    const clone = li.cloneNode(true);
+    clone.querySelectorAll('a.footnote-backref').forEach((el) => el.remove());
+    const text = (clone.textContent || '').replace(/\\s+/g, ' ').trim();
+    if (text) notes['#' + id] = text.length > 400 ? text.slice(0, 397) + '…' : text;
+  }});
+  document.querySelectorAll('.footnote-ref a[href^="#fn"]').forEach((link) => {{
+    const ref = link.getAttribute('href');
+    const text = notes[ref];
+    if (!text) return;
+    link.dataset.footnote = text;
+    link.classList.add('footnote-tip');
   }});
 }}
 {outline_js}
@@ -3463,6 +3530,24 @@ if (window.renderMathInElement) {{
       {{left: '\\\\[', right: '\\\\]', display: true}}
     ],
     throwOnError: false
+  }});
+}}
+if (document.querySelector('.footnotes')) {{
+  const notes = {{}};
+  document.querySelectorAll('.footnotes li[id]').forEach((li) => {{
+    const id = li.getAttribute('id');
+    if (!id) return;
+    const clone = li.cloneNode(true);
+    clone.querySelectorAll('a.footnote-backref').forEach((el) => el.remove());
+    const text = (clone.textContent || '').replace(/\\s+/g, ' ').trim();
+    if (text) notes['#' + id] = text.length > 400 ? text.slice(0, 397) + '…' : text;
+  }});
+  document.querySelectorAll('.footnote-ref a[href^="#fn"]').forEach((link) => {{
+    const ref = link.getAttribute('href');
+    const text = notes[ref];
+    if (!text) return;
+    link.dataset.footnote = text;
+    link.classList.add('footnote-tip');
   }});
 }}
 {outline_js}
