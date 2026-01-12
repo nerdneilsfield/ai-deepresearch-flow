@@ -73,6 +73,7 @@ Extract structured JSON from markdown files using configured providers and promp
 Key options:
 
 - `--input` (repeatable): file or directory input.
+- `--count`: translate up to N files (after skipping existing outputs).
 - `--glob`: filter when scanning directories.
 - `--prompt-template` / `--language`: select built-in prompts and output language.
 - `--prompt-system` / `--prompt-user` / `--schema-json`: custom prompt + schema.

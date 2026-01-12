@@ -117,6 +117,7 @@ def translator() -> None:
     required=True,
     help="Input markdown file or directory (repeatable)",
 )
+@click.option("--count", "count_limit", default=None, type=int, help="Translate up to N files")
 @click.option("-g", "--glob", "glob_pattern", default=None, help="Glob filter when input is a directory")
 @click.option("-m", "--model", "model_ref", required=True, help="provider/model")
 @click.option("--source-lang", "source_lang", default=None, help="Source language hint")
@@ -161,6 +162,7 @@ def translator() -> None:
 def translate(
     config_path: str,
     inputs: tuple[str, ...],
+    count_limit: int | None,
     glob_pattern: str | None,
     model_ref: str,
     source_lang: str | None,
@@ -242,6 +244,8 @@ def translate(
         raise click.ClickException("--timeout must be positive")
     if retry_times <= 0:
         raise click.ClickException("--retry-times must be positive")
+    if count_limit is not None and count_limit <= 0:
+        raise click.ClickException("--count must be positive")
     if fallback_retry_times is not None and fallback_retry_times <= 0:
         raise click.ClickException("--fallback-retry-times must be positive")
     if fallback_retry_times_2 is not None and fallback_retry_times_2 <= 0:
@@ -252,6 +256,8 @@ def translate(
     markdown_files = discover_markdown(inputs, glob_pattern)
     if not markdown_files:
         raise click.ClickException("No markdown files discovered")
+    if count_limit is not None and dry_run:
+        markdown_files = markdown_files[:count_limit]
 
     start_time = time.monotonic()
     input_chars = 0
@@ -268,6 +274,8 @@ def translate(
         table.add_column("Metric", style="cyan", no_wrap=True)
         table.add_column("Value", style="white", overflow="fold")
         table.add_row("Documents", str(len(markdown_files)))
+        if count_limit is not None:
+            table.add_row("Limit", str(count_limit))
         table.add_row("Duration", _format_duration(duration))
         table.add_row("Input chars", str(input_chars))
         table.add_row("Est tokens", str(estimate_tokens(input_chars)))
@@ -303,6 +311,8 @@ def translate(
             logger.info("Skip existing output: %s", output_path)
             continue
         to_process.append(path)
+    if count_limit is not None:
+        to_process = to_process[:count_limit]
 
     if not to_process:
         table = Table(
@@ -315,6 +325,8 @@ def translate(
         table.add_row("Documents", str(len(markdown_files)))
         table.add_row("Skipped", str(skipped))
         table.add_row("Processed", "0")
+        if count_limit is not None:
+            table.add_row("Limit", str(count_limit))
         Console().print(table)
         return
     cfg = TranslateConfig(
@@ -414,7 +426,8 @@ def translate(
         progress = ProgressTracker(len(to_process))
         try:
             async with httpx.AsyncClient() as client:
-                await asyncio.gather(*(process_one(path, client, progress) for path in to_process))
+                for path in to_process:
+                    await process_one(path, client, progress)
         finally:
             await progress.close()
 
@@ -431,6 +444,8 @@ def translate(
     table.add_row("Documents", str(len(markdown_files)))
     table.add_row("Skipped", str(skipped))
     table.add_row("Processed", str(len(to_process)))
+    if count_limit is not None:
+        table.add_row("Limit", str(count_limit))
     table.add_row("Duration", _format_duration(duration))
     table.add_row("Output suffix", f".{suffix}.md")
     Console().print(table)
