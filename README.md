@@ -9,27 +9,27 @@
 
 ---
 
-## The Core Pain Points
+## ⚡️ The Core Pain Points
 
 - **OCR Chaos**: Raw markdown from OCR tools is often broken -- tables drift, formulas break, and references are non-clickable.
 - **Translation Nightmares**: Translating technical papers often destroys code blocks, LaTeX formulas, and table structures.
 - **Information Overload**: Extracting structured insights (authors, venues, summaries) from hundreds of PDFs manually is impossible.
 - **Context Switching**: Managing PDFs, summaries, and translations in different windows kills focus.
 
-## The Solution
+## 🛡️ The Solution
 
 DeepResearch Flow provides a unified pipeline to **Repair**, **Translate**, **Extract**, and **Serve** your research library.
 
 ## Key Features
 
-- **Smart Extraction**: Turn unstructured Markdown into schema-enforced JSON (summaries, metadata, Q&A) using LLMs (OpenAI, Claude, Gemini, etc.).
-- **Precision Translation**: Translate OCR Markdown to Chinese/Japanese (`.zh.md`, `.ja.md`) while **freezing** formulas, code, tables, and references. No more broken layout.
-- **Local Knowledge DB**: A high-performance local Web UI to browse papers with **Split View** (Source vs. Translated vs. Summary), full-text search, and multi-dimensional filtering.
-- **OCR Post-Processing**: Automatically fix broken references (`[1]` -> `[^1]`), merge split paragraphs, and standardize layouts.
+- **🔍 Smart Extraction**: Turn unstructured Markdown into schema-enforced JSON (summaries, metadata, Q&A) using LLMs (OpenAI, Claude, Gemini, etc.).
+- **🌐 Precision Translation**: Translate OCR Markdown to Chinese/Japanese (`.zh.md`, `.ja.md`) while **freezing** formulas, code, tables, and references. No more broken layout.
+- **📚 Local Knowledge DB**: A high-performance local Web UI to browse papers with **Split View** (Source vs. Translated vs. Summary), full-text search, and multi-dimensional filtering.
+- **🛠️ OCR Post-Processing**: Automatically fix broken references (`[1]` -> `[^1]`), merge split paragraphs, and standardize layouts.
 
 ---
 
-## Quick Start
+## 🚀 Quick Start
 
 ### 1) Installation
 
@@ -89,7 +89,7 @@ uv run deepresearch-flow paper db serve \
 
 ---
 
-## Comprehensive Guide
+## 📖 Comprehensive Guide
 
 <details>
 <summary><strong>1. Translator: OCR-Safe Translation</strong></summary>
@@ -166,7 +166,7 @@ uv run deepresearch-flow recognize md embed --input ./raw_ocr --output ./clean_m
 
 ---
 
-## Docker Support
+## 🐳 Docker Support
 
 Don't want to manage Python environments?
 
@@ -174,7 +174,7 @@ Don't want to manage Python environments?
 docker run --rm -v $(pwd):/app -it ghcr.io/nerdneilsfield/deepresearch-flow --help
 ```
 
-## Configuration
+## ⚙️ Configuration
 
 The config.toml is your control center. It supports:
 
