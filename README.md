@@ -1,5 +1,5 @@
 <p align="center">
-  <img src=".github/assets/login.png" width="140" alt="ai-deepresearch-flow logo" />
+  <img src=".github/assets/logo.png" width="140" alt="ai-deepresearch-flow logo" />
 </p>
 
 <h3 align="center">ai-deepresearch-flow</h3>
