@@ -162,8 +162,11 @@ Web UI highlights:
 - Summary template dropdown shows only available templates per paper.
 - Homepage filters: PDF/Source/Summary availability and template tags, plus a filter syntax input (`tmpl:...`, `has:pdf`, `no:source`).
 - Homepage stats: total and filtered counts for PDF/Source/Summary plus per-template totals.
+- Stats page includes keyword frequency charts.
 - Source view renders Markdown and supports embedded HTML tables plus `data:image/...;base64` `<img>` tags.
 - PDF Viewer is served locally (PDF.js viewer assets) to avoid cross-origin issues with local PDFs.
+- PDF-only entries are surfaced for unmatched PDFs under `--pdf-root` (metadata title if available, otherwise filename), with badges and detail warnings.
+- PDF-only entries are excluded from stats counts.
 - Merge behavior for multi-input serve: title similarity (>= 0.95), preferring `bibtex.fields.title` and falling back to `paper_title`.
 - Cache merged inputs with `--cache-dir`; bypass with `--no-cache`.
 

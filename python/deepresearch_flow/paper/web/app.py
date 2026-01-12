@@ -33,6 +33,12 @@ try:
 except Exception:
     PYBTEX_AVAILABLE = False
 
+try:
+    from pypdf import PdfReader
+    PYPDF_AVAILABLE = True
+except Exception:
+    PYPDF_AVAILABLE = False
+
 
 _CDN_ECHARTS = "https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"
 _CDN_MERMAID = "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"
@@ -191,6 +197,16 @@ def _extract_tags(paper: dict[str, Any]) -> list[str]:
     return []
 
 
+def _extract_keywords(paper: dict[str, Any]) -> list[str]:
+    keywords = paper.get("keywords") or []
+    if isinstance(keywords, list):
+        return [str(keyword).strip() for keyword in keywords if str(keyword).strip()]
+    if isinstance(keywords, str):
+        parts = re.split(r"[;,]", keywords)
+        return [part.strip() for part in parts if part.strip()]
+    return []
+
+
 _SUMMARY_FIELDS = (
     "summary",
     "abstract",
@@ -250,6 +266,7 @@ def build_index(
     year_counts: dict[str, int] = {}
     month_counts: dict[str, int] = {}
     tag_counts: dict[str, int] = {}
+    keyword_counts: dict[str, int] = {}
     author_counts: dict[str, int] = {}
     venue_counts: dict[str, int] = {}
     template_tag_counts: dict[str, int] = {}
@@ -258,6 +275,7 @@ def build_index(
         index.setdefault(key, set()).add(idx)
 
     for idx, paper in enumerate(papers):
+        is_pdf_only = bool(paper.get("_is_pdf_only"))
         source_hash = paper.get("source_hash")
         if not source_hash and paper.get("source_path"):
             source_hash = stable_hash(str(paper.get("source_path")))
@@ -286,31 +304,42 @@ def build_index(
         paper["_month"] = month_label
         add_index(by_year, _normalize_key(year_label), idx)
         add_index(by_month, _normalize_key(month_label), idx)
-        year_counts[year_label] = year_counts.get(year_label, 0) + 1
-        month_counts[month_label] = month_counts.get(month_label, 0) + 1
+        if not is_pdf_only:
+            year_counts[year_label] = year_counts.get(year_label, 0) + 1
+            month_counts[month_label] = month_counts.get(month_label, 0) + 1
 
         venue = _extract_venue(paper).strip()
         paper["_venue"] = venue
         if venue:
             add_index(by_venue, _normalize_key(venue), idx)
-            venue_counts[venue] = venue_counts.get(venue, 0) + 1
+            if not is_pdf_only:
+                venue_counts[venue] = venue_counts.get(venue, 0) + 1
         else:
             add_index(by_venue, "unknown", idx)
-            venue_counts["Unknown"] = venue_counts.get("Unknown", 0) + 1
+            if not is_pdf_only:
+                venue_counts["Unknown"] = venue_counts.get("Unknown", 0) + 1
 
         authors = _extract_authors(paper)
         paper["_authors"] = authors
         for author in authors:
             key = _normalize_key(author)
             add_index(by_author, key, idx)
-            author_counts[author] = author_counts.get(author, 0) + 1
+            if not is_pdf_only:
+                author_counts[author] = author_counts.get(author, 0) + 1
 
         tags = _extract_tags(paper)
         paper["_tags"] = tags
         for tag in tags:
             key = _normalize_key(tag)
             add_index(by_tag, key, idx)
-            tag_counts[tag] = tag_counts.get(tag, 0) + 1
+            if not is_pdf_only:
+                tag_counts[tag] = tag_counts.get(tag, 0) + 1
+
+        keywords = _extract_keywords(paper)
+        paper["_keywords"] = keywords
+        for keyword in keywords:
+            if not is_pdf_only:
+                keyword_counts[keyword] = keyword_counts.get(keyword, 0) + 1
 
         template_tags = _available_templates(paper)
         if not template_tags:
@@ -320,8 +349,9 @@ def build_index(
         paper["_template_tags"] = template_tags
         paper["_template_tags_lc"] = [tag.lower() for tag in template_tags]
         paper["_has_summary"] = _has_summary(paper, template_tags)
-        for tag in template_tags:
-            template_tag_counts[tag] = template_tag_counts.get(tag, 0) + 1
+        if not is_pdf_only:
+            for tag in template_tags:
+                template_tag_counts[tag] = template_tag_counts.get(tag, 0) + 1
 
         search_parts = [title, venue, " ".join(authors), " ".join(tags)]
         paper["_search_lc"] = " ".join(part for part in search_parts if part).lower()
@@ -344,11 +374,13 @@ def build_index(
 
     ordered_ids = [idx for idx, _ in sorted(enumerate(papers), key=year_sort_key)]
 
+    stats_total = sum(1 for paper in papers if not paper.get("_is_pdf_only"))
     stats = {
-        "total": len(papers),
+        "total": stats_total,
         "years": _sorted_counts(year_counts, numeric_desc=True),
         "months": _sorted_month_counts(month_counts),
         "tags": _sorted_counts(tag_counts),
+        "keywords": _sorted_counts(keyword_counts),
         "authors": _sorted_counts(author_counts),
         "venues": _sorted_counts(venue_counts),
     }
@@ -464,7 +496,11 @@ def _infer_template_tag(papers: list[dict[str, Any]], path: Path) -> str:
     return best_tag
 
 
-def _build_cache_meta(db_paths: list[Path], bibtex_path: Path | None) -> dict[str, Any]:
+def _build_cache_meta(
+    db_paths: list[Path],
+    bibtex_path: Path | None,
+    pdf_roots_meta: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     def file_meta(path: Path) -> dict[str, Any]:
         try:
             stats = path.stat()
@@ -477,6 +513,8 @@ def _build_cache_meta(db_paths: list[Path], bibtex_path: Path | None) -> dict[st
         "inputs": [file_meta(path) for path in db_paths],
         "bibtex": file_meta(bibtex_path) if bibtex_path else None,
     }
+    if pdf_roots_meta is not None:
+        meta["pdf_roots"] = pdf_roots_meta
     return meta
 
 
@@ -504,16 +542,72 @@ def _write_cached_papers(cache_dir: Path, meta: dict[str, Any], papers: list[dic
     data_path.write_text(json.dumps(papers, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _extract_year_for_matching(paper: dict[str, Any]) -> str | None:
+    if isinstance(paper.get("bibtex"), dict):
+        fields = paper.get("bibtex", {}).get("fields", {}) or {}
+        year = fields.get("year")
+        if year and str(year).isdigit():
+            return str(year)
+    parsed_year, _ = _parse_year_month(str(paper.get("publication_date") or ""))
+    return parsed_year
+
+
+def _prepare_paper_matching_fields(paper: dict[str, Any]) -> None:
+    if "_authors" not in paper:
+        paper["_authors"] = _extract_authors(paper)
+    if "_year" not in paper:
+        paper["_year"] = _extract_year_for_matching(paper) or ""
+
+
+def _build_pdf_only_entries(
+    papers: list[dict[str, Any]],
+    pdf_paths: list[Path],
+    pdf_index: dict[str, list[Path]],
+) -> list[dict[str, Any]]:
+    matched: set[Path] = set()
+    for paper in papers:
+        _prepare_paper_matching_fields(paper)
+        pdf_path = _resolve_pdf(paper, pdf_index)
+        if pdf_path:
+            matched.add(pdf_path.resolve())
+
+    entries: list[dict[str, Any]] = []
+    for path in pdf_paths:
+        resolved = path.resolve()
+        if resolved in matched:
+            continue
+        title = _read_pdf_metadata_title(resolved) or _extract_title_from_filename(resolved.name)
+        if not title:
+            title = resolved.stem
+        year_hint, author_hint = _extract_year_author_from_filename(resolved.name)
+        entry: dict[str, Any] = {
+            "paper_title": title,
+            "paper_authors": [author_hint] if author_hint else [],
+            "publication_date": year_hint or "",
+            "source_hash": stable_hash(str(resolved)),
+            "source_path": str(resolved),
+            "_is_pdf_only": True,
+        }
+        entries.append(entry)
+    return entries
+
+
 def _load_or_merge_papers(
     db_paths: list[Path],
     bibtex_path: Path | None,
     cache_dir: Path | None,
     use_cache: bool,
+    pdf_roots: list[Path] | None = None,
 ) -> list[dict[str, Any]]:
     cache_meta = None
+    pdf_roots = pdf_roots or []
+    pdf_paths: list[Path] = []
+    pdf_roots_meta: list[dict[str, Any]] | None = None
+    if pdf_roots:
+        pdf_paths, pdf_roots_meta = _scan_pdf_roots(pdf_roots)
     if cache_dir and use_cache:
         cache_dir.mkdir(parents=True, exist_ok=True)
-        cache_meta = _build_cache_meta(db_paths, bibtex_path)
+        cache_meta = _build_cache_meta(db_paths, bibtex_path, pdf_roots_meta)
         cached = _load_cached_papers(cache_dir, cache_meta)
         if cached is not None:
             return cached
@@ -523,6 +617,9 @@ def _load_or_merge_papers(
         for bundle in inputs:
             enrich_with_bibtex(bundle["papers"], bibtex_path)
     papers = _merge_paper_inputs(inputs)
+    if pdf_paths:
+        pdf_index = _build_file_index_from_paths(pdf_paths, suffixes={".pdf"})
+        papers.extend(_build_pdf_only_entries(papers, pdf_paths, pdf_index))
 
     if cache_dir and use_cache and cache_meta is not None:
         _write_cached_papers(cache_dir, cache_meta, papers)
@@ -1227,6 +1324,90 @@ def _extract_title_from_filename(name: str) -> str:
     return base.strip()
 
 
+def _clean_pdf_metadata_title(value: str | None, path: Path) -> str | None:
+    if not value:
+        return None
+    text = str(value).replace("\x00", "").strip()
+    if not text:
+        return None
+    text = re.sub(r"(?i)^microsoft\\s+word\\s*-\\s*", "", text)
+    text = re.sub(r"(?i)^pdf\\s*-\\s*", "", text)
+    text = re.sub(r"(?i)^untitled\\b", "", text).strip()
+    if text.lower().endswith(".pdf"):
+        text = text[:-4].strip()
+    if len(text) < 3:
+        return None
+    stem = path.stem.strip()
+    if stem and text.lower() == stem.lower():
+        return None
+    return text
+
+
+def _read_pdf_metadata_title(path: Path) -> str | None:
+    if not PYPDF_AVAILABLE:
+        return None
+    try:
+        reader = PdfReader(str(path))
+        meta = reader.metadata
+        title = meta.title if meta else None
+    except Exception:
+        return None
+    return _clean_pdf_metadata_title(title, path)
+
+
+def _is_pdf_like(path: Path) -> bool:
+    suffix = path.suffix.lower()
+    if suffix == ".pdf":
+        return True
+    name_lower = path.name.lower()
+    return ".pdf-" in name_lower and not name_lower.endswith(".md")
+
+
+def _scan_pdf_roots(roots: list[Path]) -> tuple[list[Path], list[dict[str, Any]]]:
+    pdf_paths: list[Path] = []
+    meta: list[dict[str, Any]] = []
+    seen: set[Path] = set()
+    for root in roots:
+        try:
+            if not root.exists() or not root.is_dir():
+                continue
+        except OSError:
+            continue
+        files: list[Path] = []
+        for path in root.rglob("*"):
+            try:
+                if not path.is_file():
+                    continue
+            except OSError:
+                continue
+            if not _is_pdf_like(path):
+                continue
+            resolved = path.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            files.append(resolved)
+        max_mtime = 0.0
+        total_size = 0
+        for path in files:
+            try:
+                stats = path.stat()
+            except OSError:
+                continue
+            max_mtime = max(max_mtime, stats.st_mtime)
+            total_size += stats.st_size
+        pdf_paths.extend(files)
+        meta.append(
+            {
+                "path": str(root),
+                "count": len(files),
+                "max_mtime": max_mtime,
+                "size": total_size,
+            }
+        )
+    return pdf_paths, meta
+
+
 def _extract_year_author_from_filename(name: str) -> tuple[str | None, str | None]:
     base = name
     lower = base.lower()
@@ -1449,6 +1630,47 @@ def _build_file_index(roots: list[Path], *, suffixes: set[str]) -> dict[str, lis
     return index
 
 
+def _build_file_index_from_paths(paths: list[Path], *, suffixes: set[str]) -> dict[str, list[Path]]:
+    index: dict[str, list[Path]] = {}
+    for path in paths:
+        try:
+            if not path.is_file():
+                continue
+        except OSError:
+            continue
+        suffix = path.suffix.lower()
+        if suffix not in suffixes:
+            name_lower = path.name.lower()
+            if suffixes == {".pdf"} and ".pdf-" in name_lower and suffix != ".md":
+                pass
+            else:
+                continue
+        resolved = path.resolve()
+        name_key = path.name.lower()
+        index.setdefault(name_key, []).append(resolved)
+        title_candidate = _extract_title_from_filename(path.name)
+        title_key = _normalize_title_key(title_candidate)
+        if title_key:
+            if title_key != name_key:
+                index.setdefault(title_key, []).append(resolved)
+            compact_key = _compact_title_key(title_key)
+            if compact_key:
+                index.setdefault(f"compact:{compact_key}", []).append(resolved)
+            prefix_key = _title_prefix_key(title_key)
+            if prefix_key:
+                index.setdefault(prefix_key, []).append(resolved)
+            stripped_key = _strip_leading_numeric_tokens(title_key)
+            if stripped_key and stripped_key != title_key:
+                index.setdefault(stripped_key, []).append(resolved)
+                stripped_compact = _compact_title_key(stripped_key)
+                if stripped_compact:
+                    index.setdefault(f"compact:{stripped_compact}", []).append(resolved)
+                stripped_prefix = _title_prefix_key(stripped_key)
+                if stripped_prefix:
+                    index.setdefault(stripped_prefix, []).append(resolved)
+    return index
+
+
 def _resolve_source_md(paper: dict[str, Any], md_index: dict[str, list[Path]]) -> Path | None:
     source_path = paper.get("source_path")
     if not source_path:
@@ -1609,10 +1831,14 @@ def _compute_counts(index: PaperIndex, ids: set[int]) -> dict[str, Any]:
     pdf_count = 0
     source_count = 0
     summary_count = 0
+    total_count = 0
     tag_map = _template_tag_map(index)
 
     for idx in ids:
         paper = index.papers[idx]
+        if paper.get("_is_pdf_only"):
+            continue
+        total_count += 1
         source_hash = str(paper.get("source_hash") or stable_hash(str(paper.get("source_path") or idx)))
         has_source = source_hash in index.md_path_by_hash
         has_pdf = source_hash in index.pdf_path_by_hash
@@ -1629,7 +1855,7 @@ def _compute_counts(index: PaperIndex, ids: set[int]) -> dict[str, Any]:
                 template_counts[display] = template_counts.get(display, 0) + 1
 
     return {
-        "total": len(ids),
+        "total": total_count,
         "pdf": pdf_count,
         "source": source_count,
         "summary": summary_count,
@@ -1745,6 +1971,7 @@ def _page_shell(
       .muted {{ color: #57606a; font-size: 13px; }}
       .pill {{ display: inline-block; padding: 2px 8px; border-radius: 999px; border: 1px solid #d0d7de; margin-right: 6px; font-size: 12px; }}
       .pill.template {{ border-color: #8a92a5; color: #243b53; background: #f6f8fa; }}
+      .pill.pdf-only {{ border-color: #c8a951; background: #fff8dc; color: #5b4a00; }}
       .warning {{ background: #fff4ce; border: 1px solid #ffd089; padding: 10px; border-radius: 10px; margin: 12px 0; }}
       .tabs {{ display: flex; gap: 8px; flex-wrap: wrap; }}
       .tab {{ display: inline-block; padding: 6px 12px; border-radius: 999px; border: 1px solid #d0d7de; background: #f6f8fa; color: #0969da; text-decoration: none; font-size: 13px; }}
@@ -1962,18 +2189,28 @@ function escapeHtml(text) {
 }
 
 function viewSuffixForItem(item) {
-  const view = document.getElementById("openView").value;
+  let view = document.getElementById("openView").value;
+  const isPdfOnly = item.is_pdf_only;
+  const pdfFallback = item.has_pdf ? "pdfjs" : "pdf";
+  if (isPdfOnly && (view === "summary" || view === "source")) {
+    view = pdfFallback;
+  }
   if (!view || view === "summary") return "";
   const params = new URLSearchParams();
   params.set("view", view);
   if (view === "split") {
-    params.set("left", "summary");
-    if (item.has_pdf) {
-      params.set("right", "pdfjs");
-    } else if (item.has_source) {
-      params.set("right", "source");
+    if (isPdfOnly) {
+      params.set("left", pdfFallback);
+      params.set("right", pdfFallback);
     } else {
-      params.set("right", "summary");
+      params.set("left", "summary");
+      if (item.has_pdf) {
+        params.set("right", "pdfjs");
+      } else if (item.has_source) {
+        params.set("right", "source");
+      } else {
+        params.set("right", "summary");
+      }
     }
   }
   return `?${params.toString()}`;
@@ -1988,6 +2225,7 @@ function renderItem(item) {
   const badges = [
     item.has_source ? `<span class="pill">source</span>` : "",
     item.has_pdf ? `<span class="pill">pdf</span>` : "",
+    item.is_pdf_only ? `<span class="pill pdf-only">pdf-only</span>` : "",
   ].join("");
   return `
     <div class="card">
@@ -2204,6 +2442,7 @@ async def _api_papers(request: Request) -> JSONResponse:
                 "has_source": source_hash in index.md_path_by_hash,
                 "has_pdf": source_hash in index.pdf_path_by_hash,
                 "has_summary": bool(paper.get("_has_summary")),
+                "is_pdf_only": bool(paper.get("_is_pdf_only")),
             }
         )
 
@@ -2227,28 +2466,40 @@ async def _paper_detail(request: Request) -> HTMLResponse:
     if idx is None:
         return RedirectResponse("/")
     paper = index.papers[idx]
+    is_pdf_only = bool(paper.get("_is_pdf_only"))
     page_title = str(paper.get("paper_title") or "Paper")
-    view = request.query_params.get("view", "summary")
+    view = request.query_params.get("view")
     template_param = request.query_params.get("template")
     embed = request.query_params.get("embed") == "1"
-    if view == "split":
-        embed = False
 
     pdf_path = index.pdf_path_by_hash.get(source_hash)
     pdf_url = f"/api/pdf/{source_hash}"
     source_available = source_hash in index.md_path_by_hash
-    allowed_views = {"summary", "source", "pdf", "pdfjs"}
+    allowed_views = {"summary", "source", "pdf", "pdfjs", "split"}
+    if is_pdf_only:
+        allowed_views = {"pdf", "pdfjs", "split"}
 
     def normalize_view(value: str | None, default: str) -> str:
         if value in allowed_views:
             return value
         return default
 
-    default_right = "pdfjs" if pdf_path else ("source" if source_available else "summary")
-    left_param = request.query_params.get("left")
-    right_param = request.query_params.get("right")
-    left = normalize_view(left_param, "summary") if left_param else "summary"
-    right = normalize_view(right_param, default_right) if right_param else default_right
+    preferred_pdf_view = "pdfjs" if pdf_path else "pdf"
+    default_view = preferred_pdf_view if is_pdf_only else "summary"
+    view = normalize_view(view, default_view)
+    if view == "split":
+        embed = False
+    if is_pdf_only:
+        left_param = request.query_params.get("left")
+        right_param = request.query_params.get("right")
+        left = normalize_view(left_param, preferred_pdf_view) if left_param else preferred_pdf_view
+        right = normalize_view(right_param, preferred_pdf_view) if right_param else preferred_pdf_view
+    else:
+        default_right = "pdfjs" if pdf_path else ("source" if source_available else "summary")
+        left_param = request.query_params.get("left")
+        right_param = request.query_params.get("right")
+        left = normalize_view(left_param, "summary") if left_param else "summary"
+        right = normalize_view(right_param, default_right) if right_param else default_right
 
     def render_page(title: str, body: str, extra_head: str = "", extra_scripts: str = "") -> HTMLResponse:
         if embed:
@@ -2266,15 +2517,20 @@ async def _paper_detail(request: Request) -> HTMLResponse:
         href = f"/paper/{source_hash}?{urlencode(params)}"
         return f'<a class="tab{active}" href="{html.escape(href)}">{html.escape(label)}</a>'
 
-    tabs_html = f"""
-<div class="tabs">
-  {nav_link("Summary", "summary")}
-  {nav_link("Source", "source")}
-  {nav_link("PDF", "pdf")}
-  {nav_link("PDF Viewer", "pdfjs")}
-  {nav_link("Split", "split")}
-</div>
-"""
+    tab_defs = [
+        ("Summary", "summary"),
+        ("Source", "source"),
+        ("PDF", "pdf"),
+        ("PDF Viewer", "pdfjs"),
+        ("Split", "split"),
+    ]
+    if is_pdf_only:
+        tab_defs = [
+            ("PDF", "pdf"),
+            ("PDF Viewer", "pdfjs"),
+            ("Split", "split"),
+        ]
+    tabs_html = '<div class="tabs">' + "".join(nav_link(label, v) for label, v in tab_defs) + "</div>"
     fullscreen_controls = """
 <div class="fullscreen-actions">
   <button id="fullscreenEnter" class="fullscreen-enter" type="button" title="Enter fullscreen">Fullscreen</button>
@@ -2331,6 +2587,11 @@ document.addEventListener('keydown', (event) => {
 });
 </script>
 """
+    pdf_only_warning_html = ""
+    if is_pdf_only:
+        pdf_only_warning_html = (
+            '<div class="warning">PDF-only entry: summary and source views are unavailable.</div>'
+        )
 
     if view == "split":
         def pane_src(pane_view: str) -> str:
@@ -2349,6 +2610,11 @@ document.addEventListener('keydown', (event) => {
             ("pdf", "PDF"),
             ("pdfjs", "PDF Viewer"),
         ]
+        if is_pdf_only:
+            options = [
+                ("pdf", "PDF"),
+                ("pdfjs", "PDF Viewer"),
+            ]
         left_options = "\n".join(
             f'<option value="{value}"{" selected" if value == left else ""}>{label}</option>'
             for value, label in options
@@ -2376,6 +2642,7 @@ document.addEventListener('keydown', (event) => {
 """
         toolbar_html = detail_toolbar(split_controls)
         split_layout = f"""
+{pdf_only_warning_html}
 <div class="split-layout">
   <div class="split-pane">
     <iframe id="leftPane" src="{html.escape(left_src)}" title="Left pane"></iframe>
@@ -2549,6 +2816,7 @@ if (window.renderMathInElement) {{
             return render_page("PDF", body, extra_scripts=fullscreen_script)
         body = wrap_detail(
             f"""
+{pdf_only_warning_html}
 <div class="muted">{html.escape(str(pdf_path.name))}</div>
 <div style="display:flex; gap:8px; align-items:center; margin: 10px 0;">
   <button id="prev" style="padding:6px 10px; border-radius:8px; border:1px solid #d0d7de; background:#f6f8fa; cursor:pointer;">Prev</button>
@@ -2659,6 +2927,7 @@ window.addEventListener('resize', () => {{
         frame_height = "calc(100vh - 32px)" if embed else "100%"
         body = wrap_detail(
             f"""
+{pdf_only_warning_html}
 <div class="muted">{html.escape(str(pdf_path.name))}</div>
 <iframe class="pdfjs-frame" src="{html.escape(viewer_url)}" title="PDF.js Viewer"></iframe>
 """
@@ -2927,6 +3196,7 @@ async def _stats_page(request: Request) -> HTMLResponse:
 <div id="year" style="width:100%;height:360px"></div>
 <div id="month" style="width:100%;height:360px"></div>
 <div id="tags" style="width:100%;height:420px"></div>
+<div id="keywords" style="width:100%;height:420px"></div>
 <div id="authors" style="width:100%;height:420px"></div>
 <div id="venues" style="width:100%;height:420px"></div>
 """
@@ -2953,6 +3223,7 @@ async function main() {{
   bar('year', 'Publication Year', data.years || []);
   bar('month', 'Publication Month', data.months || []);
   bar('tags', 'Top Tags', (data.tags || []).slice(0, 20));
+  bar('keywords', 'Top Keywords', (data.keywords || []).slice(0, 20));
   bar('authors', 'Top Authors', (data.authors || []).slice(0, 20));
   bar('venues', 'Top Venues', (data.venues || []).slice(0, 20));
 }}
@@ -3040,7 +3311,7 @@ def create_app(
     cache_dir: Path | None = None,
     use_cache: bool = True,
 ) -> Starlette:
-    papers = _load_or_merge_papers(db_paths, bibtex_path, cache_dir, use_cache)
+    papers = _load_or_merge_papers(db_paths, bibtex_path, cache_dir, use_cache, pdf_roots=pdf_roots)
 
     md_roots = md_roots or []
     pdf_roots = pdf_roots or []
