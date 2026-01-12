@@ -26,7 +26,11 @@ from deepresearch_flow.recognize.markdown import (
     sanitize_filename,
     unpack_markdown_images,
 )
-from deepresearch_flow.recognize.organize import discover_mineru_dirs, organize_mineru_dir
+from deepresearch_flow.recognize.organize import (
+    discover_mineru_dirs,
+    fix_markdown_text,
+    organize_mineru_dir,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -180,6 +184,8 @@ async def _run_organize(
     output_base64: Path | None,
     output_map: dict[Path, str],
     workers: int,
+    fix_level: str | None,
+    format_enabled: bool,
     progress: tqdm | None,
 ) -> None:
     image_registry = None
@@ -196,9 +202,28 @@ async def _run_organize(
             output_base64,
             output_filename,
             image_registry,
+            fix_level,
+            format_enabled,
         )
 
     await _run_with_workers(layout_dirs, workers, handler, progress=progress)
+
+
+async def _run_fix(
+    paths: list[Path],
+    output_map: dict[Path, Path],
+    fix_level: str,
+    format_enabled: bool,
+    workers: int,
+    progress: tqdm | None,
+) -> None:
+    async def handler(path: Path) -> None:
+        content = await asyncio.to_thread(read_text, path)
+        updated = await fix_markdown_text(content, fix_level, format_enabled)
+        output_path = output_map[path]
+        await asyncio.to_thread(output_path.write_text, updated, encoding="utf-8")
+
+    await _run_with_workers(paths, workers, handler, progress=progress)
 
 
 @click.group()
@@ -364,7 +389,7 @@ def unpack(
     )
 
 
-@recognize.command()
+@recognize.group(invoke_without_command=True)
 @click.option(
     "--layout",
     "layout",
@@ -378,28 +403,47 @@ def unpack(
     "--input",
     "inputs",
     multiple=True,
-    required=True,
+    required=False,
     help="Input directory (repeatable)",
 )
 @click.option("-r", "--recursive", is_flag=True, help="Recursively search for layout folders")
 @click.option("--output-simple", "output_simple", default=None, help="Output directory for copied markdown")
 @click.option("--output-base64", "output_base64", default=None, help="Output directory for embedded markdown")
+@click.option("--fix", "enable_fix", is_flag=True, help="Apply OCR fix and rumdl formatting")
+@click.option(
+    "--fix-level",
+    "fix_level",
+    default="moderate",
+    type=click.Choice(["off", "moderate", "aggressive"]),
+    show_default=True,
+    help="OCR fix level",
+)
+@click.option("--no-format", "no_format", is_flag=True, help="Disable rumdl formatting")
 @click.option("--workers", type=int, default=4, show_default=True, help="Concurrent workers")
 @click.option("--dry-run", is_flag=True, help="Report actions without writing files")
 @click.option("-v", "--verbose", is_flag=True, help="Enable verbose logging")
+@click.pass_context
 def organize(
+    ctx: click.Context,
     layout: str,
     inputs: tuple[str, ...],
     recursive: bool,
     output_simple: str | None,
     output_base64: str | None,
+    enable_fix: bool,
+    fix_level: str,
+    no_format: bool,
     workers: int,
     dry_run: bool,
     verbose: bool,
 ) -> None:
     """Organize OCR outputs into markdown files."""
+    if ctx.invoked_subcommand:
+        return
     configure_logging(verbose)
     start_time = time.monotonic()
+    if not inputs:
+        raise click.ClickException("--input is required")
     if workers <= 0:
         raise click.ClickException("--workers must be positive")
     if output_simple is None and output_base64 is None:
@@ -424,6 +468,8 @@ def organize(
 
     output_map = _map_output_files(layout_dirs, output_dirs)
     image_counts = _aggregate_image_counts([path / "full.md" for path in layout_dirs])
+    fix_value = fix_level if enable_fix else None
+    format_enabled = enable_fix and not no_format
     if dry_run:
         rows = [
             ("Layout", layout),
@@ -433,6 +479,9 @@ def organize(
             ("Images data", str(image_counts["data"])),
             ("Images http", str(image_counts["http"])),
             ("Images local", str(image_counts["local"])),
+            ("Fix", "yes" if enable_fix else "no"),
+            ("Fix level", fix_level if enable_fix else "-"),
+            ("Format", "no" if no_format else ("yes" if enable_fix else "-")),
             ("Output simple", _relative_path(output_simple_path) if output_simple_path else "-"),
             ("Output base64", _relative_path(output_base64_path) if output_base64_path else "-"),
             ("Duration", _format_duration(time.monotonic() - start_time)),
@@ -449,6 +498,8 @@ def organize(
                 output_base64_path,
                 output_map,
                 workers,
+                fix_value,
+                format_enabled,
                 progress,
             )
         )
@@ -462,8 +513,111 @@ def organize(
         ("Images data", str(image_counts["data"])),
         ("Images http", str(image_counts["http"])),
         ("Images local", str(image_counts["local"])),
+        ("Fix", "yes" if enable_fix else "no"),
+        ("Fix level", fix_level if enable_fix else "-"),
+        ("Format", "no" if no_format else ("yes" if enable_fix else "-")),
         ("Output simple", _relative_path(output_simple_path) if output_simple_path else "-"),
         ("Output base64", _relative_path(output_base64_path) if output_base64_path else "-"),
         ("Duration", _format_duration(time.monotonic() - start_time)),
     ]
     _print_summary("recognize organize", rows)
+
+
+@recognize.command("fix")
+@click.option(
+    "-i",
+    "--input",
+    "inputs",
+    multiple=True,
+    required=True,
+    help="Input markdown file or directory (repeatable)",
+)
+@click.option("-o", "--output", "output_dir", default=None, help="Output directory")
+@click.option("--in-place", "in_place", is_flag=True, help="Fix markdown files in place")
+@click.option("-r", "--recursive", is_flag=True, help="Recursively discover markdown files")
+@click.option(
+    "--fix-level",
+    "fix_level",
+    default="moderate",
+    type=click.Choice(["off", "moderate", "aggressive"]),
+    show_default=True,
+    help="OCR fix level",
+)
+@click.option("--no-format", "no_format", is_flag=True, help="Disable rumdl formatting")
+@click.option("--workers", type=int, default=4, show_default=True, help="Concurrent workers")
+@click.option("--dry-run", is_flag=True, help="Report actions without writing files")
+@click.option("-v", "--verbose", is_flag=True, help="Enable verbose logging")
+def recognize_fix(
+    inputs: tuple[str, ...],
+    output_dir: str | None,
+    in_place: bool,
+    recursive: bool,
+    fix_level: str,
+    no_format: bool,
+    workers: int,
+    dry_run: bool,
+    verbose: bool,
+) -> None:
+    """Fix and format OCR markdown outputs."""
+    configure_logging(verbose)
+    start_time = time.monotonic()
+    if workers <= 0:
+        raise click.ClickException("--workers must be positive")
+    if in_place and output_dir:
+        raise click.ClickException("--in-place cannot be used with --output")
+    if not in_place and not output_dir:
+        raise click.ClickException("Either --in-place or --output is required")
+
+    output_path = Path(output_dir) if output_dir else None
+    if output_path and not dry_run:
+        output_path = _ensure_output_dir(output_dir)
+        _warn_if_not_empty(output_path)
+
+    paths = discover_markdown(inputs, None, recursive=recursive)
+    if not paths:
+        click.echo("No markdown files discovered")
+        return
+
+    format_enabled = not no_format
+    if in_place:
+        output_map = {path: path for path in paths}
+    else:
+        output_map = {path: (output_path / name) for path, name in _map_output_files(paths, [output_path]).items()}
+
+    if dry_run:
+        rows = [
+            ("Inputs", str(len(paths))),
+            ("Outputs", str(len(output_map))),
+            ("Fix level", fix_level),
+            ("Format", "no" if no_format else "yes"),
+            ("In place", "yes" if in_place else "no"),
+            ("Output dir", _relative_path(output_path) if output_path else "-"),
+            ("Duration", _format_duration(time.monotonic() - start_time)),
+        ]
+        _print_summary("recognize fix (dry-run)", rows)
+        return
+
+    progress = tqdm(total=len(paths), desc="fix", unit="file")
+    try:
+        asyncio.run(
+            _run_fix(
+                paths,
+                output_map,
+                fix_level,
+                format_enabled,
+                workers,
+                progress,
+            )
+        )
+    finally:
+        progress.close()
+    rows = [
+        ("Inputs", str(len(paths))),
+        ("Outputs", str(len(output_map))),
+        ("Fix level", fix_level),
+        ("Format", "no" if no_format else "yes"),
+        ("In place", "yes" if in_place else "no"),
+        ("Output dir", _relative_path(output_path) if output_path else "-"),
+        ("Duration", _format_duration(time.monotonic() - start_time)),
+    ]
+    _print_summary("recognize fix", rows)

@@ -157,9 +157,28 @@ Tools to clean up raw outputs from OCR engines like MinerU.
 - Embed Images: convert local image links to Base64 for a portable single-file Markdown.
 - Unpack Images: extract Base64 images back to files.
 - Organize: flatten nested OCR output directories.
+- Fix: apply OCR fixes and rumdl formatting during organize, or as a standalone step.
 
 ```bash
 uv run deepresearch-flow recognize md embed --input ./raw_ocr --output ./clean_md
+```
+
+```bash
+# Organize MinerU output and apply OCR fixes
+uv run deepresearch-flow recognize organize \\
+  --input ./mineru_outputs \\
+  --output-simple ./ocr_md \\
+  --fix
+
+# Fix and format existing markdown outputs
+uv run deepresearch-flow recognize fix \\
+  --input ./ocr_md \\
+  --output ./ocr_md_fixed
+
+# Fix in place
+uv run deepresearch-flow recognize fix \\
+  --input ./ocr_md \\
+  --in-place
 ```
 
 </details>

@@ -5,8 +5,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import shutil
+import subprocess
 from pathlib import Path
 from typing import Iterable
+
+from deepresearch_flow.translator.fixers import fix_markdown
 
 from deepresearch_flow.recognize.markdown import (
     NameRegistry,
@@ -20,6 +23,53 @@ from deepresearch_flow.recognize.markdown import (
 
 
 logger = logging.getLogger(__name__)
+_RUMDL_PATH = shutil.which("rumdl")
+_RUMDL_WARNED = False
+
+
+async def _format_markdown(text: str) -> str:
+    global _RUMDL_WARNED
+    if not _RUMDL_PATH:
+        if not _RUMDL_WARNED:
+            logger.warning("rumdl not available; skip markdown formatting")
+            _RUMDL_WARNED = True
+        return text
+
+    def run_formatter() -> str:
+        try:
+            proc = subprocess.run(
+                [_RUMDL_PATH, "fmt", "--stdin", "--quiet"],
+                input=text,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError as exc:
+            logger.warning("rumdl fmt failed: %s", exc)
+            return text
+        if proc.returncode != 0:
+            logger.warning("rumdl fmt failed (%s): %s", proc.returncode, proc.stderr.strip())
+            return text
+        return proc.stdout or text
+
+    return await asyncio.to_thread(run_formatter)
+
+
+def _apply_fix(text: str, fix_level: str) -> str:
+    if fix_level == "off":
+        return text
+    return fix_markdown(text, fix_level)
+
+
+async def fix_markdown_text(
+    text: str,
+    fix_level: str,
+    format_enabled: bool,
+) -> str:
+    text = _apply_fix(text, fix_level)
+    if format_enabled:
+        text = await _format_markdown(text)
+    return text
 
 
 def discover_mineru_dirs(inputs: Iterable[str], recursive: bool) -> list[Path]:
@@ -61,9 +111,13 @@ async def organize_mineru_dir(
     output_base64: Path | None,
     output_filename: str,
     image_registry: NameRegistry | None,
+    fix_level: str | None,
+    format_enabled: bool,
 ) -> None:
     md_path = layout_dir / "full.md"
     content = await asyncio.to_thread(read_text, md_path)
+    if fix_level is not None:
+        content = _apply_fix(content, fix_level)
 
     if output_simple is not None and image_registry is not None:
         images_dir = output_simple / "images"
@@ -86,10 +140,14 @@ async def organize_mineru_dir(
             return f"images/{filename}"
 
         updated = await rewrite_markdown_images(content, replace_simple)
+        if format_enabled:
+            updated = await _format_markdown(updated)
         output_path = output_simple / output_filename
         await asyncio.to_thread(output_path.write_text, updated, encoding="utf-8")
 
     if output_base64 is not None:
         updated = await embed_markdown_images(content, md_path, False, None)
+        if format_enabled:
+            updated = await _format_markdown(updated)
         output_path = output_base64 / output_filename
         await asyncio.to_thread(output_path.write_text, updated, encoding="utf-8")
