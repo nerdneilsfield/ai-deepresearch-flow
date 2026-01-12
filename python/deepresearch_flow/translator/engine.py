@@ -574,6 +574,11 @@ class MarkdownTranslator:
         fallback_provider: ProviderConfig | None = None,
         fallback_model: str | None = None,
         fallback_max_tokens: int | None = None,
+        fallback_provider_2: ProviderConfig | None = None,
+        fallback_model_2: str | None = None,
+        fallback_max_tokens_2: int | None = None,
+        fallback_retry_times: int | None = None,
+        fallback_retry_times_2: int | None = None,
         format_enabled: bool = True,
     ) -> TranslationResult:
         if fix_level != "off":
@@ -748,7 +753,8 @@ class MarkdownTranslator:
         ):
             fallback_rotator = KeyRotator(resolve_api_keys(fallback_provider.api_keys))
             attempt = 1
-            while failed_nodes and attempt <= retry_limit:
+            fallback_retry_limit = fallback_retry_times or retry_limit
+            while failed_nodes and attempt <= fallback_retry_limit:
                 retry_ids = sorted(failed_nodes.keys())
                 retry_groups = self._group_nodes(
                     failed_nodes,
@@ -767,7 +773,7 @@ class MarkdownTranslator:
                     len(failed_nodes),
                     len(retry_groups),
                     attempt,
-                    retry_limit,
+                    fallback_retry_limit,
                 )
                 if progress:
                     await progress.add_groups(len(retry_groups))
@@ -785,7 +791,7 @@ class MarkdownTranslator:
                             semaphore,
                             throttle,
                             fallback_max_tokens,
-                            retry_limit,
+                            fallback_retry_limit,
                         )
                     )
                     if progress:
@@ -817,6 +823,91 @@ class MarkdownTranslator:
                     skip_count,
                 )
                 self._log_failed_sample(failed_nodes, f"fallback-{attempt}")
+                if progress:
+                    await progress.set_group_status(
+                        f"nodes {total_nodes} ok {success_count} "
+                        f"fail {len(failed_nodes)} skip {skip_count}"
+                    )
+                attempt += 1
+
+        if (
+            self.cfg.retry_failed_nodes
+            and failed_nodes
+            and fallback_provider_2
+            and fallback_model_2
+        ):
+            fallback_rotator = KeyRotator(resolve_api_keys(fallback_provider_2.api_keys))
+            attempt = 1
+            fallback_retry_limit = fallback_retry_times_2 or retry_limit
+            while failed_nodes and attempt <= fallback_retry_limit:
+                retry_ids = sorted(failed_nodes.keys())
+                retry_groups = self._group_nodes(
+                    failed_nodes,
+                    only_ids=retry_ids,
+                    max_chunk_chars=retry_group_limit,
+                    include_translated=True,
+                )
+                if not retry_groups:
+                    break
+                retry_rounds += 1
+                retry_groups_total += len(retry_groups)
+                logger.info(
+                    "Fallback2 %s/%s: retrying %d failed nodes in %d groups (round %d/%d)",
+                    fallback_provider_2.name,
+                    fallback_model_2,
+                    len(failed_nodes),
+                    len(retry_groups),
+                    attempt,
+                    fallback_retry_limit,
+                )
+                if progress:
+                    await progress.add_groups(len(retry_groups))
+                retry_outputs: list[str] = []
+                for group in retry_groups:
+                    api_key = await fallback_rotator.next_key()
+                    retry_outputs.append(
+                        await self._translate_group(
+                            group,
+                            fallback_provider_2,
+                            fallback_model_2,
+                            client,
+                            api_key,
+                            timeout,
+                            semaphore,
+                            throttle,
+                            fallback_max_tokens_2,
+                            fallback_retry_limit,
+                        )
+                    )
+                    if progress:
+                        await progress.advance_groups(1)
+                retry_nodes = self._ungroup_groups(
+                    retry_outputs, failed_nodes, fill_missing=False
+                )
+                if valid_placeholders:
+                    for node in retry_nodes.values():
+                        if node.translated_text:
+                            node.translated_text = self._fix_placeholder_typos(
+                                node.translated_text, valid_placeholders
+                            )
+                for node in retry_nodes.values():
+                    if node.translated_text:
+                        node.translated_text = self._align_placeholders(
+                            node.origin_text, node.translated_text
+                        )
+                for nid, node in retry_nodes.items():
+                    translated_nodes[nid] = node
+                failed_nodes = self._collect_failed_nodes(translated_nodes)
+                success_count = max(total_nodes - len(failed_nodes), 0)
+                logger.info(
+                    "Fallback2 round %d done: nodes=%d ok=%d fail=%d skip=%d",
+                    attempt,
+                    total_nodes,
+                    success_count,
+                    len(failed_nodes),
+                    skip_count,
+                )
+                self._log_failed_sample(failed_nodes, f"fallback2-{attempt}")
                 if progress:
                     await progress.set_group_status(
                         f"nodes {total_nodes} ok {success_count} "

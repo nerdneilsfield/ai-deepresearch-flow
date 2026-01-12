@@ -255,6 +255,9 @@ Key options:
 - `--glob`: filter when scanning directories.
 - `--model`: `provider/model` routing (same providers as `paper extract`).
 - `--fallback-model`: optional fallback `provider/model` for failed nodes after retries.
+- `--fallback-model-2`: optional second fallback `provider/model` for remaining failures.
+- `--fallback-retry-times`: retry rounds for fallback model (defaults to `--retry-times`).
+- `--fallback-retry-times-2`: retry rounds for second fallback (defaults to `--retry-times`).
 - `--target-lang`: target language hint (default `zh`).
 - `--fix-level`: OCR repair (`off`, `moderate`, `aggressive`).
 - `--max-chunk-chars`: max chars per translation chunk.
@@ -287,6 +290,22 @@ deepresearch-flow translator translate \
   --input ./ocr_md \
   --model openai/gpt-4o-mini \
   --fallback-model zhipu/glm-4.7
+
+# Retry again with a second fallback model
+deepresearch-flow translator translate \
+  --input ./ocr_md \
+  --model openai/gpt-4o-mini \
+  --fallback-model zhipu/glm-4.7 \
+  --fallback-model-2 ollama/huihui_ai-hy-mt1.5-abliterated
+
+# Customize fallback retry rounds
+deepresearch-flow translator translate \
+  --input ./ocr_md \
+  --model openai/gpt-4o-mini \
+  --fallback-model zhipu/glm-4.7 \
+  --fallback-retry-times 2 \
+  --fallback-model-2 ollama/huihui_ai-hy-mt1.5-abliterated \
+  --fallback-retry-times-2 1
 
 # Write outputs into a separate directory and dump placeholders
 deepresearch-flow translator translate \

@@ -128,6 +128,26 @@ def translator() -> None:
 @click.option("--timeout", "timeout", default=120.0, show_default=True, type=float)
 @click.option("--retry-times", "retry_times", default=3, show_default=True, type=int)
 @click.option("--fallback-model", "fallback_model_ref", default=None, help="Fallback provider/model")
+@click.option(
+    "--fallback-model-2",
+    "fallback_model_ref_2",
+    default=None,
+    help="Second fallback provider/model",
+)
+@click.option(
+    "--fallback-retry-times",
+    "fallback_retry_times",
+    default=None,
+    type=int,
+    help="Retry rounds for fallback model",
+)
+@click.option(
+    "--fallback-retry-times-2",
+    "fallback_retry_times_2",
+    default=None,
+    type=int,
+    help="Retry rounds for second fallback model",
+)
 @click.option("--sleep-every", "sleep_every", default=None, type=int, help="Sleep after every N requests")
 @click.option("--sleep-time", "sleep_time", default=None, type=float, help="Sleep duration in seconds")
 @click.option("--debug-dir", "debug_dir", default=None, help="Directory for debug outputs")
@@ -152,6 +172,9 @@ def translate(
     timeout: float,
     retry_times: int,
     fallback_model_ref: str | None,
+    fallback_model_ref_2: str | None,
+    fallback_retry_times: int | None,
+    fallback_retry_times_2: int | None,
     sleep_every: int | None,
     sleep_time: float | None,
     debug_dir: str | None,
@@ -193,6 +216,23 @@ def translate(
                 raise click.ClickException(
                     f"{fallback_provider.type} fallback providers require api_keys"
                 )
+    fallback_provider_2: ProviderConfig | None = None
+    fallback_model_name_2: str | None = None
+    if fallback_model_ref_2:
+        fallback_provider_2, fallback_model_name_2 = parse_model_ref(
+            fallback_model_ref_2, config.providers
+        )
+        if fallback_provider_2.type in {
+            "openai_compatible",
+            "dashscope",
+            "gemini_ai_studio",
+            "azure_openai",
+            "claude",
+        }:
+            if not resolve_api_keys(fallback_provider_2.api_keys):
+                raise click.ClickException(
+                    f"{fallback_provider_2.type} fallback providers require api_keys"
+                )
 
     if max_chunk_chars <= 0:
         raise click.ClickException("--max-chunk-chars must be positive")
@@ -202,6 +242,10 @@ def translate(
         raise click.ClickException("--timeout must be positive")
     if retry_times <= 0:
         raise click.ClickException("--retry-times must be positive")
+    if fallback_retry_times is not None and fallback_retry_times <= 0:
+        raise click.ClickException("--fallback-retry-times must be positive")
+    if fallback_retry_times_2 is not None and fallback_retry_times_2 <= 0:
+        raise click.ClickException("--fallback-retry-times-2 must be positive")
     if (sleep_every is None) != (sleep_time is None):
         raise click.ClickException("Both --sleep-every and --sleep-time are required")
 
@@ -292,6 +336,11 @@ def translate(
     fallback_max_tokens = (
         fallback_provider.max_tokens if fallback_provider and fallback_provider.type == "claude" else None
     )
+    fallback_max_tokens_2 = (
+        fallback_provider_2.max_tokens
+        if fallback_provider_2 and fallback_provider_2.type == "claude"
+        else None
+    )
 
     async def process_one(
         path: Path,
@@ -314,6 +363,11 @@ def translate(
             fallback_provider=fallback_provider,
             fallback_model=fallback_model_name,
             fallback_max_tokens=fallback_max_tokens,
+            fallback_provider_2=fallback_provider_2,
+            fallback_model_2=fallback_model_name_2,
+            fallback_max_tokens_2=fallback_max_tokens_2,
+            fallback_retry_times=fallback_retry_times,
+            fallback_retry_times_2=fallback_retry_times_2,
             format_enabled=not no_format,
         )
         output_path = output_map[path]
