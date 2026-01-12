@@ -12,7 +12,10 @@ import re
 from urllib.parse import urlencode, quote
 
 from markdown_it import MarkdownIt
-from mdit_py_plugins.footnote import footnote
+try:
+    from mdit_py_plugins.footnote import footnote_plugin as footnote
+except ImportError:  # pragma: no cover - compatibility with older names
+    from mdit_py_plugins.footnote import footnote
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
