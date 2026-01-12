@@ -383,9 +383,25 @@ def register_db_commands(db_group: click.Group) -> None:
         month_counts: dict[str, int] = {}
         author_counts: dict[str, int] = {}
         tag_counts: dict[str, int] = {}
+        keyword_counts: dict[str, int] = {}
         journal_counts: dict[str, int] = {}
         conference_counts: dict[str, int] = {}
         other_venue_counts: dict[str, int] = {}
+        def normalize_keywords(value: Any) -> list[str]:
+            if value is None:
+                return []
+            if isinstance(value, list):
+                items = value
+            elif isinstance(value, str):
+                items = re.split(r"[;,]", value)
+            else:
+                items = [value]
+            normalized: list[str] = []
+            for item in items:
+                token = str(item).strip().lower()
+                if token:
+                    normalized.append(token)
+            return normalized
         for paper in papers:
             bibtex_fields = {}
             bibtex_type = None
@@ -411,6 +427,8 @@ def register_db_commands(db_group: click.Group) -> None:
                 author_counts[author] = author_counts.get(author, 0) + 1
             for tag in paper.get("ai_generated_tags") or []:
                 tag_counts[tag] = tag_counts.get(tag, 0) + 1
+            for keyword in normalize_keywords(paper.get("keywords")):
+                keyword_counts[keyword] = keyword_counts.get(keyword, 0) + 1
 
             venue = None
             if bibtex_type in {"article"}:
@@ -545,6 +563,16 @@ def register_db_commands(db_group: click.Group) -> None:
                 percentage = (count / total * 100) if total else 0
                 tag_table.add_row(tag, str(count), f"{percentage:.1f}%")
             console.print(tag_table)
+
+        if keyword_counts:
+            keyword_table = Table(title=f"Top {top_n} Keywords")
+            keyword_table.add_column("Keyword", style="cyan")
+            keyword_table.add_column("Count", style="green", justify="right")
+            keyword_table.add_column("Percentage", style="yellow", justify="right")
+            for keyword, count in sorted(keyword_counts.items(), key=lambda item: item[1], reverse=True)[:top_n]:
+                percentage = (count / total * 100) if total else 0
+                keyword_table.add_row(keyword, str(count), f"{percentage:.1f}%")
+            console.print(keyword_table)
 
     @db_group.command("serve")
     @click.option("-i", "--input", "input_paths", multiple=True, required=True, help="Input JSON file path")

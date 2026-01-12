@@ -198,6 +198,7 @@ deepresearch-flow paper db filter \
 deepresearch-flow paper db statistics \
   --input paper_infos.json \
   --top-n 20
+# Statistics also include keyword frequency (normalized to lowercase)
 
 # Serve a local read-only web UI (loads charts/libs via CDN)
 deepresearch-flow paper db serve \
