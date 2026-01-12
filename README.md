@@ -1,35 +1,67 @@
-# DeepResearch Flow
+<p align="center">
+  <img src=".github/assets/login.png" width="140" alt="ai-deepresearch-flow logo" />
+</p>
 
-**The All-in-One Workflow for Deep Research Automation**
+<h3 align="center">ai-deepresearch-flow</h3>
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
+<p align="center">
+  <em>From documents to deep research insight — automatically.</em>
+</p>
 
-**DeepResearch Flow** is a command-line power tool designed for researchers and engineers who need to process, understand, and organize massive collections of technical documents. It bridges the gap between raw OCR output and structured human knowledge.
+<p align="center">
+  <a href="README.md">English</a> | <a href="README_ZH.md">中文</a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/nerdneilsfield/ai-deepresearch-flow/actions">
+    <img src="https://img.shields.io/github/actions/workflow/status/nerdneilsfield/ai-deepresearch-flow/ci.yml?style=flat-square" />
+  </a>
+  <a href="https://pypi.org/project/deepresearch-flow/">
+    <img src="https://img.shields.io/pypi/v/deepresearch-flow?style=flat-square" />
+  </a>
+  <a href="https://pypi.org/project/deepresearch-flow/">
+    <img src="https://img.shields.io/pypi/pyversions/deepresearch-flow?style=flat-square" />
+  </a>
+  <a href="https://hub.docker.com/r/nerdneils/deepresearch-flow">
+    <img src="https://img.shields.io/docker/v/nerdneils/deepresearch-flow?style=flat-square" />
+  </a>
+  <a href="https://ghcr.io/nerdneilsfield/deepresearch-flow">
+    <img src="https://img.shields.io/badge/ghcr.io-nerdneilsfield%2Fdeepresearch-flow-0f172a?style=flat-square" />
+  </a>
+  <a href="https://github.com/nerdneilsfield/ai-deepresearch-flow/blob/main/LICENSE">
+    <img src="https://img.shields.io/github/license/nerdneilsfield/ai-deepresearch-flow?style=flat-square" />
+  </a>
+  <a href="https://github.com/nerdneilsfield/ai-deepresearch-flow/stargazers">
+    <img src="https://img.shields.io/github/stars/nerdneilsfield/ai-deepresearch-flow?style=flat-square" />
+  </a>
+  <a href="https://github.com/nerdneilsfield/ai-deepresearch-flow/issues">
+    <img src="https://img.shields.io/github/issues/nerdneilsfield/ai-deepresearch-flow?style=flat-square" />
+  </a>
+</p>
 
 ---
 
-## ⚡️ The Core Pain Points
+## The Core Pain Points
 
 - **OCR Chaos**: Raw markdown from OCR tools is often broken -- tables drift, formulas break, and references are non-clickable.
 - **Translation Nightmares**: Translating technical papers often destroys code blocks, LaTeX formulas, and table structures.
 - **Information Overload**: Extracting structured insights (authors, venues, summaries) from hundreds of PDFs manually is impossible.
 - **Context Switching**: Managing PDFs, summaries, and translations in different windows kills focus.
 
-## 🛡️ The Solution
+## The Solution
 
 DeepResearch Flow provides a unified pipeline to **Repair**, **Translate**, **Extract**, and **Serve** your research library.
 
 ## Key Features
 
-- **🔍 Smart Extraction**: Turn unstructured Markdown into schema-enforced JSON (summaries, metadata, Q&A) using LLMs (OpenAI, Claude, Gemini, etc.).
-- **🌐 Precision Translation**: Translate OCR Markdown to Chinese/Japanese (`.zh.md`, `.ja.md`) while **freezing** formulas, code, tables, and references. No more broken layout.
-- **📚 Local Knowledge DB**: A high-performance local Web UI to browse papers with **Split View** (Source vs. Translated vs. Summary), full-text search, and multi-dimensional filtering.
-- **🛠️ OCR Post-Processing**: Automatically fix broken references (`[1]` -> `[^1]`), merge split paragraphs, and standardize layouts.
+- **Smart Extraction**: Turn unstructured Markdown into schema-enforced JSON (summaries, metadata, Q&A) using LLMs (OpenAI, Claude, Gemini, etc.).
+- **Precision Translation**: Translate OCR Markdown to Chinese/Japanese (`.zh.md`, `.ja.md`) while **freezing** formulas, code, tables, and references. No more broken layout.
+- **Local Knowledge DB**: A high-performance local Web UI to browse papers with **Split View** (Source vs. Translated vs. Summary), full-text search, and multi-dimensional filtering.
+- **OCR Post-Processing**: Automatically fix broken references (`[1]` -> `[^1]`), merge split paragraphs, and standardize layouts.
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### 1) Installation
 
@@ -89,7 +121,7 @@ uv run deepresearch-flow paper db serve \
 
 ---
 
-## 📖 Comprehensive Guide
+## Comprehensive Guide
 
 <details>
 <summary><strong>1. Translator: OCR-Safe Translation</strong></summary>
@@ -165,19 +197,19 @@ uv run deepresearch-flow recognize md embed --input ./raw_ocr --output ./clean_m
 
 ```bash
 # Organize MinerU output and apply OCR fixes
-uv run deepresearch-flow recognize organize \\
-  --input ./mineru_outputs \\
-  --output-simple ./ocr_md \\
+uv run deepresearch-flow recognize organize \
+  --input ./mineru_outputs \
+  --output-simple ./ocr_md \
   --fix
 
 # Fix and format existing markdown outputs
-uv run deepresearch-flow recognize fix \\
-  --input ./ocr_md \\
+uv run deepresearch-flow recognize fix \
+  --input ./ocr_md \
   --output ./ocr_md_fixed
 
 # Fix in place
-uv run deepresearch-flow recognize fix \\
-  --input ./ocr_md \\
+uv run deepresearch-flow recognize fix \
+  --input ./ocr_md \
   --in-place
 ```
 
@@ -185,7 +217,7 @@ uv run deepresearch-flow recognize fix \\
 
 ---
 
-## 🐳 Docker Support
+## Docker Support
 
 Don't want to manage Python environments?
 
@@ -193,7 +225,7 @@ Don't want to manage Python environments?
 docker run --rm -v $(pwd):/app -it ghcr.io/nerdneilsfield/deepresearch-flow --help
 ```
 
-## ⚙️ Configuration
+## Configuration
 
 The config.toml is your control center. It supports:
 
