@@ -1121,6 +1121,9 @@ _TITLE_MIN_CHARS = 24
 _TITLE_MIN_TOKENS = 4
 _AUTHOR_YEAR_MIN_SIMILARITY = 0.8
 _LEADING_NUMERIC_MAX_LEN = 2
+_SIMILARITY_START = 0.95
+_SIMILARITY_STEP = 0.05
+_SIMILARITY_MAX_STEPS = 10
 
 
 def _normalize_title_key(title: str) -> str:
@@ -1282,6 +1285,34 @@ def _title_overlap_match(a: str, b: str) -> bool:
     return False
 
 
+def _adaptive_similarity_match(title_key: str, candidates: list[Path]) -> Path | None:
+    if not title_key:
+        return None
+    scored: list[tuple[Path, float]] = []
+    for path in candidates:
+        candidate_title = _normalize_title_key(_extract_title_from_filename(path.name))
+        if not candidate_title:
+            continue
+        if _title_overlap_match(title_key, candidate_title):
+            return path
+        scored.append((path, _title_similarity(title_key, candidate_title)))
+    if not scored:
+        return None
+
+    threshold = _SIMILARITY_START
+    step = _SIMILARITY_STEP
+    for _ in range(_SIMILARITY_MAX_STEPS):
+        matches = [path for path, score in scored if score >= threshold]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) == 0:
+            threshold -= step
+            continue
+        threshold += step / 2
+        step /= 2
+    return None
+
+
 def _resolve_by_title_and_meta(
     paper: dict[str, Any],
     file_index: dict[str, list[Path]],
@@ -1317,22 +1348,11 @@ def _resolve_by_title_and_meta(
             prefix_key = _title_prefix_key(stripped_key)
             if prefix_key:
                 candidates = file_index.get(prefix_key, [])
-        if not candidates:
-            return None
-    best_path = None
-    best_score = 0.0
-    for path in candidates:
-        candidate_title = _normalize_title_key(_extract_title_from_filename(path.name))
-        if not candidate_title:
-            continue
-        if _title_overlap_match(title_key, candidate_title):
-            return path
-        score = _title_similarity(title_key, candidate_title)
-        if score > best_score:
-            best_score = score
-            best_path = path
-    if best_path is not None and best_score >= 0.86:
-        return best_path
+    if not candidates:
+        return None
+    match = _adaptive_similarity_match(title_key, candidates)
+    if match is not None:
+        return match
     year = str(paper.get("_year") or "").strip()
     if not year.isdigit():
         return None
@@ -1349,18 +1369,9 @@ def _resolve_by_title_and_meta(
         return None
     if len(candidates) == 1 and not title_key:
         return candidates[0]
-    best_path = None
-    best_score = 0.0
-    for path in candidates:
-        candidate_title = _normalize_title_key(_extract_title_from_filename(path.name))
-        if title_key and _title_overlap_match(title_key, candidate_title):
-            return path
-        score = _title_similarity(title_key, candidate_title)
-        if score > best_score:
-            best_score = score
-            best_path = path
-    if best_path is not None and best_score >= _AUTHOR_YEAR_MIN_SIMILARITY:
-        return best_path
+    match = _adaptive_similarity_match(title_key, candidates)
+    if match is not None:
+        return match
     return None
 
 
