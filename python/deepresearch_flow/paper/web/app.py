@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import json
 import logging
+import unicodedata
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
@@ -1122,8 +1123,11 @@ _AUTHOR_YEAR_MIN_SIMILARITY = 0.8
 
 
 def _normalize_title_key(title: str) -> str:
-    value = title.replace("{", "").replace("}", "")
+    value = unicodedata.normalize("NFKD", title)
+    value = value.replace("{", "").replace("}", "")
     value = value.replace("_", " ")
+    value = re.sub(r"([a-z])([0-9])", r"\1 \2", value, flags=re.IGNORECASE)
+    value = re.sub(r"([0-9])([a-z])", r"\1 \2", value, flags=re.IGNORECASE)
     value = re.sub(r"[^a-z0-9]+", " ", value.lower())
     return re.sub(r"\s+", " ", value).strip()
 
