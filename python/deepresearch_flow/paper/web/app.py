@@ -2783,10 +2783,11 @@ async def _paper_detail(request: Request) -> HTMLResponse:
         left = normalize_view(left_param, preferred_pdf_view) if left_param else preferred_pdf_view
         right = normalize_view(right_param, preferred_pdf_view) if right_param else preferred_pdf_view
     else:
-        default_right = "pdfjs" if pdf_path else ("source" if source_available else "summary")
+        default_left = preferred_pdf_view if pdf_path else ("source" if source_available else "summary")
+        default_right = "summary"
         left_param = request.query_params.get("left")
         right_param = request.query_params.get("right")
-        left = normalize_view(left_param, "summary") if left_param else "summary"
+        left = normalize_view(left_param, default_left) if left_param else default_left
         right = normalize_view(right_param, default_right) if right_param else default_right
 
     def render_page(title: str, body: str, extra_head: str = "", extra_scripts: str = "") -> HTMLResponse:
