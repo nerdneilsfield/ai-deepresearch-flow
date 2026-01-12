@@ -47,15 +47,37 @@ def _split_long_text(text: str, max_chars: int) -> list[str]:
         buf += token
     if buf:
         parts.append(buf)
-
     final_parts: list[str] = []
     for part in parts:
         if len(part) <= max_chars:
             final_parts.append(part)
+            continue
+        soft_parts = _soft_split_long_sentence(part, max_chars)
+        if len(soft_parts) == 1:
+            final_parts.append(part)
         else:
-            for i in range(0, len(part), max_chars):
-                final_parts.append(part[i : i + max_chars])
+            final_parts.extend(soft_parts)
     return final_parts
+
+
+def _soft_split_long_sentence(text: str, max_chars: int) -> list[str]:
+    if max_chars <= 0 or len(text) <= max_chars:
+        return [text]
+    tokens = re.split(r"(?<=[,，、;；:：])(\s+)", text)
+    parts: list[str] = []
+    buf = ""
+    for token in tokens:
+        if token == "":
+            continue
+        if buf and len(buf) + len(token) > max_chars:
+            parts.append(buf)
+            buf = ""
+        buf += token
+    if buf:
+        parts.append(buf)
+    if len(parts) <= 1:
+        return [text]
+    return parts
 
 
 def _collect_list_block(lines: list[str], start: int) -> tuple[list[str], int]:
