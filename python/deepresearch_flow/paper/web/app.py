@@ -1211,7 +1211,10 @@ def _normalize_author_key(name: str) -> str:
 def _title_prefix_key(title_key: str) -> str | None:
     if len(title_key.split()) < _TITLE_MIN_TOKENS:
         return None
-    prefix = title_key[:_TITLE_PREFIX_LEN]
+    compact = _compact_title_key(title_key)
+    if len(compact) < _TITLE_PREFIX_LEN:
+        return None
+    prefix = compact[:_TITLE_PREFIX_LEN]
     if not prefix:
         return None
     return f"prefix:{prefix}"
