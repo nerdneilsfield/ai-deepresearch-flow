@@ -2069,6 +2069,162 @@ def _build_pdfjs_viewer_url(pdf_url: str) -> str:
     return f"{_PDFJS_VIEWER_PATH}?file={encoded}"
 
 
+def _outline_assets(outline_top: str) -> tuple[str, str, str]:
+    outline_html = """
+<button id="outlineToggle" class="outline-toggle" title="Toggle outline">☰</button>
+<div id="outlinePanel" class="outline-panel collapsed">
+  <div class="outline-title">Outline</div>
+  <div id="outlineList" class="outline-list"></div>
+</div>
+<button id="backToTop" class="back-to-top" title="Back to top">↑</button>
+"""
+    outline_css = f"""
+<style>
+:root {{
+  --outline-top: {outline_top};
+}}
+.outline-toggle {{
+  position: fixed;
+  top: var(--outline-top);
+  left: 16px;
+  z-index: 20;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid #d0d7de;
+  background: #f6f8fa;
+  cursor: pointer;
+}}
+.outline-panel {{
+  position: fixed;
+  top: calc(var(--outline-top) + 42px);
+  left: 16px;
+  width: 240px;
+  max-height: 60vh;
+  overflow: auto;
+  border: 1px solid #d0d7de;
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 10px;
+  z-index: 20;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
+}}
+.outline-panel.collapsed {{
+  display: none;
+}}
+.outline-title {{
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #57606a;
+  margin-bottom: 8px;
+}}
+.outline-list a {{
+  display: block;
+  color: #0969da;
+  text-decoration: none;
+  padding: 4px 0;
+}}
+.outline-list a:hover {{
+  text-decoration: underline;
+}}
+.back-to-top {{
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid #d0d7de;
+  background: #ffffff;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+  z-index: 20;
+}}
+.back-to-top.visible {{
+  opacity: 1;
+  pointer-events: auto;
+}}
+@media (max-width: 900px) {{
+  .outline-panel {{
+    width: 200px;
+  }}
+}}
+</style>
+"""
+    outline_js = """
+const outlineToggle = document.getElementById('outlineToggle');
+const outlinePanel = document.getElementById('outlinePanel');
+const outlineList = document.getElementById('outlineList');
+const backToTop = document.getElementById('backToTop');
+
+function slugify(text) {
+  return text.toLowerCase().trim()
+    .replace(/[^a-z0-9\\s-]/g, '')
+    .replace(/\\s+/g, '-')
+    .replace(/-+/g, '-');
+}
+
+function buildOutline() {
+  if (!outlineList) return;
+  const content = document.getElementById('content');
+  if (!content) return;
+  const headings = content.querySelectorAll('h1, h2, h3, h4');
+  if (!headings.length) {
+    outlineList.innerHTML = '<div class="muted">No headings</div>';
+    return;
+  }
+  const used = new Set();
+  outlineList.innerHTML = '';
+  headings.forEach((heading) => {
+    let id = heading.id;
+    if (!id) {
+      const base = slugify(heading.textContent || 'section') || 'section';
+      id = base;
+      let i = 1;
+      while (used.has(id) || document.getElementById(id)) {
+        id = `${base}-${i++}`;
+      }
+      heading.id = id;
+    }
+    used.add(id);
+    const level = parseInt(heading.tagName.slice(1), 10) || 1;
+    const link = document.createElement('a');
+    link.href = `#${id}`;
+    link.textContent = heading.textContent || '';
+    link.style.paddingLeft = `${(level - 1) * 12}px`;
+    outlineList.appendChild(link);
+  });
+}
+
+function toggleBackToTop() {
+  if (!backToTop) return;
+  if (window.scrollY > 300) {
+    backToTop.classList.add('visible');
+  } else {
+    backToTop.classList.remove('visible');
+  }
+}
+
+if (outlineToggle && outlinePanel) {
+  outlineToggle.addEventListener('click', () => {
+    outlinePanel.classList.toggle('collapsed');
+  });
+}
+
+if (backToTop) {
+  backToTop.addEventListener('click', () => {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+}
+
+buildOutline();
+window.addEventListener('scroll', toggleBackToTop);
+toggleBackToTop();
+"""
+    return outline_html, outline_css, outline_js
+
+
 async def _index_page(request: Request) -> HTMLResponse:
     index: PaperIndex = request.app.state.index
     template_options = "".join(
@@ -2592,6 +2748,8 @@ document.addEventListener('keydown', (event) => {
         pdf_only_warning_html = (
             '<div class="warning">PDF-only entry: summary and source views are unavailable.</div>'
         )
+    outline_top = "72px" if not embed else "16px"
+    outline_html, outline_css, outline_js = _outline_assets(outline_top)
 
     if view == "split":
         def pane_src(pane_view: str) -> str:
@@ -2772,13 +2930,23 @@ applySplitWidth();
             f"""
 <div class="muted">{html.escape(str(source_path))}</div>
 <div class="muted" style="margin-top:10px;">Rendered from source markdown:</div>
+{outline_html}
 <div id="content">{rendered}</div>
 <details style="margin-top:12px;"><summary>Raw markdown</summary>
   <pre><code>{html.escape(raw)}</code></pre>
 </details>
 """
         )
-        extra_head = f'<link rel="stylesheet" href="{_CDN_KATEX}" />'
+        extra_head = f"""
+<link rel="stylesheet" href="{_CDN_KATEX}" />
+{outline_css}
+<style>
+#content img {{
+  max-width: 100%;
+  height: auto;
+}}
+</style>
+"""
         extra_scripts = f"""
 <script src="{_CDN_MERMAID}"></script>
 <script src="{_CDN_KATEX_JS}"></script>
@@ -2806,6 +2974,7 @@ if (window.renderMathInElement) {{
     throwOnError: false
   }});
 }}
+{outline_js}
 </script>
 """
         return render_page("Source", body, extra_head=extra_head, extra_scripts=extra_scripts + fullscreen_script)
@@ -2954,7 +3123,6 @@ window.addEventListener('resize', () => {{
     rendered_html = _render_markdown_with_math_placeholders(md, markdown)
 
     warning_html = f'<div class="warning">{html.escape(warning)}</div>' if warning else ""
-    outline_top = "72px" if not embed else "16px"
     template_controls = f'<div class="muted">Template: {html.escape(template_name)}</div>'
     if available_templates:
         options = "\n".join(
@@ -2980,14 +3148,6 @@ if (templateSelect) {{
 }}
 </script>
 """
-    outline_html = """
-<button id="outlineToggle" class="outline-toggle" title="Toggle outline">☰</button>
-<div id="outlinePanel" class="outline-panel collapsed">
-  <div class="outline-title">Outline</div>
-  <div id="outlineList" class="outline-list"></div>
-</div>
-<button id="backToTop" class="back-to-top" title="Back to top">↑</button>
-"""
     content_html = f"""
 {template_controls}
 {warning_html}
@@ -2998,78 +3158,7 @@ if (templateSelect) {{
 
     extra_head = f"""
 <link rel="stylesheet" href="{_CDN_KATEX}" />
-<style>
-:root {{
-  --outline-top: {outline_top};
-}}
-.outline-toggle {{
-  position: fixed;
-  top: var(--outline-top);
-  left: 16px;
-  z-index: 20;
-  padding: 6px 10px;
-  border-radius: 8px;
-  border: 1px solid #d0d7de;
-  background: #f6f8fa;
-  cursor: pointer;
-}}
-.outline-panel {{
-  position: fixed;
-  top: calc(var(--outline-top) + 42px);
-  left: 16px;
-  width: 240px;
-  max-height: 60vh;
-  overflow: auto;
-  border: 1px solid #d0d7de;
-  border-radius: 10px;
-  background: #ffffff;
-  padding: 10px;
-  z-index: 20;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
-}}
-.outline-panel.collapsed {{
-  display: none;
-}}
-.outline-title {{
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: #57606a;
-  margin-bottom: 8px;
-}}
-.outline-list a {{
-  display: block;
-  color: #0969da;
-  text-decoration: none;
-  padding: 4px 0;
-}}
-.outline-list a:hover {{
-  text-decoration: underline;
-}}
-.back-to-top {{
-  position: fixed;
-  left: 16px;
-  bottom: 16px;
-  padding: 6px 10px;
-  border-radius: 999px;
-  border: 1px solid #d0d7de;
-  background: #ffffff;
-  cursor: pointer;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.2s ease;
-  z-index: 20;
-}}
-.back-to-top.visible {{
-  opacity: 1;
-  pointer-events: auto;
-}}
-@media (max-width: 900px) {{
-  .outline-panel {{
-    width: 200px;
-  }}
-}}
-</style>
+{outline_css}
 """
     extra_scripts = f"""
 <script src="{_CDN_MERMAID}"></script>
@@ -3099,74 +3188,7 @@ if (window.renderMathInElement) {{
     throwOnError: false
   }});
 }}
-const outlineToggle = document.getElementById('outlineToggle');
-const outlinePanel = document.getElementById('outlinePanel');
-const outlineList = document.getElementById('outlineList');
-const backToTop = document.getElementById('backToTop');
-
-function slugify(text) {{
-  return text.toLowerCase().trim()
-    .replace(/[^a-z0-9\\s-]/g, '')
-    .replace(/\\s+/g, '-')
-    .replace(/-+/g, '-');
-}}
-
-function buildOutline() {{
-  if (!outlineList) return;
-  const content = document.getElementById('content');
-  if (!content) return;
-  const headings = content.querySelectorAll('h1, h2, h3, h4');
-  if (!headings.length) {{
-    outlineList.innerHTML = '<div class="muted">No headings</div>';
-    return;
-  }}
-  const used = new Set();
-  outlineList.innerHTML = '';
-  headings.forEach((heading) => {{
-    let id = heading.id;
-    if (!id) {{
-      const base = slugify(heading.textContent || 'section') || 'section';
-      id = base;
-      let i = 1;
-      while (used.has(id) || document.getElementById(id)) {{
-        id = `${{base}}-${{i++}}`;
-      }}
-      heading.id = id;
-    }}
-    used.add(id);
-    const level = parseInt(heading.tagName.slice(1), 10) || 1;
-    const link = document.createElement('a');
-    link.href = `#${{id}}`;
-    link.textContent = heading.textContent || '';
-    link.style.paddingLeft = `${{(level - 1) * 12}}px`;
-    outlineList.appendChild(link);
-  }});
-}}
-
-function toggleBackToTop() {{
-  if (!backToTop) return;
-  if (window.scrollY > 300) {{
-    backToTop.classList.add('visible');
-  }} else {{
-    backToTop.classList.remove('visible');
-  }}
-}}
-
-if (outlineToggle && outlinePanel) {{
-  outlineToggle.addEventListener('click', () => {{
-    outlinePanel.classList.toggle('collapsed');
-  }});
-}}
-
-if (backToTop) {{
-  backToTop.addEventListener('click', () => {{
-    window.scrollTo({{ top: 0, behavior: 'smooth' }});
-  }});
-}}
-
-buildOutline();
-window.addEventListener('scroll', toggleBackToTop);
-toggleBackToTop();
+{outline_js}
 </script>
 """
     return render_page(page_title, body, extra_head=extra_head, extra_scripts=extra_scripts + fullscreen_script)

@@ -158,12 +158,12 @@ Web UI highlights:
 
 - Summary/Source/PDF/PDF Viewer views with tab navigation.
 - Split view: choose left/right panes independently (summary/source/pdf/pdf viewer) via URL params.
-- Summary view includes a collapsible outline panel (top-left) and a back-to-top control (bottom-left).
+- Summary/Source views include a collapsible outline panel (top-left) and a back-to-top control (bottom-left).
 - Summary template dropdown shows only available templates per paper.
 - Homepage filters: PDF/Source/Summary availability and template tags, plus a filter syntax input (`tmpl:...`, `has:pdf`, `no:source`).
 - Homepage stats: total and filtered counts for PDF/Source/Summary plus per-template totals.
 - Stats page includes keyword frequency charts.
-- Source view renders Markdown and supports embedded HTML tables plus `data:image/...;base64` `<img>` tags.
+- Source view renders Markdown and supports embedded HTML tables plus `data:image/...;base64` `<img>` tags (images are constrained to the content width).
 - PDF Viewer is served locally (PDF.js viewer assets) to avoid cross-origin issues with local PDFs.
 - PDF-only entries are surfaced for unmatched PDFs under `--pdf-root` (metadata title if available, otherwise filename), with badges and detail warnings.
 - PDF-only entries are excluded from stats counts.
