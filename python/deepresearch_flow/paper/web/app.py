@@ -2974,6 +2974,16 @@ document.addEventListener('keydown', (event) => {
                 ("pdf", "PDF"),
                 ("pdfjs", "PDF Viewer"),
             ]
+        if translation_langs:
+            lang_options = "\n".join(
+                f'<option value="{html.escape(lang)}"{" selected" if lang == selected_lang else ""}>'
+                f'{html.escape(lang)}</option>'
+                for lang in translation_langs
+            )
+            lang_disabled = ""
+        else:
+            lang_options = '<option value="" selected>(no translations)</option>'
+            lang_disabled = " disabled"
         left_options = "\n".join(
             f'<option value="{value}"{" selected" if value == left else ""}>{label}</option>'
             for value, label in options
@@ -2996,6 +3006,10 @@ document.addEventListener('keydown', (event) => {
   <span class="muted">Right</span>
   <select id="splitRight">
     {right_options}
+  </select>
+  <span class="muted">Lang</span>
+  <select id="splitLang"{lang_disabled}>
+    {lang_options}
   </select>
 </div>
 """
@@ -3055,6 +3069,7 @@ document.addEventListener('keydown', (event) => {
 <script>
 const leftSelect = document.getElementById('splitLeft');
 const rightSelect = document.getElementById('splitRight');
+const langSelect = document.getElementById('splitLang');
 const swapButton = document.getElementById('splitSwap');
 const tightenButton = document.getElementById('splitTighten');
 const widenButton = document.getElementById('splitWiden');
@@ -3063,10 +3078,16 @@ function updateSplit() {
   params.set('view', 'split');
   params.set('left', leftSelect.value);
   params.set('right', rightSelect.value);
+  if (langSelect && langSelect.value) {
+    params.set('lang', langSelect.value);
+  }
   window.location.search = params.toString();
 }
 leftSelect.addEventListener('change', updateSplit);
 rightSelect.addEventListener('change', updateSplit);
+if (langSelect) {
+  langSelect.addEventListener('change', updateSplit);
+}
 swapButton.addEventListener('click', () => {
   const leftValue = leftSelect.value;
   leftSelect.value = rightSelect.value;
