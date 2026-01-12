@@ -1120,6 +1120,7 @@ _TITLE_PREFIX_LEN = 16
 _TITLE_MIN_CHARS = 24
 _TITLE_MIN_TOKENS = 4
 _AUTHOR_YEAR_MIN_SIMILARITY = 0.8
+_LEADING_NUMERIC_MAX_LEN = 2
 
 
 def _normalize_title_key(title: str) -> str:
@@ -1148,6 +1149,20 @@ def _normalize_title_key(title: str) -> str:
 
 def _compact_title_key(title_key: str) -> str:
     return title_key.replace(" ", "")
+
+
+def _strip_leading_numeric_tokens(title_key: str) -> str:
+    tokens = title_key.split()
+    idx = 0
+    while idx < len(tokens):
+        token = tokens[idx]
+        if token.isdigit() and len(token) <= _LEADING_NUMERIC_MAX_LEN:
+            idx += 1
+            continue
+        break
+    if idx == 0:
+        return title_key
+    return " ".join(tokens[idx:])
 
 
 def _strip_pdf_hash_suffix(name: str) -> str:
@@ -1249,12 +1264,27 @@ def _resolve_by_title_and_meta(
         compact_candidates = file_index.get(f"compact:{compact_key}", [])
         if compact_candidates:
             return compact_candidates[0]
+        stripped_key = _strip_leading_numeric_tokens(title_key)
+        if stripped_key and stripped_key != title_key:
+            stripped_candidates = file_index.get(stripped_key, [])
+            if stripped_candidates:
+                return stripped_candidates[0]
+            stripped_compact = _compact_title_key(stripped_key)
+            stripped_candidates = file_index.get(f"compact:{stripped_compact}", [])
+            if stripped_candidates:
+                return stripped_candidates[0]
     prefix_key = _title_prefix_key(title_key)
     if not prefix_key:
         return None
     candidates = file_index.get(prefix_key, [])
     if not candidates:
-        return None
+        stripped_key = _strip_leading_numeric_tokens(title_key)
+        if stripped_key and stripped_key != title_key:
+            prefix_key = _title_prefix_key(stripped_key)
+            if prefix_key:
+                candidates = file_index.get(prefix_key, [])
+        if not candidates:
+            return None
     best_path = None
     best_score = 0.0
     for path in candidates:
@@ -1335,6 +1365,15 @@ def _build_file_index(roots: list[Path], *, suffixes: set[str]) -> dict[str, lis
                 prefix_key = _title_prefix_key(title_key)
                 if prefix_key:
                     index.setdefault(prefix_key, []).append(resolved)
+                stripped_key = _strip_leading_numeric_tokens(title_key)
+                if stripped_key and stripped_key != title_key:
+                    index.setdefault(stripped_key, []).append(resolved)
+                    stripped_compact = _compact_title_key(stripped_key)
+                    if stripped_compact:
+                        index.setdefault(f"compact:{stripped_compact}", []).append(resolved)
+                    stripped_prefix = _title_prefix_key(stripped_key)
+                    if stripped_prefix:
+                        index.setdefault(stripped_prefix, []).append(resolved)
             year_hint, author_hint = _extract_year_author_from_filename(path.name)
             if year_hint:
                 index.setdefault(f"year:{year_hint}", []).append(resolved)
