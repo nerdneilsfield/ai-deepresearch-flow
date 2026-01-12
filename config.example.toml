@@ -76,6 +76,7 @@ name = "claude"
 type = "claude"
 api_keys = ["env:ANTHROPIC_API_KEY"]
 anthropic_version = "2024-02-15"
+# max_tokens = 4096
 model_list = ["claude-sonnet-4-5-20250929"]
 structured_mode = "none"
 extra_headers = {}

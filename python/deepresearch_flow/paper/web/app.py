@@ -66,6 +66,7 @@ class PaperIndex:
     by_venue: dict[str, set[int]]
     stats: dict[str, Any]
     md_path_by_hash: dict[str, Path]
+    translated_md_by_hash: dict[str, dict[str, Path]]
     pdf_path_by_hash: dict[str, Path]
     template_tags: list[str]
 
@@ -248,6 +249,7 @@ def build_index(
     papers: list[dict[str, Any]],
     *,
     md_roots: list[Path] | None = None,
+    md_translated_roots: list[Path] | None = None,
     pdf_roots: list[Path] | None = None,
 ) -> PaperIndex:
     id_by_hash: dict[str, int] = {}
@@ -258,9 +260,11 @@ def build_index(
     by_venue: dict[str, set[int]] = {}
 
     md_path_by_hash: dict[str, Path] = {}
+    translated_md_by_hash: dict[str, dict[str, Path]] = {}
     pdf_path_by_hash: dict[str, Path] = {}
 
     md_file_index = _build_file_index(md_roots or [], suffixes={".md"})
+    translated_index = _build_translated_index(md_translated_roots or [])
     pdf_file_index = _build_file_index(pdf_roots or [], suffixes={".pdf"})
 
     year_counts: dict[str, int] = {}
@@ -360,6 +364,10 @@ def build_index(
         md_path = _resolve_source_md(paper, md_file_index)
         if md_path is not None:
             md_path_by_hash[source_hash_str] = md_path
+            base_key = md_path.with_suffix("").name.lower()
+            translations = translated_index.get(base_key, {})
+            if translations:
+                translated_md_by_hash[source_hash_str] = translations
         pdf_path = _resolve_pdf(paper, pdf_file_index)
         if pdf_path is not None:
             pdf_path_by_hash[source_hash_str] = pdf_path
@@ -398,6 +406,7 @@ def build_index(
         by_venue=by_venue,
         stats=stats,
         md_path_by_hash=md_path_by_hash,
+        translated_md_by_hash=translated_md_by_hash,
         pdf_path_by_hash=pdf_path_by_hash,
         template_tags=template_tags,
     )
@@ -639,6 +648,51 @@ def _strip_paragraph_wrapped_tables(text: str) -> str:
         line = re.sub(r"\|\s*</p>\s*$", "|", line)
         lines[idx] = line
     return "\n".join(lines)
+
+
+def _normalize_markdown_images(text: str) -> str:
+    lines = text.splitlines()
+    out: list[str] = []
+    in_fence = False
+    fence_char = ""
+    fence_len = 0
+    img_re = re.compile(r"!\[[^\]]*\]\((?:[^)\\]|\\.)*\)")
+    list_re = re.compile(r"^\s{0,3}(-|\*|\+|\d{1,9}\.)\s+")
+
+    for line in lines:
+        stripped = line.lstrip()
+        if stripped.startswith(("```", "~~~")):
+            run_len = 0
+            while run_len < len(stripped) and stripped[run_len] == stripped[0]:
+                run_len += 1
+            if not in_fence:
+                in_fence = True
+                fence_char = stripped[0]
+                fence_len = run_len
+            elif stripped[0] == fence_char and run_len >= fence_len:
+                in_fence = False
+            out.append(line)
+            continue
+        if in_fence:
+            out.append(line)
+            continue
+        match = img_re.search(line)
+        if not match:
+            out.append(line)
+            continue
+        if list_re.match(line) or (line.lstrip().startswith("|") and line.count("|") >= 2):
+            out.append(line)
+            continue
+        prefix = line[:match.start()]
+        if prefix.strip():
+            out.append(prefix.rstrip())
+            out.append("")
+            out.append(line[match.start():].lstrip())
+            continue
+        if out and out[-1].strip():
+            out.append("")
+        out.append(line)
+    return "\n".join(out)
 
 
 def _normalize_merge_title(value: str | None) -> str | None:
@@ -1683,6 +1737,39 @@ def _resolve_source_md(paper: dict[str, Any], md_index: dict[str, list[Path]]) -
     return _resolve_by_title_and_meta(paper, md_index)
 
 
+def _build_translated_index(roots: list[Path]) -> dict[str, dict[str, Path]]:
+    index: dict[str, dict[str, Path]] = {}
+    candidates: list[Path] = []
+    for root in roots:
+        try:
+            if not root.exists() or not root.is_dir():
+                continue
+        except OSError:
+            continue
+        try:
+            candidates.extend(root.rglob("*.md"))
+        except OSError:
+            continue
+    for path in sorted(candidates, key=lambda item: str(item)):
+        try:
+            if not path.is_file():
+                continue
+        except OSError:
+            continue
+        name = path.name
+        match = re.match(r"^(.+)\.([^.]+)\.md$", name, flags=re.IGNORECASE)
+        if not match:
+            continue
+        base_name = match.group(1).strip()
+        lang = match.group(2).strip()
+        if not base_name or not lang:
+            continue
+        base_key = base_name.lower()
+        lang_key = lang.lower()
+        index.setdefault(base_key, {}).setdefault(lang_key, path.resolve())
+    return index
+
+
 def _guess_pdf_names(paper: dict[str, Any]) -> list[str]:
     source_path = paper.get("source_path")
     if not source_path:
@@ -1761,6 +1848,7 @@ def _parse_filter_query(text: str) -> dict[str, set[str]]:
         "pdf": set(),
         "source": set(),
         "summary": set(),
+        "translated": set(),
         "template": set(),
     }
     for token in _tokenize_filter_query(text):
@@ -1777,7 +1865,7 @@ def _parse_filter_query(text: str) -> dict[str, set[str]]:
                 if tag:
                     parsed["template"].add(tag.lower())
             continue
-        if key in {"pdf", "source", "summary"}:
+        if key in {"pdf", "source", "summary", "translated"}:
             for part in raw_value.split(","):
                 normalized = _normalize_presence_value(part)
                 if normalized:
@@ -1786,7 +1874,7 @@ def _parse_filter_query(text: str) -> dict[str, set[str]]:
         if key in {"has", "no"}:
             targets = [part.strip().lower() for part in raw_value.split(",") if part.strip()]
             for target in targets:
-                if target not in {"pdf", "source", "summary"}:
+                if target not in {"pdf", "source", "summary", "translated"}:
                     continue
                 parsed[target].add("with" if key == "has" else "without")
     return parsed
@@ -1831,6 +1919,7 @@ def _compute_counts(index: PaperIndex, ids: set[int]) -> dict[str, Any]:
     pdf_count = 0
     source_count = 0
     summary_count = 0
+    translated_count = 0
     total_count = 0
     tag_map = _template_tag_map(index)
 
@@ -1843,12 +1932,15 @@ def _compute_counts(index: PaperIndex, ids: set[int]) -> dict[str, Any]:
         has_source = source_hash in index.md_path_by_hash
         has_pdf = source_hash in index.pdf_path_by_hash
         has_summary = bool(paper.get("_has_summary"))
+        has_translated = bool(index.translated_md_by_hash.get(source_hash))
         if has_source:
             source_count += 1
         if has_pdf:
             pdf_count += 1
         if has_summary:
             summary_count += 1
+        if has_translated:
+            translated_count += 1
         for tag_lc in paper.get("_template_tags_lc") or []:
             display = tag_map.get(tag_lc)
             if display:
@@ -1859,6 +1951,7 @@ def _compute_counts(index: PaperIndex, ids: set[int]) -> dict[str, Any]:
         "pdf": pdf_count,
         "source": source_count,
         "summary": summary_count,
+        "translated": translated_count,
         "templates": template_counts,
         "template_order": template_order,
     }
@@ -1985,6 +2078,9 @@ def _page_shell(
       .split-inline select {{ padding: 6px 8px; border-radius: 8px; border: 1px solid #d0d7de; background: #fff; min-width: 140px; }}
       .split-actions {{ display: flex; align-items: center; justify-content: center; gap: 8px; }}
       .split-actions button {{ padding: 6px 10px; border-radius: 999px; border: 1px solid #d0d7de; background: #f6f8fa; cursor: pointer; min-width: 36px; }}
+      .lang-select {{ display: flex; align-items: center; gap: 6px; }}
+      .lang-select label {{ color: #57606a; font-size: 13px; }}
+      .lang-select select {{ padding: 6px 8px; border-radius: 8px; border: 1px solid #d0d7de; background: #fff; min-width: 120px; }}
       .fullscreen-actions {{ display: flex; align-items: center; gap: 6px; }}
       .fullscreen-actions button {{ padding: 6px 10px; border-radius: 8px; border: 1px solid #d0d7de; background: #f6f8fa; cursor: pointer; }}
       .fullscreen-exit {{ display: none; }}
@@ -2235,7 +2331,7 @@ async def _index_page(request: Request) -> HTMLResponse:
         template_options = '<option value="" disabled>(no templates)</option>'
     filter_help = (
         "Filters syntax:\\n"
-        "pdf:yes|no source:yes|no summary:yes|no\\n"
+        "pdf:yes|no source:yes|no translated:yes|no summary:yes|no\\n"
         "tmpl:<tag> or template:<tag>\\n"
         "has:pdf / no:source aliases\\n"
         "Content tags still use the search box (tag:fpga)."
@@ -2250,12 +2346,13 @@ async def _index_page(request: Request) -> HTMLResponse:
     <select id="openView" style="padding:10px; border:1px solid #d0d7de; border-radius:8px;">
       <option value="summary" selected>Open: Summary</option>
       <option value="source">Open: Source</option>
+      <option value="translated">Open: Translated</option>
       <option value="pdf">Open: PDF</option>
       <option value="pdfjs">Open: PDF Viewer</option>
       <option value="split">Open: Split</option>
     </select>
   </div>
-  <div class="filters" style="grid-template-columns: repeat(4, 1fr); margin-top:10px;">
+  <div class="filters" style="grid-template-columns: repeat(5, 1fr); margin-top:10px;">
     <div class="filter-group">
       <label>PDF</label>
       <select id="filterPdf" multiple size="2">
@@ -2266,6 +2363,13 @@ async def _index_page(request: Request) -> HTMLResponse:
     <div class="filter-group">
       <label>Source</label>
       <select id="filterSource" multiple size="2">
+        <option value="with">With</option>
+        <option value="without">Without</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <label>Translated</label>
+      <select id="filterTranslated" multiple size="2">
         <option value="with">With</option>
         <option value="without">Without</option>
       </select>
@@ -2333,6 +2437,7 @@ function currentParams(nextPage) {
   }
   addMulti("filterPdf", "pdf");
   addMulti("filterSource", "source");
+  addMulti("filterTranslated", "translated");
   addMulti("filterSummary", "summary");
   addMulti("filterTemplate", "template");
   return params;
@@ -2348,7 +2453,7 @@ function viewSuffixForItem(item) {
   let view = document.getElementById("openView").value;
   const isPdfOnly = item.is_pdf_only;
   const pdfFallback = item.has_pdf ? "pdfjs" : "pdf";
-  if (isPdfOnly && (view === "summary" || view === "source")) {
+  if (isPdfOnly && (view === "summary" || view === "source" || view === "translated")) {
     view = pdfFallback;
   }
   if (!view || view === "summary") return "";
@@ -2380,6 +2485,7 @@ function renderItem(item) {
   const viewSuffix = viewSuffixForItem(item);
   const badges = [
     item.has_source ? `<span class="pill">source</span>` : "",
+    item.has_translation ? `<span class="pill">translated</span>` : "",
     item.has_pdf ? `<span class="pill">pdf</span>` : "",
     item.is_pdf_only ? `<span class="pill pdf-only">pdf-only</span>` : "",
   ].join("");
@@ -2401,6 +2507,7 @@ function renderStatsRow(targetId, label, counts) {
   pills.push(`<span class="pill stat">Count ${counts.total}</span>`);
   pills.push(`<span class="pill stat">PDF ${counts.pdf}</span>`);
   pills.push(`<span class="pill stat">Source ${counts.source}</span>`);
+  pills.push(`<span class="pill stat">Translated ${counts.translated || 0}</span>`);
   pills.push(`<span class="pill stat">Summary ${counts.summary}</span>`);
   const order = counts.template_order || Object.keys(counts.templates || {});
   for (const tag of order) {
@@ -2451,6 +2558,7 @@ document.getElementById("openView").addEventListener("change", resetAndLoad);
 document.getElementById("filterQuery").addEventListener("change", resetAndLoad);
 document.getElementById("filterPdf").addEventListener("change", resetAndLoad);
 document.getElementById("filterSource").addEventListener("change", resetAndLoad);
+document.getElementById("filterTranslated").addEventListener("change", resetAndLoad);
 document.getElementById("filterSummary").addEventListener("change", resetAndLoad);
 document.getElementById("filterTemplate").addEventListener("change", resetAndLoad);
 
@@ -2511,6 +2619,7 @@ def _parse_filters(request: Request) -> dict[str, list[str] | str | int]:
     pdf_filters = [item for item in qp.getlist("pdf") if item]
     source_filters = [item for item in qp.getlist("source") if item]
     summary_filters = [item for item in qp.getlist("summary") if item]
+    translated_filters = [item for item in qp.getlist("translated") if item]
     template_filters = [item for item in qp.getlist("template") if item]
 
     return {
@@ -2521,6 +2630,7 @@ def _parse_filters(request: Request) -> dict[str, list[str] | str | int]:
         "pdf": pdf_filters,
         "source": source_filters,
         "summary": summary_filters,
+        "translated": translated_filters,
         "template": template_filters,
     }
 
@@ -2542,6 +2652,9 @@ async def _api_papers(request: Request) -> JSONResponse:
     summary_filter = _merge_filter_set(
         _presence_filter(filters["summary"]), _presence_filter(list(filter_terms["summary"]))
     )
+    translated_filter = _merge_filter_set(
+        _presence_filter(filters["translated"]), _presence_filter(list(filter_terms["translated"]))
+    )
     template_selected = {item.lower() for item in filters["template"] if item}
     template_filter = _merge_filter_set(
         template_selected or None,
@@ -2556,11 +2669,14 @@ async def _api_papers(request: Request) -> JSONResponse:
             has_source = source_hash in index.md_path_by_hash
             has_pdf = source_hash in index.pdf_path_by_hash
             has_summary = bool(paper.get("_has_summary"))
+            has_translated = bool(index.translated_md_by_hash.get(source_hash))
             if not _matches_presence(pdf_filter, has_pdf):
                 continue
             if not _matches_presence(source_filter, has_source):
                 continue
             if not _matches_presence(summary_filter, has_summary):
+                continue
+            if not _matches_presence(translated_filter, has_translated):
                 continue
             if template_filter:
                 tags = paper.get("_template_tags_lc") or []
@@ -2585,6 +2701,8 @@ async def _api_papers(request: Request) -> JSONResponse:
     for idx in page_ids:
         paper = index.papers[idx]
         source_hash = str(paper.get("source_hash") or stable_hash(str(paper.get("source_path") or idx)))
+        translations = index.translated_md_by_hash.get(source_hash, {})
+        translation_languages = sorted(translations.keys(), key=str.lower)
         items.append(
             {
                 "source_hash": source_hash,
@@ -2596,9 +2714,11 @@ async def _api_papers(request: Request) -> JSONResponse:
                 "tags": paper.get("_tags") or [],
                 "template_tags": paper.get("_template_tags") or [],
                 "has_source": source_hash in index.md_path_by_hash,
+                "has_translation": bool(translation_languages),
                 "has_pdf": source_hash in index.pdf_path_by_hash,
                 "has_summary": bool(paper.get("_has_summary")),
                 "is_pdf_only": bool(paper.get("_is_pdf_only")),
+                "translation_languages": translation_languages,
             }
         )
 
@@ -2631,7 +2751,19 @@ async def _paper_detail(request: Request) -> HTMLResponse:
     pdf_path = index.pdf_path_by_hash.get(source_hash)
     pdf_url = f"/api/pdf/{source_hash}"
     source_available = source_hash in index.md_path_by_hash
-    allowed_views = {"summary", "source", "pdf", "pdfjs", "split"}
+    translations = index.translated_md_by_hash.get(source_hash, {})
+    translation_langs = sorted(translations.keys(), key=str.lower)
+    lang_param = request.query_params.get("lang")
+    normalized_lang = lang_param.lower() if lang_param else None
+    selected_lang = None
+    if translation_langs:
+        if normalized_lang and normalized_lang in translations:
+            selected_lang = normalized_lang
+        elif "zh" in translations:
+            selected_lang = "zh"
+        else:
+            selected_lang = translation_langs[0]
+    allowed_views = {"summary", "source", "translated", "pdf", "pdfjs", "split"}
     if is_pdf_only:
         allowed_views = {"pdf", "pdfjs", "split"}
 
@@ -2667,6 +2799,8 @@ async def _paper_detail(request: Request) -> HTMLResponse:
         params: dict[str, str] = {"view": v}
         if v == "summary" and template_param:
             params["template"] = str(template_param)
+        if v == "translated" and selected_lang:
+            params["lang"] = selected_lang
         if v == "split":
             params["left"] = left
             params["right"] = right
@@ -2676,6 +2810,7 @@ async def _paper_detail(request: Request) -> HTMLResponse:
     tab_defs = [
         ("Summary", "summary"),
         ("Source", "source"),
+        ("Translated", "translated"),
         ("PDF", "pdf"),
         ("PDF Viewer", "pdfjs"),
         ("Split", "split"),
@@ -2758,6 +2893,8 @@ document.addEventListener('keydown', (event) => {
             params: dict[str, str] = {"view": pane_view, "embed": "1"}
             if pane_view == "summary" and template_param:
                 params["template"] = str(template_param)
+            if pane_view == "translated" and selected_lang:
+                params["lang"] = selected_lang
             return f"/paper/{source_hash}?{urlencode(params)}"
 
         left_src = pane_src(left)
@@ -2765,6 +2902,7 @@ document.addEventListener('keydown', (event) => {
         options = [
             ("summary", "Summary"),
             ("source", "Source"),
+            ("translated", "Translated"),
             ("pdf", "PDF"),
             ("pdfjs", "PDF Viewer"),
         ]
@@ -2909,6 +3047,116 @@ applySplitWidth();
 """
         return render_page(
             "Split View",
+            body,
+            extra_head=extra_head,
+            extra_scripts=extra_scripts + fullscreen_script,
+        )
+
+    if view == "translated":
+        if translation_langs:
+            lang_options = "\n".join(
+                f'<option value="{html.escape(lang)}"{" selected" if lang == selected_lang else ""}>'
+                f'{html.escape(lang)}</option>'
+                for lang in translation_langs
+            )
+            disabled_attr = ""
+        else:
+            lang_options = '<option value="" selected>(no translations)</option>'
+            disabled_attr = " disabled"
+        lang_controls = f"""
+<div class="lang-select">
+  <label for="translationLang">Language</label>
+  <select id="translationLang"{disabled_attr}>
+    {lang_options}
+  </select>
+</div>
+"""
+        toolbar_html = detail_toolbar(lang_controls)
+        if not translation_langs or not selected_lang:
+            body = wrap_detail(
+                '<div class="warning">No translated markdown found. '
+                'Provide <code>--md-translated-root</code> and place '
+                '<code>&lt;base&gt;.&lt;lang&gt;.md</code> under that root.</div>',
+                toolbar_html=toolbar_html,
+            )
+            return render_page("Translated", body, extra_scripts=fullscreen_script)
+        translated_path = translations.get(selected_lang)
+        if not translated_path:
+            body = wrap_detail(
+                '<div class="warning">Translated markdown not found for the selected language.</div>',
+                toolbar_html=toolbar_html,
+            )
+            return render_page("Translated", body, extra_scripts=fullscreen_script)
+        try:
+            raw = translated_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            raw = translated_path.read_text(encoding="latin-1")
+        raw = _normalize_markdown_images(raw)
+        rendered = _render_markdown_with_math_placeholders(md, raw)
+        body = wrap_detail(
+            f"""
+<div class="muted">Language: {html.escape(selected_lang)}</div>
+<div class="muted">{html.escape(str(translated_path))}</div>
+<div class="muted" style="margin-top:10px;">Rendered from translated markdown:</div>
+{outline_html}
+<div id="content">{rendered}</div>
+<details style="margin-top:12px;"><summary>Raw markdown</summary>
+  <pre><code>{html.escape(raw)}</code></pre>
+</details>
+""",
+            toolbar_html=toolbar_html,
+        )
+        extra_head = f"""
+<link rel="stylesheet" href="{_CDN_KATEX}" />
+{outline_css}
+<style>
+#content img {{
+  max-width: 100%;
+  height: auto;
+}}
+</style>
+"""
+        extra_scripts = f"""
+<script src="{_CDN_MERMAID}"></script>
+<script src="{_CDN_KATEX_JS}"></script>
+<script src="{_CDN_KATEX_AUTO}"></script>
+<script>
+const translationSelect = document.getElementById('translationLang');
+if (translationSelect) {{
+  translationSelect.addEventListener('change', () => {{
+    const params = new URLSearchParams(window.location.search);
+    params.set('view', 'translated');
+    params.set('lang', translationSelect.value);
+    window.location.search = params.toString();
+  }});
+}}
+document.querySelectorAll('code.language-mermaid').forEach((code) => {{
+  const pre = code.parentElement;
+  const div = document.createElement('div');
+  div.className = 'mermaid';
+  div.textContent = code.textContent;
+  pre.replaceWith(div);
+}});
+if (window.mermaid) {{
+  mermaid.initialize({{ startOnLoad: false }});
+  mermaid.run();
+}}
+if (window.renderMathInElement) {{
+  renderMathInElement(document.getElementById('content'), {{
+    delimiters: [
+      {{left: '$$', right: '$$', display: true}},
+      {{left: '$', right: '$', display: false}},
+      {{left: '\\\\(', right: '\\\\)', display: false}},
+      {{left: '\\\\[', right: '\\\\]', display: true}}
+    ],
+    throwOnError: false
+  }});
+}}
+{outline_js}
+</script>
+"""
+        return render_page(
+            "Translated",
             body,
             extra_head=extra_head,
             extra_scripts=extra_scripts + fullscreen_script,
@@ -3329,6 +3577,7 @@ def create_app(
     fallback_language: str = "en",
     bibtex_path: Path | None = None,
     md_roots: list[Path] | None = None,
+    md_translated_roots: list[Path] | None = None,
     pdf_roots: list[Path] | None = None,
     cache_dir: Path | None = None,
     use_cache: bool = True,
@@ -3336,8 +3585,14 @@ def create_app(
     papers = _load_or_merge_papers(db_paths, bibtex_path, cache_dir, use_cache, pdf_roots=pdf_roots)
 
     md_roots = md_roots or []
+    md_translated_roots = md_translated_roots or []
     pdf_roots = pdf_roots or []
-    index = build_index(papers, md_roots=md_roots, pdf_roots=pdf_roots)
+    index = build_index(
+        papers,
+        md_roots=md_roots,
+        md_translated_roots=md_translated_roots,
+        pdf_roots=pdf_roots,
+    )
     md = _md_renderer()
     routes = [
         Route("/", _index_page, methods=["GET"]),

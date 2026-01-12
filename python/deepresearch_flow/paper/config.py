@@ -40,6 +40,7 @@ class ProviderConfig:
     location: str | None
     credentials_path: str | None
     anthropic_version: str | None
+    max_tokens: int | None
     structured_mode: str
     extra_headers: dict[str, str]
     system_prompt: str | None
@@ -102,6 +103,15 @@ def _as_str(value: Any, default: str | None = None) -> str | None:
     return str(value)
 
 
+def _ensure_http_scheme(base_url: str, *, default_scheme: str = "http://") -> str:
+    normalized = base_url.strip()
+    if normalized.startswith(("http://", "https://")):
+        scheme, rest = normalized.split("://", 1)
+        rest = rest.lstrip("/")
+        return f"{scheme}://{rest}" if rest else f"{scheme}://"
+    return f"{default_scheme}{normalized.lstrip('/')}"
+
+
 def load_config(path: str) -> PaperConfig:
     config_path = Path(path)
     if not config_path.exists():
@@ -158,6 +168,8 @@ def load_config(path: str) -> PaperConfig:
                 raise ValueError(f"Provider '{name}' requires base_url")
         elif provider_type == "azure_openai" and endpoint:
             base_url = endpoint
+        if provider_type == "ollama" and base_url:
+            base_url = _ensure_http_scheme(base_url)
 
         api_keys = _as_list(provider.get("api_keys"))
         if not api_keys:
@@ -188,6 +200,8 @@ def load_config(path: str) -> PaperConfig:
         location = _as_str(provider.get("location"), None)
         credentials_path = _as_str(provider.get("credentials_path"), None)
         anthropic_version = _as_str(provider.get("anthropic_version"), None)
+        max_tokens = provider.get("max_tokens")
+        max_tokens_value = int(max_tokens) if max_tokens is not None else None
 
         if provider_type == "azure_openai":
             if not base_url:
@@ -221,6 +235,7 @@ def load_config(path: str) -> PaperConfig:
                 location=location,
                 credentials_path=credentials_path,
                 anthropic_version=anthropic_version,
+                max_tokens=max_tokens_value,
                 structured_mode=structured_mode,
                 extra_headers=extra_headers,
                 system_prompt=_as_str(provider.get("system_prompt"), None),

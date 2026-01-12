@@ -32,6 +32,7 @@ async def call_provider(
     timeout: float,
     structured_mode: str,
     client: httpx.AsyncClient,
+    max_tokens: int | None = None,
 ) -> str:
     headers = dict(provider.extra_headers)
     if api_key and provider.type == "openai_compatible":
@@ -98,6 +99,7 @@ async def call_provider(
             model=model,
             messages=messages,
             anthropic_version=provider.anthropic_version,
+            max_tokens=max_tokens or 2048,
         )
 
     if provider.type == "openai_compatible":

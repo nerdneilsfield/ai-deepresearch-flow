@@ -50,6 +50,7 @@ Copy `config.example.toml` to `config.toml` and edit providers.
 - Explicit model routing is required: `--model provider/model`.
 - Supported provider types: `ollama`, `openai_compatible`, `dashscope`, `gemini_ai_studio`, `gemini_vertex`, `azure_openai`, `claude`.
 - Provider-specific fields: `azure_openai` requires `endpoint`, `api_version`, `deployment`; `gemini_vertex` requires `project_id`, `location`; `claude` requires `anthropic_version`.
+- `claude` providers optionally accept `max_tokens` to control translation output length.
 - Built-in prompt templates for extraction: `simple`, `deep_read`, `eight_questions`, `three_pass`.
 - Template rename: `seven_questions` is now `eight_questions`.
 - Render templates use `paper db render-md --template-name` with the same names.
@@ -156,12 +157,13 @@ JSON input formats:
 
 Web UI highlights:
 
-- Summary/Source/PDF/PDF Viewer views with tab navigation.
-- Split view: choose left/right panes independently (summary/source/pdf/pdf viewer) via URL params.
-- Summary/Source views include a collapsible outline panel (top-left) and a back-to-top control (bottom-left).
+- Summary/Source/Translated/PDF/PDF Viewer views with tab navigation.
+- Split view: choose left/right panes independently (summary/source/translated/pdf/pdf viewer) via URL params.
+- Summary/Source/Translated views include a collapsible outline panel (top-left) and a back-to-top control (bottom-left).
+- Translated view renders `<base>.<lang>.md` files under `--md-translated-root` (defaults to `zh` when available, with a language dropdown).
 - Summary template dropdown shows only available templates per paper.
-- Homepage filters: PDF/Source/Summary availability and template tags, plus a filter syntax input (`tmpl:...`, `has:pdf`, `no:source`).
-- Homepage stats: total and filtered counts for PDF/Source/Summary plus per-template totals.
+- Homepage filters: PDF/Source/Translated/Summary availability and template tags, plus a filter syntax input (`tmpl:...`, `has:pdf`, `no:source`, `translated:yes`).
+- Homepage stats: total and filtered counts for PDF/Source/Translated/Summary plus per-template totals.
 - Stats page includes keyword frequency charts.
 - Source view renders Markdown and supports embedded HTML tables plus `data:image/...;base64` `<img>` tags (images are constrained to the content width).
 - PDF Viewer is served locally (PDF.js viewer assets) to avoid cross-origin issues with local PDFs.
@@ -214,6 +216,7 @@ deepresearch-flow paper db serve \
   --input paper_infos_deep_read.json \
   --bibtex ./refs/library.bib \
   --md-root ./docs \
+  --md-translated-root ./translations \
   --md-root ./more_docs \
   --pdf-root ./pdfs \
   --cache-dir .cache/db-serve \
@@ -238,6 +241,60 @@ Other database helpers:
 - `split-database`
 - `statistics`
 - `merge`
+
+</details>
+
+<details>
+<summary>translator translate — OCR markdown translation</summary>
+
+Translate OCR-produced Markdown into another language while preserving structure.
+
+Key options:
+
+- `--input` (repeatable): file or directory input.
+- `--glob`: filter when scanning directories.
+- `--model`: `provider/model` routing (same providers as `paper extract`).
+- `--fallback-model`: optional fallback `provider/model` for failed nodes after retries.
+- `--target-lang`: target language hint (default `zh`).
+- `--fix-level`: OCR repair (`off`, `moderate`, `aggressive`).
+- `--max-chunk-chars`: max chars per translation chunk.
+- `--max-concurrency`: max concurrent provider requests.
+- `--dump-protected` / `--dump-placeholders` / `--dump-nodes`: optional debug outputs.
+- Existing outputs are skipped by default; use `--force` to overwrite.
+- Runs `rumdl fmt` before and after translation to normalize Markdown (disable with `--no-format`).
+
+Outputs:
+
+- Translated Markdown files with a language suffix (e.g. `paper.zh.md`, `paper.ja.md`).
+
+Examples:
+
+```bash
+# Translate a directory (default: zh suffix)
+deepresearch-flow translator translate \
+  --input ./ocr_md \
+  --model openai/gpt-4o-mini
+
+# Translate to Japanese with OCR repairs enabled
+deepresearch-flow translator translate \
+  --input ./ocr_md \
+  --target-lang ja \
+  --fix-level moderate \
+  --model openai/gpt-4o-mini
+
+# Retry failed nodes with a fallback model
+deepresearch-flow translator translate \
+  --input ./ocr_md \
+  --model openai/gpt-4o-mini \
+  --fallback-model zhipu/glm-4.7
+
+# Write outputs into a separate directory and dump placeholders
+deepresearch-flow translator translate \
+  --input ./ocr_md \
+  --output-dir ./translated_md \
+  --dump-placeholders \
+  --model openai/gpt-4o-mini
+```
 
 </details>
 

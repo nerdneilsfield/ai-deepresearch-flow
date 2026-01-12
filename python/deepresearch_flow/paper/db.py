@@ -585,6 +585,13 @@ def register_db_commands(db_group: click.Group) -> None:
         help="Optional markdown root directory (repeatable) for source viewing",
     )
     @click.option(
+        "--md-translated-root",
+        "md_translated_roots",
+        multiple=True,
+        default=(),
+        help="Optional markdown root directory (repeatable) for translated viewing",
+    )
+    @click.option(
         "--pdf-root",
         "pdf_roots",
         multiple=True,
@@ -606,6 +613,7 @@ def register_db_commands(db_group: click.Group) -> None:
         input_paths: tuple[str, ...],
         bibtex_path: str | None,
         md_roots: tuple[str, ...],
+        md_translated_roots: tuple[str, ...],
         pdf_roots: tuple[str, ...],
         cache_dir: str | None,
         no_cache: bool,
@@ -623,6 +631,7 @@ def register_db_commands(db_group: click.Group) -> None:
                 fallback_language=fallback_language,
                 bibtex_path=Path(bibtex_path) if bibtex_path else None,
                 md_roots=[Path(root) for root in md_roots],
+                md_translated_roots=[Path(root) for root in md_translated_roots],
                 pdf_roots=[Path(root) for root in pdf_roots],
                 cache_dir=Path(cache_dir) if cache_dir else None,
                 use_cache=not no_cache,
