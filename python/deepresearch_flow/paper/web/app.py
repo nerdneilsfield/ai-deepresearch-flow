@@ -1299,17 +1299,38 @@ def _adaptive_similarity_match(title_key: str, candidates: list[Path]) -> Path |
     if not scored:
         return None
 
+    def matches_at(threshold: float) -> list[Path]:
+        return [path for path, score in scored if score >= threshold]
+
     threshold = _SIMILARITY_START
     step = _SIMILARITY_STEP
+    prev_threshold = None
+    prev_count = None
     for _ in range(_SIMILARITY_MAX_STEPS):
-        matches = [path for path, score in scored if score >= threshold]
+        matches = matches_at(threshold)
         if len(matches) == 1:
             return matches[0]
         if len(matches) == 0:
+            prev_threshold = threshold
+            prev_count = 0
             threshold -= step
             continue
-        threshold += step / 2
-        step /= 2
+        if prev_count == 0 and prev_threshold is not None:
+            low = threshold
+            high = prev_threshold
+            for _ in range(_SIMILARITY_MAX_STEPS):
+                mid = (low + high) / 2
+                mid_matches = matches_at(mid)
+                if len(mid_matches) == 1:
+                    return mid_matches[0]
+                if len(mid_matches) == 0:
+                    high = mid
+                else:
+                    low = mid
+            return None
+        prev_threshold = threshold
+        prev_count = len(matches)
+        threshold -= step
     return None
 
 
