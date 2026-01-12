@@ -2052,7 +2052,7 @@ def _page_shell(
       .detail-header .header-back {{ margin-right: 0; }}
       .detail-header .header-link {{ margin-right: 0; }}
       .container {{ max-width: 1100px; margin: 0 auto; padding: 16px; }}
-      .filters {{ display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; margin: 12px 0 16px; }}
+      .filters {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px; margin: 12px 0 16px; }}
       .filters input {{ width: 100%; padding: 8px; border: 1px solid #d0d7de; border-radius: 6px; }}
       .filters select {{ width: 100%; border: 1px solid #d0d7de; border-radius: 6px; background: #fff; font-size: 13px; }}
       .filters select:not([multiple]) {{ padding: 6px 8px; }}
@@ -2074,6 +2074,13 @@ def _page_shell(
       .detail-toolbar {{ display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 12px; padding: 6px 8px 10px; border-bottom: 1px solid #e5e7eb; box-sizing: border-box; }}
       .detail-toolbar .tabs {{ margin: 0; }}
       .toolbar-actions {{ display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-left: auto; padding-right: 16px; }}
+      .search-row {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; align-items: stretch; }}
+      .search-row input {{ flex: 1 1 320px; min-width: 0; padding: 10px; border: 1px solid #d0d7de; border-radius: 8px; }}
+      .search-row select {{ flex: 0 1 220px; min-width: 0; max-width: 100%; padding: 10px; border: 1px solid #d0d7de; border-radius: 8px; background: #fff; }}
+      .filter-row {{ display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }}
+      .filter-row input {{ flex: 1 1 320px; min-width: 0; padding: 10px; border: 1px solid #d0d7de; border-radius: 8px; }}
+      .filter-row .help-icon {{ flex: 0 0 auto; }}
+      .adv-actions {{ display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }}
       .split-inline {{ display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }}
       .split-inline select {{ padding: 6px 8px; border-radius: 8px; border: 1px solid #d0d7de; background: #fff; min-width: 140px; }}
       .split-actions {{ display: flex; align-items: center; justify-content: center; gap: 8px; }}
@@ -2109,7 +2116,25 @@ def _page_shell(
       pre {{ overflow: auto; padding: 10px; background: #0b1220; color: #e6edf3; border-radius: 10px; }}
       code {{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }}
       a {{ color: #0969da; }}
-      @media (max-width: 768px) {{
+      @media (max-width: 640px) {{
+        .search-row {{
+          flex-direction: column;
+        }}
+        .search-row input,
+        .search-row select {{
+          width: 100%;
+        }}
+        .filter-row {{
+          flex-direction: column;
+          align-items: stretch;
+        }}
+        .filter-row .help-icon {{
+          align-self: flex-end;
+        }}
+        .adv-actions {{
+          flex-direction: column;
+          align-items: stretch;
+        }}
         .detail-toolbar {{
           flex-wrap: nowrap;
           overflow-x: auto;
@@ -2341,9 +2366,9 @@ async def _index_page(request: Request) -> HTMLResponse:
 <h2>Paper Database</h2>
 <div class="card">
   <div class="muted">Search (Scholar-style): <code>tag:fpga year:2023..2025 -survey</code> · Use quotes for phrases and <code>OR</code> for alternatives.</div>
-  <div style="display:flex; gap:8px; margin-top:8px;">
-    <input id="query" placeholder='Search... e.g. title:"nearest neighbor" tag:fpga year:2023..2025' style="flex:1; padding:10px; border:1px solid #d0d7de; border-radius:8px;" />
-    <select id="openView" style="padding:10px; border:1px solid #d0d7de; border-radius:8px;">
+  <div class="search-row">
+    <input id="query" placeholder='Search... e.g. title:"nearest neighbor" tag:fpga year:2023..2025' />
+    <select id="openView">
       <option value="summary" selected>Open: Summary</option>
       <option value="source">Open: Source</option>
       <option value="translated">Open: Translated</option>
@@ -2352,7 +2377,7 @@ async def _index_page(request: Request) -> HTMLResponse:
       <option value="split">Open: Split</option>
     </select>
   </div>
-  <div class="filters" style="grid-template-columns: repeat(5, 1fr); margin-top:10px;">
+  <div class="filters" style="margin-top:10px;">
     <div class="filter-group">
       <label>PDF</label>
       <select id="filterPdf" multiple size="2">
@@ -2388,14 +2413,14 @@ async def _index_page(request: Request) -> HTMLResponse:
       </select>
     </div>
   </div>
-  <div style="display:flex; gap:8px; align-items:center; margin-top:8px;">
-    <input id="filterQuery" placeholder='Filters... e.g. pdf:yes tmpl:simple' style="flex:1; padding:10px; border:1px solid #d0d7de; border-radius:8px;" />
+  <div class="filter-row">
+    <input id="filterQuery" placeholder='Filters... e.g. pdf:yes tmpl:simple' />
     <span class="help-icon" data-tip="__FILTER_HELP__">?</span>
   </div>
   <details style="margin-top:10px;">
     <summary>Advanced search</summary>
     <div style="margin-top:10px;" class="muted">Build a query:</div>
-    <div class="filters" style="grid-template-columns: repeat(3, 1fr);">
+    <div class="filters">
       <input id="advTitle" placeholder="title contains..." />
       <input id="advAuthor" placeholder="author contains..." />
       <input id="advTag" placeholder="tag (comma separated)" />
@@ -2403,7 +2428,7 @@ async def _index_page(request: Request) -> HTMLResponse:
       <input id="advMonth" placeholder="month (01-12)" />
       <input id="advVenue" placeholder="venue contains..." />
     </div>
-    <div style="display:flex; gap:8px; align-items:center; margin-top:8px;">
+    <div class="adv-actions">
       <button id="buildQuery" style="padding:8px 12px; border-radius:8px; border:1px solid #d0d7de; background:#f6f8fa; cursor:pointer;">Build</button>
       <div class="muted">Generated: <code id="generated"></code></div>
     </div>
