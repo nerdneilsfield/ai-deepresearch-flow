@@ -1125,6 +1125,40 @@ _LEADING_NUMERIC_MAX_LEN = 2
 
 def _normalize_title_key(title: str) -> str:
     value = unicodedata.normalize("NFKD", title)
+    greek_map = {
+        "α": "alpha",
+        "β": "beta",
+        "γ": "gamma",
+        "δ": "delta",
+        "ε": "epsilon",
+        "ζ": "zeta",
+        "η": "eta",
+        "θ": "theta",
+        "ι": "iota",
+        "κ": "kappa",
+        "λ": "lambda",
+        "μ": "mu",
+        "ν": "nu",
+        "ξ": "xi",
+        "ο": "omicron",
+        "π": "pi",
+        "ρ": "rho",
+        "σ": "sigma",
+        "τ": "tau",
+        "υ": "upsilon",
+        "φ": "phi",
+        "χ": "chi",
+        "ψ": "psi",
+        "ω": "omega",
+    }
+    for char, name in greek_map.items():
+        value = value.replace(char, f" {name} ")
+    value = re.sub(
+        r"\\(alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lambda|mu|nu|xi|omicron|pi|rho|sigma|tau|upsilon|phi|chi|psi|omega)\b",
+        r" \1 ",
+        value,
+        flags=re.IGNORECASE,
+    )
     value = value.replace("{", "").replace("}", "")
     value = value.replace("_", " ")
     value = re.sub(r"([a-z])([0-9])", r"\1 \2", value, flags=re.IGNORECASE)
