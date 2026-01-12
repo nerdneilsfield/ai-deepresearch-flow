@@ -9,6 +9,8 @@ __pycache__/
 # Distribution / packaging
 .Python
 build/
+!python/deepresearch_flow/paper/web/pdfjs/build/
+!python/deepresearch_flow/paper/web/pdfjs/build/**
 develop-eggs/
 dist/
 downloads/
