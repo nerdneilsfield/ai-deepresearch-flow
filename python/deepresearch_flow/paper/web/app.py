@@ -1146,6 +1146,10 @@ def _normalize_title_key(title: str) -> str:
     return " ".join(merged)
 
 
+def _compact_title_key(title_key: str) -> str:
+    return title_key.replace(" ", "")
+
+
 def _strip_pdf_hash_suffix(name: str) -> str:
     return re.sub(r"(?i)(\.pdf)(?:-[0-9a-f\-]{8,})$", r"\1", name)
 
@@ -1237,6 +1241,11 @@ def _resolve_by_title_and_meta(
     candidates = file_index.get(title_key, [])
     if candidates:
         return candidates[0]
+    if title_key:
+        compact_key = _compact_title_key(title_key)
+        compact_candidates = file_index.get(f"compact:{compact_key}", [])
+        if compact_candidates:
+            return compact_candidates[0]
     prefix_key = _title_prefix_key(title_key)
     if not prefix_key:
         return None
@@ -1317,6 +1326,9 @@ def _build_file_index(roots: list[Path], *, suffixes: set[str]) -> dict[str, lis
             if title_key:
                 if title_key != name_key:
                     index.setdefault(title_key, []).append(resolved)
+                compact_key = _compact_title_key(title_key)
+                if compact_key:
+                    index.setdefault(f"compact:{compact_key}", []).append(resolved)
                 prefix_key = _title_prefix_key(title_key)
                 if prefix_key:
                     index.setdefault(prefix_key, []).append(resolved)
