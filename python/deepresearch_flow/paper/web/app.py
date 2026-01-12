@@ -1129,7 +1129,21 @@ def _normalize_title_key(title: str) -> str:
     value = re.sub(r"([a-z])([0-9])", r"\1 \2", value, flags=re.IGNORECASE)
     value = re.sub(r"([0-9])([a-z])", r"\1 \2", value, flags=re.IGNORECASE)
     value = re.sub(r"[^a-z0-9]+", " ", value.lower())
-    return re.sub(r"\s+", " ", value).strip()
+    value = re.sub(r"\s+", " ", value).strip()
+    tokens = value.split()
+    if not tokens:
+        return ""
+    merged: list[str] = []
+    idx = 0
+    while idx < len(tokens):
+        token = tokens[idx]
+        if len(token) == 1 and idx + 1 < len(tokens):
+            merged.append(token + tokens[idx + 1])
+            idx += 2
+            continue
+        merged.append(token)
+        idx += 1
+    return " ".join(merged)
 
 
 def _strip_pdf_hash_suffix(name: str) -> str:
