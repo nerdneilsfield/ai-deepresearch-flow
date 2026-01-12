@@ -14,7 +14,7 @@
 
 <p align="center">
   <a href="https://github.com/nerdneilsfield/ai-deepresearch-flow/actions">
-    <img src="https://img.shields.io/github/actions/workflow/status/nerdneilsfield/ai-deepresearch-flow/ci.yml?style=flat-square" />
+    <img src="https://img.shields.io/github/actions/workflow/status/nerdneilsfield/ai-deepresearch-flow/push-to-pypi.yml?style=flat-square" />
   </a>
   <a href="https://pypi.org/project/deepresearch-flow/">
     <img src="https://img.shields.io/pypi/v/deepresearch-flow?style=flat-square" />
@@ -33,6 +33,9 @@
   </a>
   <a href="https://github.com/nerdneilsfield/ai-deepresearch-flow/stargazers">
     <img src="https://img.shields.io/github/stars/nerdneilsfield/ai-deepresearch-flow?style=flat-square" />
+  </a>
+  <a href="https://pypi.org/project/deepresearch-flow">
+  <img alt="PyPI - Version" src="https://img.shields.io/pypi/v/deepresearch-flow">
   </a>
   <a href="https://github.com/nerdneilsfield/ai-deepresearch-flow/issues">
     <img src="https://img.shields.io/github/issues/nerdneilsfield/ai-deepresearch-flow?style=flat-square" />
