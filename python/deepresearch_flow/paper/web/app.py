@@ -1359,21 +1359,20 @@ def _resolve_by_title_and_meta(
             stripped_candidates = file_index.get(f"compact:{stripped_compact}", [])
             if stripped_candidates:
                 return stripped_candidates[0]
+    prefix_candidates: list[Path] = []
     prefix_key = _title_prefix_key(title_key)
-    if not prefix_key:
-        return None
-    candidates = file_index.get(prefix_key, [])
-    if not candidates:
+    if prefix_key:
+        prefix_candidates = file_index.get(prefix_key, [])
+    if not prefix_candidates:
         stripped_key = _strip_leading_numeric_tokens(title_key)
         if stripped_key and stripped_key != title_key:
             prefix_key = _title_prefix_key(stripped_key)
             if prefix_key:
-                candidates = file_index.get(prefix_key, [])
-    if not candidates:
-        return None
-    match = _adaptive_similarity_match(title_key, candidates)
-    if match is not None:
-        return match
+                prefix_candidates = file_index.get(prefix_key, [])
+    if prefix_candidates:
+        match = _adaptive_similarity_match(title_key, prefix_candidates)
+        if match is not None:
+            return match
     year = str(paper.get("_year") or "").strip()
     if not year.isdigit():
         return None
