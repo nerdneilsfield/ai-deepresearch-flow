@@ -951,11 +951,14 @@ def _extract_math_placeholders(text: str) -> tuple[str, dict[str, str]]:
 
         # Inline math: $...$ (single-line)
         if ch == "$" and not text.startswith("$$", idx) and (idx == 0 or text[idx - 1] != "\\"):
+            line_end = text.find("\n", idx + 1)
+            if line_end == -1:
+                line_end = len(text)
             search_from = idx + 1
-            end = text.find("$", search_from)
+            end = text.find("$", search_from, line_end)
             while end != -1 and text[end - 1] == "\\":
                 search_from = end + 1
-                end = text.find("$", search_from)
+                end = text.find("$", search_from, line_end)
             if end != -1:
                 out.append(next_placeholder(text[idx : end + 1]))
                 idx = end + 1
