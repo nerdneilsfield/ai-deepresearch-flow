@@ -19,6 +19,7 @@ except ImportError:  # pragma: no cover - compatibility with older names
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
+from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
@@ -2050,6 +2051,9 @@ def _page_shell(
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow, noarchive, nosnippet" />
+    <meta name="googlebot" content="noindex, nofollow, noarchive, nosnippet" />
+    <meta name="bingbot" content="noindex, nofollow, noarchive, nosnippet" />
     <title>{html.escape(title)}</title>
     <style>
       body {{ font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 0; }}
@@ -2204,6 +2208,9 @@ def _embed_shell(title: str, body_html: str, extra_head: str = "", extra_scripts
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow, noarchive, nosnippet" />
+    <meta name="googlebot" content="noindex, nofollow, noarchive, nosnippet" />
+    <meta name="bingbot" content="noindex, nofollow, noarchive, nosnippet" />
     <title>{html.escape(title)}</title>
     <style>
       body {{ font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 0; padding: 16px; }}
@@ -2221,6 +2228,17 @@ def _embed_shell(title: str, body_html: str, extra_head: str = "", extra_scripts
     {extra_scripts}
   </body>
 </html>"""
+
+
+class _NoIndexMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):  # type: ignore[override]
+        response = await call_next(request)
+        response.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive, nosnippet, noai, noimageai"
+        return response
+
+
+async def _robots_txt(_: Request) -> Response:
+    return Response("User-agent: *\nDisallow: /\n", media_type="text/plain")
 
 
 def _build_pdfjs_viewer_url(pdf_url: str) -> str:
@@ -3811,6 +3829,7 @@ def create_app(
     md = _md_renderer()
     routes = [
         Route("/", _index_page, methods=["GET"]),
+        Route("/robots.txt", _robots_txt, methods=["GET"]),
         Route("/stats", _stats_page, methods=["GET"]),
         Route("/paper/{source_hash:str}", _paper_detail, methods=["GET"]),
         Route("/api/papers", _api_papers, methods=["GET"]),
@@ -3831,6 +3850,7 @@ def create_app(
             _PDFJS_STATIC_DIR,
         )
     app = Starlette(routes=routes)
+    app.add_middleware(_NoIndexMiddleware)
     app.state.index = index
     app.state.md = md
     app.state.fallback_language = fallback_language
