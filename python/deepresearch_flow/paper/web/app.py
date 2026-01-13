@@ -2087,6 +2087,7 @@ def _page_shell(
       .search-row select {{ flex: 0 1 220px; min-width: 0; max-width: 100%; padding: 10px; border: 1px solid #d0d7de; border-radius: 8px; background: #fff; }}
       .filter-row {{ display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }}
       .filter-row input {{ flex: 1 1 320px; min-width: 0; padding: 10px; border: 1px solid #d0d7de; border-radius: 8px; }}
+      .filter-row select {{ flex: 0 1 180px; min-width: 0; padding: 8px 10px; border: 1px solid #d0d7de; border-radius: 8px; background: #fff; }}
       .filter-row .help-icon {{ flex: 0 0 auto; }}
       .adv-actions {{ display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }}
       .split-inline {{ display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }}
@@ -2452,6 +2453,17 @@ async def _index_page(request: Request) -> HTMLResponse:
   </div>
   <div class="filter-row">
     <input id="filterQuery" placeholder='Filters... e.g. pdf:yes tmpl:simple' />
+    <select id="sortBy">
+      <option value="" selected>Sort: Default</option>
+      <option value="year">Sort: Year</option>
+      <option value="title">Sort: Title</option>
+      <option value="venue">Sort: Venue</option>
+      <option value="author">Sort: First Author</option>
+    </select>
+    <select id="sortDir">
+      <option value="desc" selected>Order: Desc</option>
+      <option value="asc">Order: Asc</option>
+    </select>
     <span class="help-icon" data-tip="__FILTER_HELP__">?</span>
   </div>
   <details style="margin-top:10px;">
@@ -2490,6 +2502,10 @@ function currentParams(nextPage) {
   if (q) params.set("q", q);
   const fq = document.getElementById("filterQuery").value.trim();
   if (fq) params.set("fq", fq);
+  const sortBy = document.getElementById("sortBy").value;
+  if (sortBy) params.set("sort_by", sortBy);
+  const sortDir = document.getElementById("sortDir").value;
+  if (sortDir) params.set("sort_dir", sortDir);
   function addMulti(id, key) {
     const el = document.getElementById(id);
     const values = Array.from(el.selectedOptions).map(opt => opt.value).filter(Boolean);
@@ -2623,6 +2639,8 @@ document.getElementById("filterSource").addEventListener("change", resetAndLoad)
 document.getElementById("filterTranslated").addEventListener("change", resetAndLoad);
 document.getElementById("filterSummary").addEventListener("change", resetAndLoad);
 document.getElementById("filterTemplate").addEventListener("change", resetAndLoad);
+document.getElementById("sortBy").addEventListener("change", resetAndLoad);
+document.getElementById("sortDir").addEventListener("change", resetAndLoad);
 
 document.getElementById("buildQuery").addEventListener("click", () => {
   function add(field, value) {
@@ -2683,6 +2701,10 @@ def _parse_filters(request: Request) -> dict[str, list[str] | str | int]:
     summary_filters = [item for item in qp.getlist("summary") if item]
     translated_filters = [item for item in qp.getlist("translated") if item]
     template_filters = [item for item in qp.getlist("template") if item]
+    sort_by = qp.get("sort_by", "").strip()
+    sort_dir = qp.get("sort_dir", "desc").strip().lower()
+    if sort_dir not in {"asc", "desc"}:
+        sort_dir = "desc"
 
     return {
         "page": page,
@@ -2694,7 +2716,58 @@ def _parse_filters(request: Request) -> dict[str, list[str] | str | int]:
         "summary": summary_filters,
         "translated": translated_filters,
         "template": template_filters,
+        "sort_by": sort_by,
+        "sort_dir": sort_dir,
     }
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _normalize_sort_value(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _sorted_ids(
+    index: PaperIndex,
+    ids: set[int],
+    sort_by: str,
+    sort_dir: str,
+) -> list[int]:
+    if not sort_by:
+        return [idx for idx in index.ordered_ids if idx in ids]
+    reverse = sort_dir == "desc"
+
+    def sort_value(idx: int) -> tuple[Any, bool]:
+        paper = index.papers[idx]
+        if sort_by == "year":
+            year = _safe_int(paper.get("_year"))
+            month = _safe_int(paper.get("_month"))
+            return (year, month), year == 0
+        if sort_by == "title":
+            value = _normalize_sort_value(paper.get("paper_title"))
+            return value, not bool(value)
+        if sort_by == "venue":
+            value = _normalize_sort_value(paper.get("_venue"))
+            return value, not bool(value)
+        if sort_by == "author":
+            authors = paper.get("_authors") or paper.get("authors") or []
+            value = _normalize_sort_value(authors[0] if authors else "")
+            return value, not bool(value)
+        return _normalize_sort_value(paper.get("paper_title")), False
+
+    def key_fn(idx: int) -> tuple[int, Any, int]:
+        value, missing = sort_value(idx)
+        missing_score = 0 if missing else 1
+        if not reverse:
+            missing_score = 1 if missing else 0
+        return (missing_score, value, idx)
+
+    return sorted(ids, key=key_fn, reverse=reverse)
 
 
 async def _api_papers(request: Request) -> JSONResponse:
@@ -2704,6 +2777,10 @@ async def _api_papers(request: Request) -> JSONResponse:
     page_size = int(filters["page_size"])
     q = str(filters["q"])
     filter_query = str(filters["filter_query"])
+    sort_by = str(filters["sort_by"]).strip().lower()
+    sort_dir = str(filters["sort_dir"]).strip().lower()
+    if sort_by not in {"year", "title", "venue", "author"}:
+        sort_by = ""
     query = parse_query(q)
     candidate = _apply_query(index, query)
     filter_terms = _parse_filter_query(filter_query)
@@ -2746,7 +2823,7 @@ async def _api_papers(request: Request) -> JSONResponse:
                     continue
             filtered.add(idx)
         candidate = filtered
-    ordered = [idx for idx in index.ordered_ids if idx in candidate]
+    ordered = _sorted_ids(index, candidate, sort_by, sort_dir)
     total = len(ordered)
     start = (page - 1) * page_size
     end = min(start + page_size, total)
