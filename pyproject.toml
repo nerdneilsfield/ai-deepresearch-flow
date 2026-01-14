@@ -59,4 +59,4 @@ include-package-data = true
 "deepresearch_flow.paper.templates" = ["*.j2"]
 "deepresearch_flow.paper.prompt_templates" = ["*.j2"]
 "deepresearch_flow.paper.examples" = ["*.toml"]
-"deepresearch_flow.paper.web" = ["pdfjs/**/*"]
+"deepresearch_flow.paper.web" = ["pdfjs/**/*", "templates/**/*", "static/**/*"]

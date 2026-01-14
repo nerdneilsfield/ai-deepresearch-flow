@@ -5,7 +5,50 @@ from __future__ import annotations
 import html
 from urllib.parse import quote
 
-from deepresearch_flow.paper.web.constants import PDFJS_VIEWER_PATH
+from jinja2 import Environment, FileSystemLoader, PackageLoader
+
+from deepresearch_flow.paper.web.constants import PDFJS_VIEWER_PATH, TEMPLATES_DIR
+
+
+def get_jinja_env() -> Environment:
+    """Get a Jinja2 environment configured for web templates.
+
+    Uses PackageLoader for installed packages (works after pip install).
+    Falls back to FileSystemLoader for development mode.
+    """
+    try:
+        # Try PackageLoader first (works in installed package)
+        env = Environment(
+            loader=PackageLoader("deepresearch_flow.paper.web", "templates"),
+            autoescape=True,
+        )
+        return env
+    except Exception:
+        # Fallback to FileSystemLoader for development
+        env = Environment(
+            loader=FileSystemLoader(str(TEMPLATES_DIR)),
+            autoescape=True,
+        )
+        return env
+
+
+# Global Jinja2 environment
+_jinja_env = None
+
+
+def get_template_env() -> Environment:
+    """Get the shared Jinja2 environment for web handlers."""
+    global _jinja_env
+    if _jinja_env is None:
+        _jinja_env = get_jinja_env()
+    return _jinja_env
+
+
+def render_template(template_name: str, **context) -> str:
+    """Render a template with the given context."""
+    env = get_template_env()
+    template = env.get_template(template_name)
+    return template.render(**context)
 
 
 def embed_shell(title: str, body_html: str, extra_head: str = "", extra_scripts: str = "") -> str:

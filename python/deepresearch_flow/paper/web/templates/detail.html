@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css" />
+<style>
+  #content img {
+    max-width: 100%;
+    height: auto;
+  }
+  .pdfjs-frame {
+    width: 100%;
+    height: 100%;
+    border: 1px solid #d0d7de;
+    border-radius: 10px;
+    flex: 1;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="detail-shell">
+  <div class="detail-toolbar">
+    <div class="tabs">
+      {% for label, view in tabs %}
+      <a class="tab{% if current_view == view %} active{% endif %}" href="{{ view_hrefs[view] }}">{{ label }}</a>
+      {% endfor %}
+    </div>
+    <div class="toolbar-actions">
+      {{ toolbar_controls|safe }}
+      <div class="fullscreen-actions">
+        <button id="fullscreenEnter" class="fullscreen-enter" type="button" title="Enter fullscreen">Fullscreen</button>
+        <button id="fullscreenExit" class="fullscreen-exit" type="button" title="Exit fullscreen">Exit Fullscreen</button>
+      </div>
+    </div>
+  </div>
+  <div class="detail-body">
+    {{ body_html|safe }}
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10.6.1/dist/mermaid.min.js"></script>
+<script>
+(function() {
+  function initRendering() {
+    // Mermaid: convert fenced code blocks to mermaid divs
+    document.querySelectorAll('code.language-mermaid').forEach(function(code) {
+      var pre = code.parentElement;
+      var div = document.createElement('div');
+      div.className = 'mermaid';
+      div.textContent = code.textContent;
+      pre.replaceWith(div);
+    });
+    
+    if (window.mermaid) {
+      mermaid.initialize({ startOnLoad: false });
+      mermaid.run();
+    }
+    
+    if (window.renderMathInElement) {
+      renderMathInElement(document.getElementById('content'), {
+        delimiters: [
+          {left: '$$', right: '$$', display: true},
+          {left: '$', right: '$', display: false},
+          {left: '\\(', right: '\\)', display: false},
+          {left: '\\[', right: '\\]', display: true}
+        ],
+        throwOnError: false
+      });
+    }
+  }
+  
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initRendering);
+  } else {
+    initRendering();
+  }
+})();
+
+// Footnotes
+if (document.querySelector('.footnotes')) {
+  var notes = {};
+  document.querySelectorAll('.footnotes li[id]').forEach(function(li) {
+    var id = li.getAttribute('id');
+    if (!id) return;
+    var clone = li.cloneNode(true);
+    clone.querySelectorAll('a.footnote-backref').forEach(function(el) { el.remove(); });
+    var text = (clone.textContent || '').replace(/\s+/g, ' ').trim();
+    if (text) notes['#' + id] = text.length > 400 ? text.slice(0, 397) + '…' : text;
+  });
+  document.querySelectorAll('.footnote-ref a[href^="#fn"]').forEach(function(link) {
+    var ref = link.getAttribute('href');
+    var text = notes[ref];
+    if (!text) return;
+    link.dataset.footnote = text;
+    link.classList.add('footnote-tip');
+  });
+}
+
+// Fullscreen
+var fullscreenEnter = document.getElementById('fullscreenEnter');
+var fullscreenExit = document.getElementById('fullscreenExit');
+function setFullscreen(enable) {
+  document.body.classList.toggle('detail-fullscreen', enable);
+}
+if (fullscreenEnter) {
+  fullscreenEnter.addEventListener('click', function() { setFullscreen(true); });
+}
+if (fullscreenExit) {
+  fullscreenExit.addEventListener('click', function() { setFullscreen(false); });
+}
+document.addEventListener('keydown', function(event) {
+  if (event.key === 'Escape' && document.body.classList.contains('detail-fullscreen')) {
+    setFullscreen(false);
+  }
+});
+</script>
+{{ outline_script|safe }}
+{% endblock %}

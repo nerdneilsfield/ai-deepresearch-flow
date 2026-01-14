@@ -10,7 +10,7 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from deepresearch_flow.paper.db_ops import build_index, load_and_merge_papers
-from deepresearch_flow.paper.web.constants import PDFJS_STATIC_DIR
+from deepresearch_flow.paper.web.constants import PDFJS_STATIC_DIR, STATIC_DIR
 from deepresearch_flow.paper.web.handlers import (
     api_papers,
     api_pdf,
@@ -76,6 +76,14 @@ def create_app(
         logger.warning(
             "PDF.js viewer assets not found at %s; PDF Viewer mode will be unavailable.",
             PDFJS_STATIC_DIR,
+        )
+    if STATIC_DIR.exists():
+        routes.append(
+            Mount(
+                "/static",
+                app=StaticFiles(directory=str(STATIC_DIR)),
+                name="static",
+            )
         )
     app = Starlette(routes=routes)
     app.add_middleware(_NoIndexMiddleware)

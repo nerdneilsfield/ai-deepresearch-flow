@@ -5,3 +5,5 @@ recursive-include python/deepresearch_flow/paper/templates *.j2
 recursive-include python/deepresearch_flow/paper/prompt_templates *.j2
 recursive-include python/deepresearch_flow/paper/examples *.toml
 recursive-include python/deepresearch_flow/paper/web/pdfjs *
+recursive-include python/deepresearch_flow/paper/web/templates *
+recursive-include python/deepresearch_flow/paper/web/static *

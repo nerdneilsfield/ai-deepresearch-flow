@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+
+{% block extra_head %}
+<style>
+  #year, #month, #tags, #keywords, #authors, #venues {
+    width: 100%;
+    height: 360px;
+  }
+  #tags, #keywords, #authors, #venues {
+    height: 420px;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<h2>Stats</h2>
+<div class="muted">Charts are rendered with ECharts (CDN).</div>
+<div id="year"></div>
+<div id="month"></div>
+<div id="tags"></div>
+<div id="keywords"></div>
+<div id="authors"></div>
+<div id="venues"></div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+<script src="/static/js/stats.js"></script>
+{% endblock %}
