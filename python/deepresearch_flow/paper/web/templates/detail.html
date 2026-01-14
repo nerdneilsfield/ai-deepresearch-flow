@@ -14,11 +14,43 @@
     border-radius: 10px;
     flex: 1;
   }
+  .split-layout {
+    display: flex;
+    gap: 12px;
+    width: 100%;
+    max-width: var(--split-max-width, 100%);
+    margin: 0 auto;
+    flex: 1;
+    min-height: 440px;
+  }
+  .split-pane {
+    flex: 1;
+    border: 1px solid #d0d7de;
+    border-radius: 10px;
+    overflow: hidden;
+    background: #fff;
+  }
+  .split-pane iframe {
+    width: 100%;
+    height: 100%;
+    border: 0;
+  }
+  @media (max-width: 900px) {
+    .split-layout {
+      flex-direction: column;
+      min-height: 0;
+    }
+    .split-pane {
+      height: 70vh;
+    }
+  }
 </style>
 {% endblock %}
 
 {% block content %}
 <div class="detail-shell">
+  {# Toolbar #}
+  {% if not embed %}
   <div class="detail-toolbar">
     <div class="tabs">
       {% for label, view in tabs %}
@@ -26,97 +58,259 @@
       {% endfor %}
     </div>
     <div class="toolbar-actions">
-      {{ toolbar_controls|safe }}
+      {# Template select controls for summary view #}
+      {% if current_view == 'summary' and template_controls %}
+      {{ template_controls|safe }}
+      {% endif %}
+      {# Split view inline controls #}
+      {% if current_view == 'split' %}
+      <div class="split-inline">
+        <span class="muted">Left</span>
+        <select id="splitLeft">
+          {% for value, label in split_options %}
+          <option value="{{ value }}"{% if value == left_view %} selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+        <div class="split-actions">
+          <button id="splitTighten" type="button" title="Tighten width">-</button>
+          <button id="splitSwap" type="button" title="Swap panes">⇄</button>
+          <button id="splitWiden" type="button" title="Widen width">+</button>
+        </div>
+        <span class="muted">Right</span>
+        <select id="splitRight">
+          {% for value, label in split_options %}
+          <option value="{{ value }}"{% if value == right_view %} selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+        {% if translation_langs %}
+        <span class="muted">Lang</span>
+        <select id="splitLang">
+          {% for lang in translation_langs %}
+          <option value="{{ lang }}"{% if lang == selected_lang %} selected{% endif %}>{{ lang }}</option>
+          {% endfor %}
+        </select>
+        {% endif %}
+      </div>
+      {% endif %}
+      {# Translation language select #}
+      {% if current_view == 'translated' and translation_langs %}
+      <div class="lang-select">
+        <label for="translationLang">Language</label>
+        <select id="translationLang">
+          {% for lang in translation_langs %}
+          <option value="{{ lang }}"{% if lang == selected_lang %} selected{% endif %}>{{ lang }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      {% endif %}
+      {# Fullscreen controls #}
       <div class="fullscreen-actions">
         <button id="fullscreenEnter" class="fullscreen-enter" type="button" title="Enter fullscreen">Fullscreen</button>
         <button id="fullscreenExit" class="fullscreen-exit" type="button" title="Exit fullscreen">Exit Fullscreen</button>
       </div>
     </div>
   </div>
+  {% endif %}
+
   <div class="detail-body">
-    {{ body_html|safe }}
+    {# PDF-only warning #}
+    {% if is_pdf_only and current_view in ['summary', 'source'] %}
+    <div class="warning">PDF-only entry: summary and source views are unavailable.</div>
+    {% endif %}
+
+    {# Main content based on view #}
+    {% if current_view == 'summary' %}
+      {# Summary view #}
+      {% if template_name %}
+      <div class="muted">Template: {{ template_name }}</div>
+      {% endif %}
+      {% if template_warning %}
+      {{ template_warning|safe }}
+      {% endif %}
+      {# Outline #}
+      {% if show_outline %}
+      <div id="outline" style="display:none;">
+        <div style="position:sticky;top:-12px;background:#ffffff;z-index:2;padding:4px 0 6px;">
+          <button id="outlineClose" style="float:right;padding:4px 8px;border:1px solid #d0d7de;border-radius:6px;background:#f6f8fa;cursor:pointer;font-size:12px;">Hide</button>
+          <strong style="color:#1f2a37;">Outline</strong>
+        </div>
+        <div id="outlineContent" style="margin-top:8px;"></div>
+      </div>
+      <div id="outlineToggleContainer" style="position:fixed;top:96px;right:20px;z-index:4;">
+        <button id="outlineToggle" style="padding:8px 12px;border:1px solid #d0d7de;border-radius:8px;background:#f6f8fa;cursor:pointer;font-size:13px;box-shadow:0 1px 3px rgba(27,31,36,0.12);">☰ Outline</button>
+      </div>
+      {% endif %}
+      <div id="content">{{ body_html|safe }}</div>
+
+    {% elif current_view == 'source' %}
+      {# Source view #}
+      {% if body_html.startswith('<div class="warning') %}
+        {# Error state - just show the warning #}
+        {{ body_html|safe }}
+      {% else %}
+        {# Normal state - show content with outline #}
+        <div class="muted">{{ source_path }}</div>
+        <div class="muted" style="margin-top:10px;">Rendered from source markdown:</div>
+        {% if show_outline %}
+        <div id="outline" style="display:none;">
+          <div style="position:sticky;top:-12px;background:#ffffff;z-index:2;padding:4px 0 6px;">
+            <button id="outlineClose" style="float:right;padding:4px 8px;border:1px solid #d0d7de;border-radius:6px;background:#f6f8fa;cursor:pointer;font-size:12px;">Hide</button>
+            <strong style="color:#1f2a37;">Outline</strong>
+          </div>
+          <div id="outlineContent" style="margin-top:8px;"></div>
+        </div>
+        <div id="outlineToggleContainer" style="position:fixed;top:96px;right:20px;z-index:4;">
+          <button id="outlineToggle" style="padding:8px 12px;border:1px solid #d0d7de;border-radius:8px;background:#f6f8fa;cursor:pointer;font-size:13px;box-shadow:0 1px 3px rgba(27,31,36,0.12);">☰ Outline</button>
+        </div>
+        {% endif %}
+        <div id="content">{{ body_html|safe }}</div>
+        <details style="margin-top:12px;"><summary>Raw markdown</summary>
+          <pre><code>{{ raw_content|escape }}</code></pre>
+        </details>
+      {% endif %}
+
+    {% elif current_view == 'translated' %}
+      {# Translated view #}
+      {% if body_html.startswith('<div class="warning') %}
+        {# Error state - just show the warning #}
+        {{ body_html|safe }}
+      {% else %}
+        {# Normal state - show content with outline #}
+        <div class="muted">Language: {{ selected_lang }}</div>
+        <div class="muted">{{ translated_path }}</div>
+        <div class="muted" style="margin-top:10px;">Rendered from translated markdown:</div>
+        {% if show_outline %}
+        <div id="outline" style="display:none;">
+          <div style="position:sticky;top:-12px;background:#ffffff;z-index:2;padding:4px 0 6px;">
+            <button id="outlineClose" style="float:right;padding:4px 8px;border:1px solid #d0d7de;border-radius:6px;background:#f6f8fa;cursor:pointer;font-size:12px;">Hide</button>
+            <strong style="color:#1f2a37;">Outline</strong>
+          </div>
+          <div id="outlineContent" style="margin-top:8px;"></div>
+        </div>
+        <div id="outlineToggleContainer" style="position:fixed;top:96px;right:20px;z-index:4;">
+          <button id="outlineToggle" style="padding:8px 12px;border:1px solid #d0d7de;border-radius:8px;background:#f6f8fa;cursor:pointer;font-size:13px;box-shadow:0 1px 3px rgba(27,31,36,0.12);">☰ Outline</button>
+        </div>
+        {% endif %}
+        <div id="content">{{ body_html|safe }}</div>
+        <details style="margin-top:12px;"><summary>Raw markdown</summary>
+          <pre><code>{{ raw_content|escape }}</code></pre>
+        </details>
+      {% endif %}
+
+    {% elif current_view == 'pdf' %}
+      {# PDF view (canvas) #}
+      {% if body_html.startswith('<div class="warning') %}
+        {{ body_html|safe }}
+      {% else %}
+        <div class="muted">{{ pdf_filename }}</div>
+        <div style="display:flex; gap:8px; align-items:center; margin: 10px 0;">
+          <button id="prev" style="padding:6px 10px; border-radius:8px; border:1px solid #d0d7de; background:#f6f8fa; cursor:pointer;">Prev</button>
+          <button id="next" style="padding:6px 10px; border-radius:8px; border:1px solid #d0d7de; background:#f6f8fa; cursor:pointer;">Next</button>
+          <span class="muted">Page <span id="page_num">1</span> / <span id="page_count">?</span></span>
+          <span style="flex:1"></span>
+          <button id="zoomOut" style="padding:6px 10px; border-radius:8px; border:1px solid #d0d7de; background:#f6f8fa; cursor:pointer;">-</button>
+          <button id="zoomIn" style="padding:6px 10px; border-radius:8px; border:1px solid #d0d7de; background:#f6f8fa; cursor:pointer;">+</button>
+        </div>
+        <canvas id="the-canvas" style="width: 100%; border: 1px solid #d0d7de; border-radius: 10px;"></canvas>
+      {% endif %}
+
+    {% elif current_view == 'pdfjs' %}
+      {# PDF.js viewer view #}
+      {% if body_html.startswith('<div class="warning') %}
+        {{ body_html|safe }}
+      {% else %}
+        <div class="muted">{{ pdf_filename }}</div>
+        <iframe class="pdfjs-frame" src="{{ pdfjs_url }}" title="PDF.js Viewer"></iframe>
+      {% endif %}
+
+    {% elif current_view == 'split' %}
+      {# Split view #}
+      <div class="split-layout">
+        <div class="split-pane">
+          <iframe id="leftPane" src="{{ left_src }}" title="Left pane"></iframe>
+        </div>
+        <div class="split-pane">
+          <iframe id="rightPane" src="{{ right_src }}" title="Right pane"></iframe>
+        </div>
+      </div>
+
+    {% endif %}
   </div>
 </div>
 {% endblock %}
 
 {% block extra_scripts %}
+{# CDN scripts for markdown rendering #}
 <script src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10.6.1/dist/mermaid.min.js"></script>
+
+{# PDF.js for PDF view #}
+{% if current_view == 'pdf' %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.min.js"></script>
+{% endif %}
+
+{# Main detail JavaScript #}
+<script src="/static/js/detail.js"></script>
+
+{# Outline functionality #}
+{% if show_outline %}
 <script>
 (function() {
-  function initRendering() {
-    // Mermaid: convert fenced code blocks to mermaid divs
-    document.querySelectorAll('code.language-mermaid').forEach(function(code) {
-      var pre = code.parentElement;
-      var div = document.createElement('div');
-      div.className = 'mermaid';
-      div.textContent = code.textContent;
-      pre.replaceWith(div);
+  function initOutline() {
+    var content = document.getElementById('content');
+    if (!content) return;
+    var headings = content.querySelectorAll('h2, h3, h4');
+    if (headings.length === 0) return;
+
+    var outline = document.getElementById('outline');
+    var toggle = document.getElementById('outlineToggle');
+    var close = document.getElementById('outlineClose');
+    var outlineContent = document.getElementById('outlineContent');
+
+    if (!outline || !toggle || !close || !outlineContent) return;
+
+    for (var i = 0; i < headings.length; i++) {
+      var h = headings[i];
+      if (!h.id) h.id = 'heading-' + i;
+      var a = document.createElement('a');
+      a.href = '#' + h.id;
+      a.textContent = h.textContent.trim();
+      a.className = 'outline-' + h.tagName.toLowerCase();
+      outlineContent.appendChild(a);
+    }
+
+    toggle.addEventListener('click', function() {
+      outline.style.display = 'block';
+      toggle.style.display = 'none';
     });
-    
-    if (window.mermaid) {
-      mermaid.initialize({ startOnLoad: false });
-      mermaid.run();
+
+    close.addEventListener('click', function() {
+      outline.style.display = 'none';
+      toggle.style.display = 'block';
+    });
+
+    var savedState = sessionStorage.getItem('outlineVisible');
+    if (savedState === 'true') {
+      outline.style.display = 'block';
+      toggle.style.display = 'none';
+    } else {
+      toggle.style.display = 'block';
     }
-    
-    if (window.renderMathInElement) {
-      renderMathInElement(document.getElementById('content'), {
-        delimiters: [
-          {left: '$$', right: '$$', display: true},
-          {left: '$', right: '$', display: false},
-          {left: '\\(', right: '\\)', display: false},
-          {left: '\\[', right: '\\]', display: true}
-        ],
-        throwOnError: false
-      });
-    }
+
+    var observer = new MutationObserver(function() {
+      var isVisible = outline.style.display === 'block';
+      sessionStorage.setItem('outlineVisible', String(isVisible));
+    });
+    observer.observe(outline, { attributes: true, attributeFilter: ['style'] });
   }
-  
+
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initRendering);
+    document.addEventListener('DOMContentLoaded', initOutline);
   } else {
-    initRendering();
+    initOutline();
   }
 })();
-
-// Footnotes
-if (document.querySelector('.footnotes')) {
-  var notes = {};
-  document.querySelectorAll('.footnotes li[id]').forEach(function(li) {
-    var id = li.getAttribute('id');
-    if (!id) return;
-    var clone = li.cloneNode(true);
-    clone.querySelectorAll('a.footnote-backref').forEach(function(el) { el.remove(); });
-    var text = (clone.textContent || '').replace(/\s+/g, ' ').trim();
-    if (text) notes['#' + id] = text.length > 400 ? text.slice(0, 397) + '…' : text;
-  });
-  document.querySelectorAll('.footnote-ref a[href^="#fn"]').forEach(function(link) {
-    var ref = link.getAttribute('href');
-    var text = notes[ref];
-    if (!text) return;
-    link.dataset.footnote = text;
-    link.classList.add('footnote-tip');
-  });
-}
-
-// Fullscreen
-var fullscreenEnter = document.getElementById('fullscreenEnter');
-var fullscreenExit = document.getElementById('fullscreenExit');
-function setFullscreen(enable) {
-  document.body.classList.toggle('detail-fullscreen', enable);
-}
-if (fullscreenEnter) {
-  fullscreenEnter.addEventListener('click', function() { setFullscreen(true); });
-}
-if (fullscreenExit) {
-  fullscreenExit.addEventListener('click', function() { setFullscreen(false); });
-}
-document.addEventListener('keydown', function(event) {
-  if (event.key === 'Escape' && document.body.classList.contains('detail-fullscreen')) {
-    setFullscreen(false);
-  }
-});
 </script>
-{{ outline_script|safe }}
+{% endif %}
 {% endblock %}

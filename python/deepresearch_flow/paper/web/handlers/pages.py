@@ -3,22 +3,12 @@
 from __future__ import annotations
 
 import html
-import json
 from urllib.parse import urlencode
 
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
 
 from deepresearch_flow.paper.db_ops import PaperIndex
-from deepresearch_flow.paper.web.constants import (
-    CDN_ECHARTS,
-    CDN_KATEX,
-    CDN_KATEX_AUTO,
-    CDN_KATEX_JS,
-    CDN_MERMAID,
-    CDN_PDFJS,
-    CDN_PDFJS_WORKER,
-)
 from deepresearch_flow.paper.web.markdown import (
     create_md_renderer,
     normalize_markdown_images,
@@ -28,9 +18,7 @@ from deepresearch_flow.paper.web.markdown import (
 )
 from deepresearch_flow.paper.web.templates import (
     build_pdfjs_viewer_url,
-    embed_shell,
-    outline_assets,
-    page_shell,
+    render_template,
 )
 
 
@@ -51,16 +39,17 @@ async def index_page(request: Request) -> HTMLResponse:
         "has:pdf / no:source aliases\n"
         "Content tags still use the search box (tag:fpga)."
     )
+    # Convert newlines to HTML entity for tooltip
+    filter_help_escaped = filter_help.replace("\n", "&#10;")
 
     return HTMLResponse(
         render_template(
             "index.html",
             title="Paper DB",
             template_tags=index.template_tags,
-            filter_help=filter_help,
+            filter_help=filter_help_escaped,
         )
     )
-
 
 
 async def stats_page(request: Request) -> HTMLResponse:
@@ -71,9 +60,11 @@ async def stats_page(request: Request) -> HTMLResponse:
 
 
 async def paper_detail(request: Request) -> HTMLResponse:
-    """Paper detail page with multiple views (summary, source, translated, PDF, etc)."""
+    """Paper detail page with multiple views (summary, source, translated, PDF, etc).
+
+    Uses Jinja2 templates for rendering (detail.html).
+    """
     index: PaperIndex = request.app.state.index
-    md = request.app.state.md
     source_hash = request.path_params["source_hash"]
     idx = index.id_by_hash.get(source_hash)
     if idx is None:
@@ -100,6 +91,8 @@ async def paper_detail(request: Request) -> HTMLResponse:
             selected_lang = "zh"
         else:
             selected_lang = translation_langs[0]
+
+    # Determine allowed views
     allowed_views = {"summary", "source", "translated", "pdf", "pdfjs", "split"}
     if is_pdf_only:
         allowed_views = {"pdf", "pdfjs", "split"}
@@ -114,36 +107,33 @@ async def paper_detail(request: Request) -> HTMLResponse:
     view = normalize_view(view, default_view)
     if view == "split":
         embed = False
+
+    # Determine split view settings
     if is_pdf_only:
-        left_param = request.query_params.get("left")
-        right_param = request.query_params.get("right")
-        left = normalize_view(left_param, preferred_pdf_view) if left_param else preferred_pdf_view
-        right = normalize_view(right_param, preferred_pdf_view) if right_param else preferred_pdf_view
+        default_left = preferred_pdf_view
+        default_right = preferred_pdf_view
     else:
         default_left = preferred_pdf_view if pdf_path else ("source" if source_available else "summary")
         default_right = "summary"
-        left_param = request.query_params.get("left")
-        right_param = request.query_params.get("right")
-        left = normalize_view(left_param, default_left) if left_param else default_left
-        right = normalize_view(right_param, default_right) if right_param else default_right
 
-    def render_page(title: str, body: str, extra_head: str = "", extra_scripts: str = "") -> HTMLResponse:
-        if embed:
-            return HTMLResponse(embed_shell(title, body, extra_head, extra_scripts))
-        return HTMLResponse(page_shell(title, body, extra_head, extra_scripts, header_title=page_title))
+    left_param = request.query_params.get("left")
+    right_param = request.query_params.get("right")
+    left_view = normalize_view(left_param, default_left) if left_param else default_left
+    right_view = normalize_view(right_param, default_right) if right_param else default_right
 
-    def nav_link(label: str, v: str) -> str:
-        active = " active" if view == v else ""
+    # Build tabs and view_hrefs
+    def build_href(v: str, **extra_params: str) -> str:
         params: dict[str, str] = {"view": v}
         if v == "summary" and template_param:
             params["template"] = str(template_param)
         if v == "translated" and selected_lang:
             params["lang"] = selected_lang
         if v == "split":
-            params["left"] = left
-            params["right"] = right
-        href = f"/paper/{source_hash}?{urlencode(params)}"
-        return f'<a class="tab{active}" href="{html.escape(href)}">{html.escape(label)}</a>'
+            params["left"] = left_view
+            params["right"] = right_view
+        for k, val in extra_params.items():
+            params[k] = str(val)
+        return f"/paper/{source_hash}?{urlencode(params)}"
 
     tab_defs = [
         ("Summary", "summary"),
@@ -159,654 +149,44 @@ async def paper_detail(request: Request) -> HTMLResponse:
             ("PDF Viewer", "pdfjs"),
             ("Split", "split"),
         ]
-    tabs_html = '<div class="tabs">' + "".join(nav_link(label, v) for label, v in tab_defs) + "</div>"
-    fullscreen_controls = """
-<div class="fullscreen-actions">
-  <button id="fullscreenEnter" class="fullscreen-enter" type="button" title="Enter fullscreen">Fullscreen</button>
-  <button id="fullscreenExit" class="fullscreen-exit" type="button" title="Exit fullscreen">Exit Fullscreen</button>
-</div>
-"""
 
-    def detail_toolbar(extra_controls: str = "") -> str:
-        if embed:
-            return ""
-        controls = extra_controls.strip()
-        toolbar_controls = f"{controls}{fullscreen_controls}" if controls else fullscreen_controls
-        return f"""
-<div class="detail-toolbar">
-  {tabs_html}
-  <div class="toolbar-actions">
-    {toolbar_controls}
-  </div>
-</div>
-"""
+    tabs = [(label, v) for label, v in tab_defs if v in allowed_views]
+    view_hrefs = {v: build_href(v) for label, v in tab_defs if v in allowed_views}
 
-    def wrap_detail(content: str, toolbar_html: str | None = None) -> str:
-        if embed:
-            return content
-        toolbar = detail_toolbar() if toolbar_html is None else toolbar_html
-        return f"""
-<div class="detail-shell">
-  {toolbar}
-  <div class="detail-body">
-    {content}
-  </div>
-</div>
-"""
+    # Initialize template variables
+    body_html = ""
+    raw_content = ""
+    template_name = ""
+    template_warning = ""
+    template_controls = ""
+    source_path_str = ""
+    translated_path_str = ""
+    pdf_filename = ""
+    pdfjs_url = ""
+    left_src = ""
+    right_src = ""
+    split_options: list[tuple[str, str]] = []
+    show_outline = False
 
-    fullscreen_script = ""
-    if not embed:
-        fullscreen_script = """
-<script>
-const fullscreenEnter = document.getElementById('fullscreenEnter');
-const fullscreenExit = document.getElementById('fullscreenExit');
-function setFullscreen(enable) {
-  document.body.classList.toggle('detail-fullscreen', enable);
-}
-if (fullscreenEnter) {
-  fullscreenEnter.addEventListener('click', () => setFullscreen(true));
-}
-if (fullscreenExit) {
-  fullscreenExit.addEventListener('click', () => setFullscreen(false));
-}
-document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && document.body.classList.contains('detail-fullscreen')) {
-    setFullscreen(false);
-  }
-});
-</script>
-"""
-    pdf_only_warning_html = ""
-    if is_pdf_only:
-        pdf_only_warning_html = (
-            '<div class="warning">PDF-only entry: summary and source views are unavailable.</div>'
+    # Summary view
+    if view == "summary":
+        selected_tag, available_templates = select_template_tag(paper, template_param)
+        markdown, template_name, warning = render_paper_markdown(
+            paper,
+            request.app.state.fallback_language,
+            template_tag=selected_tag,
         )
-    outline_top = "72px" if not embed else "16px"
-    outline_html, outline_css, outline_js = outline_assets(outline_top)
-
-    if view == "split":
-        def pane_src(pane_view: str) -> str:
-            if pane_view == "pdfjs" and pdf_path:
-                return build_pdfjs_viewer_url(pdf_url)
-            params: dict[str, str] = {"view": pane_view, "embed": "1"}
-            if pane_view == "summary" and template_param:
-                params["template"] = str(template_param)
-            if pane_view == "translated" and selected_lang:
-                params["lang"] = selected_lang
-            return f"/paper/{source_hash}?{urlencode(params)}"
-
-        left_src = pane_src(left)
-        right_src = pane_src(right)
-        options = [
-            ("summary", "Summary"),
-            ("source", "Source"),
-            ("translated", "Translated"),
-            ("pdf", "PDF"),
-            ("pdfjs", "PDF Viewer"),
-        ]
-        if is_pdf_only:
-            options = [
-                ("pdf", "PDF"),
-                ("pdfjs", "PDF Viewer"),
-            ]
-        if translation_langs:
-            lang_options = "\n".join(
-                f'<option value="{html.escape(lang)}"{" selected" if lang == selected_lang else ""}>'
-                f'{html.escape(lang)}</option>'
-                for lang in translation_langs
-            )
-            lang_disabled = ""
-        else:
-            lang_options = '<option value="" selected>(no translations)</option>'
-            lang_disabled = " disabled"
-        left_options = "\n".join(
-            f'<option value="{value}"{" selected" if value == left else ""}>{label}</option>'
-            for value, label in options
-        )
-        right_options = "\n".join(
-            f'<option value="{value}"{" selected" if value == right else ""}>{label}</option>'
-            for value, label in options
-        )
-        split_controls = f"""
-<div class="split-inline">
-  <span class="muted">Left</span>
-  <select id="splitLeft">
-    {left_options}
-  </select>
-  <div class="split-actions">
-    <button id="splitTighten" type="button" title="Tighten width">-</button>
-    <button id="splitSwap" type="button" title="Swap panes">⇄</button>
-    <button id="splitWiden" type="button" title="Widen width">+</button>
-  </div>
-  <span class="muted">Right</span>
-  <select id="splitRight">
-    {right_options}
-  </select>
-  <span class="muted">Lang</span>
-  <select id="splitLang"{lang_disabled}>
-    {lang_options}
-  </select>
-</div>
-"""
-        toolbar_html = detail_toolbar(split_controls)
-        split_layout = f"""
-{pdf_only_warning_html}
-<div class="split-layout">
-  <div class="split-pane">
-    <iframe id="leftPane" src="{html.escape(left_src)}" title="Left pane"></iframe>
-  </div>
-  <div class="split-pane">
-    <iframe id="rightPane" src="{html.escape(right_src)}" title="Right pane"></iframe>
-  </div>
-</div>
-"""
-        body = wrap_detail(split_layout, toolbar_html=toolbar_html)
-        extra_head = """
-<style>
-.container {
-  max-width: 100%;
-  width: 100%;
-  margin: 0 auto;
-}
-.split-layout {
-  display: flex;
-  gap: 12px;
-  width: 100%;
-  max-width: var(--split-max-width, 100%);
-  margin: 0 auto;
-  flex: 1;
-  min-height: 440px;
-}
-.split-pane {
-  flex: 1;
-  border: 1px solid #d0d7de;
-  border-radius: 10px;
-  overflow: hidden;
-  background: #fff;
-}
-.split-pane iframe {
-  width: 100%;
-  height: 100%;
-  border: 0;
-}
-@media (max-width: 900px) {
-  .split-layout {
-    flex-direction: column;
-    min-height: 0;
-  }
-  .split-pane {
-    height: 70vh;
-  }
-}
-</style>
-"""
-        extra_scripts = """
-<script>
-const leftSelect = document.getElementById('splitLeft');
-const rightSelect = document.getElementById('splitRight');
-const langSelect = document.getElementById('splitLang');
-const swapButton = document.getElementById('splitSwap');
-const tightenButton = document.getElementById('splitTighten');
-const widenButton = document.getElementById('splitWiden');
-function updateSplit() {
-  const params = new URLSearchParams(window.location.search);
-  params.set('view', 'split');
-  params.set('left', leftSelect.value);
-  params.set('right', rightSelect.value);
-  if (langSelect && langSelect.value) {
-    params.set('lang', langSelect.value);
-  }
-  window.location.search = params.toString();
-}
-leftSelect.addEventListener('change', updateSplit);
-rightSelect.addEventListener('change', updateSplit);
-if (langSelect) {
-  langSelect.addEventListener('change', updateSplit);
-}
-swapButton.addEventListener('click', () => {
-  const leftValue = leftSelect.value;
-  leftSelect.value = rightSelect.value;
-  rightSelect.value = leftValue;
-  updateSplit();
-});
-const widthSteps = ["1200px", "1400px", "1600px", "1800px", "2000px", "100%"];
-let widthIndex = widthSteps.length - 1;
-try {
-  const stored = localStorage.getItem('splitWidthIndex');
-  if (stored !== null) {
-    const parsed = Number.parseInt(stored, 10);
-    if (!Number.isNaN(parsed)) {
-      widthIndex = Math.max(0, Math.min(widthSteps.length - 1, parsed));
-    }
-  }
-} catch (err) {
-  // Ignore storage errors (e.g. private mode)
-}
-
-function applySplitWidth() {
-  const value = widthSteps[widthIndex];
-  document.documentElement.style.setProperty('--split-max-width', value);
-  try {
-    localStorage.setItem('splitWidthIndex', String(widthIndex));
-  } catch (err) {
-    // Ignore storage errors
-  }
-}
-
-tightenButton.addEventListener('click', () => {
-  widthIndex = Math.max(0, widthIndex - 1);
-  applySplitWidth();
-});
-widenButton.addEventListener('click', () => {
-  widthIndex = Math.min(widthSteps.length - 1, widthIndex + 1);
-  applySplitWidth();
-});
-applySplitWidth();
-</script>
-"""
-        return render_page(
-            "Split View",
-            body,
-            extra_head=extra_head,
-            extra_scripts=extra_scripts + fullscreen_script,
-        )
-
-    if view == "translated":
-        if translation_langs:
-            lang_options = "\n".join(
-                f'<option value="{html.escape(lang)}"{" selected" if lang == selected_lang else ""}>'
-                f'{html.escape(lang)}</option>'
-                for lang in translation_langs
-            )
-            disabled_attr = ""
-        else:
-            lang_options = '<option value="" selected>(no translations)</option>'
-            disabled_attr = " disabled"
-        lang_controls = f"""
-<div class="lang-select">
-  <label for="translationLang">Language</label>
-  <select id="translationLang"{disabled_attr}>
-    {lang_options}
-  </select>
-</div>
-"""
-        toolbar_html = detail_toolbar(lang_controls)
-        if not translation_langs or not selected_lang:
-            body = wrap_detail(
-                '<div class="warning">No translated markdown found. '
-                'Provide <code>--md-translated-root</code> and place '
-                '<code>&lt;base&gt;.&lt;lang&gt;.md</code> under that root.</div>',
-                toolbar_html=toolbar_html,
-            )
-            return render_page("Translated", body, extra_scripts=fullscreen_script)
-        translated_path = translations.get(selected_lang)
-        if not translated_path:
-            body = wrap_detail(
-                '<div class="warning">Translated markdown not found for the selected language.</div>',
-                toolbar_html=toolbar_html,
-            )
-            return render_page("Translated", body, extra_scripts=fullscreen_script)
-        try:
-            raw = translated_path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            raw = translated_path.read_text(encoding="latin-1")
-        raw = normalize_markdown_images(raw)
         md_renderer = create_md_renderer()
-        rendered = render_markdown_with_math_placeholders(md_renderer, raw)
-        body = wrap_detail(
-            f"""
-<div class="muted">Language: {html.escape(selected_lang)}</div>
-<div class="muted">{html.escape(str(translated_path))}</div>
-<div class="muted" style="margin-top:10px;">Rendered from translated markdown:</div>
-{outline_html}
-<div id="content">{rendered}</div>
-<details style="margin-top:12px;"><summary>Raw markdown</summary>
-  <pre><code>{html.escape(raw)}</code></pre>
-</details>
-""",
-            toolbar_html=toolbar_html,
-        )
-        extra_head = f"""
-<link rel="stylesheet" href="{CDN_KATEX}" />
-{outline_css}
-<style>
-#content img {{
-  max-width: 100%;
-  height: auto;
-}}
-</style>
-"""
-        extra_scripts = f"""
-<script src="{CDN_MERMAID}"></script>
-<script src="{CDN_KATEX_JS}"></script>
-<script src="{CDN_KATEX_AUTO}"></script>
-<script>
-const translationSelect = document.getElementById('translationLang');
-if (translationSelect) {{
-  translationSelect.addEventListener('change', () => {{
-    const params = new URLSearchParams(window.location.search);
-    params.set('view', 'translated');
-    params.set('lang', translationSelect.value);
-    window.location.search = params.toString();
-  }});
-}}
-
-(function() {{
-  function initRendering() {{
-    // Mermaid: convert fenced code blocks to mermaid divs
-    document.querySelectorAll('code.language-mermaid').forEach((code) => {{
-      const pre = code.parentElement;
-      const div = document.createElement('div');
-      div.className = 'mermaid';
-      div.textContent = code.textContent;
-      pre.replaceWith(div);
-    }});
-    
-    if (window.mermaid) {{
-      mermaid.initialize({{ startOnLoad: false }});
-      mermaid.run();
-    }}
-    
-    if (window.renderMathInElement) {{
-      renderMathInElement(document.getElementById('content'), {{
-        delimiters: [
-          {{left: '$$', right: '$$', display: true}},
-          {{left: '$', right: '$', display: false}},
-          {{left: '\\\\(', right: '\\\\)', display: false}},
-          {{left: '\\\\[', right: '\\\\]', display: true}}
-        ],
-        throwOnError: false
-      }});
-    }}
-  }}
-  
-  // Run immediately if document is already loaded, otherwise wait
-  if (document.readyState === 'loading') {{
-    document.addEventListener('DOMContentLoaded', initRendering);
-  }} else {{
-    initRendering();
-  }}
-}})();
-
-if (document.querySelector('.footnotes')) {{
-  const notes = {{}};
-  document.querySelectorAll('.footnotes li[id]').forEach((li) => {{
-    const id = li.getAttribute('id');
-    if (!id) return;
-    const clone = li.cloneNode(true);
-    clone.querySelectorAll('a.footnote-backref').forEach((el) => el.remove());
-    const text = (clone.textContent || '').replace(/\\s+/g, ' ').trim();
-    if (text) notes['#' + id] = text.length > 400 ? text.slice(0, 397) + '…' : text;
-  }});
-  document.querySelectorAll('.footnote-ref a[href^="#fn"]').forEach((link) => {{
-    const ref = link.getAttribute('href');
-    const text = notes[ref];
-    if (!text) return;
-    link.dataset.footnote = text;
-    link.classList.add('footnote-tip');
-  }});
-}}
-{outline_js}
-</script>
-"""
-        return render_page(
-            "Translated",
-            body,
-            extra_head=extra_head,
-            extra_scripts=extra_scripts + fullscreen_script,
-        )
-
-    if view == "source":
-        source_path = index.md_path_by_hash.get(source_hash)
-        if not source_path:
-            body = wrap_detail(
-                '<div class="warning">Source markdown not found. Provide --md-root to enable source viewing.</div>'
+        body_html = render_markdown_with_math_placeholders(md_renderer, markdown)
+        # Warning is already HTML, don't wrap again
+        template_warning = warning if warning else ""
+        show_outline = True
+        if available_templates:
+            options = "\n".join(
+                f'<option value="{html.escape(tag)}"{" selected" if tag == selected_tag else ""}>{html.escape(tag)}</option>'
+                for tag in available_templates
             )
-            return render_page("Source", body, extra_scripts=fullscreen_script)
-        try:
-            raw = source_path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            raw = source_path.read_text(encoding="latin-1")
-        md_renderer = create_md_renderer()
-        rendered = render_markdown_with_math_placeholders(md_renderer, raw)
-        body = wrap_detail(
-            f"""
-<div class="muted">{html.escape(str(source_path))}</div>
-<div class="muted" style="margin-top:10px;">Rendered from source markdown:</div>
-{outline_html}
-<div id="content">{rendered}</div>
-<details style="margin-top:12px;"><summary>Raw markdown</summary>
-  <pre><code>{html.escape(raw)}</code></pre>
-</details>
-"""
-        )
-        extra_head = f"""
-<link rel="stylesheet" href="{CDN_KATEX}" />
-{outline_css}
-<style>
-#content img {{
-  max-width: 100%;
-  height: auto;
-}}
-</style>
-"""
-        extra_scripts = f"""
-<script src="{CDN_MERMAID}"></script>
-<script src="{CDN_KATEX_JS}"></script>
-<script src="{CDN_KATEX_AUTO}"></script>
-<script>
-(function() {{
-  function initRendering() {{
-    // Mermaid: convert fenced code blocks to mermaid divs
-    document.querySelectorAll('code.language-mermaid').forEach((code) => {{
-      const pre = code.parentElement;
-      const div = document.createElement('div');
-      div.className = 'mermaid';
-      div.textContent = code.textContent;
-      pre.replaceWith(div);
-    }});
-    
-    if (window.mermaid) {{
-      mermaid.initialize({{ startOnLoad: false }});
-      mermaid.run();
-    }}
-    
-    if (window.renderMathInElement) {{
-      renderMathInElement(document.getElementById('content'), {{
-        delimiters: [
-          {{left: '$$', right: '$$', display: true}},
-          {{left: '$', right: '$', display: false}},
-          {{left: '\\\\(', right: '\\\\)', display: false}},
-          {{left: '\\\\[', right: '\\\\]', display: true}}
-        ],
-        throwOnError: false
-      }});
-    }}
-  }}
-  
-  // Run immediately if document is already loaded, otherwise wait
-  if (document.readyState === 'loading') {{
-    document.addEventListener('DOMContentLoaded', initRendering);
-  }} else {{
-    initRendering();
-  }}
-}})();
-
-if (document.querySelector('.footnotes')) {{
-  const notes = {{}};
-  document.querySelectorAll('.footnotes li[id]').forEach((li) => {{
-    const id = li.getAttribute('id');
-    if (!id) return;
-    const clone = li.cloneNode(true);
-    clone.querySelectorAll('a.footnote-backref').forEach((el) => el.remove());
-    const text = (clone.textContent || '').replace(/\\s+/g, ' ').trim();
-    if (text) notes['#' + id] = text.length > 400 ? text.slice(0, 397) + '…' : text;
-  }});
-  document.querySelectorAll('.footnote-ref a[href^="#fn"]').forEach((link) => {{
-    const ref = link.getAttribute('href');
-    const text = notes[ref];
-    if (!text) return;
-    link.dataset.footnote = text;
-    link.classList.add('footnote-tip');
-  }});
-}}
-{outline_js}
-</script>
-"""
-        return render_page("Source", body, extra_head=extra_head, extra_scripts=extra_scripts + fullscreen_script)
-
-    if view == "pdf":
-        if not pdf_path:
-            body = wrap_detail('<div class="warning">PDF not found. Provide --pdf-root to enable PDF viewing.</div>')
-            return render_page("PDF", body, extra_scripts=fullscreen_script)
-        body = wrap_detail(
-            f"""
-{pdf_only_warning_html}
-<div class="muted">{html.escape(str(pdf_path.name))}</div>
-<div style="display:flex; gap:8px; align-items:center; margin: 10px 0;">
-  <button id="prev" style="padding:6px 10px; border-radius:8px; border:1px solid #d0d7de; background:#f6f8fa; cursor:pointer;">Prev</button>
-  <button id="next" style="padding:6px 10px; border-radius:8px; border:1px solid #d0d7de; background:#f6f8fa; cursor:pointer;">Next</button>
-  <span class="muted">Page <span id="page_num">1</span> / <span id="page_count">?</span></span>
-  <span style="flex:1"></span>
-  <button id="zoomOut" style="padding:6px 10px; border-radius:8px; border:1px solid #d0d7de; background:#f6f8fa; cursor:pointer;">-</button>
-  <button id="zoomIn" style="padding:6px 10px; border-radius:8px; border:1px solid #d0d7de; background:#f6f8fa; cursor:pointer;">+</button>
-</div>
-<canvas id="the-canvas" style="width: 100%; border: 1px solid #d0d7de; border-radius: 10px;"></canvas>
-"""
-        )
-        extra_scripts = f"""
-<script src="{CDN_PDFJS}"></script>
-<script>
-const url = {json.dumps(pdf_url)};
-pdfjsLib.GlobalWorkerOptions.workerSrc = {json.dumps(CDN_PDFJS_WORKER)};
-let pdfDoc = null;
-let pageNum = 1;
-let pageRendering = false;
-let pageNumPending = null;
-let zoomLevel = 1.0;
-const canvas = document.getElementById('the-canvas');
-const ctx = canvas.getContext('2d');
-
-function renderPage(num) {{
-  pageRendering = true;
-  pdfDoc.getPage(num).then((page) => {{
-    const baseViewport = page.getViewport({{scale: 1}});
-    const containerWidth = canvas.clientWidth || baseViewport.width;
-    const fitScale = containerWidth / baseViewport.width;
-    const scale = fitScale * zoomLevel;
-
-    const viewport = page.getViewport({{scale}});
-    const outputScale = window.devicePixelRatio || 1;
-
-    canvas.width = Math.floor(viewport.width * outputScale);
-    canvas.height = Math.floor(viewport.height * outputScale);
-    canvas.style.width = Math.floor(viewport.width) + 'px';
-    canvas.style.height = Math.floor(viewport.height) + 'px';
-
-    const transform = outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : null;
-    const renderContext = {{ canvasContext: ctx, viewport, transform }};
-    const renderTask = page.render(renderContext);
-    renderTask.promise.then(() => {{
-      pageRendering = false;
-      document.getElementById('page_num').textContent = String(pageNum);
-      if (pageNumPending !== null) {{
-        const next = pageNumPending;
-        pageNumPending = null;
-        renderPage(next);
-      }}
-    }});
-  }});
-}}
-
-function queueRenderPage(num) {{
-  if (pageRendering) {{
-    pageNumPending = num;
-  }} else {{
-    renderPage(num);
-  }}
-}}
-
-function onPrevPage() {{
-  if (pageNum <= 1) return;
-  pageNum--;
-  queueRenderPage(pageNum);
-}}
-
-function onNextPage() {{
-  if (pageNum >= pdfDoc.numPages) return;
-  pageNum++;
-  queueRenderPage(pageNum);
-}}
-
-function adjustZoom(delta) {{
-  zoomLevel = Math.max(0.5, Math.min(3.0, zoomLevel + delta));
-  queueRenderPage(pageNum);
-}}
-
-document.getElementById('prev').addEventListener('click', onPrevPage);
-document.getElementById('next').addEventListener('click', onNextPage);
-document.getElementById('zoomOut').addEventListener('click', () => adjustZoom(-0.1));
-document.getElementById('zoomIn').addEventListener('click', () => adjustZoom(0.1));
-
-pdfjsLib.getDocument(url).promise.then((pdfDoc_) => {{
-  pdfDoc = pdfDoc_;
-  document.getElementById('page_count').textContent = String(pdfDoc.numPages);
-  renderPage(pageNum);
-}});
-
-let resizeTimer = null;
-window.addEventListener('resize', () => {{
-  if (!pdfDoc) return;
-  if (resizeTimer) clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => queueRenderPage(pageNum), 150);
-}});
-</script>
-"""
-        return render_page("PDF", body, extra_scripts=extra_scripts + fullscreen_script)
-
-    if view == "pdfjs":
-        if not pdf_path:
-            body = wrap_detail('<div class="warning">PDF not found. Provide --pdf-root to enable PDF viewing.</div>')
-            return render_page("PDF Viewer", body, extra_scripts=fullscreen_script)
-        viewer_url = build_pdfjs_viewer_url(pdf_url)
-        frame_height = "calc(100vh - 32px)" if embed else "100%"
-        body = wrap_detail(
-            f"""
-{pdf_only_warning_html}
-<div class="muted">{html.escape(str(pdf_path.name))}</div>
-<iframe class="pdfjs-frame" src="{html.escape(viewer_url)}" title="PDF.js Viewer"></iframe>
-"""
-        )
-        extra_head = f"""
-<style>
-.pdfjs-frame {{
-  width: 100%;
-  height: {frame_height};
-  border: 1px solid #d0d7de;
-  border-radius: 10px;
-  flex: 1;
-}}
-</style>
-"""
-        return render_page("PDF Viewer", body, extra_head=extra_head, extra_scripts=fullscreen_script)
-
-    selected_tag, available_templates = select_template_tag(paper, template_param)
-    markdown, template_name, warning = render_paper_markdown(
-        paper,
-        request.app.state.fallback_language,
-        template_tag=selected_tag,
-    )
-    md_renderer = create_md_renderer()
-    rendered_html = render_markdown_with_math_placeholders(md_renderer, markdown)
-
-    warning_html = f'<div class="warning">{html.escape(warning)}</div>' if warning else ""
-    template_controls = f'<div class="muted">Template: {html.escape(template_name)}</div>'
-    if available_templates:
-        options = "\n".join(
-            f'<option value="{html.escape(tag)}"{" selected" if tag == selected_tag else ""}>{html.escape(tag)}</option>'
-            for tag in available_templates
-        )
-        template_controls = f"""
+            template_controls = f"""
 <div class="muted" style="margin: 6px 0;">
   Template:
   <select id="templateSelect" style="padding:6px 8px; border:1px solid #d0d7de; border-radius:6px;">
@@ -825,79 +205,118 @@ if (templateSelect) {{
 }}
 </script>
 """
-    content_html = f"""
-{template_controls}
-{warning_html}
-{outline_html}
-<div id="content">{rendered_html}</div>
-"""
-    body = wrap_detail(content_html)
 
-    extra_head = f"""
-<link rel="stylesheet" href="{CDN_KATEX}" />
-{outline_css}
-"""
-    extra_scripts = f"""
-<script src="{CDN_MERMAID}"></script>
-<script src="{CDN_KATEX_JS}"></script>
-<script src="{CDN_KATEX_AUTO}"></script>
-<script>
-(function() {{
-  function initRendering() {{
-    // Mermaid: convert fenced code blocks to mermaid divs
-    document.querySelectorAll('code.language-mermaid').forEach((code) => {{
-      const pre = code.parentElement;
-      const div = document.createElement('div');
-      div.className = 'mermaid';
-      div.textContent = code.textContent;
-      pre.replaceWith(div);
-    }});
-    
-    if (window.mermaid) {{
-      mermaid.initialize({{ startOnLoad: false }});
-      mermaid.run();
-    }}
-    
-    if (window.renderMathInElement) {{
-      renderMathInElement(document.getElementById('content'), {{
-        delimiters: [
-          {{left: '$$', right: '$$', display: true}},
-          {{left: '$', right: '$', display: false}},
-          {{left: '\\\\(', right: '\\\\)', display: false}},
-          {{left: '\\\\[', right: '\\\\]', display: true}}
-        ],
-        throwOnError: false
-      }});
-    }}
-  }}
-  
-  // Run immediately if document is already loaded, otherwise wait
-  if (document.readyState === 'loading') {{
-    document.addEventListener('DOMContentLoaded', initRendering);
-  }} else {{
-    initRendering();
-  }}
-}})();
+    # Source view
+    if view == "source":
+        source_path = index.md_path_by_hash.get(source_hash)
+        if not source_path:
+            body_html = '<div class="warning">Source markdown not found. Provide --md-root to enable source viewing.</div>'
+        else:
+            try:
+                raw = source_path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                raw = source_path.read_text(encoding="latin-1")
+            md_renderer = create_md_renderer()
+            body_html = render_markdown_with_math_placeholders(md_renderer, raw)
+            raw_content = raw
+            source_path_str = str(source_path)
+            show_outline = True
 
-if (document.querySelector('.footnotes')) {{
-  const notes = {{}};
-  document.querySelectorAll('.footnotes li[id]').forEach((li) => {{
-    const id = li.getAttribute('id');
-    if (!id) return;
-    const clone = li.cloneNode(true);
-    clone.querySelectorAll('a.footnote-backref').forEach((el) => el.remove());
-    const text = (clone.textContent || '').replace(/\\s+/g, ' ').trim();
-    if (text) notes['#' + id] = text.length > 400 ? text.slice(0, 397) + '…' : text;
-  }});
-  document.querySelectorAll('.footnote-ref a[href^="#fn"]').forEach((link) => {{
-    const ref = link.getAttribute('href');
-    const text = notes[ref];
-    if (!text) return;
-    link.dataset.footnote = text;
-    link.classList.add('footnote-tip');
-  }});
-}}
-{outline_js}
-</script>
-"""
-    return render_page(page_title, body, extra_head=extra_head, extra_scripts=extra_scripts + fullscreen_script)
+    # Translated view
+    if view == "translated":
+        if not translation_langs or not selected_lang:
+            body_html = '<div class="warning">No translated markdown found. Provide <code>--md-translated-root</code> and place <code><base>.<lang>.md</code> under that root.</div>'
+        else:
+            translated_path = translations.get(selected_lang)
+            if not translated_path:
+                body_html = '<div class="warning">Translated markdown not found for the selected language.</div>'
+            else:
+                try:
+                    raw = translated_path.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    raw = translated_path.read_text(encoding="latin-1")
+                raw = normalize_markdown_images(raw)
+                md_renderer = create_md_renderer()
+                body_html = render_markdown_with_math_placeholders(md_renderer, raw)
+                raw_content = raw
+                translated_path_str = str(translated_path)
+                show_outline = True
+
+    # PDF view
+    if view == "pdf":
+        if not pdf_path:
+            body_html = '<div class="warning">PDF not found. Provide --pdf-root to enable PDF viewing.</div>'
+        pdf_filename = str(pdf_path.name) if pdf_path else ""
+
+    # PDF.js view
+    if view == "pdfjs":
+        if not pdf_path:
+            body_html = '<div class="warning">PDF not found. Provide --pdf-root to enable PDF viewing.</div>'
+        pdfjs_url = build_pdfjs_viewer_url(pdf_url)
+        pdf_filename = str(pdf_path.name) if pdf_path else ""
+
+    # Split view
+    if view == "split":
+        def pane_src(pane_view: str) -> str:
+            if pane_view == "pdfjs" and pdf_path:
+                return build_pdfjs_viewer_url(pdf_url)
+            params: dict[str, str] = {"view": pane_view, "embed": "1"}
+            if pane_view == "summary" and template_param:
+                params["template"] = str(template_param)
+            if pane_view == "translated" and selected_lang:
+                params["lang"] = selected_lang
+            return f"/paper/{source_hash}?{urlencode(params)}"
+
+        left_src = pane_src(left_view)
+        right_src = pane_src(right_view)
+
+        split_options = [
+            ("summary", "Summary"),
+            ("source", "Source"),
+            ("translated", "Translated"),
+            ("pdf", "PDF"),
+            ("pdfjs", "PDF Viewer"),
+        ]
+        if is_pdf_only:
+            split_options = [
+                ("pdf", "PDF"),
+                ("pdfjs", "PDF Viewer"),
+            ]
+
+    # Render template
+    return HTMLResponse(
+        render_template(
+            "detail.html",
+            title=page_title,
+            embed=embed,
+            header_title=page_title,
+            is_pdf_only=is_pdf_only,
+            current_view=view,
+            tabs=tabs,
+            view_hrefs=view_hrefs,
+            show_outline=show_outline,
+            # Content variables
+            body_html=body_html,
+            raw_content=raw_content,
+            template_name=template_name,
+            template_warning=template_warning,
+            template_controls=template_controls,
+            # Source view
+            source_path=source_path_str,
+            # Translated view
+            translated_path=translated_path_str,
+            selected_lang=selected_lang,
+            translation_langs=translation_langs,
+            # PDF view
+            pdf_filename=pdf_filename,
+            pdf_url=pdf_url,
+            # PDF.js view
+            pdfjs_url=pdfjs_url,
+            # Split view
+            left_src=left_src,
+            right_src=right_src,
+            left_view=left_view,
+            right_view=right_view,
+            split_options=split_options,
+        )
+    )
