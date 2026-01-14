@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import difflib
+import json
 from pathlib import Path
 from typing import Any
 import re
@@ -14,6 +15,12 @@ try:
     PYPDF_AVAILABLE = True
 except Exception:
     PYPDF_AVAILABLE = False
+
+try:
+    from pybtex.database import parse_file
+    PYBTEX_AVAILABLE = True
+except Exception:
+    PYBTEX_AVAILABLE = False
 
 @dataclass(frozen=True)
 class PaperIndex:
@@ -949,3 +956,417 @@ def _sorted_month_counts(counts: dict[str, int]) -> list[dict[str, Any]]:
 
     items = sorted(counts.items(), key=lambda item: month_sort(item[0]))
     return [{"label": k, "count": v} for k, v in items]
+
+
+# ============================================================================
+# Data Layer Helpers: Load, Merge, Cache, PDF-only Entries
+# ============================================================================
+
+_TEMPLATE_INFER_IGNORE_KEYS = {
+    "source_path",
+    "source_hash",
+    "provider",
+    "model",
+    "extracted_at",
+    "truncation",
+    "output_language",
+    "prompt_template",
+}
+
+
+def _load_paper_inputs(paths: list[Path]) -> list[dict[str, Any]]:
+    """Load paper JSON files and infer template tags if needed."""
+    # Delayed import to avoid circular dependency with template_registry
+    from deepresearch_flow.paper.template_registry import (
+        list_template_names_in_registry_order,
+        load_schema_for_template,
+    )
+    
+    inputs: list[dict[str, Any]] = []
+    for path in paths:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(payload, list):
+            raise ValueError(
+                f"Input JSON must be an object with template_tag and papers (got array): {path}"
+            )
+        if not isinstance(payload, dict):
+            raise ValueError(f"Input JSON must be an object: {path}")
+        papers = payload.get("papers")
+        if not isinstance(papers, list):
+            raise ValueError(f"Input JSON missing papers list: {path}")
+        template_tag = payload.get("template_tag")
+        if not template_tag:
+            template_tag = _infer_template_tag(papers, path, list_template_names_in_registry_order, load_schema_for_template)
+        inputs.append({"template_tag": str(template_tag), "papers": papers})
+    return inputs
+
+
+def _infer_template_tag(
+    papers: list[dict[str, Any]], 
+    path: Path,
+    list_template_names_in_registry_order,
+    load_schema_for_template,
+) -> str:
+    """Infer template tag from paper content."""
+    prompt_tags = {
+        str(paper.get("prompt_template"))
+        for paper in papers
+        if isinstance(paper, dict) and paper.get("prompt_template")
+    }
+    if len(prompt_tags) == 1:
+        return prompt_tags.pop()
+
+    sample = next((paper for paper in papers if isinstance(paper, dict)), None)
+    if sample is None:
+        raise ValueError(f"Input JSON has no paper objects to infer template_tag: {path}")
+
+    paper_keys = {key for key in sample.keys() if key not in _TEMPLATE_INFER_IGNORE_KEYS}
+    if not paper_keys:
+        raise ValueError(f"Input JSON papers have no keys to infer template_tag: {path}")
+
+    best_tag = None
+    best_score = -1
+    for name in list_template_names_in_registry_order():
+        schema = load_schema_for_template(name)
+        schema_keys = set((schema.get("properties") or {}).keys())
+        score = len(paper_keys & schema_keys)
+        if score > best_score:
+            best_score = score
+            best_tag = name
+        elif score == best_score:
+            if best_tag != "simple" and name == "simple":
+                best_tag = name
+
+    if not best_tag:
+        raise ValueError(f"Unable to infer template_tag from input JSON: {path}")
+    return best_tag
+
+
+def _build_cache_meta(
+    db_paths: list[Path],
+    bibtex_path: Path | None,
+    pdf_roots_meta: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Build cache metadata for invalidation."""
+    def file_meta(path: Path) -> dict[str, Any]:
+        try:
+            stats = path.stat()
+        except OSError as exc:
+            raise ValueError(f"Failed to read input metadata for cache: {path}") from exc
+        return {"path": str(path), "mtime": stats.st_mtime, "size": stats.st_size}
+
+    meta = {
+        "version": 1,
+        "inputs": [file_meta(path) for path in db_paths],
+        "bibtex": file_meta(bibtex_path) if bibtex_path else None,
+    }
+    if pdf_roots_meta is not None:
+        meta["pdf_roots"] = pdf_roots_meta
+    return meta
+
+
+def _load_cached_papers(cache_dir: Path, meta: dict[str, Any]) -> list[dict[str, Any]] | None:
+    """Load cached papers if metadata matches."""
+    meta_path = cache_dir / "db_serve_cache.meta.json"
+    data_path = cache_dir / "db_serve_cache.papers.json"
+    if not meta_path.exists() or not data_path.exists():
+        return None
+    try:
+        cached_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        if cached_meta != meta:
+            return None
+        cached_papers = json.loads(data_path.read_text(encoding="utf-8"))
+        if not isinstance(cached_papers, list):
+            return None
+        return cached_papers
+    except Exception:
+        return None
+
+
+def _write_cached_papers(cache_dir: Path, meta: dict[str, Any], papers: list[dict[str, Any]]) -> None:
+    """Write cached papers and metadata."""
+    meta_path = cache_dir / "db_serve_cache.meta.json"
+    data_path = cache_dir / "db_serve_cache.papers.json"
+    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    data_path.write_text(json.dumps(papers, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _extract_year_for_matching(paper: dict[str, Any]) -> str | None:
+    """Extract year from bibtex or publication_date for matching."""
+    if isinstance(paper.get("bibtex"), dict):
+        fields = paper.get("bibtex", {}).get("fields", {}) or {}
+        year = fields.get("year")
+        if year and str(year).isdigit():
+            return str(year)
+    parsed_year, _ = _parse_year_month(str(paper.get("publication_date") or ""))
+    return parsed_year
+
+
+def _prepare_paper_matching_fields(paper: dict[str, Any]) -> None:
+    """Ensure paper has _authors and _year fields for matching."""
+    if "_authors" not in paper:
+        paper["_authors"] = _extract_authors(paper)
+    if "_year" not in paper:
+        paper["_year"] = _extract_year_for_matching(paper) or ""
+
+
+def _build_pdf_only_entries(
+    papers: list[dict[str, Any]],
+    pdf_paths: list[Path],
+    pdf_index: dict[str, list[Path]],
+) -> list[dict[str, Any]]:
+    """Build paper entries for unmatched PDFs."""
+    matched: set[Path] = set()
+    for paper in papers:
+        _prepare_paper_matching_fields(paper)
+        pdf_path = _resolve_pdf(paper, pdf_index)
+        if pdf_path:
+            matched.add(pdf_path.resolve())
+
+    entries: list[dict[str, Any]] = []
+    for path in pdf_paths:
+        resolved = path.resolve()
+        if resolved in matched:
+            continue
+        title = _read_pdf_metadata_title(resolved) or _extract_title_from_filename(resolved.name)
+        if not title:
+            title = resolved.stem
+        year_hint, author_hint = _extract_year_author_from_filename(resolved.name)
+        entry: dict[str, Any] = {
+            "paper_title": title,
+            "paper_authors": [author_hint] if author_hint else [],
+            "publication_date": year_hint or "",
+            "source_hash": stable_hash(str(resolved)),
+            "source_path": str(resolved),
+            "_is_pdf_only": True,
+        }
+        entries.append(entry)
+    return entries
+
+
+def _normalize_merge_title(value: str | None) -> str | None:
+    """Normalize title for merging."""
+    if not value:
+        return None
+    return str(value).replace("{", "").replace("}", "").strip().lower()
+
+
+def _extract_bibtex_title(paper: dict[str, Any]) -> str | None:
+    """Extract normalized title from bibtex."""
+    if not isinstance(paper.get("bibtex"), dict):
+        return None
+    fields = paper.get("bibtex", {}).get("fields", {}) or {}
+    return _normalize_merge_title(fields.get("title"))
+
+
+def _extract_paper_title(paper: dict[str, Any]) -> str | None:
+    """Extract normalized paper_title."""
+    return _normalize_merge_title(paper.get("paper_title"))
+
+
+def _titles_match(group: dict[str, Any], paper: dict[str, Any], *, threshold: float) -> bool:
+    """Check if paper title matches group titles."""
+    bib_title = _extract_bibtex_title(paper)
+    group_bib = group.get("_merge_bibtex_titles") or set()
+    if bib_title and group_bib:
+        return any(_title_similarity(bib_title, existing) >= threshold for existing in group_bib)
+
+    paper_title = _extract_paper_title(paper)
+    group_titles = group.get("_merge_paper_titles") or set()
+    if paper_title and group_titles:
+        return any(_title_similarity(paper_title, existing) >= threshold for existing in group_titles)
+    return False
+
+
+def _add_merge_titles(group: dict[str, Any], paper: dict[str, Any]) -> None:
+    """Add paper titles to group merge tracking."""
+    bib_title = _extract_bibtex_title(paper)
+    if bib_title:
+        group.setdefault("_merge_bibtex_titles", set()).add(bib_title)
+    paper_title = _extract_paper_title(paper)
+    if paper_title:
+        group.setdefault("_merge_paper_titles", set()).add(paper_title)
+
+
+def _merge_paper_inputs(inputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Merge paper inputs from multiple template extractions."""
+    merged: list[dict[str, Any]] = []
+    threshold = 0.95
+    prefix_len = 5
+    bibtex_exact: dict[str, set[int]] = {}
+    bibtex_prefix: dict[str, set[int]] = {}
+    paper_exact: dict[str, set[int]] = {}
+    paper_prefix: dict[str, set[int]] = {}
+
+    def prefix_key(value: str) -> str:
+        return value[:prefix_len] if len(value) >= prefix_len else value
+
+    def add_index(
+        value: str,
+        exact_index: dict[str, set[int]],
+        prefix_index: dict[str, set[int]],
+        idx: int,
+    ) -> None:
+        exact_index.setdefault(value, set()).add(idx)
+        prefix_index.setdefault(prefix_key(value), set()).add(idx)
+
+    def candidate_ids(bib_title: str | None, paper_title: str | None) -> list[int]:
+        ids: set[int] = set()
+        if bib_title:
+            ids |= bibtex_exact.get(bib_title, set())
+            ids |= bibtex_prefix.get(prefix_key(bib_title), set())
+        if paper_title:
+            ids |= paper_exact.get(paper_title, set())
+            ids |= paper_prefix.get(prefix_key(paper_title), set())
+        return sorted(ids)
+
+    for bundle in inputs:
+        template_tag = bundle.get("template_tag")
+        papers = bundle.get("papers") or []
+        for paper in papers:
+            if not isinstance(paper, dict):
+                raise ValueError("Input papers must be objects")
+            bib_title = _extract_bibtex_title(paper)
+            paper_title = _extract_paper_title(paper)
+            match = None
+            match_idx = None
+            for idx in candidate_ids(bib_title, paper_title):
+                candidate = merged[idx]
+                if _titles_match(candidate, paper, threshold=threshold):
+                    match = candidate
+                    match_idx = idx
+                    break
+            if match is None:
+                group = {
+                    "templates": {template_tag: paper},
+                    "template_order": [template_tag],
+                }
+                _add_merge_titles(group, paper)
+                merged.append(group)
+                group_idx = len(merged) - 1
+                if bib_title:
+                    add_index(bib_title, bibtex_exact, bibtex_prefix, group_idx)
+                if paper_title:
+                    add_index(paper_title, paper_exact, paper_prefix, group_idx)
+            else:
+                templates = match.setdefault("templates", {})
+                templates[template_tag] = paper
+                order = match.setdefault("template_order", [])
+                if template_tag not in order:
+                    order.append(template_tag)
+                _add_merge_titles(match, paper)
+                if match_idx is not None:
+                    if bib_title:
+                        add_index(bib_title, bibtex_exact, bibtex_prefix, match_idx)
+                    if paper_title:
+                        add_index(paper_title, paper_exact, paper_prefix, match_idx)
+
+    for group in merged:
+        templates = group.get("templates") or {}
+        order = group.get("template_order") or list(templates.keys())
+        default_tag = "simple" if "simple" in order else (order[0] if order else None)
+        group["default_template"] = default_tag
+        if default_tag and default_tag in templates:
+            base = templates[default_tag]
+            for key, value in base.items():
+                group[key] = value
+        group.pop("_merge_bibtex_titles", None)
+        group.pop("_merge_paper_titles", None)
+    return merged
+
+
+def _normalize_bibtex_title(title: str) -> str:
+    """Normalize bibtex title for matching."""
+    value = title.replace("{", "").replace("}", "")
+    value = re.sub(r"[^a-z0-9]+", " ", value.lower())
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def enrich_with_bibtex(papers: list[dict[str, Any]], bibtex_path: Path) -> None:
+    """Enrich papers with bibtex metadata."""
+    if not PYBTEX_AVAILABLE:
+        raise RuntimeError("pybtex is required for --bibtex support")
+
+    bib_data = parse_file(str(bibtex_path))
+    entries: list[dict[str, Any]] = []
+    by_prefix: dict[str, list[int]] = {}
+    for key, entry in bib_data.entries.items():
+        fields = dict(entry.fields)
+        title = str(fields.get("title") or "").strip()
+        title_norm = _normalize_bibtex_title(title)
+        if not title_norm:
+            continue
+        record = {
+            "key": key,
+            "type": entry.type,
+            "fields": fields,
+            "persons": {role: [str(p) for p in persons] for role, persons in entry.persons.items()},
+            "_title_norm": title_norm,
+        }
+        idx = len(entries)
+        entries.append(record)
+        prefix = title_norm[:16]
+        by_prefix.setdefault(prefix, []).append(idx)
+
+    for paper in papers:
+        if isinstance(paper.get("bibtex"), dict):
+            continue
+        title = str(paper.get("paper_title") or "").strip()
+        if not title:
+            continue
+        norm = _normalize_bibtex_title(title)
+        if not norm:
+            continue
+
+        candidates = []
+        prefix = norm[:16]
+        for cand_idx in by_prefix.get(prefix, []):
+            candidates.append(entries[cand_idx])
+        if not candidates:
+            candidates = entries
+
+        best = None
+        best_score = 0.0
+        for entry in candidates:
+            score = _title_similarity(norm, entry["_title_norm"])
+            if score > best_score:
+                best_score = score
+                best = entry
+
+        if best is not None and best_score >= 0.9:
+            paper["bibtex"] = {k: v for k, v in best.items() if not k.startswith("_")}
+
+
+def load_and_merge_papers(
+    db_paths: list[Path],
+    bibtex_path: Path | None = None,
+    cache_dir: Path | None = None,
+    use_cache: bool = True,
+    pdf_roots: list[Path] | None = None,
+) -> list[dict[str, Any]]:
+    """Load and merge papers from multiple JSON files, with optional caching and PDF-only entries."""
+    cache_meta = None
+    pdf_roots = pdf_roots or []
+    pdf_paths: list[Path] = []
+    pdf_roots_meta: list[dict[str, Any]] | None = None
+    if pdf_roots:
+        pdf_paths, pdf_roots_meta = _scan_pdf_roots(pdf_roots)
+    if cache_dir and use_cache:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_meta = _build_cache_meta(db_paths, bibtex_path, pdf_roots_meta)
+        cached = _load_cached_papers(cache_dir, cache_meta)
+        if cached is not None:
+            return cached
+
+    inputs = _load_paper_inputs(db_paths)
+    if bibtex_path is not None:
+        for bundle in inputs:
+            enrich_with_bibtex(bundle["papers"], bibtex_path)
+    papers = _merge_paper_inputs(inputs)
+    if pdf_paths:
+        pdf_index = _build_file_index_from_paths(pdf_paths, suffixes={".pdf"})
+        papers.extend(_build_pdf_only_entries(papers, pdf_paths, pdf_index))
+
+    if cache_dir and use_cache and cache_meta is not None:
+        _write_cached_papers(cache_dir, cache_meta, papers)
+    return papers
