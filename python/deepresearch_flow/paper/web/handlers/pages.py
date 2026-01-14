@@ -156,7 +156,7 @@ async def paper_detail(request: Request) -> HTMLResponse:
     # Initialize template variables
     body_html = ""
     raw_content = ""
-    template_name = ""
+    summary_template_name = ""
     template_warning = ""
     template_controls = ""
     source_path_str = ""
@@ -171,7 +171,7 @@ async def paper_detail(request: Request) -> HTMLResponse:
     # Summary view
     if view == "summary":
         selected_tag, available_templates = select_template_tag(paper, template_param)
-        markdown, template_name, warning = render_paper_markdown(
+        markdown, summary_template_name, warning = render_paper_markdown(
             paper,
             request.app.state.fallback_language,
             template_tag=selected_tag,
@@ -298,7 +298,7 @@ if (templateSelect) {{
             # Content variables
             body_html=body_html,
             raw_content=raw_content,
-            template_name=template_name,
+            summary_template_name=summary_template_name,
             template_warning=template_warning,
             template_controls=template_controls,
             # Source view

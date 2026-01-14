@@ -10,17 +10,8 @@
     <link rel="stylesheet" href="/static/css/main.css" />
     {% block extra_head %}{% endblock %}
   </head>
-  {% if pdf_url %}
-  <body data-pdf-url="{{ pdf_url }}">
-  {% else %}
-  <body>
-  {% endif %}
-    {% if embed %}
-    {# Embed mode: minimal container without header #}
-    <div class="container" style="max-width:100%;padding:16px;">
-      {% block content %}{% endblock %}
-    </div>
-    {% else %}
+  <body{% if pdf_url %} data-pdf-url="{{ pdf_url }}"{% endif %}>
+    {% if not embed %}
     {# Normal mode: show header #}
     {% if header_title %}
     <header class="detail-header">
@@ -36,10 +27,10 @@
       <a href="/stats">Stats</a>
     </header>
     {% endif %}
-    <div class="container">
+    {% endif %}
+    <div class="container"{% if embed %} style="max-width:100%;padding:16px;"{% endif %}>
       {% block content %}{% endblock %}
     </div>
-    {% endif %}
     {% block extra_scripts %}{% endblock %}
   </body>
 </html>

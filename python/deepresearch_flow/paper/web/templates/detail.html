@@ -121,8 +121,8 @@
     {# Main content based on view #}
     {% if current_view == 'summary' %}
       {# Summary view #}
-      {% if template_name %}
-      <div class="muted">Template: {{ template_name }}</div>
+      {% if summary_template_name %}
+      <div class="muted">Template: {{ summary_template_name }}</div>
       {% endif %}
       {% if template_warning %}
       {{ template_warning|safe }}
