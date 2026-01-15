@@ -89,6 +89,24 @@
     if (!document.getElementById('content')) return;
 
     function initRendering() {
+      // Markmap: convert fenced markmap blocks to svg mindmaps
+      if (window.markmap && window.markmap.Transformer && window.markmap.Markmap) {
+        var transformer = new window.markmap.Transformer();
+        document.querySelectorAll('code.language-markmap').forEach(function(code) {
+          var pre = code.parentElement;
+          if (!pre) return;
+          var svg = document.createElement('svg');
+          svg.className = 'markmap';
+          pre.replaceWith(svg);
+          try {
+            var result = transformer.transform(code.textContent || '');
+            window.markmap.Markmap.create(svg, null, result.root);
+          } catch (err) {
+            // Ignore markmap parse errors
+          }
+        });
+      }
+
       // Mermaid: convert fenced code blocks to mermaid divs
       document.querySelectorAll('code.language-mermaid').forEach(function(code) {
         var pre = code.parentElement;
