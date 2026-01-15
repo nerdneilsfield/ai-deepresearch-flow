@@ -39,6 +39,14 @@
     return div.innerHTML;
   }
 
+  function normalizeText(text) {
+    return String(text || "").replace(/\s+/g, " ").trim();
+  }
+
+  function cleanVenue(text) {
+    return normalizeText(text).replace(/\{\{|\}\}/g, "");
+  }
+
   function viewSuffixForItem(item) {
     var viewSelect = document.getElementById("openView");
     var view = viewSelect ? viewSelect.value : "summary";
@@ -68,18 +76,42 @@
     return "?" + params.toString();
   }
 
-  function renderItem(item) {
+  function renderItem(item, ordinal) {
     var tags = (item.tags || []).map(function(t) { return '<span class="pill">' + escapeHtml(t) + '</span>'; }).join("");
     var templateTags = (item.template_tags || []).map(function(t) { return '<span class="pill template">tmpl:' + escapeHtml(t) + '</span>'; }).join("");
     var authors = (item.authors || []).slice(0, 6).map(function(a) { return escapeHtml(a); }).join(", ");
-    var meta = escapeHtml(item.year || "") + "-" + escapeHtml(item.month || "") + " · " + escapeHtml(item.venue || "");
+    var venue = cleanVenue(item.venue || "");
+    var dateLabel = escapeHtml(item.year || "") + "-" + escapeHtml(item.month || "");
+    var meta = venue ? (dateLabel + " · <strong>" + escapeHtml(venue) + "</strong>") : dateLabel;
+    var excerpt = "";
+    var fullSummary = normalizeText(item.summary_full || "");
+    var shortSummary = normalizeText(item.summary_excerpt || fullSummary);
+    if (shortSummary) {
+      if (fullSummary && fullSummary !== shortSummary) {
+        excerpt = '<div class="summary-snippet" data-summary="1">' +
+          '<button class="summary-toggle" type="button" aria-expanded="false" title="Expand summary">▾</button>' +
+          '<div class="summary-text summary-short">' + escapeHtml(shortSummary) + '</div>' +
+          '<div class="summary-text summary-full">' + escapeHtml(fullSummary) + '</div>' +
+          '</div>';
+      } else {
+        excerpt = '<div class="summary-snippet"><div class="summary-text summary-short">' + escapeHtml(shortSummary) + '</div></div>';
+      }
+    }
     var viewSuffix = viewSuffixForItem(item);
     var badges = [];
     if (item.has_source) badges.push('<span class="pill">source</span>');
     if (item.has_translation) badges.push('<span class="pill">translated</span>');
     if (item.has_pdf) badges.push('<span class="pill">pdf</span>');
     if (item.is_pdf_only) badges.push('<span class="pill pdf-only">pdf-only</span>');
-    return '<div class="card"><div><a href="/paper/' + encodeURIComponent(item.source_hash) + viewSuffix + '">' + escapeHtml(item.title || "") + '</a></div><div class="muted">' + authors + '</div><div class="muted">' + meta + '</div><div style="margin-top:6px">' + badges.join("") + " " + templateTags + " " + tags + '</div></div>';
+    var indexBadge = typeof ordinal === "number" ? '<span class="card-index">#' + ordinal + '</span>' : "";
+    return '<div class="card paper-card">' +
+      indexBadge +
+      '<div><a href="/paper/' + encodeURIComponent(item.source_hash) + viewSuffix + '">' + escapeHtml(item.title || "") + '</a></div>' +
+      '<div class="muted">' + authors + '</div>' +
+      '<div class="muted">' + meta + '</div>' +
+      excerpt +
+      '<div style="margin-top:6px">' + badges.join("") + " " + templateTags + " " + tags + '</div>' +
+      '</div>';
   }
 
   function renderStatsRow(targetId, label, counts) {
@@ -116,11 +148,23 @@
     fetch(url).then(function(res) { return res.json(); }).then(function(data) {
       if (data.stats) updateStats(data.stats);
       var results = document.getElementById("results");
-      if (results) {
-        for (var i = 0; i < data.items.length; i++) {
-          results.insertAdjacentHTML("beforeend", renderItem(data.items[i]));
-        }
+    if (results) {
+      var startIndex = (data.page - 1) * data.page_size;
+      for (var i = 0; i < data.items.length; i++) {
+        results.insertAdjacentHTML("beforeend", renderItem(data.items[i], startIndex + i + 1));
       }
+      if (window.renderMathInElement) {
+        renderMathInElement(results, {
+          delimiters: [
+            {left: '$$', right: '$$', display: true},
+            {left: '$', right: '$', display: false},
+            {left: '\\\\(', right: '\\\\)', display: false},
+            {left: '\\\\[', right: '\\\\]', display: true}
+          ],
+          throwOnError: false
+        });
+      }
+    }
       if (!data.has_more) {
         done = true;
         if (loadingEl) loadingEl.textContent = "End.";
@@ -195,9 +239,22 @@
     });
   }
 
+  function initSummaryToggle() {
+    document.addEventListener("click", function(event) {
+      var target = event.target;
+      if (!target || !target.classList.contains("summary-toggle")) return;
+      var container = target.closest(".summary-snippet");
+      if (!container) return;
+      var isOpen = container.classList.toggle("is-open");
+      target.setAttribute("aria-expanded", isOpen ? "true" : "false");
+      target.textContent = isOpen ? "▴" : "▾";
+    });
+  }
+
   function init() {
     initEventListeners();
     initScrollHandler();
+    initSummaryToggle();
     loadMore();
   }
 

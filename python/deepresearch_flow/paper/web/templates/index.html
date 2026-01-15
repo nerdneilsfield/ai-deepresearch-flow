@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 
 {% block extra_head %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css" />
 <style>
   #content img {
     max-width: 100%;
@@ -11,11 +12,11 @@
 
 {% block content %}
 <h2>Paper Database</h2>
-<div class="card">
+<div class="card rounded-2xl border border-slate-200 bg-white/80 shadow-sm backdrop-blur">
   <div class="muted">Search (Scholar-style): <code>tag:fpga year:2023..2025 -survey</code> · Use quotes for phrases and <code>OR</code> for alternatives.</div>
   <div class="search-row">
-    <input id="query" placeholder='Search... e.g. title:"nearest neighbor" tag:fpga year:2023..2025' />
-    <select id="openView">
+    <input id="query" class="h-11 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-950/20" placeholder='Search... e.g. title:"nearest neighbor" tag:fpga year:2023..2025' />
+    <select id="openView" class="h-11 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 shadow-sm">
       <option value="summary" selected>Open: Summary</option>
       <option value="source">Open: Source</option>
       <option value="translated">Open: Translated</option>
@@ -27,35 +28,35 @@
   <div class="filters" style="margin-top:10px;">
     <div class="filter-group">
       <label>PDF</label>
-      <select id="filterPdf" multiple size="2">
+      <select id="filterPdf" multiple size="2" class="h-20 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-900 shadow-sm">
         <option value="with">With</option>
         <option value="without">Without</option>
       </select>
     </div>
     <div class="filter-group">
       <label>Source</label>
-      <select id="filterSource" multiple size="2">
+      <select id="filterSource" multiple size="2" class="h-20 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-900 shadow-sm">
         <option value="with">With</option>
         <option value="without">Without</option>
       </select>
     </div>
     <div class="filter-group">
       <label>Translated</label>
-      <select id="filterTranslated" multiple size="2">
+      <select id="filterTranslated" multiple size="2" class="h-20 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-900 shadow-sm">
         <option value="with">With</option>
         <option value="without">Without</option>
       </select>
     </div>
     <div class="filter-group">
       <label>Summary</label>
-      <select id="filterSummary" multiple size="2">
+      <select id="filterSummary" multiple size="2" class="h-20 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-900 shadow-sm">
         <option value="with">With</option>
         <option value="without">Without</option>
       </select>
     </div>
     <div class="filter-group">
       <label>Template</label>
-      <select id="filterTemplate" multiple size="4">
+      <select id="filterTemplate" multiple size="4" class="h-28 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-900 shadow-sm">
         {% if template_tags %}
         {% for tag in template_tags %}
         <option value="{{ tag }}">{{ tag }}</option>
@@ -67,15 +68,15 @@
     </div>
   </div>
   <div class="filter-row">
-    <input id="filterQuery" placeholder='Filters... e.g. pdf:yes tmpl:simple' />
-    <select id="sortBy">
+    <input id="filterQuery" class="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 shadow-sm" placeholder='Filters... e.g. pdf:yes tmpl:simple' />
+    <select id="sortBy" class="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 shadow-sm">
       <option value="" selected>Sort: Default</option>
       <option value="year">Sort: Year</option>
       <option value="title">Sort: Title</option>
       <option value="venue">Sort: Venue</option>
       <option value="author">Sort: First Author</option>
     </select>
-    <select id="sortDir">
+    <select id="sortDir" class="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 shadow-sm">
       <option value="desc" selected>Order: Desc</option>
       <option value="asc">Order: Asc</option>
     </select>
@@ -85,27 +86,29 @@
     <summary>Advanced search</summary>
     <div style="margin-top:10px;" class="muted">Build a query:</div>
     <div class="filters">
-      <input id="advTitle" placeholder="title contains..." />
-      <input id="advAuthor" placeholder="author contains..." />
-      <input id="advTag" placeholder="tag (comma separated)" />
-      <input id="advYear" placeholder="year (e.g. 2020..2024)" />
-      <input id="advMonth" placeholder="month (01-12)" />
-      <input id="advVenue" placeholder="venue contains..." />
+      <input id="advTitle" class="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 shadow-sm" placeholder="title contains..." />
+      <input id="advAuthor" class="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 shadow-sm" placeholder="author contains..." />
+      <input id="advTag" class="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 shadow-sm" placeholder="tag (comma separated)" />
+      <input id="advYear" class="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 shadow-sm" placeholder="year (e.g. 2020..2024)" />
+      <input id="advMonth" class="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 shadow-sm" placeholder="month (01-12)" />
+      <input id="advVenue" class="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 shadow-sm" placeholder="venue contains..." />
     </div>
     <div class="adv-actions">
-      <button id="buildQuery" style="padding:8px 12px; border-radius:8px; border:1px solid #d0d7de; background:#f6f8fa; cursor:pointer;">Build</button>
+      <button id="buildQuery" class="inline-flex h-10 items-center justify-center rounded-md bg-slate-900 px-4 text-sm font-medium text-white shadow hover:bg-slate-800">Build</button>
       <div class="muted">Generated: <code id="generated"></code></div>
     </div>
   </details>
 </div>
-<div id="stats" class="stats">
-  <div id="statsTotal" class="stats-row"></div>
-  <div id="statsFiltered" class="stats-row" style="margin-top:6px;"></div>
+<div id="stats" class="stats mt-3 grid gap-2">
+  <div id="statsTotal" class="stats-row flex flex-wrap items-center gap-2"></div>
+  <div id="statsFiltered" class="stats-row flex flex-wrap items-center gap-2"></div>
 </div>
 <div id="results"></div>
 <div id="loading" class="muted">Loading...</div>
 {% endblock %}
 
 {% block extra_scripts %}
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"></script>
 <script src="/static/js/index.js"></script>
 {% endblock %}

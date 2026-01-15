@@ -17,6 +17,9 @@ except ImportError:  # pragma: no cover - compatibility with older names
 from deepresearch_flow.paper.db_ops import _available_templates
 from deepresearch_flow.paper.render import load_default_template
 from deepresearch_flow.paper.template_registry import load_render_template
+from deepresearch_flow.paper.web.text import normalize_venue
+
+_HTML_TABLE_TOKEN_RE = re.compile(r"@@HTML_TABLE_\d+@@")
 
 
 def create_md_renderer() -> MarkdownIt:
@@ -34,6 +37,16 @@ def strip_paragraph_wrapped_tables(text: str) -> str:
         line = re.sub(r"^\s*<p>\s*\|", "|", line)
         line = re.sub(r"\|\s*</p>\s*$", "|", line)
         lines[idx] = line
+    return "\n".join(lines)
+
+
+def normalize_footnote_definitions(text: str) -> str:
+    """Normalize footnote definitions to the markdown-it footnote format."""
+    lines = text.splitlines()
+    for idx, line in enumerate(lines):
+        match = re.match(r"^\[\^([0-9]+)\]\s+", line)
+        if match:
+            lines[idx] = re.sub(r"^\[\^([0-9]+)\]\s+", r"[^\1]: ", line)
     return "\n".join(lines)
 
 
@@ -464,6 +477,7 @@ def extract_html_table_placeholders(text: str) -> tuple[str, dict[str, str]]:
 def render_markdown_with_math_placeholders(md: MarkdownIt, text: str) -> str:
     """Render markdown with math, images, and tables properly escaped."""
     text = strip_paragraph_wrapped_tables(text)
+    text = normalize_footnote_definitions(text)
     rendered, table_placeholders = extract_html_table_placeholders(text)
     rendered, img_placeholders = extract_html_img_placeholders(rendered)
     rendered, placeholders = extract_math_placeholders(rendered)
@@ -476,6 +490,14 @@ def render_markdown_with_math_placeholders(md: MarkdownIt, text: str) -> str:
     for key, value in table_placeholders.items():
         safe_html = sanitize_table_html(value)
         html_out = re.sub(rf"<p>\s*{re.escape(key)}\s*</p>", lambda _: safe_html, html_out)
+        html_out = html_out.replace(key, safe_html)
+    if _HTML_TABLE_TOKEN_RE.search(html_out):
+        html_out = _HTML_TABLE_TOKEN_RE.sub(
+            '<div class="warning">Table placeholder could not be restored.</div>',
+            html_out,
+        )
+    html_out = re.sub(r"&lt;sup&gt;([0-9]+)&lt;/sup&gt;", r"<sup>\1</sup>", html_out)
+    html_out = re.sub(r"&lt;sub&gt;([0-9]+)&lt;/sub&gt;", r"<sub>\1</sub>", html_out)
     return html_out
 
 
@@ -522,4 +544,6 @@ def render_paper_markdown(
     context = dict(selected_paper)
     if not context.get("output_language"):
         context["output_language"] = fallback_language
+    if "publication_venue" in context:
+        context["publication_venue"] = normalize_venue(str(context.get("publication_venue") or ""))
     return template.render(**context), str(template_name), warning

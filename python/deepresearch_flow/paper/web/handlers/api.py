@@ -19,6 +19,7 @@ from deepresearch_flow.paper.web.filters import (
     presence_filter,
     sorted_ids,
 )
+from deepresearch_flow.paper.web.text import extract_summary_snippet, normalize_title, normalize_venue
 from deepresearch_flow.paper.web.query import Query, QueryTerm, parse_query
 
 
@@ -167,11 +168,13 @@ async def api_papers(request: Request) -> JSONResponse:
         items.append(
             {
                 "source_hash": source_hash,
-                "title": paper.get("paper_title") or "",
+                "title": normalize_title(paper.get("paper_title") or ""),
+                "summary_excerpt": extract_summary_snippet(paper),
+                "summary_full": paper.get("summary") or "",
                 "authors": paper.get("_authors") or [],
                 "year": paper.get("_year") or "",
                 "month": paper.get("_month") or "",
-                "venue": paper.get("_venue") or "",
+                "venue": normalize_venue(paper.get("_venue") or ""),
                 "tags": paper.get("_tags") or [],
                 "template_tags": paper.get("_template_tags") or [],
                 "has_source": source_hash in index.md_path_by_hash,
