@@ -60,6 +60,7 @@ DeepResearch Flow provides a unified pipeline to **Repair**, **Translate**, **Ex
 - **Smart Extraction**: Turn unstructured Markdown into schema-enforced JSON (summaries, metadata, Q&A) using LLMs (OpenAI, Claude, Gemini, etc.).
 - **Precision Translation**: Translate OCR Markdown to Chinese/Japanese (`.zh.md`, `.ja.md`) while **freezing** formulas, code, tables, and references. No more broken layout.
 - **Local Knowledge DB**: A high-performance local Web UI to browse papers with **Split View** (Source vs. Translated vs. Summary), full-text search, and multi-dimensional filtering.
+- **Coverage Compare**: Compare JSON/PDF/Markdown/Translated datasets to find missing artifacts and export CSV reports.
 - **OCR Post-Processing**: Automatically fix broken references (`[1]` -> `[^1]`), merge split paragraphs, and standardize layouts.
 
 ---
@@ -185,7 +186,27 @@ uv run deepresearch-flow paper db serve \
 </details>
 
 <details>
-<summary><strong>4. Recognize: OCR Post-Processing</strong></summary>
+<summary><strong>4. Paper DB Compare: Coverage Audit</strong></summary>
+
+Compare two datasets (A/B) to find missing PDFs, markdowns, translations, or JSON items, with match metadata.
+
+```bash
+uv run deepresearch-flow paper db compare \
+  --input-a ./a.json \
+  --md-root-b ./md_root \
+  --output-csv ./compare.csv
+
+# Compare translated markdowns by language
+uv run deepresearch-flow paper db compare \
+  --md-translated-root-a ./translated_a \
+  --md-translated-root-b ./translated_b \
+  --lang zh
+```
+
+</details>
+
+<details>
+<summary><strong>5. Recognize: OCR Post-Processing</strong></summary>
 
 Tools to clean up raw outputs from OCR engines like MinerU.
 

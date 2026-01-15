@@ -808,3 +808,187 @@ def register_db_commands(db_group: click.Group) -> None:
             raise click.ClickException(str(exc)) from exc
         rendered = render_papers(papers, out_dir, template, output_language)
         click.echo(f"Rendered {rendered} markdown files")
+
+    @db_group.command("compare")
+    @click.option(
+        "-ia", "--input-a", "input_paths_a", multiple=True, help="Input JSON files for side A (repeatable)"
+    )
+    @click.option(
+        "-ib", "--input-b", "input_paths_b", multiple=True, help="Input JSON files for side B (repeatable)"
+    )
+    @click.option(
+        "--pdf-root-a", "pdf_roots_a", multiple=True, help="PDF root directories for side A (repeatable)"
+    )
+    @click.option(
+        "--pdf-root-b", "pdf_roots_b", multiple=True, help="PDF root directories for side B (repeatable)"
+    )
+    @click.option(
+        "--md-root-a", "md_roots_a", multiple=True, help="Markdown root directories for side A (repeatable)"
+    )
+    @click.option(
+        "--md-root-b", "md_roots_b", multiple=True, help="Markdown root directories for side B (repeatable)"
+    )
+    @click.option(
+        "--md-translated-root-a", "md_translated_roots_a", multiple=True,
+        help="Translated Markdown root directories for side A (repeatable)"
+    )
+    @click.option(
+        "--md-translated-root-b", "md_translated_roots_b", multiple=True,
+        help="Translated Markdown root directories for side B (repeatable)"
+    )
+    @click.option("-b", "--bibtex", "bibtex_path", default=None, help="Optional BibTeX file path")
+    @click.option("--lang", "lang", default=None, help="Language code for translated comparisons (e.g., zh)")
+    @click.option(
+        "--output-csv", "output_csv", default=None, help="Path to export results as CSV"
+    )
+    @click.option(
+        "--sample-limit", "sample_limit", default=5, type=int, show_default=True,
+        help="Number of sample items to show in terminal output"
+    )
+    def compare(
+        input_paths_a: tuple[str, ...],
+        input_paths_b: tuple[str, ...],
+        pdf_roots_a: tuple[str, ...],
+        pdf_roots_b: tuple[str, ...],
+        md_roots_a: tuple[str, ...],
+        md_roots_b: tuple[str, ...],
+        md_translated_roots_a: tuple[str, ...],
+        md_translated_roots_b: tuple[str, ...],
+        bibtex_path: str | None,
+        lang: str | None,
+        output_csv: str | None,
+        sample_limit: int,
+    ) -> None:
+        """Compare two datasets and report matches and differences."""
+        from deepresearch_flow.paper.db_ops import compare_datasets
+        import csv
+        
+        # Validate that at least one input is provided for each side
+        has_input_a = bool(input_paths_a or pdf_roots_a or md_roots_a or md_translated_roots_a)
+        has_input_b = bool(input_paths_b or pdf_roots_b or md_roots_b or md_translated_roots_b)
+        
+        if not has_input_a:
+            raise click.ClickException(
+                "Side A must have at least one input: --input-a, --pdf-root-a, --md-root-a, or --md-translated-root-a"
+            )
+        if not has_input_b:
+            raise click.ClickException(
+                "Side B must have at least one input: --input-b, --pdf-root-b, --md-root-b, or --md-translated-root-b"
+            )
+        if (md_translated_roots_a or md_translated_roots_b) and not lang:
+            raise click.ClickException("--lang is required when comparing translated Markdown datasets")
+        
+        # Run comparison
+        try:
+            results = compare_datasets(
+                json_paths_a=[Path(p) for p in input_paths_a],
+                pdf_roots_a=[Path(p) for p in pdf_roots_a],
+                md_roots_a=[Path(p) for p in md_roots_a],
+                md_translated_roots_a=[Path(p) for p in md_translated_roots_a],
+                json_paths_b=[Path(p) for p in input_paths_b],
+                pdf_roots_b=[Path(p) for p in pdf_roots_b],
+                md_roots_b=[Path(p) for p in md_roots_b],
+                md_translated_roots_b=[Path(p) for p in md_translated_roots_b],
+                bibtex_path=Path(bibtex_path) if bibtex_path else None,
+                lang=lang,
+            )
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
+        
+        # Calculate statistics
+        total_a = sum(1 for r in results if r.side == "A")
+        total_b = sum(1 for r in results if r.side == "B")
+        matched = sum(1 for r in results if r.side == "MATCH")
+        only_in_a = sum(1 for r in results if r.side == "A" and r.match_status == "only_in_A")
+        only_in_b = sum(1 for r in results if r.side == "B" and r.match_status == "only_in_B")
+        
+        console = Console()
+        
+        # Print summary table
+        summary_table = Table(title="Comparison Summary")
+        summary_table.add_column("Metric", style="cyan")
+        summary_table.add_column("Count", style="green", justify="right")
+        summary_table.add_row("Total in A", str(total_a))
+        summary_table.add_row("Total in B", str(total_b))
+        summary_table.add_row("Matched", str(matched))
+        summary_table.add_row("Only in A", str(only_in_a))
+        summary_table.add_row("Only in B", str(only_in_b))
+        console.print(summary_table)
+        
+        # Print match type breakdown
+        match_types: dict[str, int] = {}
+        for r in results:
+            if r.side == "MATCH" and r.match_type:
+                match_types[r.match_type] = match_types.get(r.match_type, 0) + 1
+        
+        if match_types:
+            type_table = Table(title="Match Types")
+            type_table.add_column("Type", style="cyan")
+            type_table.add_column("Count", style="green", justify="right")
+            for match_type, count in sorted(match_types.items(), key=lambda x: x[1], reverse=True):
+                type_table.add_row(match_type, str(count))
+            console.print(type_table)
+        
+        # Print sample results
+        console.print("\n[bold]Sample Results:[/bold]")
+        
+        # Sample matched items
+        matched_samples = [r for r in results if r.side == "MATCH"][:sample_limit]
+        if matched_samples:
+            console.print("\n[green]Matched Items:[/green]")
+            for r in matched_samples:
+                left = (r.title or "")[:60]
+                right = (r.other_title or "")[:60]
+                console.print(
+                    f"  • {left} ↔ {right} (type: {r.match_type}, score: {r.match_score:.2f})"
+                )
+        
+        # Sample only in A
+        only_a_samples = [
+            r for r in results if r.side == "A" and r.match_status == "only_in_A"
+        ][:sample_limit]
+        if only_a_samples:
+            console.print("\n[yellow]Only in A:[/yellow]")
+            for r in only_a_samples:
+                console.print(f"  • {r.title[:60]}...")
+        
+        # Sample only in B
+        only_b_samples = [
+            r for r in results if r.side == "B" and r.match_status == "only_in_B"
+        ][:sample_limit]
+        if only_b_samples:
+            console.print("\n[yellow]Only in B:[/yellow]")
+            for r in only_b_samples:
+                console.print(f"  • {r.title[:60]}...")
+        
+        # Export to CSV if requested
+        if output_csv:
+            output_path = Path(output_csv)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            with open(output_path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerow([
+                    "Side", "Source Hash", "Title", "Match Status", "Match Type",
+                    "Match Score", "Source Path", "Other Source Hash", "Other Title",
+                    "Other Source Path", "Lang"
+                ])
+                for r in results:
+                    writer.writerow([
+                        r.side,
+                        r.source_hash,
+                        r.title,
+                        r.match_status,
+                        r.match_type or "",
+                        f"{r.match_score:.4f}",
+                        r.source_path or "",
+                        r.other_source_hash or "",
+                        r.other_title or "",
+                        r.other_source_path or "",
+                        r.lang or "",
+                    ])
+            
+            console.print(f"\n[green]Results exported to: {output_path}[/green]")
+        
+        # Print final counts
+        console.print(f"\nTotal results: {len(results)}")

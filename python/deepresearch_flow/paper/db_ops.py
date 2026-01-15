@@ -1370,3 +1370,570 @@ def load_and_merge_papers(
     if cache_dir and use_cache and cache_meta is not None:
         _write_cached_papers(cache_dir, cache_meta, papers)
     return papers
+
+
+# ============================================================================
+# Compare Logic for paper db compare
+# ============================================================================
+
+from typing import Literal
+
+
+@dataclass
+class CompareResult:
+    """Result of comparing two datasets."""
+    side: Literal["A", "B", "MATCH"]
+    source_hash: str
+    title: str
+    match_status: Literal["matched", "only_in_A", "only_in_B", "matched_pair"]
+    match_type: str | None = None
+    match_score: float = 0.0
+    source_path: str | None = None
+    other_source_hash: str | None = None
+    other_title: str | None = None
+    other_source_path: str | None = None
+    lang: str | None = None
+
+
+@dataclass
+class CompareDataset:
+    """Prepared dataset for compare."""
+    papers: list[dict[str, Any]]
+    md_index: dict[str, list[Path]]
+    pdf_index: dict[str, list[Path]]
+    translated_index: dict[str, dict[str, Path]]
+    paper_index: dict[str, list[dict[str, Any]]]
+    path_to_index: dict[Path, int]
+    hash_to_index: dict[str, int]
+    paper_id_to_index: dict[int, int]
+
+
+def _scan_md_roots(roots: list[Path]) -> list[Path]:
+    paths: list[Path] = []
+    for root in roots:
+        try:
+            if not root.exists() or not root.is_dir():
+                continue
+        except OSError:
+            continue
+        try:
+            for path in root.rglob("*.md"):
+                try:
+                    if not path.is_file():
+                        continue
+                except OSError:
+                    continue
+                paths.append(path.resolve())
+        except OSError:
+            continue
+    return paths
+
+
+def _merge_file_indexes(*indexes: dict[str, list[Path]]) -> dict[str, list[Path]]:
+    merged: dict[str, list[Path]] = {}
+    for index in indexes:
+        for key, paths in index.items():
+            merged.setdefault(key, []).extend(paths)
+    return merged
+
+
+def _build_md_only_entries(
+    papers: list[dict[str, Any]],
+    md_paths: list[Path],
+    md_index: dict[str, list[Path]],
+) -> list[dict[str, Any]]:
+    matched: set[Path] = set()
+    for paper in papers:
+        _prepare_paper_matching_fields(paper)
+        md_path = _resolve_source_md(paper, md_index)
+        if md_path:
+            matched.add(md_path.resolve())
+    entries: list[dict[str, Any]] = []
+    for path in md_paths:
+        resolved = path.resolve()
+        if resolved in matched:
+            continue
+        title = _extract_title_from_filename(resolved.name) or resolved.stem
+        year_hint, author_hint = _extract_year_author_from_filename(resolved.name)
+        entry: dict[str, Any] = {
+            "paper_title": title,
+            "paper_authors": [author_hint] if author_hint else [],
+            "publication_date": year_hint or "",
+            "source_hash": stable_hash(str(resolved)),
+            "source_path": str(resolved),
+            "_is_md_only": True,
+        }
+        entries.append(entry)
+    return entries
+
+
+def _translation_base_key_for_paper(paper: dict[str, Any]) -> str:
+    source_path = str(paper.get("source_path") or "")
+    if source_path:
+        return Path(source_path).stem.lower()
+    title = str(paper.get("paper_title") or "")
+    return _normalize_title_key(title)
+
+
+def _build_translated_only_entries(
+    papers: list[dict[str, Any]],
+    translated_index: dict[str, dict[str, Path]],
+    lang: str,
+) -> list[dict[str, Any]]:
+    if not lang:
+        return []
+    lang_key = lang.lower()
+    matched: set[Path] = set()
+    for paper in papers:
+        base_key = _translation_base_key_for_paper(paper)
+        if not base_key:
+            continue
+        path = translated_index.get(base_key, {}).get(lang_key)
+        if path:
+            matched.add(path.resolve())
+    entries: list[dict[str, Any]] = []
+    for base_key, translations in translated_index.items():
+        path = translations.get(lang_key)
+        if not path:
+            continue
+        resolved = path.resolve()
+        if resolved in matched:
+            continue
+        title = _extract_title_from_filename(resolved.name) or resolved.stem
+        year_hint, author_hint = _extract_year_author_from_filename(resolved.name)
+        entry: dict[str, Any] = {
+            "paper_title": title,
+            "paper_authors": [author_hint] if author_hint else [],
+            "publication_date": year_hint or "",
+            "source_hash": stable_hash(str(resolved)),
+            "source_path": str(resolved),
+            "_is_translated_only": True,
+            "translation_lang": lang_key,
+        }
+        entries.append(entry)
+    return entries
+
+
+def _build_paper_index(papers: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    index: dict[str, list[dict[str, Any]]] = {}
+    for paper in papers:
+        _prepare_paper_matching_fields(paper)
+        title = str(paper.get("paper_title") or "")
+        title_key = _normalize_title_key(title)
+        if title_key:
+            index.setdefault(title_key, []).append(paper)
+            compact_key = _compact_title_key(title_key)
+            if compact_key:
+                index.setdefault(f"compact:{compact_key}", []).append(paper)
+            prefix_key = _title_prefix_key(title_key)
+            if prefix_key:
+                index.setdefault(prefix_key, []).append(paper)
+            stripped_key = _strip_leading_numeric_tokens(title_key)
+            if stripped_key and stripped_key != title_key:
+                index.setdefault(stripped_key, []).append(paper)
+                stripped_compact = _compact_title_key(stripped_key)
+                if stripped_compact:
+                    index.setdefault(f"compact:{stripped_compact}", []).append(paper)
+                stripped_prefix = _title_prefix_key(stripped_key)
+                if stripped_prefix:
+                    index.setdefault(stripped_prefix, []).append(paper)
+        year = str(paper.get("_year") or "").strip()
+        if year:
+            index.setdefault(f"year:{year}", []).append(paper)
+            authors = paper.get("_authors") or []
+            if authors:
+                author_key = _normalize_author_key(str(authors[0]))
+                if author_key:
+                    index.setdefault(f"authoryear:{year}:{author_key}", []).append(paper)
+    return index
+
+
+def _adaptive_similarity_match_papers(
+    title_key: str,
+    candidates: list[dict[str, Any]],
+) -> tuple[dict[str, Any] | None, float]:
+    if not title_key:
+        return None, 0.0
+    scored: list[tuple[dict[str, Any], float]] = []
+    for paper in candidates:
+        candidate_title = _normalize_title_key(str(paper.get("paper_title") or ""))
+        if not candidate_title:
+            continue
+        if _title_overlap_match(title_key, candidate_title):
+            return paper, 1.0
+        scored.append((paper, _title_similarity(title_key, candidate_title)))
+    if not scored:
+        return None, 0.0
+
+    def matches_at(threshold: float) -> list[tuple[dict[str, Any], float]]:
+        return [(paper, score) for paper, score in scored if score >= threshold]
+
+    threshold = _SIMILARITY_START
+    step = _SIMILARITY_STEP
+    prev_threshold = None
+    prev_count = None
+    for _ in range(_SIMILARITY_MAX_STEPS):
+        matches = matches_at(threshold)
+        if len(matches) == 1:
+            paper, score = matches[0]
+            return paper, score
+        if len(matches) == 0:
+            prev_threshold = threshold
+            prev_count = 0
+            threshold -= step
+            continue
+        if prev_count == 0 and prev_threshold is not None:
+            low = threshold
+            high = prev_threshold
+            for _ in range(_SIMILARITY_MAX_STEPS):
+                mid = (low + high) / 2
+                mid_matches = matches_at(mid)
+                if len(mid_matches) == 1:
+                    paper, score = mid_matches[0]
+                    return paper, score
+                if len(mid_matches) == 0:
+                    high = mid
+                else:
+                    low = mid
+            return None, 0.0
+        prev_threshold = threshold
+        prev_count = len(matches)
+        threshold -= step
+    return None, 0.0
+
+
+def _resolve_paper_by_title_and_meta(
+    paper: dict[str, Any],
+    paper_index: dict[str, list[dict[str, Any]]],
+) -> tuple[dict[str, Any] | None, str | None, float]:
+    title = str(paper.get("paper_title") or "")
+    title_key = _normalize_title_key(title)
+    if not title_key:
+        title_key = ""
+    candidates = paper_index.get(title_key, [])
+    if candidates:
+        return candidates[0], "title", 1.0
+    if title_key:
+        compact_key = _compact_title_key(title_key)
+        compact_candidates = paper_index.get(f"compact:{compact_key}", [])
+        if compact_candidates:
+            return compact_candidates[0], "title_compact", 1.0
+        stripped_key = _strip_leading_numeric_tokens(title_key)
+        if stripped_key and stripped_key != title_key:
+            stripped_candidates = paper_index.get(stripped_key, [])
+            if stripped_candidates:
+                return stripped_candidates[0], "title_stripped", 1.0
+            stripped_compact = _compact_title_key(stripped_key)
+            stripped_candidates = paper_index.get(f"compact:{stripped_compact}", [])
+            if stripped_candidates:
+                return stripped_candidates[0], "title_compact", 1.0
+    prefix_candidates: list[dict[str, Any]] = []
+    prefix_key = _title_prefix_key(title_key)
+    if prefix_key:
+        prefix_candidates = paper_index.get(prefix_key, [])
+    if not prefix_candidates:
+        stripped_key = _strip_leading_numeric_tokens(title_key)
+        if stripped_key and stripped_key != title_key:
+            prefix_key = _title_prefix_key(stripped_key)
+            if prefix_key:
+                prefix_candidates = paper_index.get(prefix_key, [])
+    if prefix_candidates:
+        match, score = _adaptive_similarity_match_papers(title_key, prefix_candidates)
+        if match is not None:
+            match_type = "title_prefix" if score >= 1.0 else "title_fuzzy"
+            return match, match_type, score
+    year = str(paper.get("_year") or "").strip()
+    if not year.isdigit():
+        return None, None, 0.0
+    author_key = ""
+    authors = paper.get("_authors") or []
+    if authors:
+        author_key = _normalize_author_key(str(authors[0]))
+    candidates = []
+    match_type = "year"
+    if author_key:
+        candidates = paper_index.get(f"authoryear:{year}:{author_key}", [])
+        if candidates:
+            match_type = "author_year"
+    if not candidates:
+        candidates = paper_index.get(f"year:{year}", [])
+    if not candidates:
+        return None, None, 0.0
+    if len(candidates) == 1 and not title_key:
+        return candidates[0], match_type, 1.0
+    match, score = _adaptive_similarity_match_papers(title_key, candidates)
+    if match is not None:
+        if score < _AUTHOR_YEAR_MIN_SIMILARITY:
+            return None, None, 0.0
+        return match, "title_fuzzy", score
+    return None, None, 0.0
+
+
+def _get_paper_identifier(paper: dict[str, Any]) -> str:
+    """Get a unique identifier for a paper."""
+    return str(paper.get("source_hash") or paper.get("source_path", ""))
+
+
+def _match_datasets(
+    dataset_a: CompareDataset,
+    dataset_b: CompareDataset,
+    *,
+    lang: str | None = None,
+) -> list[CompareResult]:
+    """Match papers between two datasets using db_ops parity."""
+    results: list[CompareResult] = []
+    matched_a: set[int] = set()
+    matched_b: set[int] = set()
+    matched_b_info: dict[int, tuple[int, str | None, float]] = {}
+    match_pairs: list[tuple[int, int, str | None, float]] = []
+
+    file_index_b = _merge_file_indexes(dataset_b.md_index, dataset_b.pdf_index)
+
+    for idx_a, paper in enumerate(dataset_a.papers):
+        _prepare_paper_matching_fields(paper)
+        source_hash = str(paper.get("source_hash") or "")
+        title = str(paper.get("paper_title") or "")
+        source_path = str(paper.get("source_path") or "")
+
+        match_type = None
+        match_score = 0.0
+        match_status = "only_in_A"
+        matched_b_idx: int | None = None
+        matched_b_paper: dict[str, Any] | None = None
+
+        if source_hash and source_hash in dataset_b.hash_to_index:
+            matched_b_idx = dataset_b.hash_to_index[source_hash]
+            matched_b_paper = dataset_b.papers[matched_b_idx]
+            match_status = "matched"
+            match_type = "hash"
+            match_score = 1.0
+        else:
+            if file_index_b:
+                matched_path, mt, score = _resolve_by_title_and_meta(paper, file_index_b)
+                if matched_path is not None:
+                    matched_b_idx = dataset_b.path_to_index.get(matched_path.resolve())
+                    matched_b_paper = dataset_b.papers[matched_b_idx] if matched_b_idx is not None else None
+                    match_status = "matched"
+                    match_type = mt
+                    match_score = score
+            if matched_b_idx is None:
+                match_paper, mt, score = _resolve_paper_by_title_and_meta(paper, dataset_b.paper_index)
+                if match_paper is not None:
+                    matched_b_idx = dataset_b.paper_id_to_index.get(id(match_paper))
+                    matched_b_paper = match_paper
+                    match_status = "matched"
+                    match_type = mt
+                    match_score = score
+            if matched_b_idx is None and lang:
+                base_key = _translation_base_key_for_paper(paper)
+                if base_key:
+                    translated_path = dataset_b.translated_index.get(base_key, {}).get(lang.lower())
+                    if translated_path is not None:
+                        matched_b_idx = dataset_b.path_to_index.get(translated_path.resolve())
+                        matched_b_paper = dataset_b.papers[matched_b_idx] if matched_b_idx is not None else None
+                        match_status = "matched"
+                        match_type = f"translated_{lang.lower()}"
+                        match_score = 1.0
+
+        other_hash = None
+        other_title = None
+        other_path = None
+        if matched_b_idx is not None and matched_b_paper is not None:
+            matched_a.add(idx_a)
+            matched_b.add(matched_b_idx)
+            other_hash = str(matched_b_paper.get("source_hash") or "")
+            other_title = str(matched_b_paper.get("paper_title") or "")
+            other_path = str(matched_b_paper.get("source_path") or "")
+            matched_b_info[matched_b_idx] = (idx_a, match_type, match_score)
+            match_pairs.append((idx_a, matched_b_idx, match_type, match_score))
+
+        results.append(
+            CompareResult(
+                side="A",
+                source_hash=source_hash,
+                title=title,
+                match_status=match_status,
+                match_type=match_type,
+                match_score=match_score,
+                source_path=source_path if source_path else None,
+                other_source_hash=other_hash,
+                other_title=other_title,
+                other_source_path=other_path,
+                lang=lang.lower() if lang else None,
+            )
+        )
+
+    for idx_b, paper in enumerate(dataset_b.papers):
+        _prepare_paper_matching_fields(paper)
+        source_hash = str(paper.get("source_hash") or "")
+        title = str(paper.get("paper_title") or "")
+        source_path = str(paper.get("source_path") or "")
+        match_status = "only_in_B"
+        match_type = None
+        match_score = 0.0
+        other_hash = None
+        other_title = None
+        other_path = None
+        if idx_b in matched_b:
+            match_status = "matched"
+            info = matched_b_info.get(idx_b)
+            if info:
+                idx_a, match_type, match_score = info
+                a_paper = dataset_a.papers[idx_a]
+                other_hash = str(a_paper.get("source_hash") or "")
+                other_title = str(a_paper.get("paper_title") or "")
+                other_path = str(a_paper.get("source_path") or "")
+        results.append(
+            CompareResult(
+                side="B",
+                source_hash=source_hash,
+                title=title,
+                match_status=match_status,
+                match_type=match_type,
+                match_score=match_score,
+                source_path=source_path if source_path else None,
+                other_source_hash=other_hash,
+                other_title=other_title,
+                other_source_path=other_path,
+                lang=lang.lower() if lang else None,
+            )
+        )
+
+    for idx_a, idx_b, match_type, match_score in match_pairs:
+        paper_a = dataset_a.papers[idx_a]
+        paper_b = dataset_b.papers[idx_b]
+        results.append(
+            CompareResult(
+                side="MATCH",
+                source_hash=str(paper_a.get("source_hash") or ""),
+                title=str(paper_a.get("paper_title") or ""),
+                match_status="matched_pair",
+                match_type=match_type,
+                match_score=match_score,
+                source_path=str(paper_a.get("source_path") or "") or None,
+                other_source_hash=str(paper_b.get("source_hash") or ""),
+                other_title=str(paper_b.get("paper_title") or ""),
+                other_source_path=str(paper_b.get("source_path") or "") or None,
+                lang=lang.lower() if lang else None,
+            )
+        )
+
+    return results
+
+
+def build_compare_dataset(
+    *,
+    json_paths: list[Path] | None = None,
+    pdf_roots: list[Path] | None = None,
+    md_roots: list[Path] | None = None,
+    md_translated_roots: list[Path] | None = None,
+    bibtex_path: Path | None = None,
+    lang: str | None = None,
+) -> CompareDataset:
+    """Load and index a dataset from various sources."""
+    papers: list[dict[str, Any]] = []
+
+    # Load from JSON files
+    if json_paths:
+        for path in json_paths:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                # Array format - direct list of papers
+                papers.extend(data)
+            elif isinstance(data, dict):
+                # Object format with template_tag and papers
+                if isinstance(data.get("papers"), list):
+                    papers.extend(data["papers"])
+            else:
+                raise ValueError(f"Invalid JSON format in {path}")
+
+        # Enrich with bibtex if provided
+        if bibtex_path and PYBTEX_AVAILABLE:
+            enrich_with_bibtex(papers, bibtex_path)
+
+    for paper in papers:
+        _prepare_paper_matching_fields(paper)
+
+    md_paths = _scan_md_roots(md_roots or [])
+    pdf_paths, _ = _scan_pdf_roots(pdf_roots or [])
+    md_index = _build_file_index(md_roots or [], suffixes={".md"})
+    pdf_index = _build_file_index(pdf_roots or [], suffixes={".pdf"})
+    translated_index = _build_translated_index(md_translated_roots or [])
+
+    if pdf_paths:
+        papers.extend(_build_pdf_only_entries(papers, pdf_paths, pdf_index))
+    if md_paths:
+        papers.extend(_build_md_only_entries(papers, md_paths, md_index))
+    if translated_index and lang:
+        papers.extend(_build_translated_only_entries(papers, translated_index, lang))
+
+    for paper in papers:
+        _prepare_paper_matching_fields(paper)
+
+    paper_index = _build_paper_index(papers)
+    path_to_index: dict[Path, int] = {}
+    hash_to_index: dict[str, int] = {}
+    paper_id_to_index: dict[int, int] = {}
+    for idx, paper in enumerate(papers):
+        paper_id_to_index[id(paper)] = idx
+        source_hash = str(paper.get("source_hash") or "")
+        if source_hash and source_hash not in hash_to_index:
+            hash_to_index[source_hash] = idx
+        source_path = paper.get("source_path")
+        if source_path:
+            path_to_index[Path(str(source_path)).resolve()] = idx
+
+    return CompareDataset(
+        papers=papers,
+        md_index=md_index,
+        pdf_index=pdf_index,
+        translated_index=translated_index,
+        paper_index=paper_index,
+        path_to_index=path_to_index,
+        hash_to_index=hash_to_index,
+        paper_id_to_index=paper_id_to_index,
+    )
+
+
+def compare_datasets(
+    *,
+    json_paths_a: list[Path] | None = None,
+    pdf_roots_a: list[Path] | None = None,
+    md_roots_a: list[Path] | None = None,
+    md_translated_roots_a: list[Path] | None = None,
+    json_paths_b: list[Path] | None = None,
+    pdf_roots_b: list[Path] | None = None,
+    md_roots_b: list[Path] | None = None,
+    md_translated_roots_b: list[Path] | None = None,
+    bibtex_path: Path | None = None,
+    lang: str | None = None,
+) -> list[CompareResult]:
+    """Compare two datasets and return comparison results."""
+    # Validate language requirement for translated inputs
+    has_translated_a = md_translated_roots_a is not None and len(md_translated_roots_a) > 0
+    has_translated_b = md_translated_roots_b is not None and len(md_translated_roots_b) > 0
+
+    if (has_translated_a or has_translated_b) and lang is None:
+        raise ValueError(
+            "--lang parameter is required when comparing translated Markdown datasets"
+        )
+
+    dataset_a = build_compare_dataset(
+        json_paths=json_paths_a,
+        pdf_roots=pdf_roots_a,
+        md_roots=md_roots_a,
+        md_translated_roots=md_translated_roots_a,
+        bibtex_path=bibtex_path,
+        lang=lang,
+    )
+
+    dataset_b = build_compare_dataset(
+        json_paths=json_paths_b,
+        pdf_roots=pdf_roots_b,
+        md_roots=md_roots_b,
+        md_translated_roots=md_translated_roots_b,
+        bibtex_path=bibtex_path,
+        lang=lang,
+    )
+
+    return _match_datasets(dataset_a, dataset_b, lang=lang)
