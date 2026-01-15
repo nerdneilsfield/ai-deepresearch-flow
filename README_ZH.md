@@ -207,6 +207,7 @@ uv run deepresearch-flow paper db compare \
 - Unpack Images：将 Base64 图片拆回文件。
 - Organize：整理 OCR 输出目录结构。
 - Fix：对 Markdown 进行 OCR 修复与 rumdl 格式化。
+- Fix JSON：对 JSON 中的 Markdown 字段进行同样修复。
 
 ```bash
 uv run deepresearch-flow recognize md embed --input ./raw_ocr --output ./clean_md
@@ -227,6 +228,12 @@ uv run deepresearch-flow recognize fix \
 # 就地修复
 uv run deepresearch-flow recognize fix \
   --input ./ocr_md \
+  --in-place
+
+# 就地修复 JSON 输出
+uv run deepresearch-flow recognize fix \
+  --json \
+  --input ./paper_outputs \
   --in-place
 ```
 

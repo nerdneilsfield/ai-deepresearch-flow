@@ -214,6 +214,7 @@ Tools to clean up raw outputs from OCR engines like MinerU.
 - Unpack Images: extract Base64 images back to files.
 - Organize: flatten nested OCR output directories.
 - Fix: apply OCR fixes and rumdl formatting during organize, or as a standalone step.
+- Fix JSON: apply the same fixes to markdown fields inside paper JSON outputs.
 
 ```bash
 uv run deepresearch-flow recognize md embed --input ./raw_ocr --output ./clean_md
@@ -234,6 +235,12 @@ uv run deepresearch-flow recognize fix \
 # Fix in place
 uv run deepresearch-flow recognize fix \
   --input ./ocr_md \
+  --in-place
+
+# Fix JSON outputs in place
+uv run deepresearch-flow recognize fix \
+  --json \
+  --input ./paper_outputs \
   --in-place
 ```
 
