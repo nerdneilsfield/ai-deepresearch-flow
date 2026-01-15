@@ -18,3 +18,6 @@ PDFJS_VIEWER_PATH = "/pdfjs/web/viewer.html"
 PDFJS_STATIC_DIR = Path(__file__).resolve().parent / "pdfjs"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
+
+# Metadata
+REPO_URL = "https://github.com/nerdneilsfield/ai-deepresearch-flow"

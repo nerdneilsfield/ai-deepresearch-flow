@@ -16,6 +16,7 @@ from deepresearch_flow.paper.web.markdown import (
     render_paper_markdown,
     select_template_tag,
 )
+from deepresearch_flow.paper.web.text import normalize_title
 from deepresearch_flow.paper.web.templates import (
     build_pdfjs_viewer_url,
     render_template,
@@ -71,7 +72,7 @@ async def paper_detail(request: Request) -> HTMLResponse:
         return RedirectResponse("/")
     paper = index.papers[idx]
     is_pdf_only = bool(paper.get("_is_pdf_only"))
-    page_title = str(paper.get("paper_title") or "Paper")
+    page_title = normalize_title(str(paper.get("paper_title") or "")) or "Paper"
     view = request.query_params.get("view")
     template_param = request.query_params.get("template")
     embed = request.query_params.get("embed") == "1"
@@ -168,9 +169,10 @@ async def paper_detail(request: Request) -> HTMLResponse:
     split_options: list[tuple[str, str]] = []
     show_outline = False
 
+    selected_tag, available_templates = select_template_tag(paper, template_param)
+
     # Summary view
     if view == "summary":
-        selected_tag, available_templates = select_template_tag(paper, template_param)
         markdown, summary_template_name, warning = render_paper_markdown(
             paper,
             request.app.state.fallback_language,
@@ -187,9 +189,9 @@ async def paper_detail(request: Request) -> HTMLResponse:
                 for tag in available_templates
             )
             template_controls = f"""
-<div class="muted" style="margin: 6px 0;">
-  Template:
-  <select id="templateSelect" style="padding:6px 8px; border:1px solid #d0d7de; border-radius:6px;">
+<div class="flex items-center gap-2 text-sm text-slate-500">
+  <span>Template:</span>
+  <select id="templateSelect" class="h-9 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-900 shadow-sm">
     {options}
   </select>
 </div>
@@ -284,12 +286,20 @@ if (templateSelect) {{
             ]
 
     # Render template
+    container_class = "wide" if view == "split" else ""
+    body_class = "font-hei"
+    if embed:
+        body_class = f"{body_class} embed-view"
+    if view == "split":
+        body_class = f"{body_class} split-view"
     return HTMLResponse(
         render_template(
             "detail.html",
             title=page_title,
             embed=embed,
             header_title=page_title,
+            body_class=body_class,
+            container_class=container_class,
             is_pdf_only=is_pdf_only,
             current_view=view,
             tabs=tabs,
@@ -301,6 +311,8 @@ if (templateSelect) {{
             summary_template_name=summary_template_name,
             template_warning=template_warning,
             template_controls=template_controls,
+            available_templates=available_templates,
+            selected_template_tag=selected_tag,
             # Source view
             source_path=source_path_str,
             # Translated view

@@ -54,7 +54,7 @@
   <div class="detail-toolbar">
     <div class="tabs">
       {% for label, view in tabs %}
-      <a class="tab{% if current_view == view %} active{% endif %}" href="{{ view_hrefs[view] }}">{{ label }}</a>
+      <a class="tab inline-flex items-center rounded-full border px-3 py-1.5 text-sm shadow-sm{% if current_view == view %} border-slate-900 bg-slate-900 text-white{% else %} border-slate-200 bg-white text-slate-700 hover:bg-slate-50{% endif %}" href="{{ view_hrefs[view] }}">{{ label }}</a>
       {% endfor %}
     </div>
     <div class="toolbar-actions">
@@ -64,39 +64,35 @@
       {% endif %}
       {# Split view inline controls #}
       {% if current_view == 'split' %}
-      <div class="split-inline">
-        <span class="muted">Left</span>
-        <select id="splitLeft">
-          {% for value, label in split_options %}
-          <option value="{{ value }}"{% if value == left_view %} selected{% endif %}>{{ label }}</option>
-          {% endfor %}
-        </select>
-        <div class="split-actions">
-          <button id="splitTighten" type="button" title="Tighten width">-</button>
-          <button id="splitSwap" type="button" title="Swap panes">⇄</button>
-          <button id="splitWiden" type="button" title="Widen width">+</button>
+      <div class="split-controls">
+        <button id="splitControlsToggle" class="inline-flex h-9 items-center justify-center rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 shadow-sm hover:bg-slate-50" type="button" aria-expanded="true" title="Toggle split controls">Controls</button>
+        <input id="splitSearch" class="split-search h-9 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 shadow-sm" placeholder="Filter views..." aria-label="Filter split views" />
+        <div class="split-inline">
+          <span class="muted">Left</span>
+          <select id="splitLeft" class="h-9 rounded-md border border-slate-200 bg-white px-2 text-sm shadow-sm text-slate-900">
+            {% for value, label in split_options %}
+            <option value="{{ value }}"{% if value == left_view %} selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+          <div class="split-actions">
+            <button id="splitTighten" class="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 bg-white text-sm text-slate-900 shadow-sm hover:bg-slate-50" type="button" title="Tighten width">-</button>
+            <button id="splitSwap" class="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 bg-white text-sm text-slate-900 shadow-sm hover:bg-slate-50" type="button" title="Swap panes">⇄</button>
+            <button id="splitWiden" class="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 bg-white text-sm text-slate-900 shadow-sm hover:bg-slate-50" type="button" title="Widen width">+</button>
+          </div>
+          <span class="muted">Right</span>
+          <select id="splitRight" class="h-9 rounded-md border border-slate-200 bg-white px-2 text-sm shadow-sm text-slate-900">
+            {% for value, label in split_options %}
+            <option value="{{ value }}"{% if value == right_view %} selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
         </div>
-        <span class="muted">Right</span>
-        <select id="splitRight">
-          {% for value, label in split_options %}
-          <option value="{{ value }}"{% if value == right_view %} selected{% endif %}>{{ label }}</option>
-          {% endfor %}
-        </select>
-        {% if translation_langs %}
-        <span class="muted">Lang</span>
-        <select id="splitLang">
-          {% for lang in translation_langs %}
-          <option value="{{ lang }}"{% if lang == selected_lang %} selected{% endif %}>{{ lang }}</option>
-          {% endfor %}
-        </select>
-        {% endif %}
       </div>
       {% endif %}
       {# Translation language select #}
       {% if current_view == 'translated' and translation_langs %}
       <div class="lang-select">
         <label for="translationLang">Language</label>
-        <select id="translationLang">
+        <select id="translationLang" class="h-9 rounded-md border border-slate-200 bg-white px-2 text-sm shadow-sm text-slate-900">
           {% for lang in translation_langs %}
           <option value="{{ lang }}"{% if lang == selected_lang %} selected{% endif %}>{{ lang }}</option>
           {% endfor %}
@@ -105,8 +101,8 @@
       {% endif %}
       {# Fullscreen controls #}
       <div class="fullscreen-actions">
-        <button id="fullscreenEnter" class="fullscreen-enter" type="button" title="Enter fullscreen">Fullscreen</button>
-        <button id="fullscreenExit" class="fullscreen-exit" type="button" title="Exit fullscreen">Exit Fullscreen</button>
+        <button id="fullscreenEnter" class="fullscreen-enter inline-flex h-9 items-center justify-center rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 shadow-sm hover:bg-slate-50" type="button" title="Enter fullscreen">Fullscreen</button>
+        <button id="fullscreenExit" class="fullscreen-exit inline-flex h-9 items-center justify-center rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 shadow-sm hover:bg-slate-50" type="button" title="Exit Fullscreen">Exit Fullscreen</button>
       </div>
     </div>
   </div>
@@ -127,20 +123,23 @@
       {% if template_warning %}
       {{ template_warning|safe }}
       {% endif %}
+      {% if embed and template_controls %}
+      {{ template_controls|safe }}
+      {% endif %}
       {# Outline #}
       {% if show_outline %}
-      <div id="outline" style="display:none;">
+      <div id="outline" style="position:fixed;top:var(--outline-top,96px);left:var(--outline-left,20px);max-width:260px;max-height:calc(100vh - var(--outline-top,96px) - 60px);overflow-y:auto;padding:12px;background:#ffffff;border:1px solid #d0d7de;border-radius:8px;box-shadow:0 2px 8px rgba(27,31,36,0.08);font-size:13px;z-index:5;display:none;">
         <div style="position:sticky;top:-12px;background:#ffffff;z-index:2;padding:4px 0 6px;">
-          <button id="outlineClose" style="float:right;padding:4px 8px;border:1px solid #d0d7de;border-radius:6px;background:#f6f8fa;cursor:pointer;font-size:12px;">Hide</button>
+        <button id="outlineClose" class="inline-flex h-7 items-center justify-center rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-900 shadow-sm hover:bg-slate-50" style="float:right;">Hide</button>
           <strong style="color:#1f2a37;">Outline</strong>
         </div>
         <div id="outlineContent" style="margin-top:8px;"></div>
       </div>
-      <div id="outlineToggleContainer" style="position:fixed;top:96px;right:20px;z-index:4;">
-        <button id="outlineToggle" style="padding:8px 12px;border:1px solid #d0d7de;border-radius:8px;background:#f6f8fa;cursor:pointer;font-size:13px;box-shadow:0 1px 3px rgba(27,31,36,0.12);">☰ Outline</button>
+      <div id="outlineToggleContainer" style="position:fixed;top:var(--outline-top,96px);left:var(--outline-left,20px);z-index:4;">
+        <button id="outlineToggle" class="inline-flex h-9 items-center justify-center rounded-md bg-slate-900 px-3 text-sm text-white shadow hover:bg-slate-800">☰ Outline</button>
       </div>
       {% endif %}
-      <div id="content">{{ body_html|safe }}</div>
+      <article id="content" class="content">{{ body_html|safe }}</article>
 
     {% elif current_view == 'source' %}
       {# Source view #}
@@ -152,18 +151,18 @@
         <div class="muted">{{ source_path }}</div>
         <div class="muted" style="margin-top:10px;">Rendered from source markdown:</div>
         {% if show_outline %}
-        <div id="outline" style="display:none;">
+        <div id="outline" style="position:fixed;top:var(--outline-top,96px);left:var(--outline-left,20px);max-width:260px;max-height:calc(100vh - var(--outline-top,96px) - 60px);overflow-y:auto;padding:12px;background:#ffffff;border:1px solid #d0d7de;border-radius:8px;box-shadow:0 2px 8px rgba(27,31,36,0.08);font-size:13px;z-index:5;display:none;">
           <div style="position:sticky;top:-12px;background:#ffffff;z-index:2;padding:4px 0 6px;">
-            <button id="outlineClose" style="float:right;padding:4px 8px;border:1px solid #d0d7de;border-radius:6px;background:#f6f8fa;cursor:pointer;font-size:12px;">Hide</button>
+        <button id="outlineClose" class="inline-flex h-7 items-center justify-center rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-900 shadow-sm hover:bg-slate-50" style="float:right;">Hide</button>
             <strong style="color:#1f2a37;">Outline</strong>
           </div>
           <div id="outlineContent" style="margin-top:8px;"></div>
         </div>
-        <div id="outlineToggleContainer" style="position:fixed;top:96px;right:20px;z-index:4;">
-          <button id="outlineToggle" style="padding:8px 12px;border:1px solid #d0d7de;border-radius:8px;background:#f6f8fa;cursor:pointer;font-size:13px;box-shadow:0 1px 3px rgba(27,31,36,0.12);">☰ Outline</button>
+        <div id="outlineToggleContainer" style="position:fixed;top:var(--outline-top,96px);left:var(--outline-left,20px);z-index:4;">
+          <button id="outlineToggle" class="inline-flex h-9 items-center justify-center rounded-md bg-slate-900 px-3 text-sm text-white shadow hover:bg-slate-800">☰ Outline</button>
         </div>
         {% endif %}
-        <div id="content">{{ body_html|safe }}</div>
+        <article id="content" class="content">{{ body_html|safe }}</article>
         <details style="margin-top:12px;"><summary>Raw markdown</summary>
           <pre><code>{{ raw_content|escape }}</code></pre>
         </details>
@@ -179,19 +178,29 @@
         <div class="muted">Language: {{ selected_lang }}</div>
         <div class="muted">{{ translated_path }}</div>
         <div class="muted" style="margin-top:10px;">Rendered from translated markdown:</div>
+        {% if embed and translation_langs %}
+        <div class="lang-select" style="margin: 8px 0;">
+          <label for="translationLang">Language</label>
+          <select id="translationLang" class="h-9 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-900 shadow-sm">
+            {% for lang in translation_langs %}
+            <option value="{{ lang }}"{% if lang == selected_lang %} selected{% endif %}>{{ lang }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        {% endif %}
         {% if show_outline %}
-        <div id="outline" style="display:none;">
+        <div id="outline" style="position:fixed;top:var(--outline-top,96px);left:var(--outline-left,20px);max-width:260px;max-height:calc(100vh - var(--outline-top,96px) - 60px);overflow-y:auto;padding:12px;background:#ffffff;border:1px solid #d0d7de;border-radius:8px;box-shadow:0 2px 8px rgba(27,31,36,0.08);font-size:13px;z-index:5;display:none;">
           <div style="position:sticky;top:-12px;background:#ffffff;z-index:2;padding:4px 0 6px;">
-            <button id="outlineClose" style="float:right;padding:4px 8px;border:1px solid #d0d7de;border-radius:6px;background:#f6f8fa;cursor:pointer;font-size:12px;">Hide</button>
+            <button id="outlineClose" class="inline-flex h-7 items-center justify-center rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-900 shadow-sm hover:bg-slate-50" style="float:right;">Hide</button>
             <strong style="color:#1f2a37;">Outline</strong>
           </div>
           <div id="outlineContent" style="margin-top:8px;"></div>
         </div>
-        <div id="outlineToggleContainer" style="position:fixed;top:96px;right:20px;z-index:4;">
-          <button id="outlineToggle" style="padding:8px 12px;border:1px solid #d0d7de;border-radius:8px;background:#f6f8fa;cursor:pointer;font-size:13px;box-shadow:0 1px 3px rgba(27,31,36,0.12);">☰ Outline</button>
+        <div id="outlineToggleContainer" style="position:fixed;top:var(--outline-top,96px);left:var(--outline-left,20px);z-index:4;">
+          <button id="outlineToggle" class="inline-flex h-9 items-center justify-center rounded-md bg-slate-900 px-3 text-sm text-white shadow hover:bg-slate-800">☰ Outline</button>
         </div>
         {% endif %}
-        <div id="content">{{ body_html|safe }}</div>
+        <article id="content" class="content">{{ body_html|safe }}</article>
         <details style="margin-top:12px;"><summary>Raw markdown</summary>
           <pre><code>{{ raw_content|escape }}</code></pre>
         </details>
@@ -203,15 +212,15 @@
         {{ body_html|safe }}
       {% else %}
         <div class="muted">{{ pdf_filename }}</div>
-        <div style="display:flex; gap:8px; align-items:center; margin: 10px 0;">
-          <button id="prev" style="padding:6px 10px; border-radius:8px; border:1px solid #d0d7de; background:#f6f8fa; cursor:pointer;">Prev</button>
-          <button id="next" style="padding:6px 10px; border-radius:8px; border:1px solid #d0d7de; background:#f6f8fa; cursor:pointer;">Next</button>
+        <div class="flex flex-wrap items-center gap-2 py-2">
+          <button id="prev" class="inline-flex h-9 items-center justify-center rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 shadow-sm hover:bg-slate-50" type="button">Prev</button>
+          <button id="next" class="inline-flex h-9 items-center justify-center rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 shadow-sm hover:bg-slate-50" type="button">Next</button>
           <span class="muted">Page <span id="page_num">1</span> / <span id="page_count">?</span></span>
-          <span style="flex:1"></span>
-          <button id="zoomOut" style="padding:6px 10px; border-radius:8px; border:1px solid #d0d7de; background:#f6f8fa; cursor:pointer;">-</button>
-          <button id="zoomIn" style="padding:6px 10px; border-radius:8px; border:1px solid #d0d7de; background:#f6f8fa; cursor:pointer;">+</button>
+          <span class="flex-1"></span>
+          <button id="zoomOut" class="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 bg-white text-sm text-slate-900 shadow-sm hover:bg-slate-50" type="button">-</button>
+          <button id="zoomIn" class="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 bg-white text-sm text-slate-900 shadow-sm hover:bg-slate-50" type="button">+</button>
         </div>
-        <canvas id="the-canvas" style="width: 100%; border: 1px solid #d0d7de; border-radius: 10px;"></canvas>
+        <canvas id="the-canvas" class="w-full rounded-lg border border-slate-200"></canvas>
       {% endif %}
 
     {% elif current_view == 'pdfjs' %}
@@ -236,6 +245,7 @@
 
     {% endif %}
   </div>
+  <button id="backToTop" class="back-to-top" type="button" title="Back to top">↑</button>
 </div>
 {% endblock %}
 
@@ -283,19 +293,23 @@
     toggle.addEventListener('click', function() {
       outline.style.display = 'block';
       toggle.style.display = 'none';
+      document.body.classList.add('outline-open');
     });
 
     close.addEventListener('click', function() {
       outline.style.display = 'none';
       toggle.style.display = 'block';
+      document.body.classList.remove('outline-open');
     });
 
     var savedState = sessionStorage.getItem('outlineVisible');
     if (savedState === 'true') {
       outline.style.display = 'block';
       toggle.style.display = 'none';
+      document.body.classList.add('outline-open');
     } else {
       toggle.style.display = 'block';
+      document.body.classList.remove('outline-open');
     }
 
     var observer = new MutationObserver(function() {

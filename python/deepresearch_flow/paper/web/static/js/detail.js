@@ -10,6 +10,7 @@
     initFullscreen();
     initMarkdownRendering();
     initFootnotes();
+    initBackToTop();
 
     // View-specific initializers
     if (document.getElementById('translationLang')) {
@@ -24,6 +25,30 @@
   }
 
   // ========================================
+  // Back-to-top button
+  // ========================================
+
+  function initBackToTop() {
+    var button = document.getElementById('backToTop');
+    if (!button) return;
+
+    function updateVisibility() {
+      if (window.scrollY > 120) {
+        button.classList.add('visible');
+      } else {
+        button.classList.remove('visible');
+      }
+    }
+
+    button.addEventListener('click', function() {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+
+    document.addEventListener('scroll', updateVisibility, { passive: true });
+    updateVisibility();
+  }
+
+  // ========================================
   // Fullscreen functionality
   // ========================================
 
@@ -33,6 +58,13 @@
 
     function setFullscreen(enable) {
       document.body.classList.toggle('detail-fullscreen', enable);
+      if (document.body.classList.contains('split-view')) {
+        document.body.classList.toggle('split-controls-collapsed', enable);
+        var toggle = document.getElementById('splitControlsToggle');
+        if (toggle) {
+          toggle.setAttribute('aria-expanded', enable ? 'false' : 'true');
+        }
+      }
     }
 
     if (fullscreenEnter) {
@@ -139,26 +171,60 @@
   function initSplitView() {
     var leftSelect = document.getElementById('splitLeft');
     var rightSelect = document.getElementById('splitRight');
-    var langSelect = document.getElementById('splitLang');
     var swapButton = document.getElementById('splitSwap');
     var tightenButton = document.getElementById('splitTighten');
     var widenButton = document.getElementById('splitWiden');
+    var controlsToggle = document.getElementById('splitControlsToggle');
+    var searchInput = document.getElementById('splitSearch');
+
+    if (!leftSelect || !rightSelect) return;
 
     function updateSplit() {
       var params = new URLSearchParams(window.location.search);
       params.set('view', 'split');
       params.set('left', leftSelect.value);
       params.set('right', rightSelect.value);
-      if (langSelect && langSelect.value) {
-        params.set('lang', langSelect.value);
-      }
       window.location.search = params.toString();
     }
 
     leftSelect.addEventListener('change', updateSplit);
     rightSelect.addEventListener('change', updateSplit);
-    if (langSelect) {
-      langSelect.addEventListener('change', updateSplit);
+
+    function setControlsCollapsed(collapsed) {
+      document.body.classList.toggle('split-controls-collapsed', collapsed);
+      if (controlsToggle) {
+        controlsToggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+      }
+    }
+
+    if (controlsToggle) {
+      controlsToggle.addEventListener('click', function() {
+        var collapsed = document.body.classList.contains('split-controls-collapsed');
+        setControlsCollapsed(!collapsed);
+      });
+    }
+
+    if (document.body.classList.contains('detail-fullscreen')) {
+      setControlsCollapsed(true);
+    }
+
+    function filterOptions(select, term) {
+      var value = select.value;
+      for (var i = 0; i < select.options.length; i++) {
+        var option = select.options[i];
+        var label = (option.textContent || "").toLowerCase();
+        var match = !term || label.indexOf(term) !== -1 || option.value === value;
+        option.hidden = !match;
+        option.style.display = match ? "" : "none";
+      }
+    }
+
+    if (searchInput) {
+      searchInput.addEventListener('input', function() {
+        var term = searchInput.value.trim().toLowerCase();
+        filterOptions(leftSelect, term);
+        filterOptions(rightSelect, term);
+      });
     }
 
     if (swapButton) {

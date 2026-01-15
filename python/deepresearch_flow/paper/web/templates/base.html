@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="{{ html_lang|default('en') }}">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -7,10 +7,11 @@
     <meta name="googlebot" content="noindex, nofollow, noarchive, nosnippet" />
     <meta name="bingbot" content="noindex, nofollow, noarchive, nosnippet" />
     <title>{{ title }}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="/static/css/main.css" />
     {% block extra_head %}{% endblock %}
   </head>
-  <body{% if pdf_url %} data-pdf-url="{{ pdf_url }}"{% endif %}>
+  <body{% if pdf_url %} data-pdf-url="{{ pdf_url }}"{% endif %} class="{{ body_class|default('font-hei') }}">
     {% if not embed %}
     {# Normal mode: show header #}
     {% if header_title %}
@@ -18,17 +19,23 @@
       <div class="header-row">
         <a class="header-back" href="/">← Papers</a>
         <span class="header-title" title="{{ header_title }}">{{ header_title }}</span>
-        <a class="header-link" href="/stats">Stats</a>
+        <div class="header-right">
+          <a class="header-link" href="/stats">Stats</a>
+          <a class="header-link" href="{{ repo_url }}" target="_blank" rel="noreferrer">GitHub</a>
+          <span class="header-version">v{{ app_version }}</span>
+        </div>
       </div>
     </header>
     {% else %}
     <header>
       <a href="/">Papers</a>
       <a href="/stats">Stats</a>
+      <a href="{{ repo_url }}" target="_blank" rel="noreferrer">GitHub</a>
+      <span class="header-version">v{{ app_version }}</span>
     </header>
     {% endif %}
     {% endif %}
-    <div class="container"{% if embed %} style="max-width:100%;padding:16px;"{% endif %}>
+    <div class="container{% if embed %} embed{% endif %}{% if container_class %} {{ container_class }}{% endif %}">
       {% block content %}{% endblock %}
     </div>
     {% block extra_scripts %}{% endblock %}

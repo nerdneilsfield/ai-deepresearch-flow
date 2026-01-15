@@ -11,7 +11,10 @@ from urllib.parse import quote
 
 from jinja2 import Environment, FileSystemLoader, PackageLoader
 
-from deepresearch_flow.paper.web.constants import PDFJS_VIEWER_PATH, TEMPLATES_DIR
+from importlib import metadata
+
+from deepresearch_flow import __version__
+from deepresearch_flow.paper.web.constants import PDFJS_VIEWER_PATH, REPO_URL, TEMPLATES_DIR
 
 
 def get_jinja_env() -> Environment:
@@ -59,6 +62,12 @@ def render_template(template_name: str, **context) -> str:
         Rendered HTML string
     """
     env = get_template_env()
+    try:
+        resolved_version = metadata.version("deepresearch-flow")
+    except metadata.PackageNotFoundError:
+        resolved_version = __version__
+    context.setdefault("app_version", resolved_version)
+    context.setdefault("repo_url", REPO_URL)
     template = env.get_template(template_name)
     return template.render(**context)
 
