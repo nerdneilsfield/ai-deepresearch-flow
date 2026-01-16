@@ -1,0 +1,31 @@
+{
+  "name": "ai-deepresearch-flow",
+  "version": "0.4.1",
+  "description": "Workflow tools for paper extraction, review, and research automation.",
+  "keywords": [
+    "\"research\"",
+    "\"papers\"",
+    "\"pdf\"",
+    "\"ocr\"",
+    "\"llm\"",
+    "\"workflow\""
+  ],
+  "homepage": "https://github.com/nerdneilsfield/ai-deepresearch-flow#readme",
+  "bugs": {
+    "url": "https://github.com/nerdneilsfield/ai-deepresearch-flow/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nerdneilsfield/ai-deepresearch-flow.git"
+  },
+  "license": "MIT",
+  "author": "QiDeng",
+  "type": "commonjs",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "katex": "^0.16.27"
+  }
+}
