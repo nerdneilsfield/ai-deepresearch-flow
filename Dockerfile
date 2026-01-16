@@ -9,8 +9,9 @@ WORKDIR /app
 
 COPY . /app
 
-RUN python -m pip install --upgrade pip && \
-    python -m pip install --no-cache-dir .
+RUN python -m pip install --upgrade pip
+RUN python -m pip install --no-cache-dir -r requirements.txt
+RUN python -m pip install --no-cache-dir .
 
 ENTRYPOINT ["deepresearch-flow"]
 CMD ["--help"]

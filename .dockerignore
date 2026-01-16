@@ -237,4 +237,11 @@ storage
 # *.json
 .env
 pnpm-lock.yaml
+
+.qoder/
+.roo/
 .rumdl_cache/
+openspec/
+.opencode/
+.github/
+.gemini/
