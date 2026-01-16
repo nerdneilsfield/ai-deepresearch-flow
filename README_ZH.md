@@ -107,7 +107,24 @@ uv run deepresearch-flow translator translate \
   --fix-level moderate
 ```
 
-#### 步骤 3：启动本地知识库
+#### 步骤 3：修复公式与 Mermaid（可选）
+
+在启动前校验并修复公式与流程图。
+
+```bash
+uv run deepresearch-flow recognize fix-math \
+  --input ./docs \
+  --model openai/gpt-4o-mini \
+  --in-place
+
+uv run deepresearch-flow recognize fix-mermaid \
+  --input ./paper_outputs \
+  --json \
+  --model openai/gpt-4o-mini \
+  --in-place
+```
+
+#### 步骤 4：启动本地知识库
 
 ```bash
 uv run deepresearch-flow paper db serve \
@@ -208,6 +225,8 @@ uv run deepresearch-flow paper db compare \
 - Organize：整理 OCR 输出目录结构。
 - Fix：对 Markdown 进行 OCR 修复与 rumdl 格式化。
 - Fix JSON：对 JSON 中的 Markdown 字段进行同样修复。
+- Fix Math：校验并修复 LaTeX 公式，可选 LLM 辅助修复。
+- Fix Mermaid：校验并修复 Mermaid 图（需要 `mmdc` / mermaid-cli）。
 
 ```bash
 uv run deepresearch-flow recognize md embed --input ./raw_ocr --output ./clean_md
@@ -234,6 +253,19 @@ uv run deepresearch-flow recognize fix \
 uv run deepresearch-flow recognize fix \
   --json \
   --input ./paper_outputs \
+  --in-place
+
+# 修复 Markdown 中的 LaTeX 公式
+uv run deepresearch-flow recognize fix-math \
+  --input ./docs \
+  --model openai/gpt-4o-mini \
+  --in-place
+
+# 修复 JSON 中的 Mermaid 图
+uv run deepresearch-flow recognize fix-mermaid \
+  --json \
+  --input ./paper_outputs \
+  --model openai/gpt-4o-mini \
   --in-place
 ```
 
