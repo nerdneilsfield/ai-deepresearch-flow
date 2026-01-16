@@ -111,20 +111,32 @@ uv run deepresearch-flow translator translate \
   --fix-level moderate
 ```
 
-#### Step 3: Repair Math and Mermaid (Optional)
+#### Step 3: Repair OCR Outputs (Recommended)
 
-Validate and repair LaTeX formulas and Mermaid diagrams before serving.
+Recommended sequence to stabilize markdown before serving:
 
 ```bash
+# 1) Fix OCR markdown (auto-detects JSON if inputs are .json)
+uv run deepresearch-flow recognize fix \
+  --input ./docs \
+  --in-place
+
+# 2) Fix LaTeX formulas
 uv run deepresearch-flow recognize fix-math \
   --input ./docs \
   --model openai/gpt-4o-mini \
   --in-place
 
+# 3) Fix Mermaid diagrams
 uv run deepresearch-flow recognize fix-mermaid \
   --input ./paper_outputs \
   --json \
   --model openai/gpt-4o-mini \
+  --in-place
+
+# 4) Fix again to normalize formatting
+uv run deepresearch-flow recognize fix \
+  --input ./docs \
   --in-place
 ```
 
@@ -234,6 +246,7 @@ Tools to clean up raw outputs from OCR engines like MinerU.
 - Fix JSON: apply the same fixes to markdown fields inside paper JSON outputs.
 - Fix Math: validate and repair LaTeX formulas with optional LLM assistance.
 - Fix Mermaid: validate and repair Mermaid diagrams (requires `mmdc` from mermaid-cli).
+- Recommended order: `fix` -> `fix-math` -> `fix-mermaid` -> `fix`.
 
 ```bash
 uv run deepresearch-flow recognize md embed --input ./raw_ocr --output ./clean_md

@@ -37,6 +37,12 @@ from deepresearch_flow.recognize.math import (
     locate_json_field_start,
     require_pylatexenc,
 )
+from deepresearch_flow.recognize.mermaid import (
+    MermaidFixStats,
+    extract_mermaid_spans,
+    fix_mermaid_text,
+    require_mmdc,
+)
 from deepresearch_flow.recognize.organize import (
     discover_mineru_dirs,
     fix_markdown_text,
@@ -721,7 +727,38 @@ def recognize_fix(
     if json_mode:
         paths = discover_json(inputs, recursive=recursive)
     else:
-        paths = discover_markdown(inputs, None, recursive=recursive)
+        json_inputs: list[str] = []
+        md_inputs: list[str] = []
+        for raw in inputs:
+            path = Path(raw)
+            if path.is_file():
+                suffix = path.suffix.lower()
+                if suffix == ".json":
+                    json_inputs.append(raw)
+                    continue
+                if suffix == ".md":
+                    md_inputs.append(raw)
+                    continue
+                raise click.ClickException(f"Input file must be .md or .json: {path}")
+            if path.is_dir():
+                json_inputs.append(raw)
+                md_inputs.append(raw)
+                continue
+            raise click.ClickException(f"Input path not found: {path}")
+        json_paths = discover_json(json_inputs, recursive=recursive) if json_inputs else []
+        md_paths = discover_markdown(md_inputs, None, recursive=recursive) if md_inputs else []
+        if json_paths and not md_paths:
+            json_mode = True
+            paths = json_paths
+            click.echo("Detected JSON inputs; enabling --json mode")
+        elif md_paths and not json_paths:
+            paths = md_paths
+        elif json_paths and md_paths:
+            raise click.ClickException(
+                "Found both markdown and JSON inputs; split inputs or pass --json explicitly"
+            )
+        else:
+            paths = []
     if not paths:
         click.echo("No files discovered")
         return
@@ -1088,3 +1125,278 @@ def recognize_fix_math(
         ("Report", _relative_path(report_target) if report_target else "-"),
     ]
     _print_summary("recognize fix-math", rows)
+
+
+@recognize.command("fix-mermaid")
+@click.option("-c", "--config", "config_path", default="config.toml", help="Path to config.toml")
+@click.option(
+    "-i",
+    "--input",
+    "inputs",
+    multiple=True,
+    required=True,
+    help="Input markdown or JSON file/directory (repeatable)",
+)
+@click.option("-o", "--output", "output_dir", default=None, help="Output directory")
+@click.option("--in-place", "in_place", is_flag=True, help="Fix Mermaid blocks in place")
+@click.option("-r", "--recursive", is_flag=True, help="Recursively discover files")
+@click.option("--json", "json_mode", is_flag=True, help="Process JSON inputs instead of markdown")
+@click.option("-m", "--model", "model_ref", required=True, help="provider/model")
+@click.option("--batch-size", "batch_size", default=10, show_default=True, type=int)
+@click.option("--context-chars", "context_chars", default=80, show_default=True, type=int)
+@click.option("--max-retries", "max_retries", default=3, show_default=True, type=int)
+@click.option("--workers", type=int, default=4, show_default=True, help="Concurrent workers")
+@click.option("--timeout", "timeout", default=120.0, show_default=True, type=float)
+@click.option(
+    "--only-show-error",
+    "only_show_error",
+    is_flag=True,
+    help="Only validate Mermaid blocks and report error counts",
+)
+@click.option("--report", "report_path", default=None, help="Error report output path")
+@click.option("--dry-run", is_flag=True, help="Report actions without writing files")
+@click.option("-v", "--verbose", is_flag=True, help="Enable verbose logging")
+def recognize_fix_mermaid(
+    config_path: str,
+    inputs: tuple[str, ...],
+    output_dir: str | None,
+    in_place: bool,
+    recursive: bool,
+    json_mode: bool,
+    model_ref: str,
+    batch_size: int,
+    context_chars: int,
+    max_retries: int,
+    workers: int,
+    timeout: float,
+    only_show_error: bool,
+    report_path: str | None,
+    dry_run: bool,
+    verbose: bool,
+) -> None:
+    """Validate and repair Mermaid diagrams in markdown or JSON outputs."""
+    configure_logging(verbose)
+    if in_place and output_dir:
+        raise click.ClickException("--in-place cannot be used with --output")
+    if not only_show_error and not in_place and not output_dir:
+        raise click.ClickException("Either --in-place or --output is required")
+    if batch_size <= 0:
+        raise click.ClickException("--batch-size must be positive")
+    if context_chars < 0:
+        raise click.ClickException("--context-chars must be non-negative")
+    if max_retries < 0:
+        raise click.ClickException("--max-retries must be non-negative")
+    if workers <= 0:
+        raise click.ClickException("--workers must be positive")
+    try:
+        require_mmdc()
+    except RuntimeError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    if not json_mode:
+        file_types: set[str] = set()
+        for raw in inputs:
+            path = Path(raw)
+            if path.is_file():
+                suffix = path.suffix.lower()
+                if suffix in {".md", ".json"}:
+                    file_types.add(suffix)
+        if ".md" in file_types and ".json" in file_types:
+            raise click.ClickException(
+                "Mixed markdown and JSON inputs. Use --json for JSON or split commands."
+            )
+        if ".json" in file_types:
+            json_mode = True
+            logger.info("Detected JSON inputs; enabling --json mode")
+
+    config = load_config(config_path)
+    provider, model_name = parse_model_ref(model_ref, config.providers)
+    api_keys = resolve_api_keys(provider.api_keys)
+    if provider.type in {
+        "openai_compatible",
+        "dashscope",
+        "gemini_ai_studio",
+        "azure_openai",
+        "claude",
+    } and not api_keys:
+        raise click.ClickException(f"{provider.type} providers require api_keys")
+    api_key = api_keys[0] if api_keys else None
+
+    if json_mode:
+        paths = discover_json(inputs, recursive=recursive)
+    else:
+        paths = discover_markdown(inputs, None, recursive=recursive)
+    if not paths:
+        click.echo("No files discovered")
+        return
+
+    output_path = Path(output_dir) if output_dir else None
+    if output_path and not dry_run and not only_show_error:
+        output_path = _ensure_output_dir(output_dir)
+        _warn_if_not_empty(output_path)
+
+    if in_place:
+        output_map = {path: path for path in paths}
+    elif output_path:
+        ext = ".json" if json_mode else ".md"
+        output_map = {
+            path: (output_path / name)
+            for path, name in _map_output_files(paths, [output_path], ext=ext).items()
+        }
+    else:
+        output_map = {path: path for path in paths}
+
+    report_target = None
+    if report_path:
+        report_target = Path(report_path)
+    elif not only_show_error:
+        if output_path:
+            report_target = output_path / "fix-mermaid-errors.json"
+        elif in_place:
+            report_target = Path.cwd() / "fix-mermaid-errors.json"
+
+    if dry_run and not only_show_error:
+        rows = [
+            ("Mode", "json" if json_mode else "markdown"),
+            ("Inputs", str(len(paths))),
+            ("Outputs", str(len(output_map))),
+            ("Batch size", str(batch_size)),
+            ("Context chars", str(context_chars)),
+            ("Max retries", str(max_retries)),
+            ("Workers", str(workers)),
+            ("Timeout", f"{timeout:.1f}s"),
+            ("Only show error", "yes" if only_show_error else "no"),
+            ("In place", "yes" if in_place else "no"),
+            ("Output dir", _relative_path(output_path) if output_path else "-"),
+            ("Report", _relative_path(report_target) if report_target else "-"),
+        ]
+        _print_summary("recognize fix-mermaid (dry-run)", rows)
+        return
+
+    progress = tqdm(total=len(paths), desc="fix-mermaid", unit="file")
+    diagram_progress = tqdm(total=0, desc="diagrams", unit="diagram")
+    error_records: list[dict[str, Any]] = []
+
+    async def run() -> MermaidFixStats:
+        semaphore = asyncio.Semaphore(workers)
+        progress_lock = asyncio.Lock()
+        stats_total = MermaidFixStats()
+
+        async with httpx.AsyncClient() as client:
+            async def handle_path(path: Path) -> MermaidFixStats:
+                stats = MermaidFixStats()
+                if json_mode:
+                    raw_text = read_text(path)
+                    items, payload, template_tag = _load_json_payload(path)
+                    cursor = 0
+                    for item_index, item in enumerate(items):
+                        if not isinstance(item, dict):
+                            continue
+                        template = _resolve_item_template(item, template_tag)
+                        fields = _template_markdown_fields(template)
+                        for field in fields:
+                            value = item.get(field)
+                            if not isinstance(value, str):
+                                continue
+                            spans = extract_mermaid_spans(value, context_chars)
+                            if spans:
+                                diagram_progress.total += len(spans)
+                                diagram_progress.refresh()
+                            line_start, cursor = locate_json_field_start(raw_text, value, cursor)
+                            field_path = f"papers[{item_index}].{field}"
+                            updated, errors = await fix_mermaid_text(
+                                value,
+                                str(path),
+                                line_start,
+                                field_path,
+                                item_index,
+                                provider,
+                                model_name,
+                                api_key,
+                                timeout,
+                                max_retries,
+                                batch_size,
+                                context_chars,
+                                client,
+                                stats,
+                                repair_enabled=not only_show_error,
+                                spans=spans,
+                                progress_cb=lambda: diagram_progress.update(1),
+                            )
+                            if not only_show_error and updated != value:
+                                item[field] = updated
+                            error_records.extend(errors)
+                    if not only_show_error:
+                        output_data: Any = items if payload is None else {**payload, "papers": items}
+                        output_path = output_map[path]
+                        serialized = json.dumps(output_data, ensure_ascii=False, indent=2)
+                        await asyncio.to_thread(output_path.write_text, f"{serialized}\n", encoding="utf-8")
+                else:
+                    content = await asyncio.to_thread(read_text, path)
+                    spans = extract_mermaid_spans(content, context_chars)
+                    if spans:
+                        diagram_progress.total += len(spans)
+                        diagram_progress.refresh()
+                    updated, errors = await fix_mermaid_text(
+                        content,
+                        str(path),
+                        1,
+                        None,
+                        None,
+                        provider,
+                        model_name,
+                        api_key,
+                        timeout,
+                        max_retries,
+                        batch_size,
+                        context_chars,
+                        client,
+                        stats,
+                        repair_enabled=not only_show_error,
+                        spans=spans,
+                        progress_cb=lambda: diagram_progress.update(1),
+                    )
+                    if not only_show_error:
+                        output_path = output_map[path]
+                        await asyncio.to_thread(output_path.write_text, updated, encoding="utf-8")
+                    error_records.extend(errors)
+                return stats
+
+            async def runner(path: Path) -> None:
+                async with semaphore:
+                    stats = await handle_path(path)
+                    stats_total.diagrams_total += stats.diagrams_total
+                    stats_total.diagrams_invalid += stats.diagrams_invalid
+                    stats_total.diagrams_repaired += stats.diagrams_repaired
+                    stats_total.diagrams_failed += stats.diagrams_failed
+                    async with progress_lock:
+                        progress.update(1)
+
+            await asyncio.gather(*(runner(path) for path in paths))
+        return stats_total
+
+    try:
+        stats = asyncio.run(run())
+    finally:
+        progress.close()
+        diagram_progress.close()
+
+    if report_target and error_records:
+        report_target.parent.mkdir(parents=True, exist_ok=True)
+        report_target.write_text(
+            json.dumps(error_records, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+    rows = [
+        ("Mode", "json" if json_mode else "markdown"),
+        ("Inputs", str(len(paths))),
+        ("Outputs", str(len(output_map) if not only_show_error else 0)),
+        ("Diagrams", str(stats.diagrams_total)),
+        ("Invalid", str(stats.diagrams_invalid)),
+        ("Repaired", str(stats.diagrams_repaired)),
+        ("Failed", str(stats.diagrams_failed)),
+        ("Only show error", "yes" if only_show_error else "no"),
+        ("Report", _relative_path(report_target) if report_target else "-"),
+    ]
+    _print_summary("recognize fix-mermaid", rows)

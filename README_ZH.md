@@ -107,20 +107,32 @@ uv run deepresearch-flow translator translate \
   --fix-level moderate
 ```
 
-#### 步骤 3：修复公式与 Mermaid（可选）
+#### 步骤 3：修复 OCR 产物（推荐）
 
-在启动前校验并修复公式与流程图。
+推荐顺序：先修复 OCR，再修公式和流程图，最后再修一遍统一格式。
 
 ```bash
+# 1) 修复 OCR Markdown（输入为 .json 时自动启用 JSON 模式）
+uv run deepresearch-flow recognize fix \
+  --input ./docs \
+  --in-place
+
+# 2) 修复 LaTeX 公式
 uv run deepresearch-flow recognize fix-math \
   --input ./docs \
   --model openai/gpt-4o-mini \
   --in-place
 
+# 3) 修复 Mermaid 图
 uv run deepresearch-flow recognize fix-mermaid \
   --input ./paper_outputs \
   --json \
   --model openai/gpt-4o-mini \
+  --in-place
+
+# 4) 再修一遍统一格式
+uv run deepresearch-flow recognize fix \
+  --input ./docs \
   --in-place
 ```
 
@@ -227,6 +239,7 @@ uv run deepresearch-flow paper db compare \
 - Fix JSON：对 JSON 中的 Markdown 字段进行同样修复。
 - Fix Math：校验并修复 LaTeX 公式，可选 LLM 辅助修复。
 - Fix Mermaid：校验并修复 Mermaid 图（需要 `mmdc` / mermaid-cli）。
+- 推荐顺序：`fix` -> `fix-math` -> `fix-mermaid` -> `fix`。
 
 ```bash
 uv run deepresearch-flow recognize md embed --input ./raw_ocr --output ./clean_md
