@@ -44,7 +44,6 @@ pycparser==2.23
 pydantic==2.12.5
 pydantic-core==2.41.5
 pygments==2.19.2
-pykatex==0.1.1
 pylatexenc==2.10
 pypdf==6.6.0
 pyyaml==6.0.3
