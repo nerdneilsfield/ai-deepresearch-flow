@@ -25,7 +25,7 @@
   <a href="https://hub.docker.com/r/nerdneils/deepresearch-flow">
     <img src="https://img.shields.io/docker/v/nerdneils/deepresearch-flow?style=flat-square" />
   </a>
-  <a href="https://ghcr.io/nerdneilsfield/deepresearch-flow">
+  <a href="https://github.com/nerdneilsfield/ai-deepresearch-flow/pkgs/container/deepresearch-flow">
     <img src="https://img.shields.io/badge/ghcr.io-nerdneilsfield%2Fdeepresearch-flow-0f172a?style=flat-square" />
   </a>
   <a href="https://github.com/nerdneilsfield/ai-deepresearch-flow/blob/main/LICENSE">
@@ -144,6 +144,66 @@ uv run deepresearch-flow paper db serve \
   --md-root ./docs \
   --md-translated-root ./docs \
   --host 127.0.0.1
+```
+
+---
+
+## 部署（静态 CDN）
+
+推荐用两台服务器：一台跑 API/UI，另一台只提供静态资源（PDF/Markdown/图片）。
+
+### 1) 导出静态资源
+
+```bash
+uv run deepresearch-flow paper db serve \
+  --input paper_infos.json \
+  --md-root ./docs \
+  --md-translated-root ./docs \
+  --pdf-root ./pdfs \
+  --static-mode prod \
+  --static-base-url https://static.example.com \
+  --static-export-dir /data/paper-static
+```
+
+说明：
+- API 服务器需要能读取原始 PDF/Markdown 根目录，用于建索引和计算哈希。
+- CDN 服务器只需要导出的目录（例如 `/data/paper-static`）。
+
+### 2) 静态服务器开启 CORS 和缓存（Caddy 示例）
+
+```caddyfile
+:8002 {
+  root * /data/paper-static
+  encode zstd gzip
+
+  @static path /pdf/* /md/* /md_translate/* /images/*
+  header @static {
+    Access-Control-Allow-Origin *
+    Access-Control-Allow-Methods GET,HEAD,OPTIONS
+    Access-Control-Allow-Headers *
+    Cache-Control "public, max-age=31536000, immutable"
+  }
+
+  @options method OPTIONS
+  respond @options 204
+
+  file_server
+}
+```
+
+### 3) 启动 API/UI 并指向静态域名
+
+```bash
+export PAPER_DB_STATIC_BASE_URL="https://static.example.com"
+export PAPER_DB_STATIC_MODE="prod"
+export PAPER_DB_STATIC_EXPORT_DIR="/data/paper-static"
+export PAPER_DB_PDFJS_CDN_BASE_URL="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379"
+
+uv run deepresearch-flow paper db serve \
+  --input paper_infos.json \
+  --md-root ./docs \
+  --md-translated-root ./docs \
+  --pdf-root ./pdfs
 ```
 
 ---

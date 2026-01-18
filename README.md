@@ -25,7 +25,7 @@
   <a href="https://hub.docker.com/r/nerdneils/deepresearch-flow">
     <img src="https://img.shields.io/docker/v/nerdneils/deepresearch-flow?style=flat-square" />
   </a>
-  <a href="https://ghcr.io/nerdneilsfield/deepresearch-flow">
+  <a href="https://github.com/nerdneilsfield/ai-deepresearch-flow/pkgs/container/deepresearch-flow">
     <img src="https://img.shields.io/badge/ghcr.io-nerdneilsfield%2Fdeepresearch-flow-0f172a?style=flat-square" />
   </a>
   <a href="https://github.com/nerdneilsfield/ai-deepresearch-flow/blob/main/LICENSE">
@@ -150,6 +150,66 @@ uv run deepresearch-flow paper db serve \
   --md-root ./docs \
   --md-translated-root ./docs \
   --host 127.0.0.1
+```
+
+---
+
+## Deployment (Static CDN)
+
+Use a separate static server (CDN) for PDFs/Markdown/images and keep the API/UI on another host.
+
+### 1) Export static assets
+
+```bash
+uv run deepresearch-flow paper db serve \
+  --input paper_infos.json \
+  --md-root ./docs \
+  --md-translated-root ./docs \
+  --pdf-root ./pdfs \
+  --static-mode prod \
+  --static-base-url https://static.example.com \
+  --static-export-dir /data/paper-static
+```
+
+Notes:
+- The API host must be able to read the original PDF/Markdown roots to build the index and hashes.
+- The CDN host only needs the exported directory (e.g. `/data/paper-static`).
+
+### 2) Serve the export directory with CORS + cache headers (Caddy example)
+
+```caddyfile
+:8002 {
+  root * /data/paper-static
+  encode zstd gzip
+
+  @static path /pdf/* /md/* /md_translate/* /images/*
+  header @static {
+    Access-Control-Allow-Origin *
+    Access-Control-Allow-Methods GET,HEAD,OPTIONS
+    Access-Control-Allow-Headers *
+    Cache-Control "public, max-age=31536000, immutable"
+  }
+
+  @options method OPTIONS
+  respond @options 204
+
+  file_server
+}
+```
+
+### 3) Start the API/UI with static base
+
+```bash
+export PAPER_DB_STATIC_BASE_URL="https://static.example.com"
+export PAPER_DB_STATIC_MODE="prod"
+export PAPER_DB_STATIC_EXPORT_DIR="/data/paper-static"
+export PAPER_DB_PDFJS_CDN_BASE_URL="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379"
+
+uv run deepresearch-flow paper db serve \
+  --input paper_infos.json \
+  --md-root ./docs \
+  --md-translated-root ./docs \
+  --pdf-root ./pdfs
 ```
 
 ---
