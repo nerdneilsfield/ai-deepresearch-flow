@@ -600,6 +600,32 @@ def register_db_commands(db_group: click.Group) -> None:
     )
     @click.option("--cache-dir", "cache_dir", default=None, help="Cache directory for merged inputs")
     @click.option("--no-cache", "no_cache", is_flag=True, help="Disable cache for db serve")
+    @click.option(
+        "--static-base-url",
+        "static_base_url",
+        default=None,
+        help="Static asset base URL (e.g. https://static.example.com)",
+    )
+    @click.option(
+        "--static-mode",
+        "static_mode",
+        type=click.Choice(["auto", "dev", "prod"]),
+        default="auto",
+        show_default=True,
+        help="Static asset mode (dev uses local assets, prod uses static base URL)",
+    )
+    @click.option(
+        "--static-export-dir",
+        "static_export_dir",
+        default=None,
+        help="Optional export directory for hashed static assets",
+    )
+    @click.option(
+        "--pdfjs-cdn-base-url",
+        "pdfjs_cdn_base_url",
+        default=None,
+        help="PDF.js CDN base URL (defaults to jsDelivr)",
+    )
     @click.option("--host", default="127.0.0.1", show_default=True, help="Bind host")
     @click.option("--port", default=8000, type=int, show_default=True, help="Bind port")
     @click.option(
@@ -617,6 +643,10 @@ def register_db_commands(db_group: click.Group) -> None:
         pdf_roots: tuple[str, ...],
         cache_dir: str | None,
         no_cache: bool,
+        static_base_url: str | None,
+        static_mode: str,
+        static_export_dir: str | None,
+        pdfjs_cdn_base_url: str | None,
         host: str,
         port: int,
         fallback_language: str,
@@ -635,6 +665,10 @@ def register_db_commands(db_group: click.Group) -> None:
                 pdf_roots=[Path(root) for root in pdf_roots],
                 cache_dir=Path(cache_dir) if cache_dir else None,
                 use_cache=not no_cache,
+                static_base_url=static_base_url,
+                static_mode=static_mode,
+                static_export_dir=Path(static_export_dir) if static_export_dir else None,
+                pdfjs_cdn_base_url=pdfjs_cdn_base_url,
             )
         except Exception as exc:
             raise click.ClickException(str(exc)) from exc

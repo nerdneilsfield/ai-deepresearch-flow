@@ -12,6 +12,7 @@ CDN_KATEX_AUTO = "https://cdn.jsdelivr.net/npm/katex@0.16.27/dist/contrib/auto-r
 # Use legacy builds to ensure `pdfjsLib` is available as a global.
 CDN_PDFJS = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.min.js"
 CDN_PDFJS_WORKER = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.worker.min.js"
+DEFAULT_PDFJS_CDN_BASE_URL = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174"
 
 # PDF.js viewer configuration
 PDFJS_VIEWER_PATH = "/pdfjs/web/viewer.html"

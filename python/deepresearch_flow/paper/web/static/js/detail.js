@@ -8,8 +8,7 @@
 
   function init() {
     initFullscreen();
-    initMarkdownRendering();
-    initFootnotes();
+    initMarkdownContent();
     initBackToTop();
 
     // View-specific initializers
@@ -27,6 +26,12 @@
   // ========================================
   // Back-to-top button
   // ========================================
+
+  function escapeHtml(text) {
+    var div = document.createElement('div');
+    div.textContent = String(text || '');
+    return div.innerHTML;
+  }
 
   function initBackToTop() {
     var button = document.getElementById('backToTop');
@@ -81,64 +86,395 @@
   }
 
   // ========================================
-  // Markdown rendering (Mermaid + KaTeX)
+  // Markdown rendering (Marked + DOMPurify) + enhancements
   // ========================================
 
-  function initMarkdownRendering() {
-    // Only run if we have content with mermaid/katex
-    if (!document.getElementById('content')) return;
+  var DOMPURIFY_CONFIG = {
+    ADD_TAGS: ['sup', 'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td', 'caption', 'colgroup', 'col'],
+    ADD_ATTR: ['colspan', 'rowspan', 'align'],
+    ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|tel|data:image\/)|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i
+  };
 
-    function initRendering() {
-      // Markmap: convert fenced markmap blocks to svg mindmaps
-      if (window.markmap && window.markmap.Transformer && window.markmap.Markmap) {
-        var transformer = new window.markmap.Transformer();
-        document.querySelectorAll('code.language-markmap').forEach(function(code) {
-          var pre = code.parentElement;
-          if (!pre) return;
-          var svg = document.createElement('svg');
-          svg.className = 'markmap';
-          pre.replaceWith(svg);
-          try {
-            var result = transformer.transform(code.textContent || '');
-            window.markmap.Markmap.create(svg, null, result.root);
-          } catch (err) {
-            // Ignore markmap parse errors
+  function initMarkdownContent() {
+    var content = document.getElementById('content');
+    if (!content) return;
+
+    var markdownUrl = content.dataset.markdownUrl;
+    var rawMarkdownUrl = content.dataset.rawMarkdownUrl;
+    var imagesBaseUrl = content.dataset.imagesBaseUrl || '';
+    if (!markdownUrl) {
+      var rawText = content.textContent || '';
+      if (content.children.length === 0 && rawText.trim()) {
+        var rendered = renderMarkdown(rawText, imagesBaseUrl);
+        content.innerHTML = rendered;
+      } else {
+        rewriteRenderedImages(imagesBaseUrl);
+      }
+      if (rawMarkdownUrl) {
+        var statusEl = document.getElementById('markdownStatus');
+        var rawEl = document.getElementById('rawMarkdown');
+        if (statusEl) statusEl.textContent = 'Loading raw markdown...';
+        fetch(rawMarkdownUrl).then(function(res) {
+          if (!res.ok) throw new Error('Failed to load raw markdown');
+          return res.text();
+        }).then(function(text) {
+          if (rawEl) rawEl.textContent = text;
+          if (statusEl) statusEl.remove();
+        }).catch(function() {
+          if (statusEl) statusEl.textContent = 'Failed to load raw markdown.';
+        });
+      }
+      runMarkdownEnhancements();
+      initFootnotes();
+      dispatchContentUpdated();
+      return;
+    }
+
+    var status = document.getElementById('markdownStatus');
+    var rawContainer = document.getElementById('rawMarkdown');
+    if (status) status.textContent = 'Loading markdown...';
+
+    fetch(markdownUrl).then(function(res) {
+      if (!res.ok) throw new Error('Failed to load markdown');
+      return res.text();
+    }).then(function(text) {
+      if (rawContainer) rawContainer.textContent = text;
+      var html = renderMarkdown(text, imagesBaseUrl);
+      content.innerHTML = html;
+      if (status) status.remove();
+      rewriteRenderedImages(imagesBaseUrl);
+      runMarkdownEnhancements();
+      initFootnotes();
+      dispatchContentUpdated();
+    }).catch(function() {
+      if (status) status.textContent = 'Failed to load markdown.';
+    });
+  }
+
+  function renderMarkdown(markdown, imagesBaseUrl) {
+    var normalized = normalizeFootnoteDefinitions(markdown || '');
+    var footnoteData = extractFootnotes(normalized);
+    var mathData = extractMathPlaceholders(footnoteData.markdown);
+
+    if (!window.marked) {
+      return '<pre><code>' + escapeHtml(markdown) + '</code></pre>';
+    }
+
+    var renderer = new window.marked.Renderer();
+    renderer.image = function(href, title, text) {
+      var src = rewriteImageUrl(href, imagesBaseUrl);
+      if (!src) return '';
+      var html = '<img src="' + escapeHtml(src) + '" alt="' + escapeHtml(text || '') + '"';
+      if (title) {
+        html += ' title="' + escapeHtml(title) + '"';
+      }
+      return html + ' />';
+    };
+
+    if (window.marked && window.marked.setOptions) {
+      window.marked.setOptions({ gfm: true, breaks: false });
+    }
+    var parsed = window.marked.parse(mathData.text || '', { renderer: renderer });
+    parsed = replaceMathPlaceholders(parsed, mathData.placeholders);
+    parsed = injectFootnotes(parsed, footnoteData);
+    if (window.DOMPurify) {
+      return window.DOMPurify.sanitize(parsed, DOMPURIFY_CONFIG);
+    }
+    return parsed;
+  }
+
+  function rewriteImageUrl(url, imagesBaseUrl) {
+    if (!url) return url;
+    if (!imagesBaseUrl) return url;
+    if (isAbsoluteUrl(url)) return url;
+
+    var cleaned = String(url);
+    while (cleaned.indexOf('../') === 0) {
+      cleaned = cleaned.slice(3);
+    }
+    cleaned = cleaned.replace(/^\.\//, '');
+    cleaned = cleaned.replace(/^\/+/, '');
+    if (cleaned.indexOf('images/') === 0) {
+      cleaned = cleaned.slice('images/'.length);
+    }
+    var base = String(imagesBaseUrl).replace(/\/+$/, '');
+    return base + '/' + cleaned;
+  }
+
+  function rewriteRenderedImages(imagesBaseUrl) {
+    if (!imagesBaseUrl) return;
+    var content = document.getElementById('content');
+    if (!content) return;
+    content.querySelectorAll('img').forEach(function(img) {
+      var src = img.getAttribute('src');
+      var rewritten = rewriteImageUrl(src, imagesBaseUrl);
+      if (rewritten && rewritten !== src) {
+        img.setAttribute('src', rewritten);
+      }
+    });
+  }
+
+  function isAbsoluteUrl(url) {
+    return /^(?:[a-z][a-z0-9+.\-]*:|\/\/|#)/i.test(url) || url.charAt(0) === '/';
+  }
+
+  function normalizeFootnoteDefinitions(text) {
+    return String(text || '').replace(/^\[\^([^\]]+)\]\s+/gm, '[^$1]: ');
+  }
+
+  function extractFootnotes(text) {
+    var lines = String(text || '').split(/\r?\n/);
+    var out = [];
+    var notes = {};
+    var order = [];
+    var i = 0;
+    while (i < lines.length) {
+      var line = lines[i];
+      var match = line.match(/^\[\^([^\]]+)\]:\s*(.*)$/);
+      if (!match) {
+        out.push(line);
+        i += 1;
+        continue;
+      }
+      var rawId = match[1].trim();
+      var id = sanitizeFootnoteId(rawId);
+      var content = match[2] || '';
+      var parts = [content];
+      i += 1;
+      while (i < lines.length) {
+        var next = lines[i];
+        if (/^\[\^([^\]]+)\]:\s*/.test(next)) {
+          break;
+        }
+        if (/^\s{2,}|\t/.test(next)) {
+          parts.push(next.replace(/^\s{2,}|\t/, ''));
+          i += 1;
+          continue;
+        }
+        if (next.trim() === '') {
+          parts.push('');
+          i += 1;
+          continue;
+        }
+        break;
+      }
+      if (!notes[id]) {
+        order.push(id);
+      }
+      notes[id] = parts.join('\n').trim();
+    }
+    return { markdown: out.join('\n'), notes: notes, order: order };
+  }
+
+  function injectFootnotes(html, footnoteData) {
+    if (!footnoteData || !footnoteData.order || footnoteData.order.length === 0) {
+      return html;
+    }
+    var notes = footnoteData.notes || {};
+    var order = footnoteData.order;
+    var replaced = String(html || '').replace(/\[\^([^\]]+)\]/g, function(match, rawId) {
+      var id = sanitizeFootnoteId(rawId);
+      if (!notes[id]) return match;
+      return '<sup class="footnote-ref"><a href="#fn' + id + '" id="fnref' + id + '">[' +
+        escapeHtml(rawId) + ']</a></sup>';
+    });
+
+    var items = order.map(function(id) {
+      var noteText = notes[id] || '';
+      var body = window.marked ? window.marked.parse(noteText) : '<p>' + escapeHtml(noteText) + '</p>';
+      return '<li id="fn' + id + '">' + body +
+        ' <a class="footnote-backref" href="#fnref' + id + '">↩</a></li>';
+    }).join('');
+    var footnotesHtml = '<div class="footnotes"><ol>' + items + '</ol></div>';
+    return replaced + footnotesHtml;
+  }
+
+  function sanitizeFootnoteId(value) {
+    return String(value || '').replace(/[^a-zA-Z0-9_-]/g, '-');
+  }
+
+  function extractMathPlaceholders(text) {
+    var placeholders = {};
+    var out = [];
+    var idx = 0;
+    var inFence = false;
+    var fenceChar = '';
+    var fenceLen = 0;
+    var inlineDelimLen = 0;
+
+    function nextPlaceholder(value) {
+      var key = '@@MATH_' + Object.keys(placeholders).length + '@@';
+      placeholders[key] = value;
+      return key;
+    }
+
+    while (idx < text.length) {
+      var atLineStart = idx === 0 || text[idx - 1] === '\n';
+      if (inlineDelimLen === 0 && atLineStart) {
+        var lineEnd = text.indexOf('\n', idx);
+        if (lineEnd === -1) lineEnd = text.length;
+        var line = text.slice(idx, lineEnd);
+        var stripped = line.replace(/^[ ]+/, '');
+        var leadingSpaces = line.length - stripped.length;
+        if (leadingSpaces <= 3 && stripped) {
+          var first = stripped[0];
+          if (first === '`' || first === '~') {
+            var runLen = 0;
+            while (runLen < stripped.length && stripped[runLen] === first) {
+              runLen += 1;
+            }
+            if (runLen >= 3) {
+              if (!inFence) {
+                inFence = true;
+                fenceChar = first;
+                fenceLen = runLen;
+              } else if (first === fenceChar && runLen >= fenceLen) {
+                inFence = false;
+                fenceChar = '';
+                fenceLen = 0;
+              }
+              out.push(line);
+              idx = lineEnd;
+              continue;
+            }
           }
-        });
+        }
       }
 
-      // Mermaid: convert fenced code blocks to mermaid divs
-      document.querySelectorAll('code.language-mermaid').forEach(function(code) {
+      if (inFence) {
+        out.push(text[idx]);
+        idx += 1;
+        continue;
+      }
+
+      if (inlineDelimLen > 0) {
+        var delim = '`'.repeat(inlineDelimLen);
+        if (text.slice(idx, idx + inlineDelimLen) === delim) {
+          out.push(delim);
+          idx += inlineDelimLen;
+          inlineDelimLen = 0;
+          continue;
+        }
+        out.push(text[idx]);
+        idx += 1;
+        continue;
+      }
+
+      if (text[idx] === '`') {
+        var inlineRun = 0;
+        while (idx + inlineRun < text.length && text[idx + inlineRun] === '`') {
+          inlineRun += 1;
+        }
+        inlineDelimLen = inlineRun;
+        out.push('`'.repeat(inlineRun));
+        idx += inlineRun;
+        continue;
+      }
+
+      if (text.slice(idx, idx + 2) === '$$' && (idx === 0 || text[idx - 1] !== '\\')) {
+        var searchFrom = idx + 2;
+        var end = text.indexOf('$$', searchFrom);
+        while (end !== -1 && text[end - 1] === '\\') {
+          searchFrom = end + 2;
+          end = text.indexOf('$$', searchFrom);
+        }
+        if (end !== -1) {
+          out.push(nextPlaceholder(text.slice(idx, end + 2)));
+          idx = end + 2;
+          continue;
+        }
+      }
+
+      if (text[idx] === '$' && text.slice(idx, idx + 2) !== '$$' && (idx === 0 || text[idx - 1] !== '\\')) {
+        var lineEndInline = text.indexOf('\n', idx + 1);
+        if (lineEndInline === -1) lineEndInline = text.length;
+        var searchInline = idx + 1;
+        var endInline = text.indexOf('$', searchInline);
+        while (endInline !== -1 && endInline < lineEndInline && text[endInline - 1] === '\\') {
+          searchInline = endInline + 1;
+          endInline = text.indexOf('$', searchInline);
+        }
+        if (endInline !== -1 && endInline < lineEndInline) {
+          out.push(nextPlaceholder(text.slice(idx, endInline + 1)));
+          idx = endInline + 1;
+          continue;
+        }
+      }
+
+      out.push(text[idx]);
+      idx += 1;
+    }
+
+    return { text: out.join(''), placeholders: placeholders };
+  }
+
+  function replaceMathPlaceholders(html, placeholders) {
+    var out = String(html || '');
+    Object.keys(placeholders || {}).forEach(function(key) {
+      var value = escapeHtml(placeholders[key]);
+      out = out.split(key).join(value);
+    });
+    return out;
+  }
+
+  function runMarkdownEnhancements() {
+    var content = document.getElementById('content');
+    if (!content) return;
+
+    // Markmap: convert fenced markmap blocks to svg mindmaps
+    if (window.markmap && window.markmap.Transformer && window.markmap.Markmap) {
+      var transformer = new window.markmap.Transformer();
+      document.querySelectorAll('code.language-markmap').forEach(function(code) {
         var pre = code.parentElement;
-        var div = document.createElement('div');
-        div.className = 'mermaid';
-        div.textContent = code.textContent;
-        pre.replaceWith(div);
+        if (!pre) return;
+        var svg = document.createElement('svg');
+        svg.className = 'markmap';
+        pre.replaceWith(svg);
+        try {
+          var result = transformer.transform(code.textContent || '');
+          window.markmap.Markmap.create(svg, null, result.root);
+        } catch (err) {
+          // Ignore markmap parse errors
+        }
       });
-
-      if (window.mermaid) {
-        mermaid.initialize({ startOnLoad: false });
-        mermaid.run();
-      }
-
-      if (window.renderMathInElement) {
-        renderMathInElement(document.getElementById('content'), {
-          delimiters: [
-            {left: '$$', right: '$$', display: true},
-            {left: '$', right: '$', display: false},
-            {left: '\\(', right: '\\)', display: false},
-            {left: '\\[', right: '\\]', display: true}
-          ],
-          throwOnError: false
-        });
-      }
     }
 
-    if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', initRendering);
-    } else {
-      initRendering();
+    // Mermaid: convert fenced code blocks to mermaid divs
+    document.querySelectorAll('code.language-mermaid').forEach(function(code) {
+      var pre = code.parentElement;
+      var div = document.createElement('div');
+      div.className = 'mermaid';
+      div.textContent = code.textContent;
+      pre.replaceWith(div);
+    });
+
+    if (window.mermaid) {
+      mermaid.initialize({ startOnLoad: false });
+      mermaid.run();
     }
+
+    if (window.renderMathInElement) {
+      renderMathInElement(content, {
+        delimiters: [
+          {left: '$$', right: '$$', display: true},
+          {left: '$', right: '$', display: false},
+          {left: '\\(', right: '\\)', display: false},
+          {left: '\\[', right: '\\]', display: true}
+        ],
+        throwOnError: false
+      });
+    }
+  }
+
+  function dispatchContentUpdated() {
+    var event;
+    try {
+      event = new CustomEvent('content:updated');
+    } catch (err) {
+      event = document.createEvent('Event');
+      event.initEvent('content:updated', true, true);
+    }
+    document.dispatchEvent(event);
   }
 
   // ========================================
@@ -305,92 +641,125 @@
     var pdfUrl = document.body.dataset.pdfUrl;
     if (!pdfUrl) return;
 
-    var pdfJsLib = window.pdfjsLib;
-    if (!pdfJsLib) return;
+    var started = false;
+    var loadRequested = false;
 
-    pdfJsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.js';
+    function startPdf() {
+      if (started) return true;
+      var pdfJsLib = window.pdfjsLib;
+      if (!pdfJsLib || !pdfJsLib.getDocument) return false;
 
-    var pdfDoc = null;
-    var pageNum = 1;
-    var pageRendering = false;
-    var pageNumPending = null;
-    var zoomLevel = 1.0;
-    var canvas = document.getElementById('the-canvas');
-    var ctx = canvas.getContext('2d');
+      started = true;
+      pdfJsLib.GlobalWorkerOptions.workerSrc =
+        window.PDFJS_WORKER_SRC || '/pdfjs/build/pdf.worker.js';
 
-    function renderPage(num) {
-      pageRendering = true;
-      pdfDoc.getPage(num).then(function(page) {
-        var baseViewport = page.getViewport({scale: 1});
-        var containerWidth = canvas.clientWidth || baseViewport.width;
-        var fitScale = containerWidth / baseViewport.width;
-        var scale = fitScale * zoomLevel;
+      var pdfDoc = null;
+      var pageNum = 1;
+      var pageRendering = false;
+      var pageNumPending = null;
+      var zoomLevel = 1.0;
+      var canvas = document.getElementById('the-canvas');
+      var ctx = canvas.getContext('2d');
 
-        var viewport = page.getViewport({scale: scale});
-        var outputScale = window.devicePixelRatio || 1;
+      function renderPage(num) {
+        pageRendering = true;
+        pdfDoc.getPage(num).then(function(page) {
+          var baseViewport = page.getViewport({scale: 1});
+          var containerWidth = canvas.clientWidth || baseViewport.width;
+          var fitScale = containerWidth / baseViewport.width;
+          var scale = fitScale * zoomLevel;
 
-        canvas.width = Math.floor(viewport.width * outputScale);
-        canvas.height = Math.floor(viewport.height * outputScale);
-        canvas.style.width = Math.floor(viewport.width) + 'px';
-        canvas.style.height = Math.floor(viewport.height) + 'px';
+          var viewport = page.getViewport({scale: scale});
+          var outputScale = window.devicePixelRatio || 1;
 
-        var transform = outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : null;
-        var renderContext = { canvasContext: ctx, viewport: viewport, transform: transform };
-        var renderTask = page.render(renderContext);
-        renderTask.promise.then(function() {
-          pageRendering = false;
-          document.getElementById('page_num').textContent = String(pageNum);
-          if (pageNumPending !== null) {
-            var next = pageNumPending;
-            pageNumPending = null;
-            renderPage(next);
-          }
+          canvas.width = Math.floor(viewport.width * outputScale);
+          canvas.height = Math.floor(viewport.height * outputScale);
+          canvas.style.width = Math.floor(viewport.width) + 'px';
+          canvas.style.height = Math.floor(viewport.height) + 'px';
+
+          var transform = outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : null;
+          var renderContext = { canvasContext: ctx, viewport: viewport, transform: transform };
+          var renderTask = page.render(renderContext);
+          renderTask.promise.then(function() {
+            pageRendering = false;
+            document.getElementById('page_num').textContent = String(pageNum);
+            if (pageNumPending !== null) {
+              var next = pageNumPending;
+              pageNumPending = null;
+              renderPage(next);
+            }
+          });
         });
-      });
-    }
-
-    function queueRenderPage(num) {
-      if (pageRendering) {
-        pageNumPending = num;
-      } else {
-        renderPage(num);
       }
+
+      function queueRenderPage(num) {
+        if (pageRendering) {
+          pageNumPending = num;
+        } else {
+          renderPage(num);
+        }
+      }
+
+      function onPrevPage() {
+        if (pageNum <= 1) return;
+        pageNum--;
+        queueRenderPage(pageNum);
+      }
+
+      function onNextPage() {
+        if (pageNum >= pdfDoc.numPages) return;
+        pageNum++;
+        queueRenderPage(pageNum);
+      }
+
+      function adjustZoom(delta) {
+        zoomLevel = Math.max(0.5, Math.min(3.0, zoomLevel + delta));
+        queueRenderPage(pageNum);
+      }
+
+      document.getElementById('prev').addEventListener('click', onPrevPage);
+      document.getElementById('next').addEventListener('click', onNextPage);
+      document.getElementById('zoomOut').addEventListener('click', function() { adjustZoom(-0.1); });
+      document.getElementById('zoomIn').addEventListener('click', function() { adjustZoom(0.1); });
+
+      pdfJsLib.getDocument(pdfUrl).promise.then(function(pdfDoc_) {
+        pdfDoc = pdfDoc_;
+        document.getElementById('page_count').textContent = String(pdfDoc.numPages);
+        renderPage(pageNum);
+      });
+
+      var resizeTimer = null;
+      window.addEventListener('resize', function() {
+        if (!pdfDoc) return;
+        if (resizeTimer) clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(function() { queueRenderPage(pageNum); }, 150);
+      });
+
+      return true;
     }
 
-    function onPrevPage() {
-      if (pageNum <= 1) return;
-      pageNum--;
-      queueRenderPage(pageNum);
+    if (startPdf()) return;
+
+    if (!loadRequested && window.PDFJS_SCRIPT_SRC) {
+      loadRequested = true;
+      var script = document.createElement('script');
+      script.src = window.PDFJS_SCRIPT_SRC;
+      script.defer = true;
+      script.onload = function() {
+        try {
+          window.dispatchEvent(new Event('pdfjs:loaded'));
+        } catch (err) {
+          var event = document.createEvent('Event');
+          event.initEvent('pdfjs:loaded', true, true);
+          window.dispatchEvent(event);
+        }
+      };
+      document.head.appendChild(script);
     }
 
-    function onNextPage() {
-      if (pageNum >= pdfDoc.numPages) return;
-      pageNum++;
-      queueRenderPage(pageNum);
-    }
-
-    function adjustZoom(delta) {
-      zoomLevel = Math.max(0.5, Math.min(3.0, zoomLevel + delta));
-      queueRenderPage(pageNum);
-    }
-
-    document.getElementById('prev').addEventListener('click', onPrevPage);
-    document.getElementById('next').addEventListener('click', onNextPage);
-    document.getElementById('zoomOut').addEventListener('click', function() { adjustZoom(-0.1); });
-    document.getElementById('zoomIn').addEventListener('click', function() { adjustZoom(0.1); });
-
-    pdfJsLib.getDocument(pdfUrl).promise.then(function(pdfDoc_) {
-      pdfDoc = pdfDoc_;
-      document.getElementById('page_count').textContent = String(pdfDoc.numPages);
-      renderPage(pageNum);
-    });
-
-    var resizeTimer = null;
-    window.addEventListener('resize', function() {
-      if (!pdfDoc) return;
-      if (resizeTimer) clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(function() { queueRenderPage(pageNum); }, 150);
-    });
+    window.addEventListener('pdfjs:loaded', function() {
+      startPdf();
+    }, { once: true });
   }
 
   // ========================================

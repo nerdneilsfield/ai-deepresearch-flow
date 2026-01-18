@@ -162,9 +162,10 @@
           <button id="outlineToggle" class="inline-flex h-9 items-center justify-center rounded-md bg-slate-900 px-3 text-sm text-white shadow hover:bg-slate-800">☰ Outline</button>
         </div>
         {% endif %}
-        <article id="content" class="content">{{ body_html|safe }}</article>
+        <article id="content" class="content"{% if source_markdown_url %} data-raw-markdown-url="{{ source_markdown_url }}"{% endif %}{% if images_base_url %} data-images-base-url="{{ images_base_url }}"{% endif %}>{{ body_html|safe }}</article>
+        <div id="markdownStatus" class="muted" style="margin-top:10px;">Loading raw markdown...</div>
         <details style="margin-top:12px;"><summary>Raw markdown</summary>
-          <pre><code>{{ raw_content|escape }}</code></pre>
+          <pre><code id="rawMarkdown"></code></pre>
         </details>
       {% endif %}
 
@@ -200,9 +201,10 @@
           <button id="outlineToggle" class="inline-flex h-9 items-center justify-center rounded-md bg-slate-900 px-3 text-sm text-white shadow hover:bg-slate-800">☰ Outline</button>
         </div>
         {% endif %}
-        <article id="content" class="content">{{ body_html|safe }}</article>
+        <article id="content" class="content"{% if translated_markdown_url %} data-raw-markdown-url="{{ translated_markdown_url }}"{% endif %}{% if images_base_url %} data-images-base-url="{{ images_base_url }}"{% endif %}>{{ body_html|safe }}</article>
+        <div id="markdownStatus" class="muted" style="margin-top:10px;">Loading raw markdown...</div>
         <details style="margin-top:12px;"><summary>Raw markdown</summary>
-          <pre><code>{{ raw_content|escape }}</code></pre>
+          <pre><code id="rawMarkdown"></code></pre>
         </details>
       {% endif %}
 
@@ -256,10 +258,45 @@
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10.6.1/dist/mermaid.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/markmap-lib@0.15.4/dist/browser/index.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/markmap-view@0.15.4/dist/browser/index.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.1/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.6/dist/purify.min.js"></script>
 
 {# PDF.js for PDF view #}
 {% if current_view == 'pdf' %}
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.min.js"></script>
+<script>
+(function() {
+  var primary = {{ pdfjs_script_url|tojson }};
+  var fallback = "/pdfjs/build/pdf.js";
+  if (!primary) {
+    primary = fallback;
+    fallback = "";
+  }
+  window.PDFJS_SCRIPT_SRC = primary;
+  window.PDFJS_WORKER_SRC = {{ pdfjs_worker_url|tojson }} || "/pdfjs/build/pdf.worker.js";
+  function notifyLoaded() {
+    try {
+      window.dispatchEvent(new Event('pdfjs:loaded'));
+    } catch (err) {
+      var event = document.createEvent('Event');
+      event.initEvent('pdfjs:loaded', true, true);
+      window.dispatchEvent(event);
+    }
+  }
+  function loadScript(src, onerror) {
+    var script = document.createElement('script');
+    script.src = src;
+    script.defer = true;
+    script.onload = notifyLoaded;
+    if (onerror) script.onerror = onerror;
+    document.head.appendChild(script);
+  }
+  if (fallback && primary !== fallback) {
+    loadScript(primary, function() { loadScript(fallback); });
+  } else {
+    loadScript(primary);
+  }
+})();
+</script>
 {% endif %}
 
 {# Main detail JavaScript #}
@@ -267,66 +304,6 @@
 
 {# Outline functionality #}
 {% if show_outline %}
-<script>
-(function() {
-  function initOutline() {
-    var content = document.getElementById('content');
-    if (!content) return;
-    var headings = content.querySelectorAll('h2, h3, h4');
-    if (headings.length === 0) return;
-
-    var outline = document.getElementById('outline');
-    var toggle = document.getElementById('outlineToggle');
-    var close = document.getElementById('outlineClose');
-    var outlineContent = document.getElementById('outlineContent');
-
-    if (!outline || !toggle || !close || !outlineContent) return;
-
-    for (var i = 0; i < headings.length; i++) {
-      var h = headings[i];
-      if (!h.id) h.id = 'heading-' + i;
-      var a = document.createElement('a');
-      a.href = '#' + h.id;
-      a.textContent = h.textContent.trim();
-      a.className = 'outline-' + h.tagName.toLowerCase();
-      outlineContent.appendChild(a);
-    }
-
-    toggle.addEventListener('click', function() {
-      outline.style.display = 'block';
-      toggle.style.display = 'none';
-      document.body.classList.add('outline-open');
-    });
-
-    close.addEventListener('click', function() {
-      outline.style.display = 'none';
-      toggle.style.display = 'block';
-      document.body.classList.remove('outline-open');
-    });
-
-    var savedState = sessionStorage.getItem('outlineVisible');
-    if (savedState === 'true') {
-      outline.style.display = 'block';
-      toggle.style.display = 'none';
-      document.body.classList.add('outline-open');
-    } else {
-      toggle.style.display = 'block';
-      document.body.classList.remove('outline-open');
-    }
-
-    var observer = new MutationObserver(function() {
-      var isVisible = outline.style.display === 'block';
-      sessionStorage.setItem('outlineVisible', String(isVisible));
-    });
-    observer.observe(outline, { attributes: true, attributeFilter: ['style'] });
-  }
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initOutline);
-  } else {
-    initOutline();
-  }
-})();
-</script>
+<script src="/static/js/outline.js"></script>
 {% endif %}
 {% endblock %}

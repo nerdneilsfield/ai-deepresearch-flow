@@ -7,7 +7,7 @@ for installed package compatibility.
 
 from __future__ import annotations
 
-from urllib.parse import quote
+from urllib.parse import urlencode
 
 from jinja2 import Environment, FileSystemLoader, PackageLoader
 
@@ -72,14 +72,17 @@ def render_template(template_name: str, **context) -> str:
     return template.render(**context)
 
 
-def build_pdfjs_viewer_url(pdf_url: str) -> str:
+def build_pdfjs_viewer_url(pdf_url: str, *, cdn_base_url: str | None = None) -> str:
     """Build a PDF.js viewer URL for the given PDF URL.
 
     Args:
         pdf_url: The URL of the PDF file
+        cdn_base_url: Optional CDN base URL for PDF.js assets
 
     Returns:
         Full URL to the PDF.js viewer with the PDF file as a query parameter
     """
-    encoded = quote(pdf_url, safe="")
-    return f"{PDFJS_VIEWER_PATH}?file={encoded}"
+    params = {"file": pdf_url}
+    if cdn_base_url:
+        params["cdn"] = cdn_base_url.rstrip("/")
+    return f"{PDFJS_VIEWER_PATH}?{urlencode(params)}"

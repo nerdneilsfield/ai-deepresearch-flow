@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+from pathlib import Path
 from urllib.parse import urlencode
 
 from starlette.requests import Request
@@ -16,11 +17,53 @@ from deepresearch_flow.paper.web.markdown import (
     render_paper_markdown,
     select_template_tag,
 )
+from deepresearch_flow.paper.web.static_assets import resolve_asset_urls
 from deepresearch_flow.paper.web.text import normalize_title
 from deepresearch_flow.paper.web.templates import (
     build_pdfjs_viewer_url,
     render_template,
 )
+
+
+def _safe_read_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return path.read_text(encoding="latin-1")
+
+
+def _load_markdown_for_view(
+    index: PaperIndex,
+    asset_config,
+    export_dir: Path | None,
+    source_hash: str,
+    *,
+    lang: str | None = None,
+) -> str | None:
+    if export_dir and asset_config and asset_config.enabled and (asset_config.base_url or "") == "":
+        if lang:
+            translated_url = asset_config.translated_md_urls.get(source_hash, {}).get(lang.lower())
+            if translated_url:
+                export_path = export_dir / translated_url.lstrip("/")
+                if export_path.exists():
+                    return _safe_read_text(export_path)
+        else:
+            md_url = asset_config.md_urls.get(source_hash)
+            if md_url:
+                export_path = export_dir / md_url.lstrip("/")
+                if export_path.exists():
+                    return _safe_read_text(export_path)
+
+    if lang:
+        md_path = index.translated_md_by_hash.get(source_hash, {}).get(lang.lower())
+    else:
+        md_path = index.md_path_by_hash.get(source_hash)
+    if not md_path:
+        return None
+    raw = _safe_read_text(md_path)
+    if lang:
+        raw = normalize_markdown_images(raw)
+    return raw
 
 
 async def robots_txt(_: Request) -> Response:
@@ -78,7 +121,13 @@ async def paper_detail(request: Request) -> HTMLResponse:
     embed = request.query_params.get("embed") == "1"
 
     pdf_path = index.pdf_path_by_hash.get(source_hash)
-    pdf_url = f"/api/pdf/{source_hash}"
+    asset_urls = resolve_asset_urls(
+        index,
+        source_hash,
+        request.app.state.asset_config,
+        prefer_local=request.app.state.static_mode == "dev",
+    )
+    pdf_url = asset_urls["pdf_url"] or ""
     source_available = source_hash in index.md_path_by_hash
     translations = index.translated_md_by_hash.get(source_hash, {})
     translation_langs = sorted(translations.keys(), key=str.lower)
@@ -156,14 +205,18 @@ async def paper_detail(request: Request) -> HTMLResponse:
 
     # Initialize template variables
     body_html = ""
-    raw_content = ""
     summary_template_name = ""
     template_warning = ""
     template_controls = ""
     source_path_str = ""
     translated_path_str = ""
+    source_markdown_url = ""
+    translated_markdown_url = ""
+    images_base_url = asset_urls["images_base_url"] or ""
     pdf_filename = ""
     pdfjs_url = ""
+    pdfjs_script_url = ""
+    pdfjs_worker_url = ""
     left_src = ""
     right_src = ""
     split_options: list[tuple[str, str]] = []
@@ -211,18 +264,21 @@ if (templateSelect) {{
     # Source view
     if view == "source":
         source_path = index.md_path_by_hash.get(source_hash)
-        if not source_path:
+        if not source_path or not asset_urls["md_url"]:
             body_html = '<div class="warning">Source markdown not found. Provide --md-root to enable source viewing.</div>'
         else:
-            try:
-                raw = source_path.read_text(encoding="utf-8")
-            except UnicodeDecodeError:
-                raw = source_path.read_text(encoding="latin-1")
-            md_renderer = create_md_renderer()
-            body_html = render_markdown_with_math_placeholders(md_renderer, raw)
-            raw_content = raw
+            source_markdown_url = asset_urls["md_url"] or ""
             source_path_str = str(source_path)
             show_outline = True
+            raw = _load_markdown_for_view(
+                index,
+                request.app.state.asset_config,
+                request.app.state.static_export_dir,
+                source_hash,
+            )
+            if raw is not None:
+                md_renderer = create_md_renderer()
+                body_html = render_markdown_with_math_placeholders(md_renderer, raw)
 
     # Translated view
     if view == "translated":
@@ -230,38 +286,54 @@ if (templateSelect) {{
             body_html = '<div class="warning">No translated markdown found. Provide <code>--md-translated-root</code> and place <code><base>.<lang>.md</code> under that root.</div>'
         else:
             translated_path = translations.get(selected_lang)
-            if not translated_path:
+            translated_markdown_url = asset_urls["md_translated_url"].get(selected_lang, "")
+            if not translated_path or not translated_markdown_url:
                 body_html = '<div class="warning">Translated markdown not found for the selected language.</div>'
             else:
-                try:
-                    raw = translated_path.read_text(encoding="utf-8")
-                except UnicodeDecodeError:
-                    raw = translated_path.read_text(encoding="latin-1")
-                raw = normalize_markdown_images(raw)
-                md_renderer = create_md_renderer()
-                body_html = render_markdown_with_math_placeholders(md_renderer, raw)
-                raw_content = raw
                 translated_path_str = str(translated_path)
                 show_outline = True
+                raw = _load_markdown_for_view(
+                    index,
+                    request.app.state.asset_config,
+                    request.app.state.static_export_dir,
+                    source_hash,
+                    lang=selected_lang,
+                )
+                if raw is not None:
+                    md_renderer = create_md_renderer()
+                    body_html = render_markdown_with_math_placeholders(md_renderer, raw)
 
     # PDF view
     if view == "pdf":
-        if not pdf_path:
+        if not pdf_path or not pdf_url:
             body_html = '<div class="warning">PDF not found. Provide --pdf-root to enable PDF viewing.</div>'
         pdf_filename = str(pdf_path.name) if pdf_path else ""
+        pdfjs_cdn_base_url = request.app.state.pdfjs_cdn_base_url
+        if pdfjs_cdn_base_url:
+            pdfjs_script_url = f"{pdfjs_cdn_base_url}/legacy/build/pdf.min.js"
+            pdfjs_worker_url = f"{pdfjs_cdn_base_url}/legacy/build/pdf.worker.min.js"
+        else:
+            pdfjs_script_url = "/pdfjs/build/pdf.js"
+            pdfjs_worker_url = "/pdfjs/build/pdf.worker.js"
 
     # PDF.js view
     if view == "pdfjs":
-        if not pdf_path:
+        if not pdf_path or not pdf_url:
             body_html = '<div class="warning">PDF not found. Provide --pdf-root to enable PDF viewing.</div>'
-        pdfjs_url = build_pdfjs_viewer_url(pdf_url)
+        pdfjs_url = build_pdfjs_viewer_url(
+            pdf_url,
+            cdn_base_url=request.app.state.pdfjs_cdn_base_url,
+        )
         pdf_filename = str(pdf_path.name) if pdf_path else ""
 
     # Split view
     if view == "split":
         def pane_src(pane_view: str) -> str:
-            if pane_view == "pdfjs" and pdf_path:
-                return build_pdfjs_viewer_url(pdf_url)
+            if pane_view == "pdfjs" and pdf_path and pdf_url:
+                return build_pdfjs_viewer_url(
+                    pdf_url,
+                    cdn_base_url=request.app.state.pdfjs_cdn_base_url,
+                )
             params: dict[str, str] = {"view": pane_view, "embed": "1"}
             if pane_view == "summary" and template_param:
                 params["template"] = str(template_param)
@@ -307,12 +379,14 @@ if (templateSelect) {{
             show_outline=show_outline,
             # Content variables
             body_html=body_html,
-            raw_content=raw_content,
             summary_template_name=summary_template_name,
             template_warning=template_warning,
             template_controls=template_controls,
             available_templates=available_templates,
             selected_template_tag=selected_tag,
+            images_base_url=images_base_url,
+            source_markdown_url=source_markdown_url,
+            translated_markdown_url=translated_markdown_url,
             # Source view
             source_path=source_path_str,
             # Translated view
@@ -322,6 +396,8 @@ if (templateSelect) {{
             # PDF view
             pdf_filename=pdf_filename,
             pdf_url=pdf_url,
+            pdfjs_script_url=pdfjs_script_url,
+            pdfjs_worker_url=pdfjs_worker_url,
             # PDF.js view
             pdfjs_url=pdfjs_url,
             # Split view

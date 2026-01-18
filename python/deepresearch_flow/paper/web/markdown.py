@@ -96,6 +96,64 @@ def normalize_markdown_images(text: str) -> str:
     return "\n".join(out)
 
 
+def normalize_fenced_code_blocks(text: str) -> str:
+    """Ensure fenced code block markers appear on their own lines."""
+    fence_re = re.compile(r"(`{3,}|~{3,})")
+    out: list[str] = []
+    for line in text.splitlines():
+        match = fence_re.search(line)
+        if not match:
+            out.append(line)
+            continue
+        prefix = line[: match.start()]
+        suffix = line[match.start() :]
+        if prefix.strip():
+            out.append(prefix.rstrip())
+            out.append(suffix.lstrip())
+        else:
+            out.append(line)
+    return "\n".join(out)
+
+
+def normalize_unbalanced_fences(text: str) -> str:
+    """Drop unmatched opening fences so later content still renders."""
+    lines = text.splitlines()
+    out: list[str] = []
+    in_fence = False
+    fence_char = ""
+    fence_len = 0
+    fence_open_indices: list[int] = []
+    fence_re = re.compile(r"([`~]{3,})(.*)$")
+
+    for line in lines:
+        stripped = line.lstrip(" ")
+        leading_spaces = len(line) - len(stripped)
+        is_fence = False
+        if leading_spaces <= 3 and stripped:
+            match = fence_re.match(stripped)
+            if match:
+                run = match.group(1)
+                fence = run[0]
+                run_len = len(run)
+                if not in_fence:
+                    in_fence = True
+                    fence_char = fence
+                    fence_len = run_len
+                    fence_open_indices.append(len(out))
+                    is_fence = True
+                elif fence == fence_char and run_len >= fence_len:
+                    in_fence = False
+                    fence_char = ""
+                    fence_len = 0
+                    is_fence = True
+
+        out.append(line)
+
+    if in_fence and fence_open_indices:
+        out.pop(fence_open_indices[-1])
+    return "\n".join(out)
+
+
 def extract_math_placeholders(text: str) -> tuple[str, dict[str, str]]:
     """Extract math expressions and replace with placeholders."""
     placeholders: dict[str, str] = {}
@@ -476,6 +534,8 @@ def extract_html_table_placeholders(text: str) -> tuple[str, dict[str, str]]:
 
 def render_markdown_with_math_placeholders(md: MarkdownIt, text: str) -> str:
     """Render markdown with math, images, and tables properly escaped."""
+    text = normalize_fenced_code_blocks(text)
+    text = normalize_unbalanced_fences(text)
     text = strip_paragraph_wrapped_tables(text)
     text = normalize_footnote_definitions(text)
     rendered, table_placeholders = extract_html_table_placeholders(text)

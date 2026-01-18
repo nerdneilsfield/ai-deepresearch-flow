@@ -19,6 +19,8 @@ from deepresearch_flow.paper.web.filters import (
     presence_filter,
     sorted_ids,
 )
+from deepresearch_flow.paper.web.markdown import normalize_markdown_images
+from deepresearch_flow.paper.web.static_assets import resolve_asset_urls
 from deepresearch_flow.paper.web.text import extract_summary_snippet, normalize_title, normalize_venue
 from deepresearch_flow.paper.web.query import Query, QueryTerm, parse_query
 
@@ -92,9 +94,18 @@ def _apply_query(index: PaperIndex, query: Query) -> set[int]:
     return result
 
 
+def _safe_read_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return path.read_text(encoding="latin-1")
+
+
 async def api_papers(request: Request) -> JSONResponse:
     """API endpoint for paper list with filtering, sorting, and pagination."""
     index: PaperIndex = request.app.state.index
+    asset_config = request.app.state.asset_config
+    prefer_local = request.app.state.static_mode == "dev"
     filters = parse_filters(request)
     page = int(filters["page"])
     page_size = int(filters["page_size"])
@@ -165,6 +176,7 @@ async def api_papers(request: Request) -> JSONResponse:
         source_hash = str(paper.get("source_hash") or stable_hash(str(paper.get("source_path") or idx)))
         translations = index.translated_md_by_hash.get(source_hash, {})
         translation_languages = sorted(translations.keys(), key=str.lower)
+        asset_urls = resolve_asset_urls(index, source_hash, asset_config, prefer_local=prefer_local)
         items.append(
             {
                 "source_hash": source_hash,
@@ -183,6 +195,10 @@ async def api_papers(request: Request) -> JSONResponse:
                 "has_summary": bool(paper.get("_has_summary")),
                 "is_pdf_only": bool(paper.get("_is_pdf_only")),
                 "translation_languages": translation_languages,
+                "pdf_url": asset_urls["pdf_url"],
+                "md_url": asset_urls["md_url"],
+                "md_translated_url": asset_urls["md_translated_url"],
+                "images_base_url": asset_urls["images_base_url"],
             }
         )
 
@@ -215,3 +231,42 @@ async def api_pdf(request: Request) -> Response:
     if allowed_roots and not _ensure_under_roots(pdf_path, allowed_roots):
         return Response("Forbidden", status_code=403)
     return FileResponse(pdf_path)
+
+
+async def api_markdown(request: Request) -> Response:
+    """Dev-only API endpoint to serve raw markdown content."""
+    if request.app.state.static_mode != "dev":
+        return Response("Not Found", status_code=404)
+    index: PaperIndex = request.app.state.index
+    asset_config = request.app.state.asset_config
+    export_dir = request.app.state.static_export_dir
+    source_hash = request.path_params["source_hash"]
+    lang = request.query_params.get("lang")
+    md_path = None
+    if export_dir and asset_config and asset_config.enabled and (asset_config.base_url or "") == "":
+        if lang:
+            translated_url = asset_config.translated_md_urls.get(source_hash, {}).get(lang.lower())
+            if translated_url:
+                rel_path = translated_url.lstrip("/")
+                export_path = export_dir / rel_path
+                if export_path.exists():
+                    raw = _safe_read_text(export_path)
+                    return Response(raw, media_type="text/markdown")
+        else:
+            md_url = asset_config.md_urls.get(source_hash)
+            if md_url:
+                rel_path = md_url.lstrip("/")
+                export_path = export_dir / rel_path
+                if export_path.exists():
+                    raw = _safe_read_text(export_path)
+                    return Response(raw, media_type="text/markdown")
+    if lang:
+        md_path = index.translated_md_by_hash.get(source_hash, {}).get(lang.lower())
+    else:
+        md_path = index.md_path_by_hash.get(source_hash)
+    if not md_path:
+        return Response("Markdown not found", status_code=404)
+    raw = _safe_read_text(md_path)
+    if lang:
+        raw = normalize_markdown_images(raw)
+    return Response(raw, media_type="text/markdown")

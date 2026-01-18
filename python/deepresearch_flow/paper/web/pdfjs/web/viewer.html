@@ -29,11 +29,62 @@ See https://github.com/adobe-type-tools/cmap-resources
 
 <!-- This snippet is used in production (included from viewer.html) -->
 <link rel="resource" type="application/l10n" href="locale/locale.properties">
-<script src="../build/pdf.js"></script>
+<script>
+(function() {
+  var params = new URLSearchParams(window.location.search);
+  var cdnBase = params.get('cdn');
+  if (cdnBase) {
+    cdnBase = cdnBase.replace(/\/+$/, '');
+  }
 
-    <link rel="stylesheet" href="viewer.css">
+  function loadStyle(url, fallbackUrl) {
+    var link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = url;
+    if (fallbackUrl) {
+      link.onerror = function() {
+        if (link.dataset.fallbackLoaded) return;
+        link.dataset.fallbackLoaded = '1';
+        link.href = fallbackUrl;
+      };
+    }
+    document.head.appendChild(link);
+  }
 
-  <script src="viewer.js"></script>
+  function loadScript(url, fallbackUrl, onload) {
+    var script = document.createElement('script');
+    script.src = url;
+    script.defer = true;
+    script.onload = function() {
+      if (onload) onload();
+    };
+    script.onerror = function() {
+      if (!fallbackUrl) return;
+      var fallback = document.createElement('script');
+      fallback.src = fallbackUrl;
+      fallback.defer = true;
+      fallback.onload = function() {
+        if (onload) onload();
+      };
+      document.head.appendChild(fallback);
+    };
+    document.head.appendChild(script);
+  }
+
+  var viewerCss = cdnBase ? cdnBase + '/web/viewer.css' : 'viewer.css';
+  loadStyle(viewerCss, 'viewer.css');
+
+  var pdfjsUrl = cdnBase ? cdnBase + '/build/pdf.js' : '../build/pdf.js';
+  loadScript(pdfjsUrl, '../build/pdf.js', function() {
+    var workerUrl = cdnBase ? cdnBase + '/build/pdf.worker.js' : '../build/pdf.worker.js';
+    if (window.pdfjsLib) {
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
+    }
+    var viewerJs = cdnBase ? cdnBase + '/web/viewer.js' : 'viewer.js';
+    loadScript(viewerJs, 'viewer.js');
+  });
+})();
+</script>
   </head>
 
   <body tabindex="1">
