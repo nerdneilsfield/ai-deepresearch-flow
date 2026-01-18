@@ -82,7 +82,7 @@ def build_pdfjs_viewer_url(pdf_url: str, *, cdn_base_url: str | None = None) -> 
     Returns:
         Full URL to the PDF.js viewer with the PDF file as a query parameter
     """
-    params = {"file": pdf_url}
+    params = {"file": pdf_url, "allow_origin": "1"}
     if cdn_base_url:
         params["cdn"] = cdn_base_url.rstrip("/")
     return f"{PDFJS_VIEWER_PATH}?{urlencode(params)}"

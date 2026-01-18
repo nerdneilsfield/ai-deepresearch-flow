@@ -80,8 +80,9 @@ See https://github.com/adobe-type-tools/cmap-resources
     if (window.pdfjsLib) {
       window.pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
     }
-    var viewerJs = cdnBase ? cdnBase + '/web/viewer.js' : 'viewer.js';
-    loadScript(viewerJs, 'viewer.js');
+    var viewerJs = 'viewer.js';
+    var viewerFallback = cdnBase ? cdnBase + '/web/viewer.js' : null;
+    loadScript(viewerJs, viewerFallback);
   });
 })();
 </script>

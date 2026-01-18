@@ -1637,6 +1637,10 @@ exports.PDFViewerApplication = PDFViewerApplication;
       return;
     }
     try {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("allow_origin") === "1" || params.get("disable_origin_check") === "1") {
+        return;
+      }
       const viewerOrigin = new URL(window.location.href).origin || "null";
       if (HOSTED_VIEWER_ORIGINS.includes(viewerOrigin)) {
         return;

@@ -162,8 +162,8 @@
           <button id="outlineToggle" class="inline-flex h-9 items-center justify-center rounded-md bg-slate-900 px-3 text-sm text-white shadow hover:bg-slate-800">☰ Outline</button>
         </div>
         {% endif %}
-        <article id="content" class="content"{% if source_markdown_url %} data-raw-markdown-url="{{ source_markdown_url }}"{% endif %}{% if images_base_url %} data-images-base-url="{{ images_base_url }}"{% endif %}>{{ body_html|safe }}</article>
-        <div id="markdownStatus" class="muted" style="margin-top:10px;">Loading raw markdown...</div>
+        <article id="content" class="content"{% if source_markdown_url %}{% if body_html %} data-raw-markdown-url="{{ source_markdown_url }}"{% else %} data-markdown-url="{{ source_markdown_url }}"{% endif %}{% endif %}{% if images_base_url %} data-images-base-url="{{ images_base_url }}"{% endif %}>{{ body_html|safe }}</article>
+        <div id="markdownStatus" class="muted" style="margin-top:10px;">{% if body_html %}Loading raw markdown...{% else %}Loading markdown...{% endif %}</div>
         <details style="margin-top:12px;"><summary>Raw markdown</summary>
           <pre><code id="rawMarkdown"></code></pre>
         </details>
@@ -201,8 +201,8 @@
           <button id="outlineToggle" class="inline-flex h-9 items-center justify-center rounded-md bg-slate-900 px-3 text-sm text-white shadow hover:bg-slate-800">☰ Outline</button>
         </div>
         {% endif %}
-        <article id="content" class="content"{% if translated_markdown_url %} data-raw-markdown-url="{{ translated_markdown_url }}"{% endif %}{% if images_base_url %} data-images-base-url="{{ images_base_url }}"{% endif %}>{{ body_html|safe }}</article>
-        <div id="markdownStatus" class="muted" style="margin-top:10px;">Loading raw markdown...</div>
+        <article id="content" class="content"{% if translated_markdown_url %}{% if body_html %} data-raw-markdown-url="{{ translated_markdown_url }}"{% else %} data-markdown-url="{{ translated_markdown_url }}"{% endif %}{% endif %}{% if images_base_url %} data-images-base-url="{{ images_base_url }}"{% endif %}>{{ body_html|safe }}</article>
+        <div id="markdownStatus" class="muted" style="margin-top:10px;">{% if body_html %}Loading raw markdown...{% else %}Loading markdown...{% endif %}</div>
         <details style="margin-top:12px;"><summary>Raw markdown</summary>
           <pre><code id="rawMarkdown"></code></pre>
         </details>

@@ -261,6 +261,8 @@ if (templateSelect) {{
 </script>
 """
 
+    prefer_local = request.app.state.static_mode == "dev"
+
     # Source view
     if view == "source":
         source_path = index.md_path_by_hash.get(source_hash)
@@ -270,15 +272,16 @@ if (templateSelect) {{
             source_markdown_url = asset_urls["md_url"] or ""
             source_path_str = str(source_path)
             show_outline = True
-            raw = _load_markdown_for_view(
-                index,
-                request.app.state.asset_config,
-                request.app.state.static_export_dir,
-                source_hash,
-            )
-            if raw is not None:
-                md_renderer = create_md_renderer()
-                body_html = render_markdown_with_math_placeholders(md_renderer, raw)
+            if prefer_local:
+                raw = _load_markdown_for_view(
+                    index,
+                    request.app.state.asset_config,
+                    request.app.state.static_export_dir,
+                    source_hash,
+                )
+                if raw is not None:
+                    md_renderer = create_md_renderer()
+                    body_html = render_markdown_with_math_placeholders(md_renderer, raw)
 
     # Translated view
     if view == "translated":
@@ -292,16 +295,17 @@ if (templateSelect) {{
             else:
                 translated_path_str = str(translated_path)
                 show_outline = True
-                raw = _load_markdown_for_view(
-                    index,
-                    request.app.state.asset_config,
-                    request.app.state.static_export_dir,
-                    source_hash,
-                    lang=selected_lang,
-                )
-                if raw is not None:
-                    md_renderer = create_md_renderer()
-                    body_html = render_markdown_with_math_placeholders(md_renderer, raw)
+                if prefer_local:
+                    raw = _load_markdown_for_view(
+                        index,
+                        request.app.state.asset_config,
+                        request.app.state.static_export_dir,
+                        source_hash,
+                        lang=selected_lang,
+                    )
+                    if raw is not None:
+                        md_renderer = create_md_renderer()
+                        body_html = render_markdown_with_math_placeholders(md_renderer, raw)
 
     # PDF view
     if view == "pdf":
