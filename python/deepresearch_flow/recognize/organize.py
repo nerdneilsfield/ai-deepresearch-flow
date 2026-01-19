@@ -80,26 +80,23 @@ def discover_mineru_dirs(inputs: Iterable[str], recursive: bool) -> list[Path]:
             if path.name != "full.md":
                 raise FileNotFoundError(f"Expected full.md file but got: {path}")
             parent = path.parent.resolve()
-            if (parent / "images").is_dir():
-                results.add(parent)
-            else:
-                logger.warning("Skipping %s (missing images/)", parent)
+            if not (parent / "images").is_dir():
+                logger.warning("Missing images/ for %s; continuing", parent)
+            results.add(parent)
             continue
         if not path.exists():
             raise FileNotFoundError(f"Input path not found: {path}")
         if path.is_dir():
             if (path / "full.md").is_file():
-                if (path / "images").is_dir():
-                    results.add(path.resolve())
-                else:
-                    logger.warning("Skipping %s (missing images/)", path)
+                if not (path / "images").is_dir():
+                    logger.warning("Missing images/ for %s; continuing", path)
+                results.add(path.resolve())
             pattern = path.rglob("full.md") if recursive else path.glob("full.md")
             for full_path in pattern:
                 parent = full_path.parent.resolve()
-                if (parent / "images").is_dir():
-                    results.add(parent)
-                else:
-                    logger.warning("Skipping %s (missing images/)", parent)
+                if not (parent / "images").is_dir():
+                    logger.warning("Missing images/ for %s; continuing", parent)
+                results.add(parent)
             continue
         raise FileNotFoundError(f"Input path not found: {path}")
     return sorted(results)
