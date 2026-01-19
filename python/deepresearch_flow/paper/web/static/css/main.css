@@ -223,11 +223,18 @@ header a {
 
 .markmap {
   width: 100%;
-  height: 420px;
   border: 1px solid #e2e8f0;
   border-radius: 12px;
   background: #ffffff;
   margin: 12px 0;
+  padding: 8px;
+  overflow-x: auto;
+}
+
+.markmap > svg {
+  width: 100%;
+  min-height: 240px;
+  display: block;
 }
 
 /* Utilities */

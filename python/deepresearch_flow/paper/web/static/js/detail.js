@@ -421,22 +421,56 @@
     var content = document.getElementById('content');
     if (!content) return;
 
-    // Markmap: convert fenced markmap blocks to svg mindmaps
-    if (window.markmap && window.markmap.Transformer && window.markmap.Markmap) {
-      var transformer = new window.markmap.Transformer();
-      document.querySelectorAll('code.language-markmap').forEach(function(code) {
-        var pre = code.parentElement;
-        if (!pre) return;
-        var svg = document.createElement('svg');
-        svg.className = 'markmap';
-        pre.replaceWith(svg);
+    // Markmap: convert fenced markmap blocks to autoloader containers
+    var markmapBlocks = 0;
+    document.querySelectorAll('code.language-markmap').forEach(function(code) {
+      var pre = code.parentElement;
+      if (!pre) return;
+      var wrapper = document.createElement('div');
+      wrapper.className = 'markmap';
+      var template = document.createElement('script');
+      template.type = 'text/template';
+      template.textContent = code.textContent || '';
+      wrapper.appendChild(template);
+      pre.replaceWith(wrapper);
+      markmapBlocks += 1;
+    });
+    function resizeMarkmaps() {
+      document.querySelectorAll('.markmap svg').forEach(function(svg) {
         try {
-          var result = transformer.transform(code.textContent || '');
-          window.markmap.Markmap.create(svg, null, result.root);
+          var bbox = svg.getBBox();
+          if (!bbox || !bbox.height) {
+            svg.style.height = '800px';
+            svg.style.width = '100%';
+            return;
+          }
+          var height = Math.ceil(bbox.height * 2);
+          svg.style.height = height + 'px';
+          if (bbox.width && bbox.width > svg.clientWidth) {
+            svg.style.width = Math.ceil(bbox.width * 2) + 'px';
+            if (svg.parentElement) {
+              svg.parentElement.style.overflowX = 'auto';
+            }
+          } else {
+            svg.style.width = '100%';
+          }
         } catch (err) {
-          // Ignore markmap parse errors
+          // Ignore sizing errors
         }
       });
+    }
+
+    if (markmapBlocks && window.markmap && window.markmap.autoLoader && window.markmap.autoLoader.renderAll) {
+      window.markmap.autoLoader.renderAll();
+      setTimeout(resizeMarkmaps, 120);
+      setTimeout(resizeMarkmaps, 600);
+      setTimeout(resizeMarkmaps, 1600);
+      if (!window.__markmapResizeBound) {
+        window.__markmapResizeBound = true;
+        window.addEventListener('resize', function() {
+          setTimeout(resizeMarkmaps, 120);
+        });
+      }
     }
 
     // Mermaid: convert fenced code blocks to mermaid divs
