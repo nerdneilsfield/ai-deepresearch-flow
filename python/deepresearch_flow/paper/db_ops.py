@@ -1193,6 +1193,7 @@ def _merge_paper_inputs(inputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     merged: list[dict[str, Any]] = []
     threshold = 0.95
     prefix_len = 5
+    source_hash_index: dict[str, int] = {}
     bibtex_exact: dict[str, set[int]] = {}
     bibtex_prefix: dict[str, set[int]] = {}
     paper_exact: dict[str, set[int]] = {}
@@ -1226,16 +1227,22 @@ def _merge_paper_inputs(inputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         for paper in papers:
             if not isinstance(paper, dict):
                 raise ValueError("Input papers must be objects")
+            source_hash = paper.get("source_hash")
+            source_hash_key = str(source_hash) if source_hash else None
             bib_title = _extract_bibtex_title(paper)
             paper_title = _extract_paper_title(paper)
             match = None
             match_idx = None
-            for idx in candidate_ids(bib_title, paper_title):
-                candidate = merged[idx]
-                if _titles_match(candidate, paper, threshold=threshold):
-                    match = candidate
-                    match_idx = idx
-                    break
+            if source_hash_key and source_hash_key in source_hash_index:
+                match_idx = source_hash_index[source_hash_key]
+                match = merged[match_idx]
+            else:
+                for idx in candidate_ids(bib_title, paper_title):
+                    candidate = merged[idx]
+                    if _titles_match(candidate, paper, threshold=threshold):
+                        match = candidate
+                        match_idx = idx
+                        break
             if match is None:
                 group = {
                     "templates": {template_tag: paper},
@@ -1244,6 +1251,8 @@ def _merge_paper_inputs(inputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 _add_merge_titles(group, paper)
                 merged.append(group)
                 group_idx = len(merged) - 1
+                if source_hash_key:
+                    source_hash_index[source_hash_key] = group_idx
                 if bib_title:
                     add_index(bib_title, bibtex_exact, bibtex_prefix, group_idx)
                 if paper_title:
@@ -1256,15 +1265,20 @@ def _merge_paper_inputs(inputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     order.append(template_tag)
                 _add_merge_titles(match, paper)
                 if match_idx is not None:
+                    if source_hash_key:
+                        source_hash_index[source_hash_key] = match_idx
                     if bib_title:
                         add_index(bib_title, bibtex_exact, bibtex_prefix, match_idx)
                     if paper_title:
                         add_index(paper_title, paper_exact, paper_prefix, match_idx)
 
+    preferred_defaults = ("simple", "simple_phi")
     for group in merged:
         templates = group.get("templates") or {}
         order = group.get("template_order") or list(templates.keys())
-        default_tag = "simple" if "simple" in order else (order[0] if order else None)
+        default_tag = next((tag for tag in preferred_defaults if tag in order), None)
+        if default_tag is None:
+            default_tag = order[0] if order else None
         group["default_template"] = default_tag
         if default_tag and default_tag in templates:
             base = templates[default_tag]

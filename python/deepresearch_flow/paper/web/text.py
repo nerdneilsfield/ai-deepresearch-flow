@@ -41,17 +41,21 @@ def normalize_venue(raw: str) -> str:
 
 
 def extract_summary_snippet(paper: dict[str, object], max_len: int = 280) -> str:
-    """Extract a short summary snippet, preferring the 'simple' template."""
+    """Extract a short summary snippet, preferring the simple/simple_phi templates."""
     summary = ""
     templates = paper.get("templates")
     if isinstance(templates, dict):
-        simple = templates.get("simple")
-        if isinstance(simple, dict):
+        for template_tag in ("simple", "simple_phi"):
+            template = templates.get(template_tag)
+            if not isinstance(template, dict):
+                continue
             for key in ("summary", "abstract"):
-                value = simple.get(key)
+                value = template.get(key)
                 if isinstance(value, str) and value.strip():
                     summary = value.strip()
                     break
+            if summary:
+                break
     if not summary:
         for key in ("summary", "abstract"):
             value = paper.get(key)
