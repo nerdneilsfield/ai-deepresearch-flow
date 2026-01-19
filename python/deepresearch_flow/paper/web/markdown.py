@@ -41,13 +41,88 @@ def strip_paragraph_wrapped_tables(text: str) -> str:
 
 
 def normalize_footnote_definitions(text: str) -> str:
-    """Normalize footnote definitions to the markdown-it footnote format."""
+    """Normalize footnotes and numbered notes to markdown-it footnote format."""
     lines = text.splitlines()
-    for idx, line in enumerate(lines):
+    out: list[str] = []
+    in_fence = False
+    fence_char = ""
+    fence_len = 0
+    in_notes = False
+    notes_level: int | None = None
+    notes_heading_re = re.compile(
+        r"^#{1,6}\s*(参考文献|参考资料|参考书目|文献|引用|注释|脚注|notes?|references?|bibliography|works\s+cited|citations?)\b",
+        re.IGNORECASE,
+    )
+    notes_heading_plain_re = re.compile(
+        r"^(参考文献|参考资料|参考书目|文献|引用|注释|脚注|notes?|references?|bibliography|works\s+cited|citations?)\s*:?$",
+        re.IGNORECASE,
+    )
+    last_note_index: int | None = None
+
+    for line in lines:
+        stripped = line.lstrip()
+        if stripped.startswith(("```", "~~~")):
+            run_len = 0
+            while run_len < len(stripped) and stripped[run_len] == stripped[0]:
+                run_len += 1
+            if not in_fence:
+                in_fence = True
+                fence_char = stripped[0]
+                fence_len = run_len
+            elif stripped[0] == fence_char and run_len >= fence_len:
+                in_fence = False
+                fence_char = ""
+                fence_len = 0
+            out.append(line)
+            continue
+
+        if in_fence:
+            out.append(line)
+            continue
+
+        heading_match = notes_heading_re.match(stripped)
+        if heading_match:
+            in_notes = True
+            notes_level = len(stripped.split(" ")[0].lstrip("#"))
+            last_note_index = None
+        elif notes_heading_plain_re.match(stripped):
+            in_notes = True
+            notes_level = None
+            last_note_index = None
+        elif re.match(r"^#{1,6}\s+", stripped):
+            if notes_level is not None:
+                level = len(stripped.split(" ")[0].lstrip("#"))
+                if level <= notes_level:
+                    in_notes = False
+                    notes_level = None
+                    last_note_index = None
+
         match = re.match(r"^\[\^([0-9]+)\]\s+", line)
         if match:
-            lines[idx] = re.sub(r"^\[\^([0-9]+)\]\s+", r"[^\1]: ", line)
-    return "\n".join(lines)
+            out.append(re.sub(r"^\[\^([0-9]+)\]\s+", r"[^\1]: ", line))
+            continue
+
+        if in_notes:
+            list_match = re.match(r"^\s*(\d{1,4})[.)]\s+", line)
+            if list_match:
+                number = list_match.group(1)
+                rest = line[list_match.end() :].strip()
+                out.append(f"[^{number}]: {rest}")
+                last_note_index = len(out) - 1
+                continue
+            if last_note_index is not None:
+                if line.strip() == "":
+                    out.append(line)
+                    last_note_index = None
+                    continue
+                if line.startswith((" ", "\t")):
+                    out[last_note_index] = f"{out[last_note_index]} {line.strip()}"
+                    continue
+
+        line = re.sub(r"(?<!\^)\[(\d{1,4})\]", r"[^\1]", line)
+        out.append(line)
+
+    return "\n".join(out)
 
 
 def normalize_markdown_images(text: str) -> str:
@@ -115,6 +190,68 @@ def normalize_fenced_code_blocks(text: str) -> str:
     return "\n".join(out)
 
 
+def normalize_mermaid_blocks(text: str) -> str:
+    """Keep mermaid fences clean by moving legend text outside the block."""
+    lines = text.splitlines()
+    out: list[str] = []
+    in_mermaid = False
+    fence_char = ""
+    fence_len = 0
+    mermaid_lines: list[str] = []
+    legend_lines: list[str] = []
+
+    def is_legend(line: str) -> bool:
+        stripped = line.strip()
+        if not stripped:
+            return False
+        if stripped.startswith("图例") or stripped.lower().startswith("legend"):
+            return True
+        return "节点定位" in stripped
+
+    for line in lines:
+        stripped = line.lstrip()
+        if stripped.startswith(("```", "~~~")):
+            run_len = 0
+            while run_len < len(stripped) and stripped[run_len] == stripped[0]:
+                run_len += 1
+            rest = stripped[run_len:].strip()
+            if not in_mermaid and rest.lower().startswith("mermaid"):
+                in_mermaid = True
+                fence_char = stripped[0]
+                fence_len = run_len
+                mermaid_lines = []
+                legend_lines = []
+                out.append(line)
+                continue
+            if in_mermaid and stripped[0] == fence_char and run_len >= fence_len and rest == "":
+                out.extend(mermaid_lines)
+                out.append(line)
+                out.extend(legend_lines)
+                in_mermaid = False
+                fence_char = ""
+                fence_len = 0
+                mermaid_lines = []
+                legend_lines = []
+                continue
+            out.append(line)
+            continue
+
+        if in_mermaid:
+            if is_legend(line):
+                legend_lines.append(line)
+            else:
+                mermaid_lines.append(line)
+            continue
+
+        out.append(line)
+
+    if in_mermaid:
+        out.extend(mermaid_lines)
+        out.extend(legend_lines)
+
+    return "\n".join(out)
+
+
 def normalize_unbalanced_fences(text: str) -> str:
     """Drop unmatched opening fences so later content still renders."""
     lines = text.splitlines()
@@ -122,6 +259,7 @@ def normalize_unbalanced_fences(text: str) -> str:
     in_fence = False
     fence_char = ""
     fence_len = 0
+    fence_has_content = False
     fence_open_indices: list[int] = []
     fence_re = re.compile(r"([`~]{3,})(.*)$")
 
@@ -135,19 +273,46 @@ def normalize_unbalanced_fences(text: str) -> str:
                 run = match.group(1)
                 fence = run[0]
                 run_len = len(run)
+                rest = match.group(2) or ""
+                has_info = bool(rest.strip())
                 if not in_fence:
                     in_fence = True
                     fence_char = fence
                     fence_len = run_len
+                    fence_has_content = False
                     fence_open_indices.append(len(out))
                     is_fence = True
-                elif fence == fence_char and run_len >= fence_len:
-                    in_fence = False
-                    fence_char = ""
-                    fence_len = 0
+                elif fence == fence_char and run_len >= fence_len and not has_info:
+                    if not fence_has_content:
+                        if fence_open_indices:
+                            out.pop(fence_open_indices[-1])
+                            fence_open_indices.pop()
+                        in_fence = True
+                        fence_char = fence
+                        fence_len = run_len
+                        fence_has_content = False
+                        fence_open_indices.append(len(out))
+                        is_fence = True
+                    else:
+                        in_fence = False
+                        fence_char = ""
+                        fence_len = 0
+                        fence_has_content = False
+                        is_fence = True
+                elif fence == fence_char and run_len >= fence_len and has_info:
+                    if fence_open_indices:
+                        out.pop(fence_open_indices[-1])
+                        fence_open_indices.pop()
+                    in_fence = True
+                    fence_char = fence
+                    fence_len = run_len
+                    fence_has_content = False
+                    fence_open_indices.append(len(out))
                     is_fence = True
 
         out.append(line)
+        if in_fence and not is_fence and line.strip():
+            fence_has_content = True
 
     if in_fence and fence_open_indices:
         out.pop(fence_open_indices[-1])
@@ -534,6 +699,7 @@ def extract_html_table_placeholders(text: str) -> tuple[str, dict[str, str]]:
 
 def render_markdown_with_math_placeholders(md: MarkdownIt, text: str) -> str:
     """Render markdown with math, images, and tables properly escaped."""
+    text = normalize_mermaid_blocks(text)
     text = normalize_fenced_code_blocks(text)
     text = normalize_unbalanced_fences(text)
     text = strip_paragraph_wrapped_tables(text)

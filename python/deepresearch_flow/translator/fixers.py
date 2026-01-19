@@ -448,4 +448,19 @@ def fix_markdown(text: str, level: str) -> str:
     if level == "aggressive":
         text = title_processor.fix_titles(text)
 
+    try:
+        from deepresearch_flow.paper.web.markdown import (
+            normalize_fenced_code_blocks,
+            normalize_footnote_definitions,
+            normalize_mermaid_blocks,
+            normalize_unbalanced_fences,
+        )
+    except Exception:
+        return text
+
+    text = normalize_fenced_code_blocks(text)
+    text = normalize_mermaid_blocks(text)
+    text = normalize_unbalanced_fences(text)
+    text = normalize_footnote_definitions(text)
+
     return text
