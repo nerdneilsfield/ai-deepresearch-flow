@@ -574,12 +574,22 @@ async def fix_mermaid_text(
     stats: MermaidFixStats,
     repair_enabled: bool = True,
     spans: list[MermaidSpan] | None = None,
+    allowed_keys: set[tuple[int, str | None, int | None]] | None = None,
     progress_cb: Callable[[], None] | None = None,
 ) -> tuple[str, list[dict[str, Any]]]:
     replacements: list[tuple[int, int, str]] = []
     issues: list[MermaidIssue] = []
     if spans is None:
         spans = extract_mermaid_spans(text, context_chars)
+    if allowed_keys:
+        filtered: list[MermaidSpan] = []
+        for span in spans:
+            line_no = line_offset + span.line - 1
+            if (line_no, field_path, item_index) in allowed_keys:
+                filtered.append(span)
+        spans = filtered
+    if not spans:
+        return text, []
     stats.diagrams_total += len(spans)
     file_id = short_hash(file_path)
     for idx, span in enumerate(spans):

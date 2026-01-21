@@ -319,6 +319,31 @@ uv run deepresearch-flow paper extract \
 </details>
 
 <details>
+<summary><strong>4. Recognize Fix: Repair Math and Mermaid</strong></summary>
+
+Fix broken LaTeX formulas and Mermaid diagrams in markdown or JSON outputs.
+
+- Retry Failed: use `--retry-failed` with the prior `--report` output to reprocess only failed formulas/diagrams.
+
+```bash
+uv run deepresearch-flow recognize fix-math \
+  --input ./docs \
+  --in-place \
+  --model claude/claude-3-5-sonnet-20240620 \
+  --report ./fix-math-errors.json \
+  --retry-failed
+
+uv run deepresearch-flow recognize fix-mermaid \
+  --input ./docs \
+  --in-place \
+  --model claude/claude-3-5-sonnet-20240620 \
+  --report ./fix-mermaid-errors.json \
+  --retry-failed
+```
+
+</details>
+
+<details>
 <summary><strong>3. Database and UI: Your Personal ArXiv</strong></summary>
 
 The db serve command creates a local research station.

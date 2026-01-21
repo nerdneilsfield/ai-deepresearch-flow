@@ -114,6 +114,60 @@ def _map_output_files(
     return mapping
 
 
+RetryKey = tuple[int, str | None, int | None]
+
+
+def _load_retry_targets(report_path: Path) -> dict[Path, set[RetryKey]]:
+    if not report_path.exists():
+        raise click.ClickException(f"Retry report not found: {report_path}")
+    try:
+        payload = json.loads(read_text(report_path))
+    except json.JSONDecodeError as exc:
+        raise click.ClickException(f"Retry report is not valid JSON: {exc}") from exc
+    if not isinstance(payload, list) or not payload:
+        raise click.ClickException(f"Retry report is empty: {report_path}")
+    targets: dict[Path, set[RetryKey]] = {}
+    for entry in payload:
+        if not isinstance(entry, dict):
+            continue
+        path_raw = entry.get("path")
+        line_raw = entry.get("line")
+        if not path_raw or line_raw is None:
+            continue
+        try:
+            line_no = int(line_raw)
+        except (TypeError, ValueError):
+            continue
+        field_path = entry.get("field_path")
+        if not isinstance(field_path, str):
+            field_path = None
+        item_index = entry.get("item_index")
+        if not isinstance(item_index, int):
+            item_index = None
+        key = (line_no, field_path, item_index)
+        targets.setdefault(Path(path_raw).resolve(), set()).add(key)
+    if not targets:
+        raise click.ClickException(f"Retry report has no valid entries: {report_path}")
+    return targets
+
+
+def _filter_retry_spans(
+    spans: list[Any],
+    line_offset: int,
+    field_path: str | None,
+    item_index: int | None,
+    retry_keys: set[RetryKey] | None,
+) -> list[Any]:
+    if not retry_keys:
+        return spans
+    filtered: list[Any] = []
+    for span in spans:
+        line_no = line_offset + span.line - 1
+        if (line_no, field_path, item_index) in retry_keys:
+            filtered.append(span)
+    return filtered
+
+
 def _aggregate_image_counts(paths: Iterable[Path]) -> dict[str, int]:
     totals = {"total": 0, "data": 0, "http": 0, "local": 0}
     for path in paths:
@@ -870,6 +924,7 @@ def recognize_fix(
 @click.option("--max-retries", "max_retries", default=3, show_default=True, type=int)
 @click.option("--workers", type=int, default=4, show_default=True, help="Concurrent workers")
 @click.option("--timeout", "timeout", default=120.0, show_default=True, type=float)
+@click.option("--retry-failed", "retry_failed", is_flag=True, help="Retry only failed formulas")
 @click.option(
     "--only-show-error",
     "only_show_error",
@@ -892,6 +947,7 @@ def recognize_fix_math(
     max_retries: int,
     workers: int,
     timeout: float,
+    retry_failed: bool,
     only_show_error: bool,
     report_path: str | None,
     dry_run: bool,
@@ -911,6 +967,8 @@ def recognize_fix_math(
         raise click.ClickException("--max-retries must be non-negative")
     if workers <= 0:
         raise click.ClickException("--workers must be positive")
+    if retry_failed and only_show_error:
+        raise click.ClickException("--retry-failed cannot be used with --only-show-error")
     try:
         require_pylatexenc()
     except RuntimeError as exc:
@@ -954,6 +1012,24 @@ def recognize_fix_math(
         return
 
     output_path = Path(output_dir) if output_dir else None
+    report_target = None
+    if report_path:
+        report_target = Path(report_path)
+    elif not only_show_error:
+        if output_path:
+            report_target = output_path / "fix-math-errors.json"
+        elif in_place:
+            report_target = Path.cwd() / "fix-math-errors.json"
+
+    retry_targets: dict[Path, set[RetryKey]] | None = None
+    if retry_failed:
+        if report_target is None:
+            raise click.ClickException("--retry-failed requires an error report path")
+        retry_targets = _load_retry_targets(report_target)
+        paths = [path for path in paths if path.resolve() in retry_targets]
+        if not paths:
+            raise click.ClickException("No failed formulas matched the provided inputs")
+
     if output_path and not dry_run and not only_show_error:
         output_path = _ensure_output_dir(output_dir)
         _warn_if_not_empty(output_path)
@@ -969,15 +1045,6 @@ def recognize_fix_math(
     else:
         output_map = {path: path for path in paths}
 
-    report_target = None
-    if report_path:
-        report_target = Path(report_path)
-    elif not only_show_error:
-        if output_path:
-            report_target = output_path / "fix-math-errors.json"
-        elif in_place:
-            report_target = Path.cwd() / "fix-math-errors.json"
-
     if dry_run and not only_show_error:
         rows = [
             ("Mode", "json" if json_mode else "markdown"),
@@ -988,6 +1055,7 @@ def recognize_fix_math(
             ("Max retries", str(max_retries)),
             ("Workers", str(workers)),
             ("Timeout", f"{timeout:.1f}s"),
+            ("Retry failed", "yes" if retry_failed else "no"),
             ("Only show error", "yes" if only_show_error else "no"),
             ("In place", "yes" if in_place else "no"),
             ("Output dir", _relative_path(output_path) if output_path else "-"),
@@ -1021,12 +1089,24 @@ def recognize_fix_math(
                             value = item.get(field)
                             if not isinstance(value, str):
                                 continue
-                            spans = extract_math_spans(value, context_chars)
-                            if spans:
-                                formula_progress.total += len(spans)
-                                formula_progress.refresh()
                             line_start, cursor = locate_json_field_start(raw_text, value, cursor)
                             field_path = f"papers[{item_index}].{field}"
+                            spans = extract_math_spans(value, context_chars)
+                            retry_keys = None
+                            if retry_targets is not None:
+                                retry_keys = retry_targets.get(path.resolve(), set())
+                                retry_keys = {
+                                    key
+                                    for key in retry_keys
+                                    if key[1] == field_path and key[2] == item_index
+                                }
+                            spans = _filter_retry_spans(
+                                spans, line_start, field_path, item_index, retry_keys
+                            )
+                            if not spans:
+                                continue
+                            formula_progress.total += len(spans)
+                            formula_progress.refresh()
                             updated, errors = await fix_math_text(
                                 value,
                                 str(path),
@@ -1044,6 +1124,7 @@ def recognize_fix_math(
                                 stats,
                                 repair_enabled=not only_show_error,
                                 spans=spans,
+                                allowed_keys=retry_keys,
                                 progress_cb=lambda: formula_progress.update(1),
                             )
                             if not only_show_error and updated != value:
@@ -1057,6 +1138,12 @@ def recognize_fix_math(
                 else:
                     content = await asyncio.to_thread(read_text, path)
                     spans = extract_math_spans(content, context_chars)
+                    retry_keys = None
+                    if retry_targets is not None:
+                        retry_keys = retry_targets.get(path.resolve(), set())
+                        spans = _filter_retry_spans(spans, 1, None, None, retry_keys)
+                        if not spans:
+                            return stats
                     if spans:
                         formula_progress.total += len(spans)
                         formula_progress.refresh()
@@ -1077,6 +1164,7 @@ def recognize_fix_math(
                         stats,
                         repair_enabled=not only_show_error,
                         spans=spans,
+                        allowed_keys=retry_keys,
                         progress_cb=lambda: formula_progress.update(1),
                     )
                     if not only_show_error:
@@ -1121,6 +1209,7 @@ def recognize_fix_math(
         ("Cleaned", str(stats.formulas_cleaned)),
         ("Repaired", str(stats.formulas_repaired)),
         ("Failed", str(stats.formulas_failed)),
+        ("Retry failed", "yes" if retry_failed else "no"),
         ("Only show error", "yes" if only_show_error else "no"),
         ("Report", _relative_path(report_target) if report_target else "-"),
     ]
@@ -1147,6 +1236,7 @@ def recognize_fix_math(
 @click.option("--max-retries", "max_retries", default=3, show_default=True, type=int)
 @click.option("--workers", type=int, default=4, show_default=True, help="Concurrent workers")
 @click.option("--timeout", "timeout", default=120.0, show_default=True, type=float)
+@click.option("--retry-failed", "retry_failed", is_flag=True, help="Retry only failed diagrams")
 @click.option(
     "--only-show-error",
     "only_show_error",
@@ -1169,6 +1259,7 @@ def recognize_fix_mermaid(
     max_retries: int,
     workers: int,
     timeout: float,
+    retry_failed: bool,
     only_show_error: bool,
     report_path: str | None,
     dry_run: bool,
@@ -1188,6 +1279,8 @@ def recognize_fix_mermaid(
         raise click.ClickException("--max-retries must be non-negative")
     if workers <= 0:
         raise click.ClickException("--workers must be positive")
+    if retry_failed and only_show_error:
+        raise click.ClickException("--retry-failed cannot be used with --only-show-error")
     try:
         require_mmdc()
     except RuntimeError as exc:
@@ -1231,6 +1324,24 @@ def recognize_fix_mermaid(
         return
 
     output_path = Path(output_dir) if output_dir else None
+    report_target = None
+    if report_path:
+        report_target = Path(report_path)
+    elif not only_show_error:
+        if output_path:
+            report_target = output_path / "fix-mermaid-errors.json"
+        elif in_place:
+            report_target = Path.cwd() / "fix-mermaid-errors.json"
+
+    retry_targets: dict[Path, set[RetryKey]] | None = None
+    if retry_failed:
+        if report_target is None:
+            raise click.ClickException("--retry-failed requires an error report path")
+        retry_targets = _load_retry_targets(report_target)
+        paths = [path for path in paths if path.resolve() in retry_targets]
+        if not paths:
+            raise click.ClickException("No failed diagrams matched the provided inputs")
+
     if output_path and not dry_run and not only_show_error:
         output_path = _ensure_output_dir(output_dir)
         _warn_if_not_empty(output_path)
@@ -1246,15 +1357,6 @@ def recognize_fix_mermaid(
     else:
         output_map = {path: path for path in paths}
 
-    report_target = None
-    if report_path:
-        report_target = Path(report_path)
-    elif not only_show_error:
-        if output_path:
-            report_target = output_path / "fix-mermaid-errors.json"
-        elif in_place:
-            report_target = Path.cwd() / "fix-mermaid-errors.json"
-
     if dry_run and not only_show_error:
         rows = [
             ("Mode", "json" if json_mode else "markdown"),
@@ -1265,6 +1367,7 @@ def recognize_fix_mermaid(
             ("Max retries", str(max_retries)),
             ("Workers", str(workers)),
             ("Timeout", f"{timeout:.1f}s"),
+            ("Retry failed", "yes" if retry_failed else "no"),
             ("Only show error", "yes" if only_show_error else "no"),
             ("In place", "yes" if in_place else "no"),
             ("Output dir", _relative_path(output_path) if output_path else "-"),
@@ -1298,12 +1401,24 @@ def recognize_fix_mermaid(
                             value = item.get(field)
                             if not isinstance(value, str):
                                 continue
-                            spans = extract_mermaid_spans(value, context_chars)
-                            if spans:
-                                diagram_progress.total += len(spans)
-                                diagram_progress.refresh()
                             line_start, cursor = locate_json_field_start(raw_text, value, cursor)
                             field_path = f"papers[{item_index}].{field}"
+                            spans = extract_mermaid_spans(value, context_chars)
+                            retry_keys = None
+                            if retry_targets is not None:
+                                retry_keys = retry_targets.get(path.resolve(), set())
+                                retry_keys = {
+                                    key
+                                    for key in retry_keys
+                                    if key[1] == field_path and key[2] == item_index
+                                }
+                            spans = _filter_retry_spans(
+                                spans, line_start, field_path, item_index, retry_keys
+                            )
+                            if not spans:
+                                continue
+                            diagram_progress.total += len(spans)
+                            diagram_progress.refresh()
                             updated, errors = await fix_mermaid_text(
                                 value,
                                 str(path),
@@ -1321,6 +1436,7 @@ def recognize_fix_mermaid(
                                 stats,
                                 repair_enabled=not only_show_error,
                                 spans=spans,
+                                allowed_keys=retry_keys,
                                 progress_cb=lambda: diagram_progress.update(1),
                             )
                             if not only_show_error and updated != value:
@@ -1334,6 +1450,12 @@ def recognize_fix_mermaid(
                 else:
                     content = await asyncio.to_thread(read_text, path)
                     spans = extract_mermaid_spans(content, context_chars)
+                    retry_keys = None
+                    if retry_targets is not None:
+                        retry_keys = retry_targets.get(path.resolve(), set())
+                        spans = _filter_retry_spans(spans, 1, None, None, retry_keys)
+                        if not spans:
+                            return stats
                     if spans:
                         diagram_progress.total += len(spans)
                         diagram_progress.refresh()
@@ -1354,6 +1476,7 @@ def recognize_fix_mermaid(
                         stats,
                         repair_enabled=not only_show_error,
                         spans=spans,
+                        allowed_keys=retry_keys,
                         progress_cb=lambda: diagram_progress.update(1),
                     )
                     if not only_show_error:
@@ -1396,6 +1519,7 @@ def recognize_fix_mermaid(
         ("Invalid", str(stats.diagrams_invalid)),
         ("Repaired", str(stats.diagrams_repaired)),
         ("Failed", str(stats.diagrams_failed)),
+        ("Retry failed", "yes" if retry_failed else "no"),
         ("Only show error", "yes" if only_show_error else "no"),
         ("Report", _relative_path(report_target) if report_target else "-"),
     ]

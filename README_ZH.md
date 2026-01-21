@@ -312,6 +312,31 @@ uv run deepresearch-flow paper extract \
 </details>
 
 <details>
+<summary><strong>4. Recognize Fix：修复公式与 Mermaid</strong></summary>
+
+修复 Markdown/JSON 中损坏的 LaTeX 公式和 Mermaid 图。
+
+- 重试失败：使用 `--retry-failed` 搭配之前的 `--report` 输出，仅重试失败项。
+
+```bash
+uv run deepresearch-flow recognize fix-math \
+  --input ./docs \
+  --in-place \
+  --model claude/claude-3-5-sonnet-20240620 \
+  --report ./fix-math-errors.json \
+  --retry-failed
+
+uv run deepresearch-flow recognize fix-mermaid \
+  --input ./docs \
+  --in-place \
+  --model claude/claude-3-5-sonnet-20240620 \
+  --report ./fix-mermaid-errors.json \
+  --retry-failed
+```
+
+</details>
+
+<details>
 <summary><strong>3. Database & UI：你的私人 ArXiv</strong></summary>
 
 本地 Web UI 快速浏览研究库。
