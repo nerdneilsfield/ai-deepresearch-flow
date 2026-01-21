@@ -25,7 +25,7 @@ from deepresearch_flow.paper.utils import (
     short_hash,
 )
 from deepresearch_flow.translator.config import TranslateConfig
-from deepresearch_flow.translator.engine import MarkdownTranslator, RequestThrottle
+from deepresearch_flow.translator.engine import DumpSnapshot, MarkdownTranslator, RequestThrottle
 
 
 logger = logging.getLogger(__name__)
@@ -127,6 +127,14 @@ def translator() -> None:
 @click.option("--fix-level", "fix_level", default="moderate", type=click.Choice(["off", "moderate", "aggressive"]))
 @click.option("--max-chunk-chars", "max_chunk_chars", default=4000, show_default=True, type=int)
 @click.option("--max-concurrency", "max_concurrency", default=4, show_default=True, type=int)
+@click.option(
+    "--group-concurrency",
+    "group_concurrency",
+    default=1,
+    show_default=True,
+    type=int,
+    help="Concurrent translation groups per document",
+)
 @click.option("--timeout", "timeout", default=120.0, show_default=True, type=float)
 @click.option("--retry-times", "retry_times", default=3, show_default=True, type=int)
 @click.option("--fallback-model", "fallback_model_ref", default=None, help="Fallback provider/model")
@@ -178,6 +186,7 @@ def translate(
     fix_level: str,
     max_chunk_chars: int,
     max_concurrency: int,
+    group_concurrency: int,
     timeout: float,
     retry_times: int,
     fallback_model_ref: str | None,
@@ -248,6 +257,8 @@ def translate(
         raise click.ClickException("--max-chunk-chars must be positive")
     if max_concurrency <= 0:
         raise click.ClickException("--max-concurrency must be positive")
+    if group_concurrency <= 0:
+        raise click.ClickException("--group-concurrency must be positive")
     if timeout <= 0:
         raise click.ClickException("--timeout must be positive")
     if retry_times <= 0:
@@ -371,6 +382,42 @@ def translate(
     ) -> None:
         content = read_text(path)
         request_log: list[dict[str, Any]] = []
+        debug_tag = None
+        protected_path = None
+        placeholders_path = None
+        nodes_path = None
+        requests_path = None
+        if debug_root is not None:
+            debug_tag = f"{path.stem}.{short_hash(str(path))}"
+            protected_path = debug_root / f"{debug_tag}.protected.md"
+            placeholders_path = debug_root / f"{debug_tag}.placeholders.json"
+            nodes_path = debug_root / f"{debug_tag}.nodes.json"
+            requests_path = debug_root / f"{debug_tag}.requests.json"
+
+        def write_dump(snapshot: DumpSnapshot) -> None:
+            if debug_root is None or debug_tag is None:
+                return
+            if dump_protected and snapshot.protected_text is not None and protected_path:
+                protected_path.write_text(snapshot.protected_text, encoding="utf-8")
+            if dump_placeholders and snapshot.placeholder_store is not None and placeholders_path:
+                snapshot.placeholder_store.save(str(placeholders_path))
+            if dump_nodes and snapshot.nodes is not None and nodes_path:
+                node_payload = {
+                    str(node_id): {
+                        "origin_text": node.origin_text,
+                        "translated_text": node.translated_text,
+                    }
+                    for node_id, node in snapshot.nodes.items()
+                }
+                nodes_path.write_text(
+                    json.dumps(node_payload, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+            if dump_requests_log and snapshot.request_log is not None and requests_path:
+                requests_path.write_text(
+                    json.dumps(snapshot.request_log, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
         result = await translator.translate(
             content,
             provider,
@@ -393,6 +440,8 @@ def translate(
             fallback_retry_times_2=fallback_retry_times_2,
             format_enabled=not no_format,
             request_log=request_log if dump_requests_log else None,
+            dump_callback=write_dump if debug_root is not None else None,
+            group_concurrency=group_concurrency,
         )
         output_path = output_map[path]
         output_path.write_text(result.translated_text, encoding="utf-8")
@@ -413,30 +462,15 @@ def translate(
         )
 
         if debug_root is not None:
-            debug_tag = f"{path.stem}.{short_hash(str(path))}"
-            if dump_protected:
-                (debug_root / f"{debug_tag}.protected.md").write_text(
-                    result.protected_text, encoding="utf-8"
+            write_dump(
+                DumpSnapshot(
+                    stage="final",
+                    nodes=result.nodes,
+                    protected_text=result.protected_text,
+                    placeholder_store=result.placeholder_store,
+                    request_log=request_log if dump_requests_log else None,
                 )
-            if dump_placeholders:
-                result.placeholder_store.save(str(debug_root / f"{debug_tag}.placeholders.json"))
-            if dump_nodes:
-                node_payload = {
-                    str(node_id): {
-                        "origin_text": node.origin_text,
-                        "translated_text": node.translated_text,
-                    }
-                    for node_id, node in result.nodes.items()
-                }
-                (debug_root / f"{debug_tag}.nodes.json").write_text(
-                    json.dumps(node_payload, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
-            if dump_requests_log:
-                (debug_root / f"{debug_tag}.requests.json").write_text(
-                    json.dumps(request_log, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
+            )
         await progress.advance_docs(1)
 
     async def run() -> None:

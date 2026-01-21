@@ -32,9 +32,12 @@ class MarkdownProtector:
         return len(line.strip()) == 0
 
     @staticmethod
-    def _line_starts_with_fence(line: str) -> Optional[str]:
+    def _line_starts_with_fence(line: str) -> tuple[str, int] | None:
         match = re.match(r"^\s*(`{3,}|~{3,})", line)
-        return match.group(1) if match else None
+        if not match:
+            return None
+        fence = match.group(1)
+        return fence[0], len(fence)
 
     @staticmethod
     def _line_is_block_math_open(line: str) -> bool:
@@ -128,8 +131,11 @@ class MarkdownProtector:
 
             fence = MarkdownProtector._line_starts_with_fence(line)
             if fence:
+                fence_char, fence_len = fence
                 j = i + 1
-                while j < n and not re.match(rf"^\s*{re.escape(fence)}", lines[j]):
+                while j < n and not re.match(
+                    rf"^\s*{re.escape(fence_char)}{{{fence_len},}}", lines[j]
+                ):
                     j += 1
                 if j < n:
                     block = "".join(lines[i : j + 1])
@@ -275,6 +281,12 @@ class MarkdownProtector:
 
         url_pattern = re.compile(r"(https?://[^ )\n]+)")
         s = url_pattern.sub(lambda m: store.add("URL", m.group(0)), s)
+
+        block_math_pattern = re.compile(r"\$\$[\s\S]+?\$\$")
+        s = block_math_pattern.sub(lambda m: store.add("MATHBLOCK", m.group(0)), s)
+
+        block_math_bracket_pattern = re.compile(r"\\\[[\s\S]+?\\\]")
+        s = block_math_bracket_pattern.sub(lambda m: store.add("MATHBLOCK", m.group(0)), s)
 
         inline_code_pattern = re.compile(r"(?<!`)(`+)([^`\n]+?)\1(?!`)")
         s = inline_code_pattern.sub(lambda m: store.add("CODE", m.group(0)), s)

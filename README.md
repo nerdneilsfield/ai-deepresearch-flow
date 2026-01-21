@@ -285,6 +285,7 @@ The translator module is built for scientific documents. It uses a node-based ar
 - Structure Protection: automatically detects and "freezes" code blocks, LaTeX (`$$...$$`), HTML tables, and images before sending text to the LLM.
 - OCR Repair: use `--fix-level` to merge broken paragraphs and convert text references (`[1]`) to clickable Markdown footnotes (`[^1]`).
 - Context-Aware: supports retries for failed chunks and falls back gracefully.
+- Group Concurrency: use `--group-concurrency` to run multiple translation groups in parallel per document.
 
 ```bash
 # Translate with structure protection and OCR repairs
@@ -292,6 +293,7 @@ uv run deepresearch-flow translator translate \
   --input ./paper.md \
   --target-lang ja \
   --fix-level aggressive \
+  --group-concurrency 4 \
   --model claude/claude-3-5-sonnet-20240620
 ```
 

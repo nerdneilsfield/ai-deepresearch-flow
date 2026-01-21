@@ -279,12 +279,14 @@ uv run deepresearch-flow paper db serve \
 - 结构保护：自动冻结代码块、LaTeX（`$$...$$`）、HTML 表格与图片。
 - OCR 修复：`--fix-level` 支持断段合并与引用修复（`[1]` -> `[^1]`）。
 - 失败恢复：支持失败重试与后备模型。
+- 分组并发：使用 `--group-concurrency` 在单个文档内并行翻译多个分组。
 
 ```bash
 uv run deepresearch-flow translator translate \
   --input ./paper.md \
   --target-lang ja \
   --fix-level aggressive \
+  --group-concurrency 4 \
   --model claude/claude-3-5-sonnet-20240620
 ```
 

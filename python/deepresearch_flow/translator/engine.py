@@ -10,7 +10,7 @@ import re
 import shutil
 import subprocess
 import time
-from typing import Any, Optional, Protocol
+from typing import Any, Callable, Optional, Protocol
 
 import httpx
 
@@ -46,6 +46,15 @@ class TranslationResult:
     placeholder_store: PlaceHolderStore
     nodes: dict[int, Node]
     stats: "TranslationStats"
+
+
+@dataclass
+class DumpSnapshot:
+    stage: str
+    nodes: dict[int, Node] | None = None
+    protected_text: str | None = None
+    placeholder_store: PlaceHolderStore | None = None
+    request_log: list[dict[str, Any]] | None = None
 
 
 @dataclass
@@ -117,7 +126,8 @@ class MarkdownTranslator:
         )
 
         self._rx_node_unpack = re.compile(
-            r"<NODE_START_(\d{4})>(.*?)</NODE_END_\1>", re.DOTALL
+            r"(?:<|@@)NODE_START_(\d{4})(?:>|@@)(.*?)(?:</NODE_END_\1>|@@NODE_END_\1@@)",
+            re.DOTALL,
         )
 
     def _strip_untranslatables(self, s: str) -> str:
@@ -534,6 +544,7 @@ class MarkdownTranslator:
         request_log: list[dict[str, Any]] | None,
         stage: str,
         group_index: int,
+        dump_callback: Callable[[DumpSnapshot], None] | None,
     ) -> str:
         attempts = 0
         while True:
@@ -557,6 +568,7 @@ class MarkdownTranslator:
                         client,
                         max_tokens=max_tokens,
                     )
+                elapsed_ms = int((time.time() - start_time) * 1000)
                 if request_log is not None:
                     request_log.append(
                         {
@@ -567,11 +579,23 @@ class MarkdownTranslator:
                             "model": model,
                             "messages": messages,
                             "response": response,
-                            "elapsed_ms": int((time.time() - start_time) * 1000),
+                            "elapsed_ms": elapsed_ms,
                         }
+                    )
+                    if dump_callback is not None:
+                        dump_callback(DumpSnapshot(stage=stage, request_log=request_log))
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(
+                        "Group translated: stage=%s group=%d attempt=%d chars=%d elapsed_ms=%d",
+                        stage,
+                        group_index,
+                        attempts,
+                        len(group_text),
+                        elapsed_ms,
                     )
                 return response
             except ProviderError as exc:
+                elapsed_ms = int((time.time() - start_time) * 1000)
                 if request_log is not None:
                     request_log.append(
                         {
@@ -583,8 +607,20 @@ class MarkdownTranslator:
                             "messages": messages,
                             "error": str(exc),
                             "retryable": exc.retryable,
-                            "elapsed_ms": int((time.time() - start_time) * 1000),
+                            "elapsed_ms": elapsed_ms,
                         }
+                    )
+                    if dump_callback is not None:
+                        dump_callback(DumpSnapshot(stage=stage, request_log=request_log))
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(
+                        "Group failed: stage=%s group=%d attempt=%d retryable=%s elapsed_ms=%d error=%s",
+                        stage,
+                        group_index,
+                        attempts,
+                        exc.retryable,
+                        elapsed_ms,
+                        exc,
                     )
                 if exc.retryable and attempts < max_retries:
                     await asyncio.sleep(backoff_delay(1.0, attempts, 20.0))
@@ -614,6 +650,8 @@ class MarkdownTranslator:
         fallback_retry_times_2: int | None = None,
         format_enabled: bool = True,
         request_log: list[dict[str, Any]] | None = None,
+        dump_callback: Callable[[DumpSnapshot], None] | None = None,
+        group_concurrency: int = 1,
     ) -> TranslationResult:
         if fix_level != "off":
             text = fix_markdown(text, fix_level)
@@ -622,6 +660,15 @@ class MarkdownTranslator:
 
         store = PlaceHolderStore()
         protected = self.protector.protect(text, self.cfg, store)
+        if dump_callback is not None:
+            dump_callback(
+                DumpSnapshot(
+                    stage="protected",
+                    protected_text=protected,
+                    placeholder_store=store,
+                    request_log=request_log,
+                )
+            )
         segments, nodes = split_to_segments(protected, self.cfg.max_chunk_chars)
         total_nodes = len(nodes)
         if logger.isEnabledFor(logging.DEBUG):
@@ -641,34 +688,111 @@ class MarkdownTranslator:
         rotator = KeyRotator(resolve_api_keys(api_keys))
         max_retries = max(self.cfg.retry_times, 1)
 
+        nodes_progress: dict[int, Node] | None = None
+        if dump_callback is not None:
+            nodes_progress = {
+                nid: Node(
+                    nid=nid,
+                    origin_text=node.origin_text,
+                    translated_text=node.translated_text,
+                )
+                for nid, node in nodes.items()
+            }
+
+        async def run_groups(
+            groups: list[str],
+            rotator: KeyRotator,
+            stage: str,
+            max_tokens_value: int | None,
+            retry_limit_value: int,
+            provider_value: ProviderConfig,
+            model_value: str,
+        ) -> list[str]:
+            if not groups:
+                return []
+            outputs: list[str] = [""] * len(groups)
+
+            async def run_one(idx: int, group_text: str) -> tuple[int, str]:
+                api_key = await rotator.next_key()
+                response = await self._translate_group(
+                    group_text,
+                    provider_value,
+                    model_value,
+                    client,
+                    api_key,
+                    timeout,
+                    semaphore,
+                    throttle,
+                    max_tokens_value,
+                    retry_limit_value,
+                    request_log,
+                    stage,
+                    idx,
+                    dump_callback,
+                )
+                return idx, response
+
+            if group_concurrency <= 1:
+                for idx, group_text in enumerate(groups):
+                    idx_out, response = await run_one(idx, group_text)
+                    outputs[idx_out] = response
+                    if nodes_progress is not None:
+                        nodes_progress.update(self._ungroup_nodes(response, nodes))
+                        dump_callback(
+                            DumpSnapshot(
+                                stage=stage,
+                                nodes=nodes_progress,
+                                request_log=request_log,
+                            )
+                        )
+                    if progress:
+                        await progress.advance_groups(1)
+                return outputs
+
+            guard = asyncio.Semaphore(group_concurrency)
+
+            async def guarded(idx: int, group_text: str) -> tuple[int, str]:
+                async with guard:
+                    return await run_one(idx, group_text)
+
+            tasks = [asyncio.create_task(guarded(i, g)) for i, g in enumerate(groups)]
+            try:
+                for task in asyncio.as_completed(tasks):
+                    idx_out, response = await task
+                    outputs[idx_out] = response
+                    if nodes_progress is not None:
+                        nodes_progress.update(self._ungroup_nodes(response, nodes))
+                        dump_callback(
+                            DumpSnapshot(
+                                stage=stage,
+                                nodes=nodes_progress,
+                                request_log=request_log,
+                            )
+                        )
+                    if progress:
+                        await progress.advance_groups(1)
+            except Exception:
+                for task in tasks:
+                    task.cancel()
+                raise
+
+            return outputs
+
         groups = self._group_nodes(nodes)
         initial_groups = len(groups)
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug("Groups: %d", len(groups))
         if progress:
             await progress.add_groups(len(groups))
-        outputs: list[str] = []
-        for group_index, group in enumerate(groups):
-            api_key = await rotator.next_key()
-            outputs.append(
-                await self._translate_group(
-                    group,
-                    provider,
-                    model,
-                    client,
-                    api_key,
-                    timeout,
-                    semaphore,
-                    throttle,
-                    max_tokens,
-                    max_retries,
-                    request_log,
-                    "initial",
-                    group_index,
-                )
-            )
-            if progress:
-                await progress.advance_groups(1)
+        outputs = await run_groups(
+            groups,
+            rotator,
+            "initial",
+            max_tokens,
+            max_retries,
+            provider,
+            model,
+        )
 
         translated_nodes = self._ungroup_groups(outputs, nodes)
         valid_placeholders = set(store.snapshot().values())
@@ -729,28 +853,15 @@ class MarkdownTranslator:
                 )
                 if progress:
                     await progress.add_groups(len(retry_groups))
-                retry_outputs: list[str] = []
-                for group_index, group in enumerate(retry_groups):
-                    api_key = await rotator.next_key()
-                    retry_outputs.append(
-                        await self._translate_group(
-                            group,
-                            provider,
-                            model,
-                            client,
-                            api_key,
-                            timeout,
-                            semaphore,
-                            throttle,
-                            max_tokens,
-                            retry_limit,
-                            request_log,
-                            f"retry-{attempt}",
-                            group_index,
-                        )
-                    )
-                    if progress:
-                        await progress.advance_groups(1)
+                retry_outputs = await run_groups(
+                    retry_groups,
+                    rotator,
+                    f"retry-{attempt}",
+                    max_tokens,
+                    retry_limit,
+                    provider,
+                    model,
+                )
                 retry_nodes = self._ungroup_groups(
                     retry_outputs, failed_nodes, fill_missing=False
                 )
@@ -817,28 +928,15 @@ class MarkdownTranslator:
                 )
                 if progress:
                     await progress.add_groups(len(retry_groups))
-                retry_outputs: list[str] = []
-                for group_index, group in enumerate(retry_groups):
-                    api_key = await fallback_rotator.next_key()
-                    retry_outputs.append(
-                        await self._translate_group(
-                            group,
-                            fallback_provider,
-                            fallback_model,
-                            client,
-                            api_key,
-                            timeout,
-                            semaphore,
-                            throttle,
-                            fallback_max_tokens,
-                            fallback_retry_limit,
-                            request_log,
-                            f"fallback-{attempt}",
-                            group_index,
-                        )
-                    )
-                    if progress:
-                        await progress.advance_groups(1)
+                retry_outputs = await run_groups(
+                    retry_groups,
+                    fallback_rotator,
+                    f"fallback-{attempt}",
+                    fallback_max_tokens,
+                    fallback_retry_limit,
+                    fallback_provider,
+                    fallback_model,
+                )
                 retry_nodes = self._ungroup_groups(
                     retry_outputs, failed_nodes, fill_missing=False
                 )
@@ -905,28 +1003,15 @@ class MarkdownTranslator:
                 )
                 if progress:
                     await progress.add_groups(len(retry_groups))
-                retry_outputs: list[str] = []
-                for group_index, group in enumerate(retry_groups):
-                    api_key = await fallback_rotator.next_key()
-                    retry_outputs.append(
-                        await self._translate_group(
-                            group,
-                            fallback_provider_2,
-                            fallback_model_2,
-                            client,
-                            api_key,
-                            timeout,
-                            semaphore,
-                            throttle,
-                            fallback_max_tokens_2,
-                            fallback_retry_limit,
-                            request_log,
-                            f"fallback2-{attempt}",
-                            group_index,
-                        )
-                    )
-                    if progress:
-                        await progress.advance_groups(1)
+                retry_outputs = await run_groups(
+                    retry_groups,
+                    fallback_rotator,
+                    f"fallback2-{attempt}",
+                    fallback_max_tokens_2,
+                    fallback_retry_limit,
+                    fallback_provider_2,
+                    fallback_model_2,
+                )
                 retry_nodes = self._ungroup_groups(
                     retry_outputs, failed_nodes, fill_missing=False
                 )
