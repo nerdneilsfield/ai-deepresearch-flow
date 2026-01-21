@@ -3,4 +3,5 @@ Output language: {{ output_language }}.
 Extract structured data from the provided markdown document.
 Return ONLY valid JSON that conforms to the given JSON Schema.
 The field "paper_authors" MUST be an array of strings (each author name as one item).
+If affiliations are available, extract them into "paper_institutions" as a list of institution names.
 If a field is unknown, use an empty string or empty list per schema.

@@ -25,6 +25,7 @@
     "module_m4": {"type": "string"},
     "module_m5": {"type": "string"},
     "module_m6": {"type": "string"},
+    "paper_institutions": {"type": "array", "items": {"type": "string"}},
     "output_language": {"type": "string"}
   }
 }

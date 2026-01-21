@@ -29,6 +29,7 @@
     "question6": {"type": "string"},
     "question7": {"type": "string"},
     "question8": {"type": "string"},
+    "paper_institutions": {"type": "array", "items": {"type": "string"}},
     "output_language": {"type": "string"}
   }
 }

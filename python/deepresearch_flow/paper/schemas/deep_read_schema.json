@@ -41,6 +41,7 @@
     "module_f": {"type": "string"},
     "module_g": {"type": "string"},
     "module_h": {"type": "string"},
+    "paper_institutions": {"type": "array", "items": {"type": "string"}},
     "output_language": {"type": "string"}
   }
 }

@@ -40,6 +40,12 @@
     "summary": {
       "type": "string"
     },
+    "paper_institutions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
     "output_language": {
       "type": "string"
     }

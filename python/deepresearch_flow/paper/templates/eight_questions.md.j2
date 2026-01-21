@@ -4,6 +4,10 @@
 
 **{{ "作者 / Authors" if is_zh else "Authors" }}:** {{ paper_authors | join(", ") }}
 
+{% if paper_institutions %}
+**{{ "单位 / Institutions" if is_zh else "Institutions" }}:** {{ paper_institutions | join(", ") }}
+{% endif %}
+
 {% if output_language %}
 **{{ "输出语言 / Output Language" if is_zh else "Output Language" }}:** {{ output_language }}
 {% endif %}

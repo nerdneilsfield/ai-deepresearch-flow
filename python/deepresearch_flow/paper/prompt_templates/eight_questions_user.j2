@@ -9,6 +9,10 @@ Previously completed outputs (JSON): {{ previous_outputs }}
 Answer each question in the corresponding JSON field question1 through question8.
 Use Markdown in each answer if helpful.
 Output language: {{ output_language }}. Use that language in all answers (if zh, use Chinese).
+
+Diagram guidance (only when relevant; do not invent):
+- In question3, include a mermaid architecture diagram when the paper describes system/model architecture or algorithm flow.
+- Triggers: "architecture", "module", "pipeline", "stage", "system", "flow" or explicit block/module descriptions.
 {% endif %}
 
 Questions:

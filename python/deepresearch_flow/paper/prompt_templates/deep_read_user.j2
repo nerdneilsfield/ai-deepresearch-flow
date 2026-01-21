@@ -10,6 +10,19 @@ Template: deep_read
 每个模块字段内部使用 Markdown 编排（标题、列表等）。
 禁止第一人称（不出现“我/我们/本人”）。
 关键结论需要注明来自论文的定位（章节/图/表/公式编号）。
+
+图示要求（仅在内容触发时输出，使用 mermaid/markmap 代码块，不要臆造）：
+- 模块 C3：算法流程图（Algorithm Flowchart）
+  触发：出现 pipeline/steps/procedure/algorithm/flow 或连续步骤（Step 1/2/3, First/Then/Finally）。输出 flowchart TD。
+- 模块 D：硬件架构图（Hardware Block Diagram）
+  触发：出现 FPGA/accelerator/module/pipeline stage/hardware 或明确模块名。输出 flowchart LR。
+- 模块 C4/C5：数据流图（Data Flow Diagram）
+  触发：出现 dataset/input format/preprocessing/metrics，且描述输入→处理→评估链条。输出 flowchart LR。
+- 模块 E：性能-精度权衡图（Pareto-style）
+  触发：出现 trade-off/efficiency vs accuracy/Pareto/speedup/EER 或具体数值对比。输出 flowchart TD。
+- 模块 H：实验设置图（Evaluation Setup）
+  触发：出现 benchmark/sequences/scenarios/test cases 且列出测试序列/场景。输出 flowchart TD。
+- 模块 B：若论文结构清晰，可补充 markmap 思维导图。
 {% endif %}
 
 ---
