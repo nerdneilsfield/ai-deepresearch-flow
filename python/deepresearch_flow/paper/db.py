@@ -88,6 +88,19 @@ def export_compare_csv(results: list[Any], output_path: Path) -> None:
             ])
 
 
+def export_only_in_b_paths(results: list[Any], output_path: Path) -> int:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    lines = []
+    for result in results:
+        if result.side != "B" or result.match_status != "only_in_B":
+            continue
+        if result.source_path:
+            lines.append(result.source_path)
+
+    output_path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    return len(lines)
+
+
 def normalize_authors(value: Any) -> list[str]:
     if value is None:
         return []
@@ -913,12 +926,22 @@ def register_db_commands(db_group: click.Group) -> None:
         "--md-translated-root", "md_translated_roots", multiple=True,
         help="Translated Markdown root directories to extract from (repeatable)"
     )
+    @click.option(
+        "--md-source-root", "md_source_roots", multiple=True,
+        help="Source Markdown root directories to extract from (repeatable)"
+    )
     @click.option("--output-json", "output_json", default=None, help="Output JSON file path")
     @click.option(
         "--output-md-translated-root",
         "output_md_translated_root",
         default=None,
         help="Output directory for matched translated Markdown",
+    )
+    @click.option(
+        "--output-md-root",
+        "output_md_root",
+        default=None,
+        help="Output directory for matched source Markdown",
     )
     @click.option("-b", "--bibtex", "bibtex_path", default=None, help="Optional BibTeX file path")
     @click.option("--lang", "lang", default=None, help="Language code for translated Markdown (e.g., zh)")
@@ -928,8 +951,10 @@ def register_db_commands(db_group: click.Group) -> None:
         pdf_roots: tuple[str, ...],
         md_roots: tuple[str, ...],
         md_translated_roots: tuple[str, ...],
+        md_source_roots: tuple[str, ...],
         output_json: str | None,
         output_md_translated_root: str | None,
+        output_md_root: str | None,
         bibtex_path: str | None,
         lang: str | None,
         output_csv: str | None,
@@ -939,8 +964,10 @@ def register_db_commands(db_group: click.Group) -> None:
         has_reference = bool(pdf_roots or md_roots)
         if not has_reference:
             raise click.ClickException("Reference inputs must include --pdf-root or --md-root")
-        if not input_json and not md_translated_roots:
-            raise click.ClickException("Provide --input-json and/or --md-translated-root")
+        if not input_json and not md_translated_roots and not md_source_roots:
+            raise click.ClickException(
+                "Provide --input-json and/or --md-translated-root and/or --md-source-root"
+            )
         if input_json and not output_json:
             raise click.ClickException("--output-json is required when using --input-json")
         if output_json and not input_json:
@@ -953,12 +980,17 @@ def register_db_commands(db_group: click.Group) -> None:
             raise click.ClickException(
                 "--md-translated-root is required when using --output-md-translated-root"
             )
+        if md_source_roots and not output_md_root:
+            raise click.ClickException("--output-md-root is required when using --md-source-root")
+        if output_md_root and not md_source_roots:
+            raise click.ClickException("--md-source-root is required when using --output-md-root")
         if md_translated_roots and not lang:
             raise click.ClickException("--lang is required when extracting translated Markdown")
 
         pdf_root_paths = [Path(path) for path in pdf_roots]
         md_root_paths = [Path(path) for path in md_roots]
         translated_root_paths = [Path(path) for path in md_translated_roots]
+        source_root_paths = [Path(path) for path in md_source_roots]
         bibtex = Path(bibtex_path) if bibtex_path else None
 
         all_results: list[Any] = []
@@ -1025,10 +1057,82 @@ def register_db_commands(db_group: click.Group) -> None:
             )
             all_results.extend(results)
 
+        if md_source_roots:
+            output_root = Path(output_md_root) if output_md_root else None
+            if output_root is None:
+                raise click.ClickException("--output-md-root is required when using --md-source-root")
+            results, match_pairs, dataset_a, _ = compare_datasets_with_pairs(
+                md_roots_a=source_root_paths,
+                pdf_roots_b=pdf_root_paths,
+                md_roots_b=md_root_paths,
+                lang=None,
+            )
+            matched_indices = {idx_a for idx_a, _, _, _ in match_pairs}
+            copied_source = 0
+            for idx, paper in enumerate(dataset_a.papers):
+                if idx not in matched_indices:
+                    continue
+                source_path = paper.get("source_path")
+                if not source_path:
+                    continue
+                source = Path(str(source_path))
+                relative = resolve_relative_path(source, source_root_paths)
+                destination = output_root / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, destination)
+                copied_source += 1
+            click.echo(f"Copied {copied_source} source Markdown files to {output_root}")
+            copied_count += copied_source
+            all_results.extend(results)
+
         if output_csv:
             output_path = Path(output_csv)
             export_compare_csv(all_results, output_path)
             click.echo(f"Results exported to: {output_path}")
+
+    @db_group.command("transfer-pdfs")
+    @click.option("--input-list", "input_list", required=True, help="Text file containing PDF paths")
+    @click.option("--output-dir", "output_dir", required=True, help="Output directory")
+    @click.option("--move", "move_files", is_flag=True, help="Move PDFs instead of copying")
+    @click.option("--copy", "copy_files", is_flag=True, help="Copy PDFs instead of moving")
+    def transfer_pdfs(
+        input_list: str,
+        output_dir: str,
+        move_files: bool,
+        copy_files: bool,
+    ) -> None:
+        if move_files == copy_files:
+            raise click.ClickException("Specify exactly one of --move or --copy")
+
+        list_path = Path(input_list)
+        if not list_path.is_file():
+            raise click.ClickException(f"Input list not found: {list_path}")
+
+        destination_root = Path(output_dir)
+        destination_root.mkdir(parents=True, exist_ok=True)
+
+        entries = [line.strip() for line in list_path.read_text(encoding="utf-8").splitlines()]
+        entries = [line for line in entries if line]
+
+        processed = 0
+        missing = 0
+        for raw in entries:
+            source = Path(raw).expanduser()
+            if not source.is_file():
+                missing += 1
+                continue
+            destination = destination_root / source.name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if move_files:
+                shutil.move(str(source), str(destination))
+            else:
+                shutil.copy2(source, destination)
+            processed += 1
+
+        action = "Moved" if move_files else "Copied"
+        click.echo(f"{action} {processed} PDFs to {destination_root}")
+        if missing:
+            click.echo(f"Skipped {missing} missing paths")
 
     @db_group.command("compare")
     @click.option(
@@ -1063,6 +1167,12 @@ def register_db_commands(db_group: click.Group) -> None:
         "--output-csv", "output_csv", default=None, help="Path to export results as CSV"
     )
     @click.option(
+        "--output-only-in-b",
+        "output_only_in_b",
+        default=None,
+        help="Path to export only-in-B source paths as a newline list",
+    )
+    @click.option(
         "--sample-limit", "sample_limit", default=5, type=int, show_default=True,
         help="Number of sample items to show in terminal output"
     )
@@ -1078,6 +1188,7 @@ def register_db_commands(db_group: click.Group) -> None:
         bibtex_path: str | None,
         lang: str | None,
         output_csv: str | None,
+        output_only_in_b: str | None,
         sample_limit: int,
     ) -> None:
         """Compare two datasets and report matches and differences."""
@@ -1186,6 +1297,12 @@ def register_db_commands(db_group: click.Group) -> None:
             output_path = Path(output_csv)
             export_compare_csv(results, output_path)
             console.print(f"\n[green]Results exported to: {output_path}[/green]")
-        
+        if output_only_in_b:
+            output_path = Path(output_only_in_b)
+            count = export_only_in_b_paths(results, output_path)
+            console.print(
+                f"\n[green]Only-in-B list exported ({count} items): {output_path}[/green]"
+            )
+
         # Print final counts
         console.print(f"\nTotal results: {len(results)}")

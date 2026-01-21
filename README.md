@@ -155,6 +155,66 @@ uv run deepresearch-flow paper db serve \
 
 ---
 
+## Incremental PDF Library Workflow
+
+This workflow keeps a growing PDF library in sync without reprocessing everything.
+
+```bash
+# 1) Compare processed JSON vs new PDF library to find missing PDFs
+uv run deepresearch-flow paper db compare \
+  --input-a ./paper_infos.json \
+  --pdf-root-b ./pdfs_new \
+  --output-only-in-b ./pdfs_todo.txt
+
+# 2) Stage the missing PDFs for OCR
+uv run deepresearch-flow paper db transfer-pdfs \
+  --input-list ./pdfs_todo.txt \
+  --output-dir ./pdfs_todo \
+  --copy
+
+# (optional) use --move instead of --copy
+# uv run deepresearch-flow paper db transfer-pdfs --input-list ./pdfs_todo.txt --output-dir ./pdfs_todo --move
+
+# 3) OCR the missing PDFs (use your OCR tool; write markdowns to ./md_todo)
+
+# 4) Export matched existing assets against the new PDF library
+uv run deepresearch-flow paper db extract \
+  --input-json ./paper_infos.json \
+  --pdf-root ./pdfs_new \
+  --output-json ./paper_infos_matched.json
+
+uv run deepresearch-flow paper db extract \
+  --md-source-root ./mds \
+  --output-md-root ./mds_matched \
+  --pdf-root ./pdfs_new
+
+uv run deepresearch-flow paper db extract \
+  --md-translated-root ./translated \
+  --output-md-translated-root ./translated_matched \
+  --pdf-root ./pdfs_new \
+  --lang zh
+
+# 5) Translate + extract summaries for the new OCR markdowns
+uv run deepresearch-flow translator translate \
+  --input ./md_todo \
+  --target-lang zh \
+  --model openai/gpt-4o-mini
+
+uv run deepresearch-flow paper extract \
+  --input ./md_todo \
+  --model openai/gpt-4o-mini
+
+# 6) Merge and serve the new library (multi-input)
+uv run deepresearch-flow paper db serve \
+  --input ./paper_infos_matched.json \
+  --input ./paper_infos_new.json \
+  --md-root ./mds_matched \
+  --md-root ./md_todo \
+  --md-translated-root ./translated_matched \
+  --md-translated-root ./md_todo \
+  --pdf-root ./pdfs_new
+```
+
 ## Deployment (Static CDN)
 
 Use a separate static server (CDN) for PDFs/Markdown/images and keep the API/UI on another host.

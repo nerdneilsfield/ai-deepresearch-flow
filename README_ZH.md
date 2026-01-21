@@ -149,6 +149,66 @@ uv run deepresearch-flow paper db serve \
 
 ---
 
+## 增量构建 PDF 文献库流程
+
+这个流程用于在 PDF 库持续增长时，只处理新增部分。
+
+```bash
+# 1) 对比已处理 JSON 和新 PDF 库，找到未处理的 PDF
+uv run deepresearch-flow paper db compare \
+  --input-a ./paper_infos.json \
+  --pdf-root-b ./pdfs_new \
+  --output-only-in-b ./pdfs_todo.txt
+
+# 2) 把缺失 PDF 复制/移动到 OCR 目录
+uv run deepresearch-flow paper db transfer-pdfs \
+  --input-list ./pdfs_todo.txt \
+  --output-dir ./pdfs_todo \
+  --copy
+
+# （可选）用 --move 替代 --copy
+# uv run deepresearch-flow paper db transfer-pdfs --input-list ./pdfs_todo.txt --output-dir ./pdfs_todo --move
+
+# 3) 对缺失的 PDF 做 OCR（外部工具，输出到 ./md_todo）
+
+# 4) 从旧资产中提取与新 PDF 库匹配的部分
+uv run deepresearch-flow paper db extract \
+  --input-json ./paper_infos.json \
+  --pdf-root ./pdfs_new \
+  --output-json ./paper_infos_matched.json
+
+uv run deepresearch-flow paper db extract \
+  --md-source-root ./mds \
+  --output-md-root ./mds_matched \
+  --pdf-root ./pdfs_new
+
+uv run deepresearch-flow paper db extract \
+  --md-translated-root ./translated \
+  --output-md-translated-root ./translated_matched \
+  --pdf-root ./pdfs_new \
+  --lang zh
+
+# 5) 对 OCR 的新 Markdown 做翻译与摘要抽取
+uv run deepresearch-flow translator translate \
+  --input ./md_todo \
+  --target-lang zh \
+  --model openai/gpt-4o-mini
+
+uv run deepresearch-flow paper extract \
+  --input ./md_todo \
+  --model openai/gpt-4o-mini
+
+# 6) 合并并启动新的文献库（多输入）
+uv run deepresearch-flow paper db serve \
+  --input ./paper_infos_matched.json \
+  --input ./paper_infos_new.json \
+  --md-root ./mds_matched \
+  --md-root ./md_todo \
+  --md-translated-root ./translated_matched \
+  --md-translated-root ./md_todo \
+  --pdf-root ./pdfs_new
+```
+
 ## 部署（静态 CDN）
 
 推荐用两台服务器：一台跑 API/UI，另一台只提供静态资源（PDF/Markdown/图片）。
