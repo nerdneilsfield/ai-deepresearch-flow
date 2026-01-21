@@ -178,6 +178,10 @@ class MarkdownTranslator:
         text = s.strip()
         if not text:
             return False
+        if "__PH_" in text:
+            core = self._strip_untranslatables(text)
+            if len(core) <= 2:
+                return True
         if re.search(r"\b(?:isbn|issn|doi|arxiv)\b", text, flags=re.IGNORECASE):
             return True
         if re.search(r"\b(?:acm|ieee)\b", text, flags=re.IGNORECASE):
