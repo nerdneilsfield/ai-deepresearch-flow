@@ -61,6 +61,7 @@ DeepResearch Flow 提供一条完整流水线，覆盖 **修复**、**翻译**�
 - **精准翻译**：翻译 OCR Markdown 到中文/日文（`.zh.md` / `.ja.md`），同时冻结公式、代码、表格与引用。
 - **本地知识库**：高性能 Web UI，支持 Split View（原文/翻译/摘要）、全文搜索、多维过滤。
 - **覆盖对比**：对比 JSON/PDF/Markdown/翻译产物，定位缺失并导出 CSV 报告。
+- **匹配提取**：对比后导出已匹配的 JSON 或翻译 Markdown。
 - **OCR 后处理**：自动修复引用（`[1]` -> `[^1]`）、合并断段并统一格式。
 
 ---
@@ -288,7 +289,30 @@ uv run deepresearch-flow paper db compare \
 </details>
 
 <details>
-<summary><strong>5. Recognize：OCR 后处理</strong></summary>
+<summary><strong>5. Paper DB Extract：匹配提取</strong></summary>
+
+对比后导出已匹配的 JSON 条目或翻译 Markdown，并保持目录结构。
+
+```bash
+uv run deepresearch-flow paper db extract \
+  --input-json ./processed.json \
+  --pdf-root ./pdfs \
+  --output-json ./matched.json \
+  --output-csv ./extract.csv
+
+# 按语言导出翻译 Markdown
+uv run deepresearch-flow paper db extract \
+  --md-root ./md_root \
+  --md-translated-root ./translated \
+  --lang zh \
+  --output-md-translated-root ./translated_matched \
+  --output-csv ./extract.csv
+```
+
+</details>
+
+<details>
+<summary><strong>6. Recognize：OCR 后处理</strong></summary>
 
 面向 OCR 输出的清洗工具。
 

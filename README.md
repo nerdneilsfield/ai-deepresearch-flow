@@ -61,6 +61,7 @@ DeepResearch Flow provides a unified pipeline to **Repair**, **Translate**, **Ex
 - **Precision Translation**: Translate OCR Markdown to Chinese/Japanese (`.zh.md`, `.ja.md`) while **freezing** formulas, code, tables, and references. No more broken layout.
 - **Local Knowledge DB**: A high-performance local Web UI to browse papers with **Split View** (Source vs. Translated vs. Summary), full-text search, and multi-dimensional filtering.
 - **Coverage Compare**: Compare JSON/PDF/Markdown/Translated datasets to find missing artifacts and export CSV reports.
+- **Matched Export**: Extract matched JSON or translated Markdown after coverage checks.
 - **OCR Post-Processing**: Automatically fix broken references (`[1]` -> `[^1]`), merge split paragraphs, and standardize layouts.
 
 ---
@@ -295,7 +296,30 @@ uv run deepresearch-flow paper db compare \
 </details>
 
 <details>
-<summary><strong>5. Recognize: OCR Post-Processing</strong></summary>
+<summary><strong>5. Paper DB Extract: Matched Export</strong></summary>
+
+Extract matched JSON entries or translated Markdown after coverage comparison.
+
+```bash
+uv run deepresearch-flow paper db extract \
+  --input-json ./processed.json \
+  --pdf-root ./pdfs \
+  --output-json ./matched.json \
+  --output-csv ./extract.csv
+
+# Extract translated markdowns by language
+uv run deepresearch-flow paper db extract \
+  --md-root ./md_root \
+  --md-translated-root ./translated \
+  --lang zh \
+  --output-md-translated-root ./translated_matched \
+  --output-csv ./extract.csv
+```
+
+</details>
+
+<details>
+<summary><strong>6. Recognize: OCR Post-Processing</strong></summary>
 
 Tools to clean up raw outputs from OCR engines like MinerU.
 

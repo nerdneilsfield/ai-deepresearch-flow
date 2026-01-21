@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import shutil
 from pathlib import Path
 from typing import Any, Iterable
 import difflib
@@ -40,6 +41,51 @@ def load_json(path: Path) -> list[dict[str, Any]]:
 
 def write_json(path: Path, data: Any) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def load_json_payload(path: Path) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise click.ClickException(f"Invalid JSON in {path}: {exc}") from exc
+
+    if isinstance(data, list):
+        return data, None
+    if isinstance(data, dict):
+        papers = data.get("papers")
+        if isinstance(papers, list):
+            return papers, data
+        raise click.ClickException(f"JSON object missing 'papers' list: {path}")
+
+    raise click.ClickException(f"Unsupported JSON structure in {path}")
+
+
+def export_compare_csv(results: list[Any], output_path: Path) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    import csv
+
+    with open(output_path, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow([
+            "Side", "Source Hash", "Title", "Match Status", "Match Type",
+            "Match Score", "Source Path", "Other Source Hash", "Other Title",
+            "Other Source Path", "Lang"
+        ])
+        for result in results:
+            writer.writerow([
+                result.side,
+                result.source_hash,
+                result.title,
+                result.match_status,
+                result.match_type or "",
+                f"{result.match_score:.4f}",
+                result.source_path or "",
+                result.other_source_hash or "",
+                result.other_title or "",
+                result.other_source_path or "",
+                result.lang or "",
+            ])
 
 
 def normalize_authors(value: Any) -> list[str]:
@@ -131,6 +177,18 @@ def parse_year_month(date_str: str | None) -> tuple[str | None, str | None]:
         return year, normalize_month(month_word.group(0))
 
     return year, None
+
+
+def resolve_relative_path(path: Path, roots: Iterable[Path]) -> Path:
+    resolved = path.resolve()
+    roots_by_depth = sorted(roots, key=lambda r: len(str(r.resolve())), reverse=True)
+    for root in roots_by_depth:
+        root_resolved = root.resolve()
+        try:
+            return resolved.relative_to(root_resolved)
+        except ValueError:
+            continue
+    return Path(path.name)
 
 
 def clean_journal_name(name: str | None) -> str:
@@ -843,6 +901,135 @@ def register_db_commands(db_group: click.Group) -> None:
         rendered = render_papers(papers, out_dir, template, output_language)
         click.echo(f"Rendered {rendered} markdown files")
 
+    @db_group.command("extract")
+    @click.option("--input-json", "input_json", default=None, help="Input JSON file path")
+    @click.option(
+        "--pdf-root", "pdf_roots", multiple=True, help="PDF root directories for reference (repeatable)"
+    )
+    @click.option(
+        "--md-root", "md_roots", multiple=True, help="Markdown root directories for reference (repeatable)"
+    )
+    @click.option(
+        "--md-translated-root", "md_translated_roots", multiple=True,
+        help="Translated Markdown root directories to extract from (repeatable)"
+    )
+    @click.option("--output-json", "output_json", default=None, help="Output JSON file path")
+    @click.option(
+        "--output-md-translated-root",
+        "output_md_translated_root",
+        default=None,
+        help="Output directory for matched translated Markdown",
+    )
+    @click.option("-b", "--bibtex", "bibtex_path", default=None, help="Optional BibTeX file path")
+    @click.option("--lang", "lang", default=None, help="Language code for translated Markdown (e.g., zh)")
+    @click.option("--output-csv", "output_csv", default=None, help="Path to export results as CSV")
+    def extract(
+        input_json: str | None,
+        pdf_roots: tuple[str, ...],
+        md_roots: tuple[str, ...],
+        md_translated_roots: tuple[str, ...],
+        output_json: str | None,
+        output_md_translated_root: str | None,
+        bibtex_path: str | None,
+        lang: str | None,
+        output_csv: str | None,
+    ) -> None:
+        from deepresearch_flow.paper.db_ops import compare_datasets_with_pairs
+
+        has_reference = bool(pdf_roots or md_roots)
+        if not has_reference:
+            raise click.ClickException("Reference inputs must include --pdf-root or --md-root")
+        if not input_json and not md_translated_roots:
+            raise click.ClickException("Provide --input-json and/or --md-translated-root")
+        if input_json and not output_json:
+            raise click.ClickException("--output-json is required when using --input-json")
+        if output_json and not input_json:
+            raise click.ClickException("--input-json is required when using --output-json")
+        if md_translated_roots and not output_md_translated_root:
+            raise click.ClickException(
+                "--output-md-translated-root is required when using --md-translated-root"
+            )
+        if output_md_translated_root and not md_translated_roots:
+            raise click.ClickException(
+                "--md-translated-root is required when using --output-md-translated-root"
+            )
+        if md_translated_roots and not lang:
+            raise click.ClickException("--lang is required when extracting translated Markdown")
+
+        pdf_root_paths = [Path(path) for path in pdf_roots]
+        md_root_paths = [Path(path) for path in md_roots]
+        translated_root_paths = [Path(path) for path in md_translated_roots]
+        bibtex = Path(bibtex_path) if bibtex_path else None
+
+        all_results: list[Any] = []
+
+        if input_json:
+            input_json_path = Path(input_json)
+            if not input_json_path.is_file():
+                raise click.ClickException(f"Input JSON not found: {input_json_path}")
+            papers, payload = load_json_payload(input_json_path)
+            results, match_pairs, _, _ = compare_datasets_with_pairs(
+                json_paths_a=[input_json_path],
+                pdf_roots_b=pdf_root_paths,
+                md_roots_b=md_root_paths,
+                bibtex_path=bibtex,
+                lang=None,
+            )
+            matched_indices = {idx_a for idx_a, _, _, _ in match_pairs}
+            matched_papers = [
+                paper
+                for idx, paper in enumerate(papers)
+                if idx in matched_indices
+            ]
+            output_path = Path(output_json) if output_json else None
+            if output_path is None:
+                raise click.ClickException("--output-json is required when using --input-json")
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            if payload is None:
+                write_json(output_path, matched_papers)
+            else:
+                output_payload = dict(payload)
+                output_payload["papers"] = matched_papers
+                write_json(output_path, output_payload)
+            click.echo(f"Extracted {len(matched_papers)} JSON entries to {output_path}")
+            all_results.extend(results)
+
+        copied_count = 0
+        if md_translated_roots:
+            output_root = Path(output_md_translated_root) if output_md_translated_root else None
+            if output_root is None:
+                raise click.ClickException(
+                    "--output-md-translated-root is required when using --md-translated-root"
+                )
+            results, match_pairs, dataset_a, _ = compare_datasets_with_pairs(
+                md_translated_roots_a=translated_root_paths,
+                pdf_roots_b=pdf_root_paths,
+                md_roots_b=md_root_paths,
+                lang=lang,
+            )
+            matched_indices = {idx_a for idx_a, _, _, _ in match_pairs}
+            for idx, paper in enumerate(dataset_a.papers):
+                if idx not in matched_indices:
+                    continue
+                source_path = paper.get("source_path")
+                if not source_path:
+                    continue
+                source = Path(str(source_path))
+                relative = resolve_relative_path(source, translated_root_paths)
+                destination = output_root / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, destination)
+                copied_count += 1
+            click.echo(
+                f"Copied {copied_count} translated Markdown files to {output_root}"
+            )
+            all_results.extend(results)
+
+        if output_csv:
+            output_path = Path(output_csv)
+            export_compare_csv(all_results, output_path)
+            click.echo(f"Results exported to: {output_path}")
+
     @db_group.command("compare")
     @click.option(
         "-ia", "--input-a", "input_paths_a", multiple=True, help="Input JSON files for side A (repeatable)"
@@ -895,8 +1082,7 @@ def register_db_commands(db_group: click.Group) -> None:
     ) -> None:
         """Compare two datasets and report matches and differences."""
         from deepresearch_flow.paper.db_ops import compare_datasets
-        import csv
-        
+
         # Validate that at least one input is provided for each side
         has_input_a = bool(input_paths_a or pdf_roots_a or md_roots_a or md_translated_roots_a)
         has_input_b = bool(input_paths_b or pdf_roots_b or md_roots_b or md_translated_roots_b)
@@ -998,30 +1184,7 @@ def register_db_commands(db_group: click.Group) -> None:
         # Export to CSV if requested
         if output_csv:
             output_path = Path(output_csv)
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            with open(output_path, "w", newline="", encoding="utf-8") as f:
-                writer = csv.writer(f)
-                writer.writerow([
-                    "Side", "Source Hash", "Title", "Match Status", "Match Type",
-                    "Match Score", "Source Path", "Other Source Hash", "Other Title",
-                    "Other Source Path", "Lang"
-                ])
-                for r in results:
-                    writer.writerow([
-                        r.side,
-                        r.source_hash,
-                        r.title,
-                        r.match_status,
-                        r.match_type or "",
-                        f"{r.match_score:.4f}",
-                        r.source_path or "",
-                        r.other_source_hash or "",
-                        r.other_title or "",
-                        r.other_source_path or "",
-                        r.lang or "",
-                    ])
-            
+            export_compare_csv(results, output_path)
             console.print(f"\n[green]Results exported to: {output_path}[/green]")
         
         # Print final counts

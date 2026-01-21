@@ -1688,12 +1688,12 @@ def _get_paper_identifier(paper: dict[str, Any]) -> str:
     return str(paper.get("source_hash") or paper.get("source_path", ""))
 
 
-def _match_datasets(
+def _match_datasets_with_pairs(
     dataset_a: CompareDataset,
     dataset_b: CompareDataset,
     *,
     lang: str | None = None,
-) -> list[CompareResult]:
+) -> tuple[list[CompareResult], list[tuple[int, int, str | None, float]]]:
     """Match papers between two datasets using db_ops parity."""
     results: list[CompareResult] = []
     matched_a: set[int] = set()
@@ -1832,6 +1832,16 @@ def _match_datasets(
             )
         )
 
+    return results, match_pairs
+
+
+def _match_datasets(
+    dataset_a: CompareDataset,
+    dataset_b: CompareDataset,
+    *,
+    lang: str | None = None,
+) -> list[CompareResult]:
+    results, _ = _match_datasets_with_pairs(dataset_a, dataset_b, lang=lang)
     return results
 
 
@@ -1923,6 +1933,34 @@ def compare_datasets(
     lang: str | None = None,
 ) -> list[CompareResult]:
     """Compare two datasets and return comparison results."""
+    results, _, _, _ = compare_datasets_with_pairs(
+        json_paths_a=json_paths_a,
+        pdf_roots_a=pdf_roots_a,
+        md_roots_a=md_roots_a,
+        md_translated_roots_a=md_translated_roots_a,
+        json_paths_b=json_paths_b,
+        pdf_roots_b=pdf_roots_b,
+        md_roots_b=md_roots_b,
+        md_translated_roots_b=md_translated_roots_b,
+        bibtex_path=bibtex_path,
+        lang=lang,
+    )
+    return results
+
+
+def compare_datasets_with_pairs(
+    *,
+    json_paths_a: list[Path] | None = None,
+    pdf_roots_a: list[Path] | None = None,
+    md_roots_a: list[Path] | None = None,
+    md_translated_roots_a: list[Path] | None = None,
+    json_paths_b: list[Path] | None = None,
+    pdf_roots_b: list[Path] | None = None,
+    md_roots_b: list[Path] | None = None,
+    md_translated_roots_b: list[Path] | None = None,
+    bibtex_path: Path | None = None,
+    lang: str | None = None,
+) -> tuple[list[CompareResult], list[tuple[int, int, str | None, float]], CompareDataset, CompareDataset]:
     # Validate language requirement for translated inputs
     has_translated_a = md_translated_roots_a is not None and len(md_translated_roots_a) > 0
     has_translated_b = md_translated_roots_b is not None and len(md_translated_roots_b) > 0
@@ -1950,4 +1988,5 @@ def compare_datasets(
         lang=lang,
     )
 
-    return _match_datasets(dataset_a, dataset_b, lang=lang)
+    results, match_pairs = _match_datasets_with_pairs(dataset_a, dataset_b, lang=lang)
+    return results, match_pairs, dataset_a, dataset_b
