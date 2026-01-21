@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any, Iterable
 import difflib
 
+from tqdm import tqdm
+
 import click
 import httpx
 from rich.console import Console
@@ -1006,6 +1008,7 @@ def register_db_commands(db_group: click.Group) -> None:
                 md_roots_b=md_root_paths,
                 bibtex_path=bibtex,
                 lang=None,
+                show_progress=True,
             )
             matched_indices = {idx_a for idx_a, _, _, _ in match_pairs}
             matched_papers = [
@@ -1038,9 +1041,16 @@ def register_db_commands(db_group: click.Group) -> None:
                 pdf_roots_b=pdf_root_paths,
                 md_roots_b=md_root_paths,
                 lang=lang,
+                show_progress=True,
             )
             matched_indices = {idx_a for idx_a, _, _, _ in match_pairs}
-            for idx, paper in enumerate(dataset_a.papers):
+            copy_iter = tqdm(
+                enumerate(dataset_a.papers),
+                total=len(dataset_a.papers),
+                desc="copy translated",
+                unit="file",
+            )
+            for idx, paper in copy_iter:
                 if idx not in matched_indices:
                     continue
                 source_path = paper.get("source_path")
@@ -1066,10 +1076,17 @@ def register_db_commands(db_group: click.Group) -> None:
                 pdf_roots_b=pdf_root_paths,
                 md_roots_b=md_root_paths,
                 lang=None,
+                show_progress=True,
             )
             matched_indices = {idx_a for idx_a, _, _, _ in match_pairs}
             copied_source = 0
-            for idx, paper in enumerate(dataset_a.papers):
+            copy_iter = tqdm(
+                enumerate(dataset_a.papers),
+                total=len(dataset_a.papers),
+                desc="copy source",
+                unit="file",
+            )
+            for idx, paper in copy_iter:
                 if idx not in matched_indices:
                     continue
                 source_path = paper.get("source_path")
@@ -1116,7 +1133,8 @@ def register_db_commands(db_group: click.Group) -> None:
 
         processed = 0
         missing = 0
-        for raw in entries:
+        transfer_iter = tqdm(entries, total=len(entries), desc="transfer pdfs", unit="file")
+        for raw in transfer_iter:
             source = Path(raw).expanduser()
             if not source.is_file():
                 missing += 1
@@ -1222,6 +1240,7 @@ def register_db_commands(db_group: click.Group) -> None:
                 md_translated_roots_b=[Path(p) for p in md_translated_roots_b],
                 bibtex_path=Path(bibtex_path) if bibtex_path else None,
                 lang=lang,
+                show_progress=True,
             )
         except ValueError as exc:
             raise click.ClickException(str(exc)) from exc

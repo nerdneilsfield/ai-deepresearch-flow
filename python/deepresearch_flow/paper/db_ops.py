@@ -8,6 +8,8 @@ from typing import Any
 import re
 import unicodedata
 
+from tqdm import tqdm
+
 from deepresearch_flow.paper.utils import stable_hash
 
 try:
@@ -370,7 +372,11 @@ def _is_pdf_like(path: Path) -> bool:
     return ".pdf-" in name_lower and not name_lower.endswith(".md")
 
 
-def _scan_pdf_roots(roots: list[Path]) -> tuple[list[Path], list[dict[str, Any]]]:
+def _scan_pdf_roots(
+    roots: list[Path],
+    *,
+    show_progress: bool = False,
+) -> tuple[list[Path], list[dict[str, Any]]]:
     pdf_paths: list[Path] = []
     meta: list[dict[str, Any]] = []
     seen: set[Path] = set()
@@ -381,7 +387,10 @@ def _scan_pdf_roots(roots: list[Path]) -> tuple[list[Path], list[dict[str, Any]]
         except OSError:
             continue
         files: list[Path] = []
-        for path in root.rglob("*"):
+        iterator = root.rglob("*")
+        if show_progress:
+            iterator = tqdm(iterator, desc=f"scan pdf {root}", unit="file")
+        for path in iterator:
             try:
                 if not path.is_file():
                     continue
@@ -597,7 +606,12 @@ def _resolve_by_title_and_meta(
     return None, None, 0.0
 
 
-def _build_file_index(roots: list[Path], *, suffixes: set[str]) -> dict[str, list[Path]]:
+def _build_file_index(
+    roots: list[Path],
+    *,
+    suffixes: set[str],
+    show_progress: bool = False,
+) -> dict[str, list[Path]]:
     index: dict[str, list[Path]] = {}
     for root in roots:
         try:
@@ -605,7 +619,10 @@ def _build_file_index(roots: list[Path], *, suffixes: set[str]) -> dict[str, lis
                 continue
         except OSError:
             continue
-        for path in root.rglob("*"):
+        iterator = root.rglob("*")
+        if show_progress:
+            iterator = tqdm(iterator, desc=f"index {next(iter(suffixes))} {root}", unit="file")
+        for path in iterator:
             try:
                 if not path.is_file():
                     continue
@@ -692,7 +709,11 @@ def _build_file_index_from_paths(paths: list[Path], *, suffixes: set[str]) -> di
     return index
 
 
-def _build_translated_index(roots: list[Path]) -> dict[str, dict[str, Path]]:
+def _build_translated_index(
+    roots: list[Path],
+    *,
+    show_progress: bool = False,
+) -> dict[str, dict[str, Path]]:
     index: dict[str, dict[str, Path]] = {}
     candidates: list[Path] = []
     for root in roots:
@@ -702,7 +723,11 @@ def _build_translated_index(roots: list[Path]) -> dict[str, dict[str, Path]]:
         except OSError:
             continue
         try:
-            candidates.extend(root.rglob("*.md"))
+            iterator = root.rglob("*.md")
+            if show_progress:
+                iterator = tqdm(iterator, desc=f"scan translated {root}", unit="file")
+            for path in iterator:
+                candidates.append(path)
         except OSError:
             continue
     for path in sorted(candidates, key=lambda item: str(item)):
@@ -1422,7 +1447,7 @@ class CompareDataset:
     paper_id_to_index: dict[int, int]
 
 
-def _scan_md_roots(roots: list[Path]) -> list[Path]:
+def _scan_md_roots(roots: list[Path], *, show_progress: bool = False) -> list[Path]:
     paths: list[Path] = []
     for root in roots:
         try:
@@ -1431,7 +1456,10 @@ def _scan_md_roots(roots: list[Path]) -> list[Path]:
         except OSError:
             continue
         try:
-            for path in root.rglob("*.md"):
+            iterator = root.rglob("*.md")
+            if show_progress:
+                iterator = tqdm(iterator, desc=f"scan md {root}", unit="file")
+            for path in iterator:
                 try:
                     if not path.is_file():
                         continue
@@ -1693,6 +1721,7 @@ def _match_datasets_with_pairs(
     dataset_b: CompareDataset,
     *,
     lang: str | None = None,
+    show_progress: bool = False,
 ) -> tuple[list[CompareResult], list[tuple[int, int, str | None, float]]]:
     """Match papers between two datasets using db_ops parity."""
     results: list[CompareResult] = []
@@ -1703,7 +1732,11 @@ def _match_datasets_with_pairs(
 
     file_index_b = _merge_file_indexes(dataset_b.md_index, dataset_b.pdf_index)
 
-    for idx_a, paper in enumerate(dataset_a.papers):
+    papers_a_iter = dataset_a.papers
+    if show_progress:
+        papers_a_iter = tqdm(dataset_a.papers, desc="match A", unit="paper")
+
+    for idx_a, paper in enumerate(papers_a_iter):
         _prepare_paper_matching_fields(paper)
         source_hash = str(paper.get("source_hash") or "")
         title = str(paper.get("paper_title") or "")
@@ -1777,7 +1810,11 @@ def _match_datasets_with_pairs(
             )
         )
 
-    for idx_b, paper in enumerate(dataset_b.papers):
+    papers_b_iter = dataset_b.papers
+    if show_progress:
+        papers_b_iter = tqdm(dataset_b.papers, desc="match B", unit="paper")
+
+    for idx_b, paper in enumerate(papers_b_iter):
         _prepare_paper_matching_fields(paper)
         source_hash = str(paper.get("source_hash") or "")
         title = str(paper.get("paper_title") or "")
@@ -1840,8 +1877,11 @@ def _match_datasets(
     dataset_b: CompareDataset,
     *,
     lang: str | None = None,
+    show_progress: bool = False,
 ) -> list[CompareResult]:
-    results, _ = _match_datasets_with_pairs(dataset_a, dataset_b, lang=lang)
+    results, _ = _match_datasets_with_pairs(
+        dataset_a, dataset_b, lang=lang, show_progress=show_progress
+    )
     return results
 
 
@@ -1853,6 +1893,7 @@ def build_compare_dataset(
     md_translated_roots: list[Path] | None = None,
     bibtex_path: Path | None = None,
     lang: str | None = None,
+    show_progress: bool = False,
 ) -> CompareDataset:
     """Load and index a dataset from various sources."""
     papers: list[dict[str, Any]] = []
@@ -1878,11 +1919,17 @@ def build_compare_dataset(
     for paper in papers:
         _prepare_paper_matching_fields(paper)
 
-    md_paths = _scan_md_roots(md_roots or [])
-    pdf_paths, _ = _scan_pdf_roots(pdf_roots or [])
-    md_index = _build_file_index(md_roots or [], suffixes={".md"})
-    pdf_index = _build_file_index(pdf_roots or [], suffixes={".pdf"})
-    translated_index = _build_translated_index(md_translated_roots or [])
+    md_paths = _scan_md_roots(md_roots or [], show_progress=show_progress)
+    pdf_paths, _ = _scan_pdf_roots(pdf_roots or [], show_progress=show_progress)
+    md_index = _build_file_index(
+        md_roots or [], suffixes={".md"}, show_progress=show_progress
+    )
+    pdf_index = _build_file_index(
+        pdf_roots or [], suffixes={".pdf"}, show_progress=show_progress
+    )
+    translated_index = _build_translated_index(
+        md_translated_roots or [], show_progress=show_progress
+    )
 
     if pdf_paths:
         papers.extend(_build_pdf_only_entries(papers, pdf_paths, pdf_index))
@@ -1931,6 +1978,7 @@ def compare_datasets(
     md_translated_roots_b: list[Path] | None = None,
     bibtex_path: Path | None = None,
     lang: str | None = None,
+    show_progress: bool = False,
 ) -> list[CompareResult]:
     """Compare two datasets and return comparison results."""
     results, _, _, _ = compare_datasets_with_pairs(
@@ -1944,6 +1992,7 @@ def compare_datasets(
         md_translated_roots_b=md_translated_roots_b,
         bibtex_path=bibtex_path,
         lang=lang,
+        show_progress=show_progress,
     )
     return results
 
@@ -1960,6 +2009,7 @@ def compare_datasets_with_pairs(
     md_translated_roots_b: list[Path] | None = None,
     bibtex_path: Path | None = None,
     lang: str | None = None,
+    show_progress: bool = False,
 ) -> tuple[list[CompareResult], list[tuple[int, int, str | None, float]], CompareDataset, CompareDataset]:
     # Validate language requirement for translated inputs
     has_translated_a = md_translated_roots_a is not None and len(md_translated_roots_a) > 0
@@ -1977,6 +2027,7 @@ def compare_datasets_with_pairs(
         md_translated_roots=md_translated_roots_a,
         bibtex_path=bibtex_path,
         lang=lang,
+        show_progress=show_progress,
     )
 
     dataset_b = build_compare_dataset(
@@ -1986,7 +2037,10 @@ def compare_datasets_with_pairs(
         md_translated_roots=md_translated_roots_b,
         bibtex_path=bibtex_path,
         lang=lang,
+        show_progress=show_progress,
     )
 
-    results, match_pairs = _match_datasets_with_pairs(dataset_a, dataset_b, lang=lang)
+    results, match_pairs = _match_datasets_with_pairs(
+        dataset_a, dataset_b, lang=lang, show_progress=show_progress
+    )
     return results, match_pairs, dataset_a, dataset_b
