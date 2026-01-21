@@ -28,7 +28,7 @@ You are a professional translation engine. Follow these invariant rules:
 
 TRANSLATE_XML_TEMPLATE = Template(
     dedent(
-        """\
+        r"""\
 <TranslationTask version="1.0">
   <meta>
     <source_lang>$SOURCE_LANG</source_lang>
@@ -36,13 +36,22 @@ TRANSLATE_XML_TEMPLATE = Template(
     <visibility_note>Sections with visibility="internal" are instructions and MUST NOT appear in the final output.</visibility_note>
   </meta>
 
+  <task>
+    You are a professional $SOURCE_LANG_NAME ($SOURCE_LANG_CODE) to $TARGET_LANG_NAME ($TARGET_LANG_CODE) translator.
+    Your goal is to accurately convey the meaning and nuances of the original $SOURCE_LANG_NAME text while adhering to $TARGET_LANG_NAME grammar, vocabulary, and cultural sensitivities.
+    Produce only the $TARGET_LANG_NAME translation, without any additional explanations or commentary.
+    Please translate the following $SOURCE_LANG_NAME text into $TARGET_LANG_NAME:
+    Important: There are two blank lines before the text to translate.
+  </task>
+
   <constraints visibility="internal">
     <rule id="fmt-1">Preserve ALL original formatting exactly: Markdown, whitespace, line breaks, paragraph spacing.</rule>
-    <rule id="fmt-2">Do NOT translate any content inside LaTeX ($$...$$, $$$$...$$$$, \\( ... \\), \\[ ... \\]) or LaTeX commands/environments.</rule>
+    <rule id="fmt-2">Do NOT translate any content inside LaTeX ($$...$$, $$$$...$$$$, \( ... \), \[ ... \]) or LaTeX commands/environments.</rule>
     <rule id="fmt-3">Keep ALL HTML tags intact.</rule>
     <rule id="fmt-4">Do NOT alter abbreviations, technical terms, or code identifiers; translate surrounding prose only.</rule>
     <rule id="fmt-5">Document structure must be preserved, including blank lines (double newlines) between blocks.</rule>
   </constraints>
+
 
   <markers visibility="internal">
     <preserve>
@@ -91,6 +100,8 @@ TRANSLATE_XML_TEMPLATE = Template(
   <io>
     <input>
       <![CDATA[
+
+
 $TEXT_TO_TRANSLATE
       ]]>
     </input>
@@ -105,9 +116,15 @@ $TEXT_TO_TRANSLATE
 
 
 def build_translation_messages(source_lang: str | None, target_lang: str, text: str) -> list[dict[str, str]]:
+    source_name = source_lang or "auto"
+    target_name = target_lang
     user_xml = TRANSLATE_XML_TEMPLATE.substitute(
         SOURCE_LANG=source_lang or "auto",
         TARGET_LANG=target_lang,
+        SOURCE_LANG_NAME=source_name,
+        SOURCE_LANG_CODE=source_name,
+        TARGET_LANG_NAME=target_name,
+        TARGET_LANG_CODE=target_name,
         TEXT_TO_TRANSLATE=_cdata_wrap(text),
     )
     return [
