@@ -307,6 +307,7 @@ Turn loose markdown files into a queryable database.
 - Templates: built-in prompts like `simple`, `eight_questions`, and `deep_read` guide the LLM to extract specific insights.
 - Async and throttled: precise control over concurrency (`--max-concurrency`) and rate limits (`--sleep-every`).
 - Incremental: skips already processed files; resumes from where you left off.
+- Stage resume: multi-stage templates persist per-module outputs; use `--force-stage <name>` to rerun a module.
 
 ```bash
 uv run deepresearch-flow paper extract \

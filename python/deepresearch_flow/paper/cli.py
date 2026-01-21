@@ -67,6 +67,12 @@ def paper() -> None:
 @click.option("--split", is_flag=True, help="Write per-document JSON outputs")
 @click.option("--split-dir", "split_dir", default=None, help="Directory for split outputs")
 @click.option("--force", is_flag=True, help="Force re-extraction")
+@click.option(
+    "--force-stage",
+    "force_stages",
+    multiple=True,
+    help="Force re-run specific stages (multi-stage templates only)",
+)
 @click.option("--retry-failed", is_flag=True, help="Retry only failed documents")
 @click.option("--dry-run", is_flag=True, help="Discover inputs without calling providers")
 @click.option("--max-concurrency", "max_concurrency", type=int, default=None, help="Override max concurrency")
@@ -116,6 +122,7 @@ def extract(
     split: bool,
     split_dir: str | None,
     force: bool,
+    force_stages: tuple[str, ...],
     retry_failed: bool,
     dry_run: bool,
     max_concurrency: int | None,
@@ -258,6 +265,7 @@ def extract(
             split=split,
             split_dir=split_out,
             force=force,
+            force_stages=list(force_stages),
             retry_failed=retry_failed,
             dry_run=dry_run,
             max_concurrency_override=max_concurrency,

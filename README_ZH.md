@@ -300,6 +300,7 @@ uv run deepresearch-flow translator translate \
 - 模板驱动：`simple` / `eight_questions` / `deep_read` 等模板控制抽取维度。
 - 异步节流：通过 `--max-concurrency` 与 `--sleep-every` 控制请求节奏。
 - 增量处理：跳过已处理文件，续跑不中断。
+- 分模块恢复：多阶段模板会持久化每个模块输出，可用 `--force-stage <name>` 重跑某模块。
 
 ```bash
 uv run deepresearch-flow paper extract \

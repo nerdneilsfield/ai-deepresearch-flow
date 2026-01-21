@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
+import importlib.resources as resources
 import logging
 import re
 import time
@@ -25,6 +27,7 @@ from deepresearch_flow.paper.prompts import DEFAULT_SYSTEM_PROMPT, DEFAULT_USER_
 from deepresearch_flow.paper.render import render_papers, resolve_render_template
 from deepresearch_flow.paper.schema import schema_to_prompt, validate_schema
 from deepresearch_flow.paper.template_registry import (
+    get_template_bundle,
     get_stage_definitions,
     load_custom_prompt_templates,
     load_prompt_templates,
@@ -76,8 +79,80 @@ def configure_logging(verbose: bool) -> None:
     coloredlogs.install(level=level, fmt="%(asctime)s %(levelname)s %(message)s")
 
 
+@dataclass(frozen=True)
+class DocTask:
+    path: Path
+    stage_index: int
+    stage_name: str
+    stage_fields: list[str]
+
+
+@dataclass
+class DocState:
+    total_stages: int
+    next_index: int = 0
+    failed: bool = False
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    event: asyncio.Event = field(default_factory=asyncio.Event)
+
+
+@dataclass
+class DocContext:
+    path: Path
+    source_path: str
+    content: str
+    truncated_content: str
+    truncation: dict[str, Any] | None
+    source_hash: str
+    stage_path: Path | None
+    stage_state: dict[str, Any] | None
+    stages: dict[str, dict[str, Any]]
+    stage_meta: dict[str, dict[str, Any]]
+
+
 def _count_prompt_chars(messages: list[dict[str, str]]) -> int:
     return sum(len(message.get("content") or "") for message in messages)
+
+
+def _load_prompt_template_sources(name: str) -> tuple[str, str]:
+    bundle = get_template_bundle(name)
+    system_path = resources.files("deepresearch_flow.paper.prompt_templates").joinpath(
+        bundle.prompt_system
+    )
+    user_path = resources.files("deepresearch_flow.paper.prompt_templates").joinpath(
+        bundle.prompt_user
+    )
+    return (
+        system_path.read_text(encoding="utf-8"),
+        user_path.read_text(encoding="utf-8"),
+    )
+
+
+def _compute_prompt_hash(
+    *,
+    prompt_template: str,
+    output_language: str,
+    stage_name: str | None,
+    stage_fields: list[str],
+    custom_prompt: bool,
+    prompt_system_path: Path | None,
+    prompt_user_path: Path | None,
+) -> str:
+    if custom_prompt and prompt_system_path and prompt_user_path:
+        system_text = prompt_system_path.read_text(encoding="utf-8")
+        user_text = prompt_user_path.read_text(encoding="utf-8")
+    else:
+        system_text, user_text = _load_prompt_template_sources(prompt_template)
+    payload = {
+        "prompt_template": prompt_template,
+        "output_language": output_language,
+        "stage_name": stage_name or "",
+        "stage_fields": stage_fields,
+        "system_template": system_text,
+        "user_template": user_text,
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def _estimate_tokens_for_chars(char_count: int) -> int:
@@ -448,6 +523,7 @@ async def extract_documents(
     split: bool,
     split_dir: Path | None,
     force: bool,
+    force_stages: list[str],
     retry_failed: bool,
     dry_run: bool,
     max_concurrency_override: int | None,
@@ -594,125 +670,52 @@ async def extract_documents(
         )
     stats = ExtractionStats(doc_bar=doc_bar)
 
-    async def process_one(path: Path, client: httpx.AsyncClient) -> None:
-        source_path = str(path.resolve())
-        current_stage: str | None = None
-        try:
-            if verbose:
-                logger.debug("Processing %s", source_path)
-            content = read_text(path)
-            await stats.add_input_chars(len(content))
-            source_hash = compute_source_hash(content)
-            stage_state: dict[str, Any] | None = None
-            stage_path: Path | None = None
+    results_lock = asyncio.Lock()
 
-            if not force and not retry_failed:
-                existing_entry = existing_by_path.get(source_path)
-                if existing_entry and existing_entry.get("source_hash") == source_hash:
-                    results[source_path] = existing_entry
-                    if stage_bar:
-                        stage_bar.update(len(stage_definitions))
-                    return
+    def build_output_payload() -> dict[str, Any]:
+        final_results: list[dict[str, Any]] = []
+        seen = set()
+        for entry in existing:
+            path = entry.get("source_path") if isinstance(entry, dict) else None
+            if path and path in results:
+                final_results.append(results[path])
+                seen.add(path)
+            elif path and not retry_failed:
+                final_results.append(entry)
+                seen.add(path)
 
-            truncated_content, truncation = truncate_content(
-                content, config.extract.truncate_max_chars, config.extract.truncate_strategy
-            )
+        for path, entry in results.items():
+            if path not in seen:
+                final_results.append(entry)
+        return {"template_tag": template_tag, "papers": final_results}
 
-            api_key = await rotator.next_key()
+    async def persist_output_snapshot() -> None:
+        async with results_lock:
+            payload = build_output_payload()
+        await asyncio.to_thread(write_json, output_path, payload)
 
-            if multi_stage:
-                stage_path = stage_output_dir / f"{stable_hash(source_path)}.json"
-                stage_state = load_stage_state(stage_path) if not force else None
-                if stage_state and stage_state.get("source_hash") != source_hash:
-                    stage_state = None
-                if stage_state is None:
-                    stage_state = {
-                        "source_path": source_path,
-                        "source_hash": source_hash,
-                        "prompt_template": prompt_template,
-                        "output_language": output_language,
-                        "stages": {},
-                    }
+    async def run_single_stage(client: httpx.AsyncClient) -> None:
+        async def process_one(path: Path) -> None:
+            source_path = str(path.resolve())
+            current_stage: str | None = None
+            try:
+                if verbose:
+                    logger.debug("Processing %s", source_path)
+                content = read_text(path)
+                await stats.add_input_chars(len(content))
+                source_hash = compute_source_hash(content)
 
-            if multi_stage and stage_state is not None and stage_path is not None:
-                stages: dict[str, dict[str, Any]] = stage_state.get("stages", {})
-                metadata_fields = [
-                    "paper_title",
-                    "paper_authors",
-                    "publication_date",
-                    "publication_venue",
-                ]
-                for stage_def in stage_definitions:
-                    stage_name = stage_def.name
-                    stage_fields = stage_def.fields
-                    current_stage = stage_name
-                    if stage_name in stages and not force:
-                        if stage_bar:
-                            stage_bar.update(1)
-                        continue
-                    try:
-                        required_fields = metadata_fields + stage_fields
-                        stage_schema = build_stage_schema(schema, required_fields)
-                        stage_validator = validate_schema(stage_schema)
-                        previous_outputs = json.dumps(stages, ensure_ascii=False)
-                        messages = build_messages(
-                            truncated_content,
-                            stage_schema,
-                            provider,
-                            prompt_template,
-                            output_language,
-                            custom_prompt=False,
-                            prompt_system_path=None,
-                            prompt_user_path=None,
-                            stage_name=stage_name,
-                            stage_fields=required_fields,
-                            previous_outputs=previous_outputs,
-                        )
-                        async with semaphore:
-                            data = await call_with_retries(
-                                provider,
-                                model,
-                                messages,
-                                stage_schema,
-                                api_key,
-                                timeout=60.0,
-                                structured_mode=provider.structured_mode,
-                                max_retries=config.extract.max_retries,
-                                backoff_base_seconds=config.extract.backoff_base_seconds,
-                                backoff_max_seconds=config.extract.backoff_max_seconds,
-                                client=client,
-                                validator=stage_validator,
-                                throttle=throttle,
-                                stats=stats,
-                            )
-                        stages[stage_name] = data
-                        stage_state["stages"] = stages
-                        write_json_atomic(stage_path, stage_state)
-                    finally:
-                        if stage_bar:
-                            stage_bar.update(1)
+                if not force and not retry_failed:
+                    existing_entry = existing_by_path.get(source_path)
+                    if existing_entry and existing_entry.get("source_hash") == source_hash:
+                        results[source_path] = existing_entry
+                        return
 
-                merged: dict[str, Any] = {}
-                for stage_def in stage_definitions:
-                    merged.update(stages.get(stage_def.name, {}))
-                errors_in_doc = sorted(validator.iter_errors(merged), key=lambda e: e.path)
-                if errors_in_doc:
-                    raise ProviderError(
-                        f"Schema validation failed: {errors_in_doc[0].message}",
-                        error_type="validation_error",
-                    )
-                data = append_metadata(
-                    merged,
-                    source_path=source_path,
-                    source_hash=source_hash,
-                    provider=provider.name,
-                    model=model,
-                    truncation=truncation,
-                    prompt_template=prompt_template,
-                    output_language=output_language,
+                truncated_content, truncation = truncate_content(
+                    content, config.extract.truncate_max_chars, config.extract.truncate_strategy
                 )
-                results[source_path] = data
-            else:
+                api_key = await rotator.next_key()
+
                 messages = build_messages(
                     truncated_content,
                     schema,
@@ -752,37 +755,285 @@ async def extract_documents(
                     output_language=output_language,
                 )
                 results[source_path] = data
-        except ProviderError as exc:
-            logger.warning("Extraction failed for %s: %s", source_path, exc)
-            errors.append(
-                ExtractionError(
-                    path=path,
-                    provider=provider.name,
-                    model=model,
-                    error_type=exc.error_type,
-                    error_message=str(exc),
-                    stage_name=current_stage if multi_stage else None,
+            except ProviderError as exc:
+                logger.warning("Extraction failed for %s: %s", source_path, exc)
+                errors.append(
+                    ExtractionError(
+                        path=path,
+                        provider=provider.name,
+                        model=model,
+                        error_type=exc.error_type,
+                        error_message=str(exc),
+                        stage_name=current_stage if multi_stage else None,
+                    )
                 )
-            )
-        except Exception as exc:  # pragma: no cover - safety net
-            logger.exception("Unexpected error while processing %s", source_path)
-            errors.append(
-                ExtractionError(
-                    path=path,
-                    provider=provider.name,
-                    model=model,
-                    error_type="unexpected_error",
-                    error_message=str(exc),
-                    stage_name=current_stage if multi_stage else None,
+            except Exception as exc:  # pragma: no cover - safety net
+                logger.exception("Unexpected error while processing %s", source_path)
+                errors.append(
+                    ExtractionError(
+                        path=path,
+                        provider=provider.name,
+                        model=model,
+                        error_type="unexpected_error",
+                        error_message=str(exc),
+                        stage_name=current_stage if multi_stage else None,
+                    )
                 )
+            finally:
+                if doc_bar:
+                    doc_bar.update(1)
+
+        await asyncio.gather(*(process_one(path) for path in markdown_files))
+
+    async def run_multi_stage(client: httpx.AsyncClient) -> None:
+        metadata_fields = [
+            "paper_title",
+            "paper_authors",
+            "publication_date",
+            "publication_venue",
+        ]
+        force_stage_set = set(force_stages or [])
+        doc_contexts: dict[Path, DocContext] = {}
+        doc_states: dict[Path, DocState] = {}
+        task_queue: asyncio.Queue[DocTask] = asyncio.Queue()
+
+        for path in markdown_files:
+            source_path = str(path.resolve())
+            if verbose:
+                logger.debug("Preparing %s", source_path)
+            content = read_text(path)
+            await stats.add_input_chars(len(content))
+            source_hash = compute_source_hash(content)
+            truncated_content, truncation = truncate_content(
+                content, config.extract.truncate_max_chars, config.extract.truncate_strategy
             )
-        finally:
-            if doc_bar:
-                doc_bar.update(1)
+            stage_path = stage_output_dir / f"{stable_hash(source_path)}.json"
+            stage_state = load_stage_state(stage_path) if not force else None
+            if stage_state and stage_state.get("source_hash") != source_hash:
+                stage_state = None
+            if stage_state is None:
+                stage_state = {
+                    "source_path": source_path,
+                    "source_hash": source_hash,
+                    "prompt_template": prompt_template,
+                    "output_language": output_language,
+                    "stages": {},
+                    "stage_meta": {},
+                }
+            stages: dict[str, dict[str, Any]] = stage_state.get("stages", {})
+            stage_meta: dict[str, dict[str, Any]] = stage_state.get("stage_meta", {})
+            doc_contexts[path] = DocContext(
+                path=path,
+                source_path=source_path,
+                content=content,
+                truncated_content=truncated_content,
+                truncation=truncation,
+                source_hash=source_hash,
+                stage_path=stage_path,
+                stage_state=stage_state,
+                stages=stages,
+                stage_meta=stage_meta,
+            )
+            doc_states[path] = DocState(total_stages=len(stage_definitions))
+            for idx, stage_def in enumerate(stage_definitions):
+                required_fields = metadata_fields + stage_def.fields
+                task_queue.put_nowait(
+                    DocTask(
+                        path=path,
+                        stage_index=idx,
+                        stage_name=stage_def.name,
+                        stage_fields=required_fields,
+                    )
+                )
+
+        def build_merged(ctx: DocContext) -> dict[str, Any]:
+            merged: dict[str, Any] = {}
+            for stage_def in stage_definitions:
+                merged.update(ctx.stages.get(stage_def.name, {}))
+            return merged
+
+        async def update_results(ctx: DocContext) -> None:
+            merged = build_merged(ctx)
+            data = append_metadata(
+                merged,
+                source_path=ctx.source_path,
+                source_hash=ctx.source_hash,
+                provider=provider.name,
+                model=model,
+                truncation=ctx.truncation,
+                prompt_template=prompt_template,
+                output_language=output_language,
+            )
+            async with results_lock:
+                results[ctx.source_path] = data
+            await persist_output_snapshot()
+
+        async def run_task(task: DocTask) -> None:
+            ctx = doc_contexts[task.path]
+            state = doc_states[task.path]
+
+            while True:
+                async with state.lock:
+                    if state.failed:
+                        if stage_bar:
+                            stage_bar.update(1)
+                        return
+                    if task.stage_index == state.next_index:
+                        break
+                    wait_event = state.event
+                await wait_event.wait()
+
+            current_stage = task.stage_name
+            prompt_hash = _compute_prompt_hash(
+                prompt_template=prompt_template,
+                output_language=output_language,
+                stage_name=current_stage,
+                stage_fields=task.stage_fields,
+                custom_prompt=custom_prompt,
+                prompt_system_path=prompt_system_path,
+                prompt_user_path=prompt_user_path,
+            )
+            stage_schema = build_stage_schema(schema, task.stage_fields)
+            stage_validator = validate_schema(stage_schema)
+            stage_record = ctx.stages.get(current_stage)
+            stage_meta = ctx.stage_meta.get(current_stage, {})
+            needs_run = force or current_stage in force_stage_set
+            if stage_record is None:
+                needs_run = True
+            if stage_meta.get("prompt_hash") != prompt_hash:
+                needs_run = True
+            if stage_record is not None and not needs_run:
+                errors_in_stage = sorted(stage_validator.iter_errors(stage_record), key=lambda e: e.path)
+                if errors_in_stage:
+                    needs_run = True
+
+            if not needs_run:
+                if stage_bar:
+                    stage_bar.update(1)
+                await update_results(ctx)
+            else:
+                try:
+                    previous_outputs = json.dumps(ctx.stages, ensure_ascii=False)
+                    messages = build_messages(
+                        ctx.truncated_content,
+                        stage_schema,
+                        provider,
+                        prompt_template,
+                        output_language,
+                        custom_prompt=False,
+                        prompt_system_path=None,
+                        prompt_user_path=None,
+                        stage_name=current_stage,
+                        stage_fields=task.stage_fields,
+                        previous_outputs=previous_outputs,
+                    )
+                    api_key = await rotator.next_key()
+                    async with semaphore:
+                        data = await call_with_retries(
+                            provider,
+                            model,
+                            messages,
+                            stage_schema,
+                            api_key,
+                            timeout=60.0,
+                            structured_mode=provider.structured_mode,
+                            max_retries=config.extract.max_retries,
+                            backoff_base_seconds=config.extract.backoff_base_seconds,
+                            backoff_max_seconds=config.extract.backoff_max_seconds,
+                            client=client,
+                            validator=stage_validator,
+                            throttle=throttle,
+                            stats=stats,
+                        )
+                    ctx.stages[current_stage] = data
+                    ctx.stage_meta[current_stage] = {"prompt_hash": prompt_hash}
+                    ctx.stage_state["stages"] = ctx.stages
+                    ctx.stage_state["stage_meta"] = ctx.stage_meta
+                    write_json_atomic(ctx.stage_path, ctx.stage_state)
+                    if stage_bar:
+                        stage_bar.update(1)
+                    await update_results(ctx)
+                except ProviderError as exc:
+                    logger.warning("Extraction failed for %s: %s", ctx.source_path, exc)
+                    errors.append(
+                        ExtractionError(
+                            path=task.path,
+                            provider=provider.name,
+                            model=model,
+                            error_type=exc.error_type,
+                            error_message=str(exc),
+                            stage_name=current_stage,
+                        )
+                    )
+                    async with state.lock:
+                        state.failed = True
+                    if stage_bar:
+                        stage_bar.update(1)
+                except Exception as exc:  # pragma: no cover - safety net
+                    logger.exception("Unexpected error while processing %s", ctx.source_path)
+                    errors.append(
+                        ExtractionError(
+                            path=task.path,
+                            provider=provider.name,
+                            model=model,
+                            error_type="unexpected_error",
+                            error_message=str(exc),
+                            stage_name=current_stage,
+                        )
+                    )
+                    async with state.lock:
+                        state.failed = True
+                    if stage_bar:
+                        stage_bar.update(1)
+
+            final_validation_error: str | None = None
+            if not state.failed and task.stage_index == state.total_stages - 1:
+                merged = build_merged(ctx)
+                errors_in_doc = sorted(validator.iter_errors(merged), key=lambda e: e.path)
+                if errors_in_doc:
+                    final_validation_error = errors_in_doc[0].message
+
+            async with state.lock:
+                if final_validation_error:
+                    errors.append(
+                        ExtractionError(
+                            path=task.path,
+                            provider=provider.name,
+                            model=model,
+                            error_type="validation_error",
+                            error_message=f"Schema validation failed: {final_validation_error}",
+                            stage_name=current_stage,
+                        )
+                    )
+                    state.failed = True
+                if not state.failed:
+                    state.next_index += 1
+                if state.next_index >= state.total_stages or state.failed:
+                    if doc_bar and state.total_stages:
+                        doc_bar.update(1)
+                state.event.set()
+                state.event = asyncio.Event()
+
+        async def worker() -> None:
+            while True:
+                try:
+                    task = task_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    return
+                await run_task(task)
+                task_queue.task_done()
+
+        workers = [asyncio.create_task(worker()) for _ in range(max_concurrency)]
+        await task_queue.join()
+        for w in workers:
+            w.cancel()
 
     try:
         async with httpx.AsyncClient() as client:
-            await asyncio.gather(*(process_one(path, client) for path in markdown_files))
+            if multi_stage:
+                await run_multi_stage(client)
+            else:
+                await run_single_stage(client)
     finally:
         if doc_bar:
             doc_bar.close()
