@@ -9,7 +9,8 @@ import logging
 import re
 import shutil
 import subprocess
-from typing import Optional, Protocol
+import time
+from typing import Any, Optional, Protocol
 
 import httpx
 
@@ -530,6 +531,9 @@ class MarkdownTranslator:
         throttle: RequestThrottle | None,
         max_tokens: int | None,
         max_retries: int,
+        request_log: list[dict[str, Any]] | None,
+        stage: str,
+        group_index: int,
     ) -> str:
         attempts = 0
         while True:
@@ -539,9 +543,10 @@ class MarkdownTranslator:
             messages = build_translation_messages(
                 self.cfg.source_lang, self.cfg.target_lang, group_text
             )
+            start_time = time.time()
             try:
                 async with semaphore:
-                    return await call_provider(
+                    response = await call_provider(
                         provider,
                         model,
                         messages,
@@ -552,7 +557,35 @@ class MarkdownTranslator:
                         client,
                         max_tokens=max_tokens,
                     )
+                if request_log is not None:
+                    request_log.append(
+                        {
+                            "stage": stage,
+                            "group_index": group_index,
+                            "attempt": attempts,
+                            "provider": provider.name,
+                            "model": model,
+                            "messages": messages,
+                            "response": response,
+                            "elapsed_ms": int((time.time() - start_time) * 1000),
+                        }
+                    )
+                return response
             except ProviderError as exc:
+                if request_log is not None:
+                    request_log.append(
+                        {
+                            "stage": stage,
+                            "group_index": group_index,
+                            "attempt": attempts,
+                            "provider": provider.name,
+                            "model": model,
+                            "messages": messages,
+                            "error": str(exc),
+                            "retryable": exc.retryable,
+                            "elapsed_ms": int((time.time() - start_time) * 1000),
+                        }
+                    )
                 if exc.retryable and attempts < max_retries:
                     await asyncio.sleep(backoff_delay(1.0, attempts, 20.0))
                     continue
@@ -580,6 +613,7 @@ class MarkdownTranslator:
         fallback_retry_times: int | None = None,
         fallback_retry_times_2: int | None = None,
         format_enabled: bool = True,
+        request_log: list[dict[str, Any]] | None = None,
     ) -> TranslationResult:
         if fix_level != "off":
             text = fix_markdown(text, fix_level)
@@ -614,7 +648,7 @@ class MarkdownTranslator:
         if progress:
             await progress.add_groups(len(groups))
         outputs: list[str] = []
-        for group in groups:
+        for group_index, group in enumerate(groups):
             api_key = await rotator.next_key()
             outputs.append(
                 await self._translate_group(
@@ -628,6 +662,9 @@ class MarkdownTranslator:
                     throttle,
                     max_tokens,
                     max_retries,
+                    request_log,
+                    "initial",
+                    group_index,
                 )
             )
             if progress:
@@ -693,7 +730,7 @@ class MarkdownTranslator:
                 if progress:
                     await progress.add_groups(len(retry_groups))
                 retry_outputs: list[str] = []
-                for group in retry_groups:
+                for group_index, group in enumerate(retry_groups):
                     api_key = await rotator.next_key()
                     retry_outputs.append(
                         await self._translate_group(
@@ -707,6 +744,9 @@ class MarkdownTranslator:
                             throttle,
                             max_tokens,
                             retry_limit,
+                            request_log,
+                            f"retry-{attempt}",
+                            group_index,
                         )
                     )
                     if progress:
@@ -778,7 +818,7 @@ class MarkdownTranslator:
                 if progress:
                     await progress.add_groups(len(retry_groups))
                 retry_outputs: list[str] = []
-                for group in retry_groups:
+                for group_index, group in enumerate(retry_groups):
                     api_key = await fallback_rotator.next_key()
                     retry_outputs.append(
                         await self._translate_group(
@@ -792,6 +832,9 @@ class MarkdownTranslator:
                             throttle,
                             fallback_max_tokens,
                             fallback_retry_limit,
+                            request_log,
+                            f"fallback-{attempt}",
+                            group_index,
                         )
                     )
                     if progress:
@@ -863,7 +906,7 @@ class MarkdownTranslator:
                 if progress:
                     await progress.add_groups(len(retry_groups))
                 retry_outputs: list[str] = []
-                for group in retry_groups:
+                for group_index, group in enumerate(retry_groups):
                     api_key = await fallback_rotator.next_key()
                     retry_outputs.append(
                         await self._translate_group(
@@ -877,6 +920,9 @@ class MarkdownTranslator:
                             throttle,
                             fallback_max_tokens_2,
                             fallback_retry_limit,
+                            request_log,
+                            f"fallback2-{attempt}",
+                            group_index,
                         )
                     )
                     if progress:

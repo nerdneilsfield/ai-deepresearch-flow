@@ -7,6 +7,7 @@ import json
 import logging
 from pathlib import Path
 import time
+from typing import Any
 
 import click
 import coloredlogs
@@ -155,6 +156,12 @@ def translator() -> None:
 @click.option("--dump-protected", "dump_protected", is_flag=True, help="Write protected markdown")
 @click.option("--dump-placeholders", "dump_placeholders", is_flag=True, help="Write placeholder mapping JSON")
 @click.option("--dump-nodes", "dump_nodes", is_flag=True, help="Write per-node translation JSON")
+@click.option(
+    "--dump-requests-log",
+    "dump_requests_log",
+    is_flag=True,
+    help="Write request/response attempts to JSON log",
+)
 @click.option("--no-format", "no_format", is_flag=True, help="Disable rumdl formatting")
 @click.option("--dry-run", "dry_run", is_flag=True, help="Discover inputs without calling providers")
 @click.option("--force", "force", is_flag=True, help="Overwrite existing outputs")
@@ -183,6 +190,7 @@ def translate(
     dump_protected: bool,
     dump_placeholders: bool,
     dump_nodes: bool,
+    dump_requests_log: bool,
     no_format: bool,
     dry_run: bool,
     force: bool,
@@ -288,7 +296,9 @@ def translate(
         output_root.mkdir(parents=True, exist_ok=True)
 
     debug_root = Path(debug_dir) if debug_dir else None
-    if debug_root is None and (dump_protected or dump_placeholders or dump_nodes):
+    if debug_root is None and (
+        dump_protected or dump_placeholders or dump_nodes or dump_requests_log
+    ):
         debug_root = output_root or Path.cwd()
     if debug_root is not None:
         debug_root.mkdir(parents=True, exist_ok=True)
@@ -360,6 +370,7 @@ def translate(
         progress: ProgressTracker,
     ) -> None:
         content = read_text(path)
+        request_log: list[dict[str, Any]] = []
         result = await translator.translate(
             content,
             provider,
@@ -381,6 +392,7 @@ def translate(
             fallback_retry_times=fallback_retry_times,
             fallback_retry_times_2=fallback_retry_times_2,
             format_enabled=not no_format,
+            request_log=request_log if dump_requests_log else None,
         )
         output_path = output_map[path]
         output_path.write_text(result.translated_text, encoding="utf-8")
@@ -418,6 +430,11 @@ def translate(
                 }
                 (debug_root / f"{debug_tag}.nodes.json").write_text(
                     json.dumps(node_payload, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+            if dump_requests_log:
+                (debug_root / f"{debug_tag}.requests.json").write_text(
+                    json.dumps(request_log, ensure_ascii=False, indent=2),
                     encoding="utf-8",
                 )
         await progress.advance_docs(1)
