@@ -525,6 +525,8 @@ async def extract_documents(
     force: bool,
     force_stages: list[str],
     retry_failed: bool,
+    start_idx: int,
+    end_idx: int,
     dry_run: bool,
     max_concurrency_override: int | None,
     prompt_template: str,
@@ -544,6 +546,20 @@ async def extract_documents(
     start_time = time.monotonic()
     markdown_files = discover_markdown(inputs, glob_pattern, recursive=True)
     template_tag = prompt_template if not custom_prompt else "custom"
+
+    total_files = len(markdown_files)
+    if start_idx != 0 or end_idx != -1:
+        slice_end = end_idx if end_idx != -1 else None
+        markdown_files = markdown_files[start_idx:slice_end]
+        logger.info(
+            "Applied range filter [%d:%d]. Files: %d -> %d",
+            start_idx,
+            end_idx,
+            total_files,
+            len(markdown_files),
+        )
+        if not markdown_files:
+            logger.warning("Range filter yielded 0 files")
 
     if retry_failed:
         error_entries = load_errors(errors_path)

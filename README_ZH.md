@@ -301,6 +301,7 @@ uv run deepresearch-flow translator translate \
 - 异步节流：通过 `--max-concurrency` 与 `--sleep-every` 控制请求节奏。
 - 增量处理：跳过已处理文件，续跑不中断。
 - 分模块恢复：多阶段模板会持久化每个模块输出，可用 `--force-stage <name>` 重跑某模块。
+- 范围过滤：使用 `--start-idx/--end-idx` 切片输入；范围先于 `--retry-failed` 生效（`--end-idx -1` 表示最后一项）。
 
 ```bash
 uv run deepresearch-flow paper extract \
@@ -308,6 +309,14 @@ uv run deepresearch-flow paper extract \
   --output paper_data.json \
   --template-dir ./my-custom-prompts \
   --max-concurrency 10
+
+# 先取 0..99，再仅重跑该范围内失败的文件
+uv run deepresearch-flow paper extract \
+  --input ./library \
+  --start-idx 0 \
+  --end-idx 100 \
+  --retry-failed \
+  --model claude/claude-3-5-sonnet-20240620
 ```
 
 </details>

@@ -308,6 +308,7 @@ Turn loose markdown files into a queryable database.
 - Async and throttled: precise control over concurrency (`--max-concurrency`) and rate limits (`--sleep-every`).
 - Incremental: skips already processed files; resumes from where you left off.
 - Stage resume: multi-stage templates persist per-module outputs; use `--force-stage <name>` to rerun a module.
+- Range filter: use `--start-idx/--end-idx` to slice inputs; range applies before `--retry-failed` (`--end-idx -1` = last item).
 
 ```bash
 uv run deepresearch-flow paper extract \
@@ -315,6 +316,14 @@ uv run deepresearch-flow paper extract \
   --output paper_data.json \
   --template-dir ./my-custom-prompts \
   --max-concurrency 10
+
+# Extract items 0..99, then retry only failed ones from that range
+uv run deepresearch-flow paper extract \
+  --input ./library \
+  --start-idx 0 \
+  --end-idx 100 \
+  --retry-failed \
+  --model claude/claude-3-5-sonnet-20240620
 ```
 
 </details>

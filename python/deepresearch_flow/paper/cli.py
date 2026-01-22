@@ -74,6 +74,14 @@ def paper() -> None:
     help="Force re-run specific stages (multi-stage templates only)",
 )
 @click.option("--retry-failed", is_flag=True, help="Retry only failed documents")
+@click.option("--start-idx", "start_idx", type=int, default=0, help="Start index for inputs")
+@click.option(
+    "--end-idx",
+    "end_idx",
+    type=int,
+    default=-1,
+    help="End index (exclusive); -1 means to the last item",
+)
 @click.option("--dry-run", is_flag=True, help="Discover inputs without calling providers")
 @click.option("--max-concurrency", "max_concurrency", type=int, default=None, help="Override max concurrency")
 @click.option("--sleep-every", "sleep_every", type=int, default=None, help="Sleep after every N requests")
@@ -124,6 +132,8 @@ def extract(
     force: bool,
     force_stages: tuple[str, ...],
     retry_failed: bool,
+    start_idx: int,
+    end_idx: int,
     dry_run: bool,
     max_concurrency: int | None,
     sleep_every: int | None,
@@ -157,6 +167,10 @@ def extract(
         raise click.ClickException("--sleep-time must be positive")
     if (sleep_every is None) != (sleep_time is None):
         raise click.ClickException("Both --sleep-every and --sleep-time are required")
+    if start_idx < 0:
+        raise click.ClickException("--start-idx must be >= 0")
+    if end_idx < -1:
+        raise click.ClickException("--end-idx must be -1 or >= 0")
 
     if provider.type in {
         "openai_compatible",
@@ -267,6 +281,8 @@ def extract(
             force=force,
             force_stages=list(force_stages),
             retry_failed=retry_failed,
+            start_idx=start_idx,
+            end_idx=end_idx,
             dry_run=dry_run,
             max_concurrency_override=max_concurrency,
             prompt_template=prompt_template,
