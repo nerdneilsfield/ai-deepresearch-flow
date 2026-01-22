@@ -11,18 +11,17 @@ Template: deep_read
 禁止第一人称（不出现“我/我们/本人”）。
 关键结论需要注明来自论文的定位（章节/图/表/公式编号）。
 
-图示要求（仅在内容触发时输出，使用 mermaid/markmap 代码块，不要臆造）：
-- 模块 C3：算法流程图（Algorithm Flowchart）
-  触发：出现 pipeline/steps/procedure/algorithm/flow 或连续步骤（Step 1/2/3, First/Then/Finally）。输出 flowchart TD。
-- 模块 D：硬件架构图（Hardware Block Diagram）
-  触发：出现 FPGA/accelerator/module/pipeline stage/hardware 或明确模块名。输出 flowchart LR。
-- 模块 C4/C5：数据流图（Data Flow Diagram）
-  触发：出现 dataset/input format/preprocessing/metrics，且描述输入→处理→评估链条。输出 flowchart LR。
-- 模块 E：性能-精度权衡图（Pareto-style）
-  触发：出现 trade-off/efficiency vs accuracy/Pareto/speedup/EER 或具体数值对比。输出 flowchart TD。
-- 模块 H：实验设置图（Evaluation Setup）
-  触发：出现 benchmark/sequences/scenarios/test cases 且列出测试序列/场景。输出 flowchart TD。
-- 模块 B：若论文结构清晰，可补充 markmap 思维导图。
+图示要求（使用 mermaid/markmap 代码块，按内容判断是否需要）：
+- 当内容描述了复杂的流程、架构或关系，且图示能显著降低理解成本时，生成对应图示。
+- 如果图示为推断（非原文明确给出），标题前加前缀 [Inferred]。
+- Mermaid 语法要求：节点 ID 只用简单字母数字（如 NodeA/step1），描述文字放在标签里（如 NodeA["复杂描述 (含括号)"]），避免 ID 含空格或特殊字符。
+- 图示用于补充文字而非替代，图后仍要有文字说明。
+- 模块 B：论文结构清晰时优先用 markmap 给出结构导图。
+- 模块 C3：算法流程图（flowchart TD）。
+- 模块 D：硬件/系统架构图（flowchart LR）。
+- 模块 C4/C5：数据流图（flowchart LR）。
+- 模块 E：性能-精度权衡图（flowchart TD）。
+- 模块 H：实验设置图（flowchart TD）。
 {% endif %}
 
 ---
@@ -49,9 +48,12 @@ Template: deep_read
 
 ## 2) 模块内容规范
 ### 模块 A：阅读对齐与输入校验
+- 用文字描述论文的基本信息：标题、作者姓名、作者单位、作者简历/背景（若文中提供）
+- 发表信息：期刊/会议名称、年份、所属级别/档次（若文中提供或可从上下文判断）
 - 明确用户目的与背景
 - 检查输入材料：PDF/附录/代码链接/补充材料/数据集
-- 输出阅读路线图
+- 标注缺失材料（如未提供 PDF/代码/数据集）
+- 输出可执行的阅读路线图
 
 ### 模块 B：第一遍（鸟瞰扫描）
 必须给出 5 项产出：类别、上下文、正确性直觉检查、贡献、清晰度，并给出继续/放弃建议。

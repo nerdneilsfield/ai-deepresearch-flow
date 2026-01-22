@@ -301,6 +301,7 @@ uv run deepresearch-flow translator translate \
 - 异步节流：通过 `--max-concurrency` 与 `--sleep-every` 控制请求节奏。
 - 增量处理：跳过已处理文件，续跑不中断。
 - 分模块恢复：多阶段模板会持久化每个模块输出，可用 `--force-stage <name>` 重跑某模块。
+- 图示提示：`deep_read` 允许输出带 `[Inferred]` 标注的推断图示；如需修复 Mermaid，可对渲染后的 Markdown 使用 `recognize fix-mermaid`。
 - 范围过滤：使用 `--start-idx/--end-idx` 切片输入；范围先于 `--retry-failed` 生效（`--end-idx -1` 表示最后一项）。
 
 ```bash
