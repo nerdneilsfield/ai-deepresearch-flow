@@ -348,7 +348,7 @@ Turn loose markdown files into a queryable database.
 - Diagram hints: `deep_read` can emit inferred diagrams labeled `[Inferred]`; use `recognize fix-mermaid` on rendered markdown if needed.
 - Stage focus: multi-stage runs emphasize the active module and summarize others to reduce context overload.
 - Range filter: use `--start-idx/--end-idx` to slice inputs; range applies before `--retry-failed`/`--retry-failed-stages` (`--end-idx -1` = last item).
-- Retry failed stages: use `--retry-failed-stages` to re-run only failed stages (multi-stage templates); missing stages are forced to run.
+- Retry failed stages: use `--retry-failed-stages` to re-run only failed stages (multi-stage templates); missing stages are forced to run. Retry runs keep existing results and only update retried items.
 
 ```bash
 uv run deepresearch-flow paper extract \

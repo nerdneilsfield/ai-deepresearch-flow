@@ -748,7 +748,7 @@ async def extract_documents(
             if path and path in results:
                 final_results.append(results[path])
                 seen.add(path)
-            elif path and not retry_failed:
+            elif path:
                 final_results.append(entry)
                 seen.add(path)
 
@@ -1159,7 +1159,7 @@ async def extract_documents(
         if path and path in results:
             final_results.append(results[path])
             seen.add(path)
-        elif path and not retry_failed:
+        elif path:
             final_results.append(entry)
             seen.add(path)
 
