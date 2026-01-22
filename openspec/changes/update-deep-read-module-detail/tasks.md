@@ -1,0 +1,12 @@
+## 1. Implementation
+- [x] 1.1 Expand Module A guidance (basic metadata, venue level, missing materials, reading plan)
+- [x] 1.2 Expand Module B guidance (category, context, contributions, structure map)
+- [x] 1.3 Expand Module C1-C8 guidance with required subpoints
+- [x] 1.4 Expand Module D/E/F/G/H guidance with detailed checklists and diagram requirements
+- [x] 1.5 Add per-module examples where helpful
+- [x] 1.6 Refactor deep_read_user.j2 to use Jinja2 blocks for all modules
+    - [x] Hide non-active module details (one-line summary)
+    - [x] Show full checklist only for active stage_name
+- [x] 1.7 Add recency instructions at end of prompt for stage_name (JSON-only, completeness, no other fields)
+- [x] 1.8 Inject a per-module golden example snippet for the active stage
+- [x] 1.9 Update README/README_ZH if behavior notes are needed

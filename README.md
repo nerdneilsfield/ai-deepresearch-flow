@@ -309,6 +309,7 @@ Turn loose markdown files into a queryable database.
 - Incremental: skips already processed files; resumes from where you left off.
 - Stage resume: multi-stage templates persist per-module outputs; use `--force-stage <name>` to rerun a module.
 - Diagram hints: `deep_read` can emit inferred diagrams labeled `[Inferred]`; use `recognize fix-mermaid` on rendered markdown if needed.
+- Stage focus: multi-stage runs emphasize the active module and summarize others to reduce context overload.
 - Range filter: use `--start-idx/--end-idx` to slice inputs; range applies before `--retry-failed` (`--end-idx -1` = last item).
 
 ```bash
