@@ -958,7 +958,13 @@ async def extract_documents(
                 if retry_failed_stages
                 else None
             )
-            if retry_failed_stages and retry_stages is not None and current_stage not in retry_stages:
+            stage_record = ctx.stages.get(current_stage)
+            if (
+                retry_failed_stages
+                and retry_stages is not None
+                and current_stage not in retry_stages
+                and stage_record is not None
+            ):
                 if stage_bar:
                     stage_bar.update(1)
                 await update_results(ctx)
@@ -1001,7 +1007,6 @@ async def extract_documents(
             )
             stage_schema = build_stage_schema(schema, task.stage_fields)
             stage_validator = validate_schema(stage_schema)
-            stage_record = ctx.stages.get(current_stage)
             stage_meta = ctx.stage_meta.get(current_stage, {})
             needs_run = force or current_stage in force_stage_set
             if stage_record is None:
