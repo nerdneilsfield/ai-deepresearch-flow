@@ -74,6 +74,11 @@ def paper() -> None:
     help="Force re-run specific stages (multi-stage templates only)",
 )
 @click.option("--retry-failed", is_flag=True, help="Retry only failed documents")
+@click.option(
+    "--retry-failed-stages",
+    is_flag=True,
+    help="Retry only failed stages per document (multi-stage templates only)",
+)
 @click.option("--start-idx", "start_idx", type=int, default=0, help="Start index for inputs")
 @click.option(
     "--end-idx",
@@ -132,6 +137,7 @@ def extract(
     force: bool,
     force_stages: tuple[str, ...],
     retry_failed: bool,
+    retry_failed_stages: bool,
     start_idx: int,
     end_idx: int,
     dry_run: bool,
@@ -171,6 +177,8 @@ def extract(
         raise click.ClickException("--start-idx must be >= 0")
     if end_idx < -1:
         raise click.ClickException("--end-idx must be -1 or >= 0")
+    if retry_failed and retry_failed_stages:
+        raise click.ClickException("--retry-failed and --retry-failed-stages are mutually exclusive")
 
     if provider.type in {
         "openai_compatible",
@@ -281,6 +289,7 @@ def extract(
             force=force,
             force_stages=list(force_stages),
             retry_failed=retry_failed,
+            retry_failed_stages=retry_failed_stages,
             start_idx=start_idx,
             end_idx=end_idx,
             dry_run=dry_run,

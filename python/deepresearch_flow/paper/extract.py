@@ -525,6 +525,7 @@ async def extract_documents(
     force: bool,
     force_stages: list[str],
     retry_failed: bool,
+    retry_failed_stages: bool,
     start_idx: int,
     end_idx: int,
     dry_run: bool,
@@ -561,8 +562,17 @@ async def extract_documents(
         if not markdown_files:
             logger.warning("Range filter yielded 0 files")
 
-    if retry_failed:
-        error_entries = load_errors(errors_path)
+    error_entries = load_errors(errors_path) if retry_failed or retry_failed_stages else []
+    retry_stage_map: dict[str, set[str]] = {}
+    if retry_failed_stages:
+        for entry in error_entries:
+            source_path = entry.get("source_path")
+            stage_name = entry.get("stage_name")
+            if not source_path or not stage_name:
+                continue
+            retry_stage_map.setdefault(str(Path(source_path).resolve()), set()).add(stage_name)
+
+    if retry_failed or retry_failed_stages:
         retry_paths = {Path(entry.get("source_path", "")).resolve() for entry in error_entries}
         markdown_files = [path for path in markdown_files if path in retry_paths]
         logger.debug("Retrying %d markdown files", len(markdown_files))
@@ -900,6 +910,43 @@ async def extract_documents(
                 await wait_event.wait()
 
             current_stage = task.stage_name
+            retry_stages = (
+                retry_stage_map.get(ctx.source_path)
+                if retry_failed_stages
+                else None
+            )
+            if retry_failed_stages and retry_stages is not None and current_stage not in retry_stages:
+                if stage_bar:
+                    stage_bar.update(1)
+                await update_results(ctx)
+                final_validation_error: str | None = None
+                if not state.failed and task.stage_index == state.total_stages - 1:
+                    merged = build_merged(ctx)
+                    errors_in_doc = sorted(validator.iter_errors(merged), key=lambda e: e.path)
+                    if errors_in_doc:
+                        final_validation_error = errors_in_doc[0].message
+
+                async with state.lock:
+                    if final_validation_error:
+                        errors.append(
+                            ExtractionError(
+                                path=task.path,
+                                provider=provider.name,
+                                model=model,
+                                error_type="validation_error",
+                                error_message=f"Schema validation failed: {final_validation_error}",
+                                stage_name=current_stage,
+                            )
+                        )
+                        state.failed = True
+                    if not state.failed:
+                        state.next_index += 1
+                    if state.next_index >= state.total_stages or state.failed:
+                        if doc_bar and state.total_stages:
+                            doc_bar.update(1)
+                    state.event.set()
+                    state.event = asyncio.Event()
+                return
             prompt_hash = _compute_prompt_hash(
                 prompt_template=prompt_template,
                 output_language=output_language,
@@ -1128,7 +1175,15 @@ async def extract_documents(
     table.add_column("Value", style="white", overflow="fold")
     table.add_row("Documents", f"{doc_count} total")
     table.add_row("Successful", str(doc_count - len(errors)))
+    failed_stage_count = sum(1 for err in errors if err.stage_name)
+    retried_stage_count = 0
+    if retry_failed_stages:
+        retried_stage_count = sum(
+            len(retry_stage_map.get(str(path.resolve()), set())) for path in markdown_files
+        )
     table.add_row("Errors", str(len(errors)))
+    table.add_row("Failed stages", str(failed_stage_count))
+    table.add_row("Retried stages", str(retried_stage_count))
     table.add_row("Output JSON", str(output_path))
     table.add_row("Errors JSON", str(errors_path))
     table.add_row("Duration", _format_duration(duration))

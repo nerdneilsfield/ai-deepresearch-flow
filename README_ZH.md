@@ -338,7 +338,8 @@ uv run deepresearch-flow translator translate \
 - 分模块恢复：多阶段模板会持久化每个模块输出，可用 `--force-stage <name>` 重跑某模块。
 - 图示提示：`deep_read` 允许输出带 `[Inferred]` 标注的推断图示；如需修复 Mermaid，可对渲染后的 Markdown 使用 `recognize fix-mermaid`。
 - 阶段聚焦：多阶段运行时强调当前模块，其他模块只给摘要，降低上下文干扰。
-- 范围过滤：使用 `--start-idx/--end-idx` 切片输入；范围先于 `--retry-failed` 生效（`--end-idx -1` 表示最后一项）。
+- 范围过滤：使用 `--start-idx/--end-idx` 切片输入；范围先于 `--retry-failed`/`--retry-failed-stages` 生效（`--end-idx -1` 表示最后一项）。
+- 失败阶段重试：使用 `--retry-failed-stages` 仅重跑失败 stage（多阶段模板）。
 
 ```bash
 uv run deepresearch-flow paper extract \
@@ -353,6 +354,12 @@ uv run deepresearch-flow paper extract \
   --start-idx 0 \
   --end-idx 100 \
   --retry-failed \
+  --model claude/claude-3-5-sonnet-20240620
+
+# 仅重试失败 stage（多阶段模板）
+uv run deepresearch-flow paper extract \
+  --input ./library \
+  --retry-failed-stages \
   --model claude/claude-3-5-sonnet-20240620
 ```
 
