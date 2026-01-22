@@ -6,8 +6,10 @@
 ## What Changes
 - Replace `paper db merge` with two subcommands: `paper db merge library` and `paper db merge templates`.
 - `merge library` keeps the existing behavior (merge multiple JSON libraries of the same template).
-- `merge templates` merges different template JSON files from the same library, preserving shared fields once and appending non-shared fields.
+- `merge templates` merges different template JSON files from the same library, preserving shared fields once and appending non-shared fields for matched papers.
 - Shared fields are resolved by first-input precedence when both provide a value.
+- Papers that do not match the first input are skipped and reported.
+- The merge output reports key field differences between templates to aid auditing.
 
 ## Impact
 - Affected specs: paper

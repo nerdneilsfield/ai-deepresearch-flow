@@ -233,6 +233,23 @@ uv run deepresearch-flow paper db merge templates \
 
 Note: `paper db merge` is now split into `merge library` and `merge templates`.
 
+### Recommended: Merge templates then filter by BibTeX
+
+```bash
+# 1) Merge templates for the same library
+uv run deepresearch-flow paper db merge templates \
+  --inputs ./deep_read.json \
+  --inputs ./simple.json \
+  --output ./all.json
+
+# 2) Filter the merged set with BibTeX
+uv run deepresearch-flow paper db extract \
+  --input-bibtex ./library.bib \
+  --json ./all.json \
+  --output-json ./library_filtered.json \
+  --output-csv ./library_filtered.csv
+```
+
 ## Deployment (Static CDN)
 
 Use a separate static server (CDN) for PDFs/Markdown/images and keep the API/UI on another host.

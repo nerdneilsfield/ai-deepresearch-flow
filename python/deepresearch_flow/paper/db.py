@@ -903,7 +903,95 @@ def register_db_commands(db_group: click.Group) -> None:
 
         paths = [Path(path) for path in input_paths]
         inputs = db_ops._load_paper_inputs(paths)
-        groups = db_ops._merge_paper_inputs(inputs)
+        if not inputs:
+            raise click.ClickException("No input JSON files provided")
+
+        groups: list[dict[str, Any]] = []
+        base_papers: list[dict[str, Any]] = []
+        hash_to_group: dict[str, int] = {}
+        paper_id_to_group: dict[int, int] = {}
+        paper_index: dict[str, list[dict[str, Any]]] = {}
+
+        def rebuild_index() -> None:
+            nonlocal paper_index, paper_id_to_group
+            paper_index = db_ops._build_paper_index(base_papers)
+            paper_id_to_group = {id(paper): idx for idx, paper in enumerate(base_papers)}
+
+        def add_group(template_tag: str, paper: dict[str, Any]) -> None:
+            group = {
+                "templates": {template_tag: paper},
+                "template_order": [template_tag],
+            }
+            groups.append(group)
+            base_papers.append(paper)
+            source_hash = str(paper.get("source_hash") or "")
+            if source_hash:
+                hash_to_group[source_hash] = len(groups) - 1
+            rebuild_index()
+
+        stats: dict[str, dict[str, int]] = {}
+        diff_counts: dict[tuple[str, str], int] = {}
+        diff_samples: list[tuple[str, str, str, str, str]] = []
+        first_tag = str(inputs[0].get("template_tag") or "")
+        base_items = inputs[0].get("papers") or []
+        stats[first_tag] = {"total": len(base_items), "matched": len(base_items), "skipped": 0}
+        for paper in base_items:
+            if not isinstance(paper, dict):
+                raise click.ClickException("Input papers must be objects")
+            db_ops._prepare_paper_matching_fields(paper)
+            add_group(first_tag, paper)
+
+        for bundle in inputs[1:]:
+            template_tag = str(bundle.get("template_tag") or "")
+            items = bundle.get("papers") or []
+            matched = 0
+            skipped = 0
+            for paper in items:
+                if not isinstance(paper, dict):
+                    raise click.ClickException("Input papers must be objects")
+                db_ops._prepare_paper_matching_fields(paper)
+                source_hash = str(paper.get("source_hash") or "")
+                match_idx: int | None = None
+                if source_hash and source_hash in hash_to_group:
+                    match_idx = hash_to_group[source_hash]
+                else:
+                    match_paper, _, _ = db_ops._resolve_paper_by_title_and_meta(
+                        paper, paper_index
+                    )
+                    if match_paper is not None:
+                        match_idx = paper_id_to_group.get(id(match_paper))
+                if match_idx is None:
+                    skipped += 1
+                    continue
+                matched += 1
+                group = groups[match_idx]
+                base_templates = group.get("templates") or {}
+                base_paper = base_templates.get(first_tag)
+                if isinstance(base_paper, dict):
+                    for field in ("source_hash", "paper_title", "publication_date"):
+                        base_value = str(base_paper.get(field) or "")
+                        other_value = str(paper.get(field) or "")
+                        if base_value == other_value:
+                            continue
+                        diff_counts[(template_tag, field)] = diff_counts.get(
+                            (template_tag, field), 0
+                        ) + 1
+                        if len(diff_samples) < 50:
+                            diff_samples.append(
+                                (
+                                    template_tag,
+                                    field,
+                                    str(base_paper.get("paper_title") or ""),
+                                    base_value,
+                                    other_value,
+                                )
+                            )
+                templates = group.setdefault("templates", {})
+                templates[template_tag] = paper
+                order = group.setdefault("template_order", [])
+                if template_tag not in order:
+                    order.append(template_tag)
+            stats[template_tag] = {"total": len(items), "matched": matched, "skipped": skipped}
 
         merged: list[dict[str, Any]] = []
         for group in groups:
@@ -922,6 +1010,40 @@ def register_db_commands(db_group: click.Group) -> None:
         output = Path(output_path)
         write_json(output, merged)
         _summarize_merge(output, merged, input_count=len(paths))
+
+        stat_table = Table(title="Template Merge Stats")
+        stat_table.add_column("Template")
+        stat_table.add_column("Total", justify="right")
+        stat_table.add_column("Matched", justify="right")
+        stat_table.add_column("Skipped", justify="right")
+        for tag, values in stats.items():
+            stat_table.add_row(
+                tag or "(unknown)",
+                str(values.get("total", 0)),
+                str(values.get("matched", 0)),
+                str(values.get("skipped", 0)),
+            )
+        Console().print(stat_table)
+
+        if diff_counts:
+            diff_table = Table(title="Template Field Diff Summary")
+            diff_table.add_column("Template")
+            diff_table.add_column("Field")
+            diff_table.add_column("Count", justify="right")
+            for (template_tag, field), count in sorted(diff_counts.items()):
+                diff_table.add_row(template_tag or "(unknown)", field, str(count))
+            Console().print(diff_table)
+
+        if diff_samples:
+            sample_table = Table(title="Template Field Diff Samples (up to 50)")
+            sample_table.add_column("Template")
+            sample_table.add_column("Field")
+            sample_table.add_column("Base Title")
+            sample_table.add_column("Base Value")
+            sample_table.add_column("Other Value")
+            for row in diff_samples:
+                sample_table.add_row(*row)
+            Console().print(sample_table)
 
     @db_group.command("render-md")
     @click.option("-i", "--input", "input_path", required=True, help="Input JSON file path")

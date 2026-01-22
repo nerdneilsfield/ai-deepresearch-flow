@@ -227,6 +227,23 @@ uv run deepresearch-flow paper db merge templates \
 
 说明：`paper db merge` 已拆分为 `merge library` 与 `merge templates`。
 
+### 推荐流程：先合并模板再用 BibTeX 过滤
+
+```bash
+# 1) 合并同文献库的多模板结果
+uv run deepresearch-flow paper db merge templates \
+  --inputs ./deep_read.json \
+  --inputs ./simple.json \
+  --output ./all.json
+
+# 2) 用 BibTeX 过滤合并结果
+uv run deepresearch-flow paper db extract \
+  --input-bibtex ./library.bib \
+  --json ./all.json \
+  --output-json ./library_filtered.json \
+  --output-csv ./library_filtered.csv
+```
+
 ## 部署（静态 CDN）
 
 推荐用两台服务器：一台跑 API/UI，另一台只提供静态资源（PDF/Markdown/图片）。
