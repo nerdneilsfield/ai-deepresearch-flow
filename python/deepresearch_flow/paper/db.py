@@ -855,13 +855,44 @@ def register_db_commands(db_group: click.Group) -> None:
         write_json(Path(output_path), filtered)
         click.echo(f"Filtered down to {len(filtered)} papers")
 
-    @db_group.command("merge")
+    @db_group.group("merge")
+    def merge_group() -> None:
+        """Merge paper JSON inputs."""
+
+    @merge_group.command("library")
     @click.option("-i", "--inputs", "input_paths", multiple=True, required=True, help="Input JSON files")
     @click.option("-o", "--output", "output_path", required=True, help="Output JSON file path")
-    def merge_papers(input_paths: Iterable[str], output_path: str) -> None:
+    def merge_library(input_paths: Iterable[str], output_path: str) -> None:
         merged: list[dict[str, Any]] = []
         for path in input_paths:
             merged.extend(load_json(Path(path)))
+        write_json(Path(output_path), merged)
+        click.echo(f"Merged {len(input_paths)} files into {output_path}")
+
+    @merge_group.command("templates")
+    @click.option("-i", "--inputs", "input_paths", multiple=True, required=True, help="Input JSON files")
+    @click.option("-o", "--output", "output_path", required=True, help="Output JSON file path")
+    def merge_templates(input_paths: Iterable[str], output_path: str) -> None:
+        from deepresearch_flow.paper import db_ops
+
+        paths = [Path(path) for path in input_paths]
+        inputs = db_ops._load_paper_inputs(paths)
+        groups = db_ops._merge_paper_inputs(inputs)
+
+        merged: list[dict[str, Any]] = []
+        for group in groups:
+            templates = group.get("templates") or {}
+            order = group.get("template_order") or list(templates.keys())
+            entry: dict[str, Any] = {}
+            for tag in order:
+                paper = templates.get(tag)
+                if not isinstance(paper, dict):
+                    continue
+                for key, value in paper.items():
+                    if key not in entry:
+                        entry[key] = value
+            merged.append(entry)
+
         write_json(Path(output_path), merged)
         click.echo(f"Merged {len(input_paths)} files into {output_path}")
 

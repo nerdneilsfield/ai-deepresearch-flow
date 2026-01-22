@@ -215,6 +215,24 @@ uv run deepresearch-flow paper db serve \
   --pdf-root ./pdfs_new
 ```
 
+## Merge Paper JSONs
+
+```bash
+# Merge multiple libraries using the same template
+uv run deepresearch-flow paper db merge library \
+  --inputs ./paper_infos_a.json \
+  --inputs ./paper_infos_b.json \
+  --output ./paper_infos_merged.json
+
+# Merge multiple templates from the same library (first input wins on shared fields)
+uv run deepresearch-flow paper db merge templates \
+  --inputs ./simple.json \
+  --inputs ./deep_read.json \
+  --output ./paper_infos_templates.json
+```
+
+Note: `paper db merge` is now split into `merge library` and `merge templates`.
+
 ## Deployment (Static CDN)
 
 Use a separate static server (CDN) for PDFs/Markdown/images and keep the API/UI on another host.

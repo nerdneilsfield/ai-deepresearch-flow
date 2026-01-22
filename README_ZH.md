@@ -209,6 +209,24 @@ uv run deepresearch-flow paper db serve \
   --pdf-root ./pdfs_new
 ```
 
+## 合并论文 JSON
+
+```bash
+# 合并同模板的多文献库
+uv run deepresearch-flow paper db merge library \
+  --inputs ./paper_infos_a.json \
+  --inputs ./paper_infos_b.json \
+  --output ./paper_infos_merged.json
+
+# 合并同文献库的多模板结果（共享字段以第一个输入为准）
+uv run deepresearch-flow paper db merge templates \
+  --inputs ./simple.json \
+  --inputs ./deep_read.json \
+  --output ./paper_infos_templates.json
+```
+
+说明：`paper db merge` 已拆分为 `merge library` 与 `merge templates`。
+
 ## 部署（静态 CDN）
 
 推荐用两台服务器：一台跑 API/UI，另一台只提供静态资源（PDF/Markdown/图片）。
