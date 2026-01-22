@@ -87,6 +87,8 @@ cp config.example.toml config.toml
 # Edit config.toml to add your API keys (e.g., env:OPENAI_API_KEY)
 ```
 
+Multiple keys per provider are supported. Keys rotate per request and enter a short cooldown on retryable errors.
+
 ### 3) The "Zero to Hero" Workflow
 
 #### Step 1: Extract Insights

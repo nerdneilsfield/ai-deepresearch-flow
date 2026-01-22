@@ -87,6 +87,8 @@ cp config.example.toml config.toml
 # 编辑 config.toml 添加 API Key（例如 env:OPENAI_API_KEY）
 ```
 
+同一 provider 支持多个 key；每次请求轮换，遇到可重试错误会进入短暂冷却。
+
 ### 3) 从零到一的流程
 
 #### 步骤 1：抽取结构化信息

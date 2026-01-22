@@ -57,18 +57,52 @@ class ExtractionError:
 
 
 class KeyRotator:
-    def __init__(self, keys: list[str]) -> None:
+    def __init__(self, keys: list[str], *, cooldown_seconds: float, verbose: bool) -> None:
         self._keys = keys
         self._idx = 0
         self._lock = asyncio.Lock()
+        self._cooldown_seconds = max(cooldown_seconds, 0.0)
+        self._verbose = verbose
+        self._cooldowns: dict[str, float] = {key: 0.0 for key in keys}
+        self._error_counts: dict[str, int] = {key: 0 for key in keys}
 
     async def next_key(self) -> str | None:
         if not self._keys:
             return None
+        while True:
+            wait_for: float | None = None
+            async with self._lock:
+                now = time.monotonic()
+                total = len(self._keys)
+                for offset in range(total):
+                    idx = (self._idx + offset) % total
+                    key = self._keys[idx]
+                    if self._cooldowns.get(key, 0.0) <= now:
+                        self._idx = idx + 1
+                        return key
+                wait_for = min(self._cooldowns.values()) - now if self._cooldowns else None
+            if wait_for is None:
+                return None
+            wait_for = max(wait_for, 0.01)
+            if self._verbose:
+                logger.debug("All API keys cooling down; waiting %.2fs", wait_for)
+            await asyncio.sleep(wait_for)
+
+    async def mark_error(self, key: str) -> None:
+        if key not in self._cooldowns:
+            return
         async with self._lock:
-            key = self._keys[self._idx % len(self._keys)]
-            self._idx += 1
-            return key
+            now = time.monotonic()
+            self._error_counts[key] = self._error_counts.get(key, 0) + 1
+            cooldown_until = now + self._cooldown_seconds
+            current = self._cooldowns.get(key, 0.0)
+            self._cooldowns[key] = max(current, cooldown_until)
+            if self._verbose:
+                logger.debug(
+                    "API key cooldown applied (%.2fs, errors=%d)",
+                    self._cooldown_seconds,
+                    self._error_counts[key],
+                )
 
 
 logger = logging.getLogger(__name__)
@@ -451,6 +485,7 @@ async def call_with_retries(
     backoff_max_seconds: float,
     client: httpx.AsyncClient,
     validator: Draft7Validator,
+    key_rotator: KeyRotator | None = None,
     throttle: RequestThrottle | None = None,
     stats: ExtractionStats | None = None,
 ) -> dict[str, Any]:
@@ -480,6 +515,8 @@ async def call_with_retries(
             if exc.structured_error and use_structured != "none":
                 use_structured = "none"
                 continue
+            if should_retry_error(exc) and api_key and key_rotator:
+                await key_rotator.mark_error(api_key)
             if should_retry_error(exc) and attempt < max_retries:
                 await asyncio.sleep(backoff_delay(backoff_base_seconds, attempt, backoff_max_seconds))
                 continue
@@ -664,7 +701,12 @@ async def extract_documents(
         if isinstance(entry, dict) and entry.get("source_path")
     }
 
-    rotator = KeyRotator(resolve_api_keys(provider.api_keys))
+    cooldown_seconds = max(1.0, float(config.extract.backoff_base_seconds))
+    rotator = KeyRotator(
+        resolve_api_keys(provider.api_keys),
+        cooldown_seconds=cooldown_seconds,
+        verbose=verbose,
+    )
     max_concurrency = max_concurrency_override or config.extract.max_concurrency
     semaphore = asyncio.Semaphore(max_concurrency)
 
@@ -766,6 +808,7 @@ async def extract_documents(
                         backoff_max_seconds=config.extract.backoff_max_seconds,
                         client=client,
                         validator=validator,
+                        key_rotator=rotator,
                         throttle=throttle,
                         stats=stats,
                     )
@@ -1005,6 +1048,7 @@ async def extract_documents(
                             backoff_max_seconds=config.extract.backoff_max_seconds,
                             client=client,
                             validator=stage_validator,
+                            key_rotator=rotator,
                             throttle=throttle,
                             stats=stats,
                         )
