@@ -917,7 +917,8 @@ def register_db_commands(db_group: click.Group) -> None:
         click.echo(f"Rendered {rendered} markdown files")
 
     @db_group.command("extract")
-    @click.option("--input-json", "input_json", default=None, help="Input JSON file path")
+    @click.option("--json", "target_json", default=None, help="Target JSON database path")
+    @click.option("--input-json", "input_json", default=None, help="Reference JSON file path")
     @click.option(
         "--pdf-root", "pdf_roots", multiple=True, help="PDF root directories for reference (repeatable)"
     )
@@ -945,10 +946,17 @@ def register_db_commands(db_group: click.Group) -> None:
         default=None,
         help="Output directory for matched source Markdown",
     )
-    @click.option("-b", "--bibtex", "bibtex_path", default=None, help="Optional BibTeX file path")
+    @click.option(
+        "-b",
+        "--input-bibtex",
+        "input_bibtex",
+        default=None,
+        help="Reference BibTeX file path",
+    )
     @click.option("--lang", "lang", default=None, help="Language code for translated Markdown (e.g., zh)")
     @click.option("--output-csv", "output_csv", default=None, help="Path to export results as CSV")
     def extract(
+        target_json: str | None,
         input_json: str | None,
         pdf_roots: tuple[str, ...],
         md_roots: tuple[str, ...],
@@ -957,23 +965,32 @@ def register_db_commands(db_group: click.Group) -> None:
         output_json: str | None,
         output_md_translated_root: str | None,
         output_md_root: str | None,
-        bibtex_path: str | None,
+        input_bibtex: str | None,
         lang: str | None,
         output_csv: str | None,
     ) -> None:
-        from deepresearch_flow.paper.db_ops import compare_datasets_with_pairs
+        from deepresearch_flow.paper import db_ops
+        from deepresearch_flow.paper.utils import stable_hash
 
-        has_reference = bool(pdf_roots or md_roots)
+        if input_json and input_bibtex:
+            raise click.ClickException("Use only one of --input-json or --input-bibtex")
+
+        if target_json is None and input_json is not None:
+            target_json = input_json
+
+        has_reference = bool(pdf_roots or md_roots or input_json or input_bibtex)
         if not has_reference:
-            raise click.ClickException("Reference inputs must include --pdf-root or --md-root")
-        if not input_json and not md_translated_roots and not md_source_roots:
             raise click.ClickException(
-                "Provide --input-json and/or --md-translated-root and/or --md-source-root"
+                "Provide at least one reference input: --pdf-root, --md-root, --input-json, or --input-bibtex"
             )
-        if input_json and not output_json:
-            raise click.ClickException("--output-json is required when using --input-json")
-        if output_json and not input_json:
-            raise click.ClickException("--input-json is required when using --output-json")
+        if not target_json and not md_translated_roots and not md_source_roots:
+            raise click.ClickException(
+                "Provide --json and/or --md-translated-root and/or --md-source-root"
+            )
+        if target_json and not output_json:
+            raise click.ClickException("--output-json is required when using --json")
+        if output_json and not target_json:
+            raise click.ClickException("--json is required when using --output-json")
         if md_translated_roots and not output_md_translated_root:
             raise click.ClickException(
                 "--output-md-translated-root is required when using --md-translated-root"
@@ -993,32 +1010,132 @@ def register_db_commands(db_group: click.Group) -> None:
         md_root_paths = [Path(path) for path in md_roots]
         translated_root_paths = [Path(path) for path in md_translated_roots]
         source_root_paths = [Path(path) for path in md_source_roots]
-        bibtex = Path(bibtex_path) if bibtex_path else None
+        reference_json_path = Path(input_json) if input_json else None
+        reference_bibtex_path = Path(input_bibtex) if input_bibtex else None
+
+        reference_entries: list[dict[str, Any]] = []
+        if reference_json_path:
+            if not reference_json_path.is_file():
+                raise click.ClickException(f"Reference JSON not found: {reference_json_path}")
+            reference_papers, _ = load_json_payload(reference_json_path)
+            for paper in reference_papers:
+                raw_title = None
+                if isinstance(paper.get("bibtex"), dict):
+                    fields = paper.get("bibtex", {}).get("fields", {}) or {}
+                    raw_title = fields.get("title")
+                if not raw_title:
+                    raw_title = paper.get("paper_title")
+                if not raw_title:
+                    continue
+                title_key = db_ops._normalize_title_key(str(raw_title))
+                if not title_key:
+                    continue
+                reference_entries.append(
+                    {
+                        "title_key": title_key,
+                        "title": str(raw_title),
+                        "year": db_ops._extract_year_for_matching(paper) or "",
+                        "authors": db_ops._extract_authors(paper),
+                        "source_path": str(reference_json_path),
+                    }
+                )
+        if reference_bibtex_path:
+            if not reference_bibtex_path.is_file():
+                raise click.ClickException(f"Reference BibTeX not found: {reference_bibtex_path}")
+            if not db_ops.PYBTEX_AVAILABLE:
+                raise click.ClickException("pybtex is required for --input-bibtex support")
+            bib_data = db_ops.parse_file(str(reference_bibtex_path))
+            for key, entry in bib_data.entries.items():
+                title = entry.fields.get("title")
+                if not title:
+                    continue
+                title_key = db_ops._normalize_bibtex_title(str(title))
+                if not title_key:
+                    continue
+                year = entry.fields.get("year") or ""
+                year = str(year) if str(year).isdigit() else ""
+                authors = []
+                for person in entry.persons.get("author", []):
+                    authors.append(str(person))
+                reference_entries.append(
+                    {
+                        "title_key": title_key,
+                        "title": str(title),
+                        "year": year,
+                        "authors": authors,
+                        "source_path": f"bibtex:{key}",
+                    }
+                )
+
+        def _normalize_author(name: str) -> str:
+            return re.sub(r"[^a-z0-9]+", "", name.lower())
+
+        def _authors_match(reference: list[str], target: list[str]) -> bool:
+            if not reference or not target:
+                return True
+            ref_norm = {_normalize_author(author) for author in reference if author}
+            target_norm = {_normalize_author(author) for author in target if author}
+            return bool(ref_norm & target_norm)
 
         all_results: list[Any] = []
 
-        if input_json:
-            input_json_path = Path(input_json)
-            if not input_json_path.is_file():
-                raise click.ClickException(f"Input JSON not found: {input_json_path}")
-            papers, payload = load_json_payload(input_json_path)
-            results, match_pairs, _, _ = compare_datasets_with_pairs(
-                json_paths_a=[input_json_path],
-                pdf_roots_b=pdf_root_paths,
-                md_roots_b=md_root_paths,
-                bibtex_path=bibtex,
-                lang=None,
-                show_progress=True,
-            )
-            matched_indices = {idx_a for idx_a, _, _, _ in match_pairs}
-            matched_papers = [
-                paper
-                for idx, paper in enumerate(papers)
-                if idx in matched_indices
-            ]
+        if target_json:
+            target_json_path = Path(target_json)
+            if not target_json_path.is_file():
+                raise click.ClickException(f"Target JSON not found: {target_json_path}")
+            papers, payload = load_json_payload(target_json_path)
+
+            results: list[Any] = []
+            matched_indices: set[int]
+            if pdf_root_paths or md_root_paths:
+                results, match_pairs, _, _ = db_ops.compare_datasets_with_pairs(
+                    json_paths_a=[target_json_path],
+                    pdf_roots_b=pdf_root_paths,
+                    md_roots_b=md_root_paths,
+                    bibtex_path=None,
+                    lang=None,
+                    show_progress=True,
+                )
+                matched_indices = {idx_a for idx_a, _, _, _ in match_pairs}
+                all_results.extend(results)
+            else:
+                matched_indices = set(range(len(papers)))
+
+            reference_map: dict[str, list[dict[str, Any]]] = {}
+            for ref in reference_entries:
+                reference_map.setdefault(ref["title_key"], []).append(ref)
+
+            matched_reference_ids: set[int] = set()
+            if reference_map:
+                filtered_indices: set[int] = set()
+                for idx, paper in enumerate(papers):
+                    title_key = db_ops._extract_bibtex_title(paper)
+                    if not title_key:
+                        raw_title = paper.get("paper_title")
+                        title_key = db_ops._normalize_title_key(str(raw_title or ""))
+                    if not title_key:
+                        continue
+                    candidates = reference_map.get(title_key)
+                    if not candidates:
+                        continue
+                    paper_year = db_ops._extract_year_for_matching(paper) or ""
+                    paper_authors = db_ops._extract_authors(paper)
+                    matched = False
+                    for ref in candidates:
+                        if ref.get("year") and paper_year and ref["year"] != paper_year:
+                            continue
+                        if not _authors_match(ref.get("authors", []), paper_authors):
+                            continue
+                        matched_reference_ids.add(id(ref))
+                        matched = True
+                    if matched:
+                        filtered_indices.add(idx)
+                matched_indices &= filtered_indices
+
+            matched_papers = [paper for idx, paper in enumerate(papers) if idx in matched_indices]
             output_path = Path(output_json) if output_json else None
             if output_path is None:
-                raise click.ClickException("--output-json is required when using --input-json")
+                raise click.ClickException("--output-json is required when using --json")
             output_path.parent.mkdir(parents=True, exist_ok=True)
             if payload is None:
                 write_json(output_path, matched_papers)
@@ -1027,7 +1144,26 @@ def register_db_commands(db_group: click.Group) -> None:
                 output_payload["papers"] = matched_papers
                 write_json(output_path, output_payload)
             click.echo(f"Extracted {len(matched_papers)} JSON entries to {output_path}")
-            all_results.extend(results)
+
+            if output_csv and reference_entries:
+                for ref in reference_entries:
+                    if id(ref) in matched_reference_ids:
+                        continue
+                    all_results.append(
+                        db_ops.CompareResult(
+                            side="B",
+                            source_hash=stable_hash(str(ref.get("title_key") or ref.get("title") or "")),
+                            title=str(ref.get("title") or ""),
+                            match_status="only_in_B",
+                            match_type=None,
+                            match_score=0.0,
+                            source_path=ref.get("source_path"),
+                            other_source_hash=None,
+                            other_title=None,
+                            other_source_path=None,
+                            lang=None,
+                        )
+                    )
 
         copied_count = 0
         if md_translated_roots:

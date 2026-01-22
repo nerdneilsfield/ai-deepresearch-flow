@@ -394,7 +394,16 @@ uv run deepresearch-flow paper db compare \
 
 ```bash
 uv run deepresearch-flow paper db extract \
-  --input-json ./processed.json \
+  --json ./processed.json \
+  --input-bibtex ./refs.bib \
+  --pdf-root ./pdfs \
+  --output-json ./matched.json \
+  --output-csv ./extract.csv
+
+# 使用 JSON 参考清单筛选目标 JSON
+uv run deepresearch-flow paper db extract \
+  --json ./processed.json \
+  --input-json ./reference.json \
   --pdf-root ./pdfs \
   --output-json ./matched.json \
   --output-csv ./extract.csv

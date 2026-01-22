@@ -401,7 +401,16 @@ Extract matched JSON entries or translated Markdown after coverage comparison.
 
 ```bash
 uv run deepresearch-flow paper db extract \
-  --input-json ./processed.json \
+  --json ./processed.json \
+  --input-bibtex ./refs.bib \
+  --pdf-root ./pdfs \
+  --output-json ./matched.json \
+  --output-csv ./extract.csv
+
+# Use a JSON reference list to filter the target JSON
+uv run deepresearch-flow paper db extract \
+  --json ./processed.json \
+  --input-json ./reference.json \
   --pdf-root ./pdfs \
   --output-json ./matched.json \
   --output-csv ./extract.csv
