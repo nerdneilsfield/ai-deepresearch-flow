@@ -1013,32 +1013,11 @@ def register_db_commands(db_group: click.Group) -> None:
         reference_json_path = Path(input_json) if input_json else None
         reference_bibtex_path = Path(input_bibtex) if input_bibtex else None
 
-        reference_entries: list[dict[str, Any]] = []
+        reference_papers: list[dict[str, Any]] = []
         if reference_json_path:
             if not reference_json_path.is_file():
                 raise click.ClickException(f"Reference JSON not found: {reference_json_path}")
             reference_papers, _ = load_json_payload(reference_json_path)
-            for paper in reference_papers:
-                raw_title = None
-                if isinstance(paper.get("bibtex"), dict):
-                    fields = paper.get("bibtex", {}).get("fields", {}) or {}
-                    raw_title = fields.get("title")
-                if not raw_title:
-                    raw_title = paper.get("paper_title")
-                if not raw_title:
-                    continue
-                title_key = db_ops._normalize_title_key(str(raw_title))
-                if not title_key:
-                    continue
-                reference_entries.append(
-                    {
-                        "title_key": title_key,
-                        "title": str(raw_title),
-                        "year": db_ops._extract_year_for_matching(paper) or "",
-                        "authors": db_ops._extract_authors(paper),
-                        "source_path": str(reference_json_path),
-                    }
-                )
         if reference_bibtex_path:
             if not reference_bibtex_path.is_file():
                 raise click.ClickException(f"Reference BibTeX not found: {reference_bibtex_path}")
@@ -1049,33 +1028,27 @@ def register_db_commands(db_group: click.Group) -> None:
                 title = entry.fields.get("title")
                 if not title:
                     continue
-                title_key = db_ops._normalize_bibtex_title(str(title))
-                if not title_key:
-                    continue
                 year = entry.fields.get("year") or ""
                 year = str(year) if str(year).isdigit() else ""
                 authors = []
                 for person in entry.persons.get("author", []):
                     authors.append(str(person))
-                reference_entries.append(
+                reference_papers.append(
                     {
-                        "title_key": title_key,
-                        "title": str(title),
-                        "year": year,
-                        "authors": authors,
+                        "paper_title": str(title),
+                        "paper_authors": authors,
+                        "publication_date": year,
                         "source_path": f"bibtex:{key}",
                     }
                 )
 
-        def _normalize_author(name: str) -> str:
-            return re.sub(r"[^a-z0-9]+", "", name.lower())
-
-        def _authors_match(reference: list[str], target: list[str]) -> bool:
-            if not reference or not target:
-                return True
-            ref_norm = {_normalize_author(author) for author in reference if author}
-            target_norm = {_normalize_author(author) for author in target if author}
-            return bool(ref_norm & target_norm)
+        reference_index: dict[str, list[dict[str, Any]]] = {}
+        for paper in reference_papers:
+            if "source_path" not in paper and reference_json_path:
+                paper["source_path"] = str(reference_json_path)
+            db_ops._prepare_paper_matching_fields(paper)
+        if reference_papers:
+            reference_index = db_ops._build_paper_index(reference_papers)
 
         all_results: list[Any] = []
 
@@ -1101,38 +1074,93 @@ def register_db_commands(db_group: click.Group) -> None:
             else:
                 matched_indices = set(range(len(papers)))
 
-            reference_map: dict[str, list[dict[str, Any]]] = {}
-            for ref in reference_entries:
-                reference_map.setdefault(ref["title_key"], []).append(ref)
-
             matched_reference_ids: set[int] = set()
-            if reference_map:
-                filtered_indices: set[int] = set()
-                for idx, paper in enumerate(papers):
-                    title_key = db_ops._extract_bibtex_title(paper)
-                    if not title_key:
-                        raw_title = paper.get("paper_title")
-                        title_key = db_ops._normalize_title_key(str(raw_title or ""))
-                    if not title_key:
-                        continue
-                    candidates = reference_map.get(title_key)
+            if reference_index:
+                def detail_score(paper: dict[str, Any]) -> tuple[int, int]:
+                    non_empty = 0
+                    total_len = 0
+                    for value in paper.values():
+                        if value is None:
+                            continue
+                        if isinstance(value, (list, dict)):
+                            if value:
+                                non_empty += 1
+                                total_len += len(
+                                    json.dumps(value, ensure_ascii=False, sort_keys=True)
+                                )
+                        else:
+                            text = str(value).strip()
+                            if text:
+                                non_empty += 1
+                                total_len += len(text)
+                    return non_empty, total_len
+
+                def resolve_reference_match(
+                    paper: dict[str, Any],
+                ) -> tuple[dict[str, Any] | None, str | None, float]:
+                    match_paper, match_type, match_score = db_ops._resolve_paper_by_title_and_meta(
+                        paper, reference_index
+                    )
+                    if match_paper is not None:
+                        return match_paper, match_type, match_score
+                    year = str(paper.get("_year") or "").strip()
+                    if not year.isdigit():
+                        return None, None, 0.0
+                    authors = paper.get("_authors") or []
+                    author_key = ""
+                    if authors:
+                        author_key = db_ops._normalize_author_key(str(authors[0]))
+                    candidates: list[dict[str, Any]] = []
+                    fallback_type = "year_relaxed"
+                    if author_key:
+                        candidates = reference_index.get(f"authoryear:{year}:{author_key}", [])
+                        if candidates:
+                            fallback_type = "author_year_relaxed"
                     if not candidates:
+                        candidates = reference_index.get(f"year:{year}", [])
+                    if not candidates:
+                        return None, None, 0.0
+                    title_key = db_ops._normalize_title_key(str(paper.get("paper_title") or ""))
+                    match, score = db_ops._adaptive_similarity_match_papers(title_key, candidates)
+                    if match is None:
+                        return candidates[0], fallback_type, 0.0
+                    return match, fallback_type, score
+
+                base_indices = set(matched_indices)
+                best_matches: dict[int, tuple[int, tuple[int, int], str | None, float]] = {}
+                for idx, paper in enumerate(papers):
+                    if idx not in matched_indices:
                         continue
-                    paper_year = db_ops._extract_year_for_matching(paper) or ""
-                    paper_authors = db_ops._extract_authors(paper)
-                    matched = False
-                    for ref in candidates:
-                        if ref.get("year") and paper_year and ref["year"] != paper_year:
-                            continue
-                        if not _authors_match(ref.get("authors", []), paper_authors):
-                            continue
-                        matched_reference_ids.add(id(ref))
-                        matched = True
-                    if matched:
-                        filtered_indices.add(idx)
-                matched_indices &= filtered_indices
+                    db_ops._prepare_paper_matching_fields(paper)
+                    match_paper, match_type, match_score = resolve_reference_match(paper)
+                    if match_paper is None:
+                        continue
+                    ref_id = id(match_paper)
+                    score = detail_score(paper)
+                    current = best_matches.get(ref_id)
+                    if current is None:
+                        best_matches[ref_id] = (idx, score, match_type, match_score)
+                        continue
+                    if score > current[1] or (score == current[1] and match_score > current[3]):
+                        best_matches[ref_id] = (idx, score, match_type, match_score)
+
+                matched_reference_ids = set(best_matches.keys())
+                matched_indices = {idx for idx, *_ in best_matches.values()}
 
             matched_papers = [paper for idx, paper in enumerate(papers) if idx in matched_indices]
+            deduped_papers: list[Any] = []
+            seen_titles: set[str] = set()
+            for paper in matched_papers:
+                title_key = db_ops._normalize_title_key(str(paper.get("paper_title") or ""))
+                if title_key:
+                    if title_key in seen_titles:
+                        continue
+                    seen_titles.add(title_key)
+                deduped_papers.append(paper)
+            if len(deduped_papers) != len(matched_papers):
+                removed = len(matched_papers) - len(deduped_papers)
+                click.echo(f"Deduplicated {removed} entries by normalized title.")
+            matched_papers = deduped_papers
             output_path = Path(output_json) if output_json else None
             if output_path is None:
                 raise click.ClickException("--output-json is required when using --json")
@@ -1145,19 +1173,67 @@ def register_db_commands(db_group: click.Group) -> None:
                 write_json(output_path, output_payload)
             click.echo(f"Extracted {len(matched_papers)} JSON entries to {output_path}")
 
-            if output_csv and reference_entries:
-                for ref in reference_entries:
-                    if id(ref) in matched_reference_ids:
+            if output_csv and reference_papers:
+                match_meta_by_ref_id = {
+                    ref_id: (idx, match_type, match_score)
+                    for ref_id, (idx, _, match_type, match_score) in best_matches.items()
+                }
+                for ref in reference_papers:
+                    ref_id = id(ref)
+                    ref_title = str(ref.get("paper_title") or "")
+                    ref_hash = stable_hash(str(ref_title or ref.get("source_path") or ""))
+                    ref_path = str(ref.get("source_path") or "")
+                    if ref_id in match_meta_by_ref_id:
+                        idx, match_type, match_score = match_meta_by_ref_id[ref_id]
+                        paper = papers[idx]
+                        paper_hash = str(paper.get("source_hash") or "") or stable_hash(
+                            str(paper.get("paper_title") or "")
+                        )
+                        all_results.append(
+                            db_ops.CompareResult(
+                                side="MATCH",
+                                source_hash=ref_hash,
+                                title=ref_title,
+                                match_status="matched_pair",
+                                match_type=match_type,
+                                match_score=match_score,
+                                source_path=ref_path,
+                                other_source_hash=paper_hash,
+                                other_title=str(paper.get("paper_title") or ""),
+                                other_source_path=str(paper.get("source_path") or ""),
+                                lang=None,
+                            )
+                        )
                         continue
                     all_results.append(
                         db_ops.CompareResult(
                             side="B",
-                            source_hash=stable_hash(str(ref.get("title_key") or ref.get("title") or "")),
-                            title=str(ref.get("title") or ""),
+                            source_hash=ref_hash,
+                            title=ref_title,
                             match_status="only_in_B",
                             match_type=None,
                             match_score=0.0,
-                            source_path=ref.get("source_path"),
+                            source_path=ref_path,
+                            other_source_hash=None,
+                            other_title=None,
+                            other_source_path=None,
+                            lang=None,
+                        )
+                    )
+
+                for idx in sorted(base_indices - matched_indices):
+                    paper = papers[idx]
+                    paper_title = str(paper.get("paper_title") or "")
+                    paper_hash = str(paper.get("source_hash") or "") or stable_hash(paper_title)
+                    all_results.append(
+                        db_ops.CompareResult(
+                            side="A",
+                            source_hash=paper_hash,
+                            title=paper_title,
+                            match_status="only_in_A",
+                            match_type=None,
+                            match_score=0.0,
+                            source_path=str(paper.get("source_path") or ""),
                             other_source_hash=None,
                             other_title=None,
                             other_source_path=None,

@@ -234,6 +234,10 @@ _SIMILARITY_MAX_STEPS = 10
 
 def _normalize_title_key(title: str) -> str:
     value = unicodedata.normalize("NFKD", title)
+    value = re.sub(r"\$([^$]+)\$", r" \1 ", value)
+    value = re.sub(r"\\[a-zA-Z]+\\*?\s*\{([^{}]*)\}", r" \1 ", value)
+    value = re.sub(r"\\[a-zA-Z]+\\*?", " ", value)
+    value = value.replace("^", " ")
     greek_map = {
         "α": "alpha",
         "β": "beta",
@@ -281,7 +285,12 @@ def _normalize_title_key(title: str) -> str:
     idx = 0
     while idx < len(tokens):
         token = tokens[idx]
-        if len(token) == 1 and idx + 1 < len(tokens):
+        if (
+            len(token) == 1
+            and token.isalpha()
+            and idx + 1 < len(tokens)
+            and tokens[idx + 1].isalpha()
+        ):
             merged.append(token + tokens[idx + 1])
             idx += 2
             continue
@@ -300,6 +309,9 @@ def _strip_leading_numeric_tokens(title_key: str) -> str:
     while idx < len(tokens):
         token = tokens[idx]
         if token.isdigit() and len(token) <= _LEADING_NUMERIC_MAX_LEN:
+            idx += 1
+            continue
+        if re.fullmatch(r"\d+\.\d+", token) and len(token) <= _LEADING_NUMERIC_MAX_LEN + 2:
             idx += 1
             continue
         break

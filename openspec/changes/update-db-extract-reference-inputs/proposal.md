@@ -8,6 +8,13 @@
 - Treat `--input-json` and `--input-bibtex` as mutually exclusive reference inputs.
 - If `--input-json` is provided, default `--json` to that same path.
 - Include unmatched reference entries in CSV output when requested.
+- Deduplicate extracted JSON entries by normalized title before writing output.
+- When multiple target entries match one reference, keep the most detailed entry.
+- Normalize BibTeX title formatting (LaTeX/math markers) to improve title matching.
+- Use author/year fallback matching when title matching fails.
+- Include matched and only-in-A entries in CSV output for reference filtering.
+- Strip leading decimal section numbers in titles (e.g., 23.4) during matching.
+- Avoid merging numeric single-character tokens during title normalization.
 
 ## Impact
 - Affected specs: paper

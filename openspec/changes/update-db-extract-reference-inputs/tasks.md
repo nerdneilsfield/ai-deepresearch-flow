@@ -6,3 +6,10 @@
 - [x] 1.5 Filter target JSON by reference titles (normalize same as db serve)
 - [x] 1.6 Include unmatched references in `--output-csv`
 - [x] 1.7 Update README/README_ZH with examples
+- [x] 1.8 Deduplicate extracted JSON entries by normalized title before writing output
+- [x] 1.9 Keep the most detailed entry when multiple matches map to one reference
+- [x] 1.10 Normalize BibTeX title formatting (LaTeX/math markers) during matching
+- [x] 1.11 Add author/year fallback when title matching fails
+- [x] 1.12 Include matched and only-in-A entries in CSV output for reference filtering
+- [x] 1.13 Strip leading decimal section numbers in titles during matching
+- [x] 1.14 Avoid merging numeric single-character tokens during title normalization
