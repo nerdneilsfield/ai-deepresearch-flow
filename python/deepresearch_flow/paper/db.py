@@ -859,15 +859,41 @@ def register_db_commands(db_group: click.Group) -> None:
     def merge_group() -> None:
         """Merge paper JSON inputs."""
 
+    def _summarize_merge(output_path: Path, merged: list[dict[str, Any]], *, input_count: int) -> None:
+        field_set: set[str] = set()
+        for item in merged:
+            if isinstance(item, dict):
+                field_set.update(item.keys())
+        field_list = sorted(field_set)
+
+        console = Console()
+        summary = Table(title="Merge Summary")
+        summary.add_column("Metric", style="bold")
+        summary.add_column("Value")
+        summary.add_row("Inputs", str(input_count))
+        summary.add_row("Items", str(len(merged)))
+        summary.add_row("Fields", str(len(field_list)))
+        summary.add_row("Output", str(output_path))
+        console.print(summary)
+
+        if field_list:
+            field_table = Table(title="Fields")
+            field_table.add_column("Name")
+            for name in field_list:
+                field_table.add_row(name)
+            console.print(field_table)
+
     @merge_group.command("library")
     @click.option("-i", "--inputs", "input_paths", multiple=True, required=True, help="Input JSON files")
     @click.option("-o", "--output", "output_path", required=True, help="Output JSON file path")
     def merge_library(input_paths: Iterable[str], output_path: str) -> None:
+        paths = [Path(path) for path in input_paths]
         merged: list[dict[str, Any]] = []
-        for path in input_paths:
-            merged.extend(load_json(Path(path)))
-        write_json(Path(output_path), merged)
-        click.echo(f"Merged {len(input_paths)} files into {output_path}")
+        for path in paths:
+            merged.extend(load_json(path))
+        output = Path(output_path)
+        write_json(output, merged)
+        _summarize_merge(output, merged, input_count=len(paths))
 
     @merge_group.command("templates")
     @click.option("-i", "--inputs", "input_paths", multiple=True, required=True, help="Input JSON files")
@@ -893,8 +919,9 @@ def register_db_commands(db_group: click.Group) -> None:
                         entry[key] = value
             merged.append(entry)
 
-        write_json(Path(output_path), merged)
-        click.echo(f"Merged {len(input_paths)} files into {output_path}")
+        output = Path(output_path)
+        write_json(output, merged)
+        _summarize_merge(output, merged, input_count=len(paths))
 
     @db_group.command("render-md")
     @click.option("-i", "--input", "input_path", required=True, help="Input JSON file path")
