@@ -343,7 +343,7 @@ uv run deepresearch-flow translator translate \
 将散乱 Markdown 变为可检索数据。
 
 - 模板驱动：`simple` / `eight_questions` / `deep_read` 等模板控制抽取维度。
-- 异步节流：通过 `--max-concurrency` 与 `--sleep-every` 控制请求节奏。
+- 异步节流：通过 `--max-concurrency`、`--sleep-every` 控制请求节奏，并可用 `--timeout` 调整请求超时。
 - 增量处理：跳过已处理文件，续跑不中断。
 - 分模块恢复：多阶段模板会持久化每个模块输出，可用 `--force-stage <name>` 重跑某模块。
 - 图示提示：`deep_read` 允许输出带 `[Inferred]` 标注的推断图示；如需修复 Mermaid，可对渲染后的 Markdown 使用 `recognize fix-mermaid`。
@@ -356,7 +356,8 @@ uv run deepresearch-flow paper extract \
   --input ./library \
   --output paper_data.json \
   --template-dir ./my-custom-prompts \
-  --max-concurrency 10
+  --max-concurrency 10 \
+  --timeout 180
 
 # 先取 0..99，再仅重跑该范围内失败的文件
 uv run deepresearch-flow paper extract \

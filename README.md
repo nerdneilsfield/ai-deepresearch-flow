@@ -350,7 +350,7 @@ uv run deepresearch-flow translator translate \
 Turn loose markdown files into a queryable database.
 
 - Templates: built-in prompts like `simple`, `eight_questions`, and `deep_read` guide the LLM to extract specific insights.
-- Async and throttled: precise control over concurrency (`--max-concurrency`) and rate limits (`--sleep-every`).
+- Async and throttled: precise control over concurrency (`--max-concurrency`), rate limits (`--sleep-every`), and request timeout (`--timeout`).
 - Incremental: skips already processed files; resumes from where you left off.
 - Stage resume: multi-stage templates persist per-module outputs; use `--force-stage <name>` to rerun a module.
 - Diagram hints: `deep_read` can emit inferred diagrams labeled `[Inferred]`; use `recognize fix-mermaid` on rendered markdown if needed.
@@ -363,7 +363,8 @@ uv run deepresearch-flow paper extract \
   --input ./library \
   --output paper_data.json \
   --template-dir ./my-custom-prompts \
-  --max-concurrency 10
+  --max-concurrency 10 \
+  --timeout 180
 
 # Extract items 0..99, then retry only failed ones from that range
 uv run deepresearch-flow paper extract \
