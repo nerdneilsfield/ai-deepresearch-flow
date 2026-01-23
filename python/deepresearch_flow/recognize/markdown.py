@@ -138,7 +138,12 @@ def parse_data_url(target: str) -> Optional[tuple[str, bytes]]:
         return mime, base64.b64decode(payload)
     except Exception as exc:  # pragma: no cover - defensive
         message = str(exc).strip() or "unknown error"
-        logger.warning("Failed to decode base64 image: %s", message)
+        logger.warning(
+            "Failed to decode base64 image (mime=%s, chars=%d): %s",
+            mime or "<unknown>",
+            len(payload),
+            message,
+        )
         return None
 
 
@@ -220,17 +225,25 @@ async def embed_markdown_images(
                 response = await http_client.get(target)
             except Exception as exc:
                 message = str(exc).strip() or "unknown error"
-                logger.warning("Failed to fetch %s: %s", target, message)
+                logger.warning("Failed to fetch %s (md=%s): %s", target, md_path, message)
                 return None
             if response.status_code >= 400:
-                logger.warning("Failed to fetch %s: HTTP %d", target, response.status_code)
+                logger.warning(
+                    "Failed to fetch %s (md=%s): HTTP %d",
+                    target,
+                    md_path,
+                    response.status_code,
+                )
                 return None
             content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip()
             if not content_type.startswith("image/"):
                 guessed = mime_from_path(Path(urlparse(target).path))
                 if not guessed or not guessed.startswith("image/"):
                     logger.warning(
-                        "Skipping non-image URL %s (Content-Type %s)", target, content_type
+                        "Skipping non-image URL %s (md=%s, Content-Type=%s)",
+                        target,
+                        md_path,
+                        content_type,
                     )
                     return None
                 content_type = guessed
@@ -238,11 +251,16 @@ async def embed_markdown_images(
 
         local_path = resolve_local_path(md_path, target)
         if not local_path.exists() or not local_path.is_file():
-            logger.warning("Image not found: %s", local_path)
+            logger.warning("Image not found: %s (md=%s, target=%s)", local_path, md_path, target)
             return None
         mime = mime_from_path(local_path)
         if not mime or not mime.startswith("image/"):
-            logger.warning("Unsupported image type: %s", local_path)
+            logger.warning(
+                "Unsupported image type: %s (md=%s, mime=%s)",
+                local_path,
+                md_path,
+                mime or "unknown",
+            )
             return None
         data = await asyncio.to_thread(local_path.read_bytes)
         return data_url_from_bytes(mime, data)
@@ -266,7 +284,11 @@ async def unpack_markdown_images(
         mime, data = parsed
         ext = extension_from_mime(mime)
         if not ext:
-            logger.warning("Unsupported MIME type: %s", mime)
+            logger.warning(
+                "Unsupported MIME type: %s (alt=%s)",
+                mime,
+                alt_text or "<empty>",
+            )
             return None
         base_name = base_name_from_alt(alt_text)
         if not base_name:

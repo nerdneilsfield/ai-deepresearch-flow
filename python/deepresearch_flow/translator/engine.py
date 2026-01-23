@@ -356,7 +356,10 @@ class MarkdownTranslator:
             return text
         if not self._rumdl_path:
             if not self._rumdl_warned:
-                logger.warning("rumdl not available; skip markdown formatting")
+                logger.warning(
+                    "rumdl not available; skip markdown formatting (stage=%s)",
+                    stage,
+                )
                 self._rumdl_warned = True
             return text
 
@@ -371,8 +374,9 @@ class MarkdownTranslator:
         result = await asyncio.to_thread(run)
         if result.returncode != 0:
             logger.warning(
-                "rumdl fmt failed (%s): %s",
+                "rumdl fmt failed (stage=%s, rc=%s): %s",
                 stage,
+                result.returncode,
                 (result.stderr or "").strip() or "unknown error",
             )
             return text

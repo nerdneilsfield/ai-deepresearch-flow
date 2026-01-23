@@ -392,7 +392,7 @@ def _ensure_node_validator() -> NodeKatexValidator | None:
     node_path = shutil.which("node")
     if not node_path:
         if not _KATEX_WARNED:
-            logger.warning("node not available; skip KaTeX validation")
+            logger.warning("node binary not found; skip KaTeX validation")
             _KATEX_WARNED = True
         return None
     if _NODE_KATEX_READY is None:
@@ -408,7 +408,10 @@ def _ensure_node_validator() -> NodeKatexValidator | None:
             _NODE_KATEX_READY = False
         if not _NODE_KATEX_READY:
             if not _KATEX_WARNED:
-                logger.warning("katex npm package not available; skip KaTeX validation")
+                logger.warning(
+                    "katex npm package not available; skip KaTeX validation (node=%s)",
+                    node_path,
+                )
                 _KATEX_WARNED = True
             return None
     script_path = str((Path(__file__).with_name("katex_check.js")).resolve())

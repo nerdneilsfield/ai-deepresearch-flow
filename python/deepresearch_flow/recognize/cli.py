@@ -73,7 +73,8 @@ def _relative_path(path: Path) -> str:
 
 def _warn_if_not_empty(output_dir: Path) -> None:
     if output_dir.exists() and any(output_dir.iterdir()):
-        logger.warning("Output directory not empty: %s", output_dir)
+        item_count = sum(1 for _ in output_dir.iterdir())
+        logger.warning("Output directory not empty: %s (items=%d)", output_dir, item_count)
 
 
 def _print_summary(title: str, rows: list[tuple[str, str]]) -> None:

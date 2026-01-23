@@ -111,7 +111,12 @@ def create_app(
     asset_config = None
     if resolved_mode == "prod":
         if not static_base_url:
-            logger.warning("Static mode set to prod without base URL; falling back to dev asset routes.")
+            logger.warning(
+                "Static mode set to prod without base URL; falling back to dev asset routes "
+                "(static_mode=%s, static_base_url=%s)",
+                static_mode,
+                static_base_url or "<empty>",
+            )
             resolved_mode = "dev"
         else:
             asset_config = build_static_assets(
@@ -149,8 +154,10 @@ def create_app(
         )
     elif pdf_roots:
         logger.warning(
-            "PDF.js viewer assets not found at %s; PDF Viewer mode will be unavailable.",
+            "PDF.js viewer assets not found at %s; PDF Viewer mode will be unavailable "
+            "(pdf_roots=%d).",
             PDFJS_STATIC_DIR,
+            len(pdf_roots),
         )
     if STATIC_DIR.exists():
         routes.append(

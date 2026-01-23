@@ -31,7 +31,7 @@ async def _format_markdown(text: str) -> str:
     global _RUMDL_WARNED
     if not _RUMDL_PATH:
         if not _RUMDL_WARNED:
-            logger.warning("rumdl not available; skip markdown formatting")
+            logger.warning("rumdl not available; skip markdown formatting (recognize)")
             _RUMDL_WARNED = True
         return text
 
@@ -46,10 +46,14 @@ async def _format_markdown(text: str) -> str:
             )
         except OSError as exc:
             message = str(exc).strip() or "unknown error"
-            logger.warning("rumdl fmt failed: %s", message)
+            logger.warning("rumdl fmt failed (oserror=%s): %s", type(exc).__name__, message)
             return text
         if proc.returncode != 0:
-            logger.warning("rumdl fmt failed (%s): %s", proc.returncode, proc.stderr.strip())
+            logger.warning(
+                "rumdl fmt failed (rc=%s): %s",
+                proc.returncode,
+                proc.stderr.strip() or "unknown error",
+            )
             return text
         return proc.stdout or text
 
@@ -82,7 +86,11 @@ def discover_mineru_dirs(inputs: Iterable[str], recursive: bool) -> list[Path]:
                 raise FileNotFoundError(f"Expected full.md file but got: {path}")
             parent = path.parent.resolve()
             if not (parent / "images").is_dir():
-                logger.warning("Missing images/ for %s; continuing", parent)
+                logger.warning(
+                    "Missing images/ for %s; continuing (expected=%s)",
+                    parent,
+                    parent / "images",
+                )
             results.add(parent)
             continue
         if not path.exists():
@@ -90,13 +98,21 @@ def discover_mineru_dirs(inputs: Iterable[str], recursive: bool) -> list[Path]:
         if path.is_dir():
             if (path / "full.md").is_file():
                 if not (path / "images").is_dir():
-                    logger.warning("Missing images/ for %s; continuing", path)
+                    logger.warning(
+                        "Missing images/ for %s; continuing (expected=%s)",
+                        path,
+                        path / "images",
+                    )
                 results.add(path.resolve())
             pattern = path.rglob("full.md") if recursive else path.glob("full.md")
             for full_path in pattern:
                 parent = full_path.parent.resolve()
                 if not (parent / "images").is_dir():
-                    logger.warning("Missing images/ for %s; continuing", parent)
+                    logger.warning(
+                        "Missing images/ for %s; continuing (expected=%s)",
+                        parent,
+                        parent / "images",
+                    )
                 results.add(parent)
             continue
         raise FileNotFoundError(f"Input path not found: {path}")
@@ -127,7 +143,12 @@ async def organize_mineru_dir(
                 return None
             source_path = resolve_local_path(md_path, target)
             if not source_path.exists() or not source_path.is_file():
-                logger.warning("Image not found: %s", source_path)
+                logger.warning(
+                    "Image not found: %s (md=%s, target=%s)",
+                    source_path,
+                    md_path,
+                    target,
+                )
                 return None
             if source_path in image_map:
                 return f"images/{image_map[source_path]}"
