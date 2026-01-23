@@ -5,6 +5,7 @@ output = "paper_infos.json"
 errors = "paper_errors.json"
 max_concurrency = 6
 max_retries = 3
+timeout = 60
 backoff_base_seconds = 1.0
 backoff_max_seconds = 20.0
 truncate_strategy = "head_tail" # head | head_tail

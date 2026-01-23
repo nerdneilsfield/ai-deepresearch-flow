@@ -89,6 +89,7 @@ def paper() -> None:
 )
 @click.option("--dry-run", is_flag=True, help="Discover inputs without calling providers")
 @click.option("--max-concurrency", "max_concurrency", type=int, default=None, help="Override max concurrency")
+@click.option("--timeout", "timeout_seconds", type=float, default=None, help="Request timeout in seconds")
 @click.option("--sleep-every", "sleep_every", type=int, default=None, help="Sleep after every N requests")
 @click.option("--sleep-time", "sleep_time", type=float, default=None, help="Sleep duration in seconds")
 @click.option("--render-md", "render_md", is_flag=True, help="Render markdown outputs after extraction")
@@ -142,6 +143,7 @@ def extract(
     end_idx: int,
     dry_run: bool,
     max_concurrency: int | None,
+    timeout_seconds: float | None,
     sleep_every: int | None,
     sleep_time: float | None,
     render_md: bool,
@@ -165,8 +167,12 @@ def extract(
         raise click.ClickException("max_concurrency must be positive")
     if config.extract.max_retries <= 0:
         raise click.ClickException("max_retries must be positive")
+    if config.extract.timeout <= 0:
+        raise click.ClickException("timeout must be positive")
     if max_concurrency is not None and max_concurrency <= 0:
         raise click.ClickException("--max-concurrency must be positive")
+    if timeout_seconds is not None and timeout_seconds <= 0:
+        raise click.ClickException("--timeout must be positive")
     if sleep_every is not None and sleep_every <= 0:
         raise click.ClickException("--sleep-every must be positive")
     if sleep_time is not None and sleep_time <= 0:
@@ -270,6 +276,7 @@ def extract(
     output = Path(output_path or config.extract.output)
     errors = Path(errors_path or config.extract.errors)
     split_out = Path(split_dir) if split_dir else None
+    timeout_seconds_effective = timeout_seconds if timeout_seconds is not None else config.extract.timeout
 
     configure_logging(verbose)
 
@@ -294,6 +301,7 @@ def extract(
             end_idx=end_idx,
             dry_run=dry_run,
             max_concurrency_override=max_concurrency,
+            timeout_seconds=timeout_seconds_effective,
             prompt_template=prompt_template,
             output_language=output_language,
             custom_prompt=custom_prompt,

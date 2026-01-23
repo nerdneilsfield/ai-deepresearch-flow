@@ -15,6 +15,7 @@ class ExtractConfig:
     errors: str
     max_concurrency: int
     max_retries: int
+    timeout: float
     backoff_base_seconds: float
     backoff_max_seconds: float
     truncate_strategy: str
@@ -68,6 +69,7 @@ DEFAULT_EXTRACT = ExtractConfig(
     errors="paper_errors.json",
     max_concurrency=6,
     max_retries=3,
+    timeout=60.0,
     backoff_base_seconds=1.0,
     backoff_max_seconds=20.0,
     truncate_strategy="head_tail",
@@ -178,6 +180,7 @@ def load_config(path: str) -> PaperConfig:
         errors=_as_str(extract_data.get("errors"), DEFAULT_EXTRACT.errors) or DEFAULT_EXTRACT.errors,
         max_concurrency=_as_int(extract_data.get("max_concurrency"), DEFAULT_EXTRACT.max_concurrency),
         max_retries=_as_int(extract_data.get("max_retries"), DEFAULT_EXTRACT.max_retries),
+        timeout=_as_float(extract_data.get("timeout"), DEFAULT_EXTRACT.timeout),
         backoff_base_seconds=_as_float(
             extract_data.get("backoff_base_seconds"), DEFAULT_EXTRACT.backoff_base_seconds
         ),
