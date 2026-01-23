@@ -146,6 +146,20 @@ class KeyRotator:
 
 
 logger = logging.getLogger(__name__)
+_console = Console()
+
+
+def log_extraction_failure(path: str, error_type: str, error_message: str) -> None:
+    logger.warning(
+        "Extraction failed for %s (%s): %s",
+        path,
+        error_type,
+        error_message,
+    )
+    _console.print(
+        f"[bold red]Extraction failed[/] [dim]{path}[/]\n"
+        f"[bold yellow]{error_type}[/]: {error_message}"
+    )
 
 
 def configure_logging(verbose: bool) -> None:
@@ -568,12 +582,12 @@ async def call_with_retries(
             await throttle.tick()
         if stats:
             await stats.add_prompt_chars(prompt_chars)
-    try:
-        response_text = await call_provider(
-            provider,
-            model,
-            messages,
-            schema,
+        try:
+            response_text = await call_provider(
+                provider,
+                model,
+                messages,
+                schema,
                 api_key,
                 timeout,
                 use_structured,
@@ -895,7 +909,7 @@ async def extract_documents(
                 )
                 results[source_path] = data
             except ProviderError as exc:
-                logger.warning("Extraction failed for %s: %s", source_path, exc)
+                log_extraction_failure(source_path, exc.error_type, str(exc))
                 errors.append(
                     ExtractionError(
                         path=path,
@@ -1135,7 +1149,7 @@ async def extract_documents(
                         stage_bar.update(1)
                     await update_results(ctx)
                 except ProviderError as exc:
-                    logger.warning("Extraction failed for %s: %s", ctx.source_path, exc)
+                    log_extraction_failure(ctx.source_path, exc.error_type, str(exc))
                     errors.append(
                         ExtractionError(
                             path=task.path,
