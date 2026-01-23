@@ -45,7 +45,8 @@ async def _format_markdown(text: str) -> str:
                 check=False,
             )
         except OSError as exc:
-            logger.warning("rumdl fmt failed: %s", exc)
+            message = str(exc).strip() or "unknown error"
+            logger.warning("rumdl fmt failed: %s", message)
             return text
         if proc.returncode != 0:
             logger.warning("rumdl fmt failed (%s): %s", proc.returncode, proc.stderr.strip())

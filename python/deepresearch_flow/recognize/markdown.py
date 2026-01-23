@@ -137,7 +137,8 @@ def parse_data_url(target: str) -> Optional[tuple[str, bytes]]:
     try:
         return mime, base64.b64decode(payload)
     except Exception as exc:  # pragma: no cover - defensive
-        logger.warning("Failed to decode base64 image: %s", exc)
+        message = str(exc).strip() or "unknown error"
+        logger.warning("Failed to decode base64 image: %s", message)
         return None
 
 
@@ -218,7 +219,8 @@ async def embed_markdown_images(
             try:
                 response = await http_client.get(target)
             except Exception as exc:
-                logger.warning("Failed to fetch %s: %s", target, exc)
+                message = str(exc).strip() or "unknown error"
+                logger.warning("Failed to fetch %s: %s", target, message)
                 return None
             if response.status_code >= 400:
                 logger.warning("Failed to fetch %s: HTTP %d", target, response.status_code)

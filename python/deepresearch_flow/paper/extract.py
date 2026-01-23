@@ -157,7 +157,7 @@ class KeyRotator:
                     collected.append(value)
             candidate = " ".join(collected)
         lower_msg = candidate.lower()
-        tokens_match = not any(token.lower() not in lower_msg for token in tokens)
+        tokens_match = any(token.lower() in lower_msg for token in tokens)
         if not tokens_match:
             return False
         reset_epoch = _compute_next_reset_epoch(meta)
@@ -182,16 +182,30 @@ logger = logging.getLogger(__name__)
 _console = Console()
 
 
-def log_extraction_failure(path: str, error_type: str, error_message: str) -> None:
+def log_extraction_failure(
+    path: str,
+    error_type: str,
+    error_message: str,
+    *,
+    status_code: int | None = None,
+) -> None:
+    message = error_message.strip()
+    if not message:
+        message = "no error message"
+    if status_code is not None and f"status_code={status_code}" not in message:
+        message = f"{message} (status_code={status_code})"
+    console_message = message
+    if len(console_message) > 500:
+        console_message = f"{console_message[:500]}..."
     logger.warning(
         "Extraction failed for %s (%s): %s",
         path,
         error_type,
-        error_message,
+        message,
     )
     _console.print(
         f"[bold red]Extraction failed[/] [dim]{path}[/]\n"
-        f"[bold yellow]{error_type}[/]: {error_message}"
+        f"[bold yellow]{error_type}[/]: {console_message}"
     )
 
 
@@ -277,7 +291,19 @@ def _compute_prompt_hash(
 
 
 def _parse_reset_time(reset_time: str) -> datetime | None:
-    match = re.search(r"(\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}) ([+-]\\d{4})", reset_time)
+    candidate = reset_time.strip()
+    iso_match = re.search(
+        r"(\\d{4}-\\d{2}-\\d{2}[T ]\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:?\\d{2})?)",
+        candidate,
+    )
+    if iso_match:
+        iso_str = iso_match.group(1).replace("Z", "+00:00")
+        iso_str = re.sub(r"([+-]\\d{2})(\\d{2})$", r"\\1:\\2", iso_str)
+        try:
+            return datetime.fromisoformat(iso_str)
+        except ValueError:
+            pass
+    match = re.search(r"(\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}) ([+-]\\d{4})", candidate)
     if not match:
         return None
     try:
@@ -946,7 +972,12 @@ async def extract_documents(
                 )
                 results[source_path] = data
             except ProviderError as exc:
-                log_extraction_failure(source_path, exc.error_type, str(exc))
+                log_extraction_failure(
+                    source_path,
+                    exc.error_type,
+                    str(exc),
+                    status_code=exc.status_code,
+                )
                 errors.append(
                     ExtractionError(
                         path=path,
@@ -1186,7 +1217,12 @@ async def extract_documents(
                         stage_bar.update(1)
                     await update_results(ctx)
                 except ProviderError as exc:
-                    log_extraction_failure(ctx.source_path, exc.error_type, str(exc))
+                    log_extraction_failure(
+                        ctx.source_path,
+                        exc.error_type,
+                        str(exc),
+                        status_code=exc.status_code,
+                    )
                     errors.append(
                         ExtractionError(
                             path=task.path,
