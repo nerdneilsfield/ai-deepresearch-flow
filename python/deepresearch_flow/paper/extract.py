@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 import importlib.resources as resources
@@ -21,7 +22,13 @@ from jsonschema import Draft7Validator
 from rich.console import Console
 from rich.table import Table
 from tqdm import tqdm
-from deepresearch_flow.paper.config import PaperConfig, ProviderConfig, resolve_api_keys
+from deepresearch_flow.paper.config import (
+    ApiKeyConfig,
+    PaperConfig,
+    ProviderConfig,
+    resolve_api_key_configs,
+    resolve_api_keys,
+)
 from deepresearch_flow.paper.llm import backoff_delay, call_provider
 from deepresearch_flow.paper.prompts import DEFAULT_SYSTEM_PROMPT, DEFAULT_USER_PROMPT
 from deepresearch_flow.paper.render import render_papers, resolve_render_template
@@ -57,14 +64,16 @@ class ExtractionError:
 
 
 class KeyRotator:
-    def __init__(self, keys: list[str], *, cooldown_seconds: float, verbose: bool) -> None:
+    def __init__(self, keys: list[ApiKeyConfig], *, cooldown_seconds: float, verbose: bool) -> None:
         self._keys = keys
         self._idx = 0
         self._lock = asyncio.Lock()
         self._cooldown_seconds = max(cooldown_seconds, 0.0)
         self._verbose = verbose
-        self._cooldowns: dict[str, float] = {key: 0.0 for key in keys}
-        self._error_counts: dict[str, int] = {key: 0 for key in keys}
+        self._cooldowns: dict[str, float] = {key.key: 0.0 for key in keys}
+        self._quota_until: dict[str, float] = {key.key: 0.0 for key in keys}
+        self._key_meta: dict[str, ApiKeyConfig] = {key.key: key for key in keys}
+        self._error_counts: dict[str, int] = {key.key: 0 for key in keys}
 
     async def next_key(self) -> str | None:
         if not self._keys:
@@ -73,14 +82,24 @@ class KeyRotator:
             wait_for: float | None = None
             async with self._lock:
                 now = time.monotonic()
+                now_epoch = time.time()
                 total = len(self._keys)
                 for offset in range(total):
                     idx = (self._idx + offset) % total
-                    key = self._keys[idx]
-                    if self._cooldowns.get(key, 0.0) <= now:
+                    key = self._keys[idx].key
+                    if (
+                        self._cooldowns.get(key, 0.0) <= now
+                        and self._quota_until.get(key, 0.0) <= now_epoch
+                    ):
                         self._idx = idx + 1
                         return key
-                wait_for = min(self._cooldowns.values()) - now if self._cooldowns else None
+                waits: list[float] = []
+                for meta in self._keys:
+                    key = meta.key
+                    cooldown_wait = max(self._cooldowns.get(key, 0.0) - now, 0.0)
+                    quota_wait = max(self._quota_until.get(key, 0.0) - now_epoch, 0.0)
+                    waits.append(max(cooldown_wait, quota_wait))
+                wait_for = min(waits) if waits else None
             if wait_for is None:
                 return None
             wait_for = max(wait_for, 0.01)
@@ -103,6 +122,27 @@ class KeyRotator:
                     self._cooldown_seconds,
                     self._error_counts[key],
                 )
+
+    async def mark_quota_exceeded(self, key: str, message: str) -> bool:
+        if key not in self._key_meta:
+            return False
+        meta = self._key_meta[key]
+        tokens = meta.quota_error_tokens
+        if not tokens:
+            return False
+        lower_msg = message.lower()
+        if any(token.lower() not in lower_msg for token in tokens):
+            return False
+        reset_epoch = _compute_next_reset_epoch(meta)
+        if reset_epoch is None:
+            return False
+        async with self._lock:
+            current = self._quota_until.get(key, 0.0)
+            self._quota_until[key] = max(current, reset_epoch)
+            if self._verbose:
+                wait_for = max(reset_epoch - time.time(), 0.0)
+                logger.debug("API key quota exhausted; waiting %.2fs until reset", wait_for)
+        return True
 
 
 logger = logging.getLogger(__name__)
@@ -187,6 +227,34 @@ def _compute_prompt_hash(
     }
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _parse_reset_time(reset_time: str) -> datetime | None:
+    match = re.search(r"(\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}) ([+-]\\d{4})", reset_time)
+    if not match:
+        return None
+    try:
+        return datetime.strptime(f"{match.group(1)} {match.group(2)}", "%Y-%m-%d %H:%M:%S %z")
+    except ValueError:
+        return None
+
+
+def _compute_next_reset_epoch(meta: ApiKeyConfig) -> float | None:
+    if not meta.reset_time or not meta.quota_duration:
+        return None
+    base = _parse_reset_time(meta.reset_time)
+    if not base:
+        return None
+    duration = meta.quota_duration
+    if duration <= 0:
+        return None
+    now = datetime.now(timezone.utc)
+    base_utc = base.astimezone(timezone.utc)
+    if now <= base_utc:
+        return base_utc.timestamp()
+    elapsed = (now - base_utc).total_seconds()
+    cycles = math.floor(elapsed / duration) + 1
+    return base_utc.timestamp() + cycles * duration
 
 
 def _estimate_tokens_for_chars(char_count: int) -> int:
@@ -494,16 +562,18 @@ async def call_with_retries(
     prompt_chars = _count_prompt_chars(messages)
     while attempt < max_retries:
         attempt += 1
+        if key_rotator:
+            api_key = await key_rotator.next_key()
         if throttle:
             await throttle.tick()
         if stats:
             await stats.add_prompt_chars(prompt_chars)
-        try:
-            response_text = await call_provider(
-                provider,
-                model,
-                messages,
-                schema,
+    try:
+        response_text = await call_provider(
+            provider,
+            model,
+            messages,
+            schema,
                 api_key,
                 timeout,
                 use_structured,
@@ -515,8 +585,10 @@ async def call_with_retries(
             if exc.structured_error and use_structured != "none":
                 use_structured = "none"
                 continue
-            if should_retry_error(exc) and api_key and key_rotator:
-                await key_rotator.mark_error(api_key)
+            if api_key and key_rotator:
+                quota_hit = await key_rotator.mark_quota_exceeded(api_key, str(exc))
+                if not quota_hit and should_retry_error(exc):
+                    await key_rotator.mark_error(api_key)
             if should_retry_error(exc) and attempt < max_retries:
                 await asyncio.sleep(backoff_delay(backoff_base_seconds, attempt, backoff_max_seconds))
                 continue
@@ -703,7 +775,7 @@ async def extract_documents(
 
     cooldown_seconds = max(1.0, float(config.extract.backoff_base_seconds))
     rotator = KeyRotator(
-        resolve_api_keys(provider.api_keys),
+        resolve_api_key_configs(provider.api_keys),
         cooldown_seconds=cooldown_seconds,
         verbose=verbose,
     )
@@ -782,8 +854,6 @@ async def extract_documents(
                 truncated_content, truncation = truncate_content(
                     content, config.extract.truncate_max_chars, config.extract.truncate_strategy
                 )
-                api_key = await rotator.next_key()
-
                 messages = build_messages(
                     truncated_content,
                     schema,
@@ -800,7 +870,7 @@ async def extract_documents(
                         model,
                         messages,
                         schema,
-                        api_key,
+                        None,
                         timeout=60.0,
                         structured_mode=provider.structured_mode,
                         max_retries=config.extract.max_retries,
@@ -1038,14 +1108,13 @@ async def extract_documents(
                         stage_fields=task.stage_fields,
                         previous_outputs=previous_outputs,
                     )
-                    api_key = await rotator.next_key()
                     async with semaphore:
                         data = await call_with_retries(
                             provider,
                             model,
                             messages,
                             stage_schema,
-                            api_key,
+                            None,
                             timeout=60.0,
                             structured_mode=provider.structured_mode,
                             max_retries=config.extract.max_retries,

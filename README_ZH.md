@@ -88,6 +88,14 @@ cp config.example.toml config.toml
 ```
 
 同一 provider 支持多个 key；每次请求轮换，遇到可重试错误会进入短暂冷却。
+也可以为单个 key 提供配额信息：
+
+```toml
+api_keys = [
+  "env:OPENAI_API_KEY",
+  { key = "env:OPENAI_API_KEY_2", quota_duration = 18000, reset_time = "2026-01-23 18:04:25 +0800 CST", quota_error_tokens = ["exceed", "quota"] }
+]
+```
 
 ### 3) 从零到一的流程
 

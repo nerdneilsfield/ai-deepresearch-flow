@@ -88,6 +88,14 @@ cp config.example.toml config.toml
 ```
 
 Multiple keys per provider are supported. Keys rotate per request and enter a short cooldown on retryable errors.
+You can also provide quota metadata per key:
+
+```toml
+api_keys = [
+  "env:OPENAI_API_KEY",
+  { key = "env:OPENAI_API_KEY_2", quota_duration = 18000, reset_time = "2026-01-23 18:04:25 +0800 CST", quota_error_tokens = ["exceed", "quota"] }
+]
+```
 
 ### 3) The "Zero to Hero" Workflow
 

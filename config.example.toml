@@ -28,7 +28,10 @@ extra_headers = {}
 [[providers]]
 name = "dashscope"
 type = "dashscope"
-api_keys = ["env:DASHSCOPE_API_KEY"]
+api_keys = [
+  "env:DASHSCOPE_API_KEY",
+  { key = "env:DASHSCOPE_API_KEY_2", quota_duration = 18000, reset_time = "2026-01-23 18:04:25 +0800 CST", quota_error_tokens = ["exceed", "quota"] }
+]
 model_list = ["qwen-max"]
 structured_mode = "none"
 extra_headers = {}

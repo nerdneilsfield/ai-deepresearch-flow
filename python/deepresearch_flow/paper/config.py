@@ -29,11 +29,19 @@ class RenderConfig:
 
 
 @dataclass(frozen=True)
+class ApiKeyConfig:
+    key: str
+    quota_duration: int | None
+    reset_time: str | None
+    quota_error_tokens: list[str]
+
+
+@dataclass(frozen=True)
 class ProviderConfig:
     name: str
     type: str
     base_url: str
-    api_keys: list[str]
+    api_keys: list[ApiKeyConfig]
     api_version: str | None
     deployment: str | None
     project_id: str | None
@@ -101,6 +109,51 @@ def _as_str(value: Any, default: str | None = None) -> str | None:
     if value is None:
         return default
     return str(value)
+
+
+def _parse_api_keys(value: Any) -> list[ApiKeyConfig]:
+    if value is None:
+        return []
+    entries = value if isinstance(value, list) else [value]
+    parsed: list[ApiKeyConfig] = []
+    for entry in entries:
+        if isinstance(entry, dict):
+            key = _as_str(entry.get("key"))
+            if not key:
+                raise ValueError("api_keys object entries must include key")
+            quota_duration = entry.get("quota_duration")
+            quota_duration_value = int(quota_duration) if quota_duration is not None else None
+            if quota_duration_value is not None and quota_duration_value <= 0:
+                raise ValueError("quota_duration must be positive seconds")
+            reset_time = _as_str(entry.get("reset_time"), None)
+            tokens = entry.get("quota_error_tokens")
+            if tokens is None:
+                quota_error_tokens = []
+            elif isinstance(tokens, list):
+                quota_error_tokens = [str(token) for token in tokens]
+            else:
+                quota_error_tokens = [str(tokens)]
+            parsed.append(
+                ApiKeyConfig(
+                    key=key,
+                    quota_duration=quota_duration_value,
+                    reset_time=reset_time,
+                    quota_error_tokens=quota_error_tokens,
+                )
+            )
+        else:
+            key = _as_str(entry)
+            if not key:
+                continue
+            parsed.append(
+                ApiKeyConfig(
+                    key=key,
+                    quota_duration=None,
+                    reset_time=None,
+                    quota_error_tokens=[],
+                )
+            )
+    return parsed
 
 
 def _ensure_http_scheme(base_url: str, *, default_scheme: str = "http://") -> str:
@@ -171,10 +224,10 @@ def load_config(path: str) -> PaperConfig:
         if provider_type == "ollama" and base_url:
             base_url = _ensure_http_scheme(base_url)
 
-        api_keys = _as_list(provider.get("api_keys"))
+        api_keys = _parse_api_keys(provider.get("api_keys"))
         if not api_keys:
             api_key_single = provider.get("api_key")
-            api_keys = _as_list(api_key_single)
+            api_keys = _parse_api_keys(api_key_single)
 
         structured_mode = _as_str(provider.get("structured_mode"), None)
         if structured_mode is None:
@@ -250,15 +303,26 @@ def load_config(path: str) -> PaperConfig:
     return PaperConfig(extract=extract, render=render, providers=providers)
 
 
-def resolve_api_keys(entries: list[str]) -> list[str]:
-    resolved: list[str] = []
+def resolve_api_key_configs(entries: list[ApiKeyConfig]) -> list[ApiKeyConfig]:
+    resolved: list[ApiKeyConfig] = []
     for entry in entries:
-        entry = str(entry)
-        if entry.startswith("env:"):
-            env_name = entry.split(":", 1)[1]
+        key = entry.key
+        if key.startswith("env:"):
+            env_name = key.split(":", 1)[1]
             value = os.environ.get(env_name)
-            if value:
-                resolved.append(value)
-        else:
-            resolved.append(entry)
+            if not value:
+                continue
+            key = value
+        resolved.append(
+            ApiKeyConfig(
+                key=key,
+                quota_duration=entry.quota_duration,
+                reset_time=entry.reset_time,
+                quota_error_tokens=entry.quota_error_tokens,
+            )
+        )
     return resolved
+
+
+def resolve_api_keys(entries: list[ApiKeyConfig]) -> list[str]:
+    return [entry.key for entry in resolve_api_key_configs(entries)]
