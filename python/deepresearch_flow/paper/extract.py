@@ -123,15 +123,34 @@ class KeyRotator:
                     self._error_counts[key],
                 )
 
-    async def mark_quota_exceeded(self, key: str, message: str) -> bool:
+    async def mark_quota_exceeded(self, key: str, message: str, status_code: int | None) -> bool:
         if key not in self._key_meta:
             return False
         meta = self._key_meta[key]
         tokens = meta.quota_error_tokens
         if not tokens:
             return False
-        lower_msg = message.lower()
-        if any(token.lower() not in lower_msg for token in tokens):
+        candidate = message
+        try:
+            data = json.loads(message)
+        except (TypeError, json.JSONDecodeError):
+            data = None
+        if isinstance(data, dict):
+            collected: list[str] = [message]
+            error = data.get("error")
+            if isinstance(error, dict):
+                for key_name in ("code", "type", "message"):
+                    value = error.get(key_name)
+                    if isinstance(value, str):
+                        collected.append(value)
+            for key_name in ("code", "type", "message"):
+                value = data.get(key_name)
+                if isinstance(value, str):
+                    collected.append(value)
+            candidate = " ".join(collected)
+        lower_msg = candidate.lower()
+        tokens_match = not any(token.lower() not in lower_msg for token in tokens)
+        if not tokens_match:
             return False
         reset_epoch = _compute_next_reset_epoch(meta)
         if reset_epoch is None:
@@ -141,7 +160,12 @@ class KeyRotator:
             self._quota_until[key] = max(current, reset_epoch)
             if self._verbose:
                 wait_for = max(reset_epoch - time.time(), 0.0)
-                logger.debug("API key quota exhausted; waiting %.2fs until reset", wait_for)
+                reset_dt = datetime.fromtimestamp(reset_epoch, tz=timezone.utc).isoformat()
+                logger.debug(
+                    "API key quota exhausted; cooldown %.2fs until %s",
+                    wait_for,
+                    reset_dt,
+                )
         return True
 
 
@@ -600,7 +624,11 @@ async def call_with_retries(
                 use_structured = "none"
                 continue
             if api_key and key_rotator:
-                quota_hit = await key_rotator.mark_quota_exceeded(api_key, str(exc))
+                quota_hit = await key_rotator.mark_quota_exceeded(
+                    api_key,
+                    str(exc),
+                    exc.status_code,
+                )
                 if not quota_hit and should_retry_error(exc):
                     await key_rotator.mark_error(api_key)
             if should_retry_error(exc) and attempt < max_retries:
