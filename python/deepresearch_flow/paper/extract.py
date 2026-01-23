@@ -63,6 +63,14 @@ class ExtractionError:
     stage_name: str | None = None
 
 
+def _mask_key(value: str, *, keep: int = 4) -> str:
+    if not value:
+        return "<empty>"
+    if len(value) <= keep:
+        return value
+    return f"...{value[-keep:]}"
+
+
 class KeyRotator:
     def __init__(self, keys: list[ApiKeyConfig], *, cooldown_seconds: float, verbose: bool) -> None:
         self._keys = keys
@@ -160,9 +168,10 @@ class KeyRotator:
             self._quota_until[key] = max(current, reset_epoch)
             if self._verbose:
                 wait_for = max(reset_epoch - time.time(), 0.0)
-                reset_dt = datetime.fromtimestamp(reset_epoch, tz=timezone.utc).isoformat()
+                reset_dt = datetime.fromtimestamp(reset_epoch).astimezone().isoformat()
                 logger.debug(
-                    "API key quota exhausted; cooldown %.2fs until %s",
+                    "API key %s quota exhausted; cooldown %.2fs until %s",
+                    _mask_key(key),
                     wait_for,
                     reset_dt,
                 )
