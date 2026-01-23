@@ -82,12 +82,17 @@ class KeyRotator:
         self._quota_until: dict[str, float] = {key.key: 0.0 for key in keys}
         self._key_meta: dict[str, ApiKeyConfig] = {key.key: key for key in keys}
         self._error_counts: dict[str, int] = {key.key: 0 for key in keys}
+        self._last_pause_until: float = 0.0
+        self._last_key_quota_until: dict[str, float] = {key.key: 0.0 for key in keys}
 
     async def next_key(self) -> str | None:
         if not self._keys:
             return None
         while True:
             wait_for: float | None = None
+            wait_until_epoch: float | None = None
+            pause_reason: str | None = None
+            should_log_pause = False
             async with self._lock:
                 now = time.monotonic()
                 now_epoch = time.time()
@@ -102,16 +107,43 @@ class KeyRotator:
                         self._idx = idx + 1
                         return key
                 waits: list[float] = []
+                has_cooldown_wait = False
+                has_quota_wait = False
                 for meta in self._keys:
                     key = meta.key
                     cooldown_wait = max(self._cooldowns.get(key, 0.0) - now, 0.0)
                     quota_wait = max(self._quota_until.get(key, 0.0) - now_epoch, 0.0)
+                    if cooldown_wait > 0:
+                        has_cooldown_wait = True
+                    if quota_wait > 0:
+                        has_quota_wait = True
                     waits.append(max(cooldown_wait, quota_wait))
                 wait_for = min(waits) if waits else None
+                if wait_for is not None:
+                    wait_until_epoch = now_epoch + wait_for
+                    if wait_until_epoch > self._last_pause_until + 0.5:
+                        self._last_pause_until = wait_until_epoch
+                        if has_quota_wait and has_cooldown_wait:
+                            pause_reason = "quota/cooldown"
+                        elif has_quota_wait:
+                            pause_reason = "quota"
+                        elif has_cooldown_wait:
+                            pause_reason = "cooldown"
+                        else:
+                            pause_reason = "unknown"
+                        should_log_pause = True
             if wait_for is None:
                 return None
             wait_for = max(wait_for, 0.01)
-            if self._verbose:
+            if should_log_pause and wait_until_epoch is not None:
+                reset_dt = datetime.fromtimestamp(wait_until_epoch).astimezone().isoformat()
+                logger.warning(
+                    "All API keys unavailable (%s); pausing %.2fs until %s",
+                    pause_reason,
+                    wait_for,
+                    reset_dt,
+                )
+            elif self._verbose:
                 logger.debug("All API keys cooling down; waiting %.2fs", wait_for)
             await asyncio.sleep(wait_for)
 
@@ -124,7 +156,14 @@ class KeyRotator:
             cooldown_until = now + self._cooldown_seconds
             current = self._cooldowns.get(key, 0.0)
             self._cooldowns[key] = max(current, cooldown_until)
-            if self._verbose:
+            if cooldown_until > current:
+                logger.warning(
+                    "API key %s cooling down for %.2fs (errors=%d)",
+                    _mask_key(key),
+                    self._cooldown_seconds,
+                    self._error_counts[key],
+                )
+            elif self._verbose:
                 logger.debug(
                     "API key cooldown applied (%.2fs, errors=%d)",
                     self._cooldown_seconds,
@@ -160,13 +199,33 @@ class KeyRotator:
         tokens_match = any(token.lower() in lower_msg for token in tokens)
         if not tokens_match:
             return False
+        matched_tokens = [token for token in tokens if token.lower() in lower_msg]
         reset_epoch = _compute_next_reset_epoch(meta)
         if reset_epoch is None:
+            logger.warning(
+                "API key %s hit quota trigger but no reset_time/quota_duration configured "
+                "(matched=%s, status_code=%s)",
+                _mask_key(key),
+                ",".join(matched_tokens) or "<none>",
+                status_code if status_code is not None else "unknown",
+            )
             return False
         async with self._lock:
             current = self._quota_until.get(key, 0.0)
             self._quota_until[key] = max(current, reset_epoch)
-            if self._verbose:
+            if reset_epoch > self._last_key_quota_until.get(key, 0.0):
+                self._last_key_quota_until[key] = reset_epoch
+                wait_for = max(reset_epoch - time.time(), 0.0)
+                reset_dt = datetime.fromtimestamp(reset_epoch).astimezone().isoformat()
+                logger.warning(
+                    "API key %s quota exhausted; pausing %.2fs until %s (matched=%s, status_code=%s)",
+                    _mask_key(key),
+                    wait_for,
+                    reset_dt,
+                    ",".join(matched_tokens) or "<none>",
+                    status_code if status_code is not None else "unknown",
+                )
+            elif self._verbose:
                 wait_for = max(reset_epoch - time.time(), 0.0)
                 reset_dt = datetime.fromtimestamp(reset_epoch).astimezone().isoformat()
                 logger.debug(
@@ -292,22 +351,19 @@ def _compute_prompt_hash(
 
 def _parse_reset_time(reset_time: str) -> datetime | None:
     candidate = reset_time.strip()
-    iso_match = re.search(
-        r"(\\d{4}-\\d{2}-\\d{2}[T ]\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:?\\d{2})?)",
+    match = re.search(
+        r"(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2}(?:\.\d+)?)(?:\s*(Z|[+-]\d{2}:?\d{2}))?",
         candidate,
     )
-    if iso_match:
-        iso_str = iso_match.group(1).replace("Z", "+00:00")
-        iso_str = re.sub(r"([+-]\\d{2})(\\d{2})$", r"\\1:\\2", iso_str)
-        try:
-            return datetime.fromisoformat(iso_str)
-        except ValueError:
-            pass
-    match = re.search(r"(\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}) ([+-]\\d{4})", candidate)
     if not match:
         return None
+    date_part, time_part, tz_part = match.group(1), match.group(2), match.group(3)
+    if tz_part:
+        tz_part = tz_part.replace("Z", "+00:00")
+        tz_part = re.sub(r"([+-]\d{2})(\d{2})$", r"\1:\2", tz_part)
+    iso_str = f"{date_part}T{time_part}{tz_part or ''}"
     try:
-        return datetime.strptime(f"{match.group(1)} {match.group(2)}", "%Y-%m-%d %H:%M:%S %z")
+        return datetime.fromisoformat(iso_str)
     except ValueError:
         return None
 
@@ -747,7 +803,12 @@ async def extract_documents(
             len(markdown_files),
         )
         if not markdown_files:
-            logger.warning("Range filter yielded 0 files")
+            logger.warning(
+                "Range filter yielded 0 files (range=%d:%d, total=%d)",
+                start_idx,
+                end_idx,
+                total_files,
+            )
 
     error_entries = load_errors(errors_path) if retry_failed or retry_failed_stages else []
     retry_stage_map: dict[str, set[str]] = {}
@@ -889,6 +950,7 @@ async def extract_documents(
     stats = ExtractionStats(doc_bar=doc_bar)
 
     results_lock = asyncio.Lock()
+    logger.info("Request timeout set to %.1fs", timeout_seconds)
 
     def build_output_payload() -> dict[str, Any]:
         final_results: list[dict[str, Any]] = []
