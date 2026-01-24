@@ -15,6 +15,7 @@ import importlib.resources as resources
 import contextlib
 import logging
 import re
+import signal
 import time
 
 import coloredlogs
@@ -1102,6 +1103,31 @@ async def extract_documents(
     pause_gate: asyncio.Event | None = None
     pause_task: asyncio.Task[None] | None = None
 
+    shutdown_event = asyncio.Event()
+    shutdown_reason: str | None = None
+
+    def request_shutdown(reason: str) -> None:
+        nonlocal shutdown_reason
+        if shutdown_event.is_set():
+            return
+        shutdown_reason = reason
+        shutdown_event.set()
+        if pause_gate:
+            pause_gate.set()
+        logger.warning("Graceful shutdown requested (%s); draining in-flight tasks", reason)
+
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, request_shutdown, sig.name)
+        except (NotImplementedError, RuntimeError, ValueError):
+            signal.signal(
+                sig,
+                lambda *_args, _sig=sig: loop.call_soon_threadsafe(
+                    request_shutdown, _sig.name
+                ),
+            )
+
     if resolved_keys:
         pause_gate = asyncio.Event()
         pause_gate.set()
@@ -1153,10 +1179,24 @@ async def extract_documents(
         pause_task = asyncio.create_task(pause_watcher())
 
     async def await_key_pool_ready() -> None:
+        if shutdown_event.is_set():
+            return
         if not pause_gate or pause_gate.is_set():
             return
         try:
-            await asyncio.wait_for(pause_gate.wait(), timeout=pause_watchdog_seconds)
+            pause_wait = asyncio.create_task(pause_gate.wait())
+            shutdown_wait = asyncio.create_task(shutdown_event.wait())
+            try:
+                await asyncio.wait_for(
+                    asyncio.wait(
+                        [pause_wait, shutdown_wait],
+                        return_when=asyncio.FIRST_COMPLETED,
+                    ),
+                    timeout=pause_watchdog_seconds,
+                )
+            finally:
+                for task in (pause_wait, shutdown_wait):
+                    task.cancel()
         except asyncio.TimeoutError:
             logger.warning(
                 "Queue pause watchdog timeout; rechecking key pool availability"
@@ -1164,6 +1204,35 @@ async def extract_documents(
             wait_for, _, _ = await rotator.key_pool_wait()
             if wait_for is None or wait_for <= 0:
                 pause_gate.set()
+
+    async def drain_queue(queue: asyncio.Queue[Any], drain_lock: asyncio.Lock) -> int:
+        drained = 0
+        async with drain_lock:
+            while True:
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                queue.task_done()
+                drained += 1
+        return drained
+
+    async def wait_for_queue(queue: asyncio.Queue[Any], drain_lock: asyncio.Lock) -> None:
+        if shutdown_event.is_set():
+            await drain_queue(queue, drain_lock)
+            await queue.join()
+            return
+        join_task = asyncio.create_task(queue.join())
+        shutdown_task = asyncio.create_task(shutdown_event.wait())
+        done, _pending = await asyncio.wait(
+            [join_task, shutdown_task],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if shutdown_task in done:
+            await drain_queue(queue, drain_lock)
+        await queue.join()
+        for task in (join_task, shutdown_task):
+            task.cancel()
 
     def build_output_payload() -> dict[str, Any]:
         final_results: list[dict[str, Any]] = []
@@ -1210,10 +1279,15 @@ async def extract_documents(
         await persist_output_snapshot()
 
     async def run_single_stage(client: httpx.AsyncClient) -> None:
+        doc_queue: asyncio.Queue[Path] = asyncio.Queue()
+        drain_lock = asyncio.Lock()
+
         async def process_one(path: Path) -> None:
             source_path = str(path.resolve())
             current_stage: str | None = None
             try:
+                if shutdown_event.is_set():
+                    return
                 if verbose:
                     logger.debug("Processing %s", source_path)
                 content = read_text(path)
@@ -1239,6 +1313,8 @@ async def extract_documents(
                     prompt_system_path=prompt_system_path,
                     prompt_user_path=prompt_user_path,
                 )
+                if shutdown_event.is_set():
+                    return
                 await await_key_pool_ready()
                 async with semaphore:
                     data = await call_with_retries(
@@ -1303,7 +1379,28 @@ async def extract_documents(
                 if doc_bar:
                     doc_bar.update(1)
 
-        await asyncio.gather(*(process_one(path) for path in markdown_files))
+        for path in markdown_files:
+            if shutdown_event.is_set():
+                break
+            doc_queue.put_nowait(path)
+
+        async def worker() -> None:
+            while True:
+                if shutdown_event.is_set():
+                    await drain_queue(doc_queue, drain_lock)
+                    return
+                try:
+                    path = doc_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    return
+                await process_one(path)
+                doc_queue.task_done()
+
+        workers = [asyncio.create_task(worker()) for _ in range(max_concurrency)]
+        if markdown_files:
+            await wait_for_queue(doc_queue, drain_lock)
+        for w in workers:
+            w.cancel()
 
     async def run_multi_stage(client: httpx.AsyncClient) -> None:
         metadata_fields = [
@@ -1316,8 +1413,11 @@ async def extract_documents(
         doc_contexts: dict[Path, DocContext] = {}
         doc_states: dict[Path, DocState] = {}
         task_queue: asyncio.Queue[DocTask] = asyncio.Queue()
+        drain_lock = asyncio.Lock()
 
         for path in markdown_files:
+            if shutdown_event.is_set():
+                break
             source_path = str(path.resolve())
             if verbose:
                 logger.debug("Preparing %s", source_path)
@@ -1371,6 +1471,13 @@ async def extract_documents(
             state = doc_states[task.path]
 
             while True:
+                if shutdown_event.is_set():
+                    async with state.lock:
+                        state.failed = True
+                        state.event.set()
+                    if stage_bar:
+                        stage_bar.update(1)
+                    return
                 async with state.lock:
                     if state.failed:
                         if stage_bar:
@@ -1387,6 +1494,13 @@ async def extract_documents(
                 if retry_failed_stages
                 else None
             )
+            if shutdown_event.is_set():
+                async with state.lock:
+                    state.failed = True
+                    state.event.set()
+                if stage_bar:
+                    stage_bar.update(1)
+                return
             stage_record = ctx.stages.get(current_stage)
             if (
                 retry_failed_stages
@@ -1553,7 +1667,8 @@ async def extract_documents(
 
         async def worker() -> None:
             while True:
-                if task_queue.empty():
+                if shutdown_event.is_set():
+                    await drain_queue(task_queue, drain_lock)
                     return
                 await await_key_pool_ready()
                 try:
@@ -1564,7 +1679,7 @@ async def extract_documents(
                 task_queue.task_done()
 
         workers = [asyncio.create_task(worker()) for _ in range(max_concurrency)]
-        await task_queue.join()
+        await wait_for_queue(task_queue, drain_lock)
         for w in workers:
             w.cancel()
 
@@ -1606,8 +1721,11 @@ async def extract_documents(
         doc_contexts: dict[Path, DocContext] = {}
         doc_states: dict[Path, DocDagState] = {}
         task_queue: asyncio.Queue[DocTask] = asyncio.Queue()
+        drain_lock = asyncio.Lock()
 
         async def enqueue_ready(path: Path, stage_names: Iterable[str]) -> None:
+            if shutdown_event.is_set():
+                return
             state = doc_states[path]
             for stage_name in stage_names:
                 async with state.lock:
@@ -1629,6 +1747,8 @@ async def extract_documents(
                 )
 
         for path in markdown_files:
+            if shutdown_event.is_set():
+                break
             source_path = str(path.resolve())
             if verbose:
                 logger.debug("Preparing %s", source_path)
@@ -1806,6 +1926,9 @@ async def extract_documents(
             state = doc_states[task.path]
             current_stage = task.stage_name
 
+            if shutdown_event.is_set():
+                await finalize_stage(ctx, current_stage, failed=False)
+                return
             async with state.lock:
                 if state.failed:
                     state.in_flight.discard(current_stage)
@@ -1939,7 +2062,8 @@ async def extract_documents(
 
         async def worker() -> None:
             while True:
-                if task_queue.empty():
+                if shutdown_event.is_set():
+                    await drain_queue(task_queue, drain_lock)
                     return
                 await await_key_pool_ready()
                 try:
@@ -1950,7 +2074,7 @@ async def extract_documents(
                 task_queue.task_done()
 
         workers = [asyncio.create_task(worker()) for _ in range(max_concurrency)]
-        await task_queue.join()
+        await wait_for_queue(task_queue, drain_lock)
         for w in workers:
             w.cancel()
 
@@ -2003,6 +2127,12 @@ async def extract_documents(
         for err in errors
     ]
     write_json(errors_path, error_payload)
+
+    if shutdown_event.is_set():
+        logger.warning(
+            "Graceful shutdown completed (%s)",
+            shutdown_reason or "signal",
+        )
 
     if split:
         target_dir = split_dir or output_path.parent
