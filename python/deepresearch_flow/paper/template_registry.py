@@ -24,6 +24,7 @@ class TemplateBundle:
 class StageDefinition:
     name: str
     fields: list[str]
+    depends_on: list[str] | None = None
 
 
 _TEMPLATES: dict[str, TemplateBundle] = {

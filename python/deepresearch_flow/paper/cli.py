@@ -79,6 +79,11 @@ def paper() -> None:
     is_flag=True,
     help="Retry only failed stages per document (multi-stage templates only)",
 )
+@click.option(
+    "--stage-dag",
+    is_flag=True,
+    help="Enable dependency-aware DAG scheduling (multi-stage templates only)",
+)
 @click.option("--start-idx", "start_idx", type=int, default=0, help="Start index for inputs")
 @click.option(
     "--end-idx",
@@ -139,6 +144,7 @@ def extract(
     force_stages: tuple[str, ...],
     retry_failed: bool,
     retry_failed_stages: bool,
+    stage_dag: bool,
     start_idx: int,
     end_idx: int,
     dry_run: bool,
@@ -206,6 +212,8 @@ def extract(
     custom_prompt = bool(prompt_system or prompt_user or template_dir)
     if custom_prompt and prompt_template != "simple":
         raise click.ClickException("Custom prompts cannot be combined with built-in prompt templates")
+    if stage_dag and custom_prompt:
+        raise click.ClickException("--stage-dag requires a built-in multi-stage prompt template")
 
     schema_override = schema_path or None
     prompt_system_path = Path(prompt_system) if prompt_system else None
@@ -297,6 +305,7 @@ def extract(
             force_stages=list(force_stages),
             retry_failed=retry_failed,
             retry_failed_stages=retry_failed_stages,
+            stage_dag=stage_dag or config.extract.stage_dag,
             start_idx=start_idx,
             end_idx=end_idx,
             dry_run=dry_run,

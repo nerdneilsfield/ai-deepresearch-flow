@@ -8,6 +8,40 @@ import httpx
 from deepresearch_flow.paper.providers.base import ProviderError
 
 
+def _extract_error_message(response: httpx.Response) -> str:
+    parts: list[str] = []
+    try:
+        data = response.json()
+    except ValueError:
+        data = None
+    if isinstance(data, dict):
+        error = data.get("error")
+        if isinstance(error, dict):
+            for key in ("code", "type", "message"):
+                value = error.get(key)
+                if isinstance(value, str):
+                    value = value.strip()
+                    if value and value not in parts:
+                        parts.append(value)
+        elif isinstance(error, str):
+            value = error.strip()
+            if value and value not in parts:
+                parts.append(value)
+        for key in ("code", "type", "message"):
+            value = data.get(key)
+            if isinstance(value, str):
+                value = value.strip()
+                if value and value not in parts:
+                    parts.append(value)
+    if parts:
+        return " | ".join(parts)
+    text = (response.text or "").strip()
+    if text:
+        return text
+    reason = response.reason_phrase or "HTTP error"
+    return f"{response.status_code} {reason}".strip()
+
+
 async def chat(
     client: httpx.AsyncClient,
     base_url: str,
@@ -42,12 +76,20 @@ async def chat(
         raise ProviderError(str(exc), retryable=True) from exc
 
     if response.status_code == 429:
-        raise ProviderError(response.text, status_code=429, retryable=True)
+        raise ProviderError(_extract_error_message(response), status_code=429, retryable=True)
     if response.status_code >= 500:
-        raise ProviderError(response.text, status_code=response.status_code, retryable=True)
+        raise ProviderError(
+            _extract_error_message(response),
+            status_code=response.status_code,
+            retryable=True,
+        )
     if response.status_code >= 400:
         structured_error = structured_mode in ("json_schema", "json_object")
-        raise ProviderError(response.text, status_code=response.status_code, structured_error=structured_error)
+        raise ProviderError(
+            _extract_error_message(response),
+            status_code=response.status_code,
+            structured_error=structured_error,
+        )
 
     data = response.json()
     choices = data.get("choices") or []

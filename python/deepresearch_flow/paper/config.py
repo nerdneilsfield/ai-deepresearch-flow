@@ -22,6 +22,7 @@ class ExtractConfig:
     truncate_max_chars: int
     cost_estimate: bool
     schema_path: str | None
+    stage_dag: bool
 
 
 @dataclass(frozen=True)
@@ -76,6 +77,7 @@ DEFAULT_EXTRACT = ExtractConfig(
     truncate_max_chars=20000,
     cost_estimate=True,
     schema_path=None,
+    stage_dag=False,
 )
 
 DEFAULT_RENDER = RenderConfig(template_path=None)
@@ -196,6 +198,7 @@ def load_config(path: str) -> PaperConfig:
         ),
         cost_estimate=_as_bool(extract_data.get("cost_estimate"), DEFAULT_EXTRACT.cost_estimate),
         schema_path=_as_str(extract_data.get("schema_path"), DEFAULT_EXTRACT.schema_path),
+        stage_dag=_as_bool(extract_data.get("stage_dag"), DEFAULT_EXTRACT.stage_dag),
     )
 
     render_data = data.get("render", {})

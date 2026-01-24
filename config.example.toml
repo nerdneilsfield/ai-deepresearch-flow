@@ -11,6 +11,7 @@ backoff_max_seconds = 20.0
 truncate_strategy = "head_tail" # head | head_tail
 truncate_max_chars = 20000
 cost_estimate = true
+stage_dag = false
 
 [render]
 # If omitted, the built-in markdown template is used.

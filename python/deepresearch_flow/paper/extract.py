@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import math
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,6 +35,7 @@ from deepresearch_flow.paper.prompts import DEFAULT_SYSTEM_PROMPT, DEFAULT_USER_
 from deepresearch_flow.paper.render import render_papers, resolve_render_template
 from deepresearch_flow.paper.schema import schema_to_prompt, validate_schema
 from deepresearch_flow.paper.template_registry import (
+    StageDefinition,
     get_template_bundle,
     get_stage_definitions,
     load_custom_prompt_templates,
@@ -268,6 +270,13 @@ def log_extraction_failure(
     )
 
 
+def _summarize_error_message(message: str, limit: int = 300) -> str:
+    text = (message or "").strip() or "no error message"
+    if len(text) > limit:
+        return f"{text[:limit]}..."
+    return text
+
+
 def configure_logging(verbose: bool) -> None:
     level = "DEBUG" if verbose else "INFO"
     coloredlogs.install(level=level, fmt="%(asctime)s %(levelname)s %(message)s")
@@ -288,6 +297,17 @@ class DocState:
     failed: bool = False
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     event: asyncio.Event = field(default_factory=asyncio.Event)
+
+
+@dataclass
+class DocDagState:
+    total_stages: int
+    remaining: int
+    completed: set[str] = field(default_factory=set)
+    in_flight: set[str] = field(default_factory=set)
+    failed: bool = False
+    finalized: bool = False
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 @dataclass
@@ -347,6 +367,56 @@ def _compute_prompt_hash(
     }
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _resolve_stage_dependencies(
+    stage_definitions: list[StageDefinition],
+) -> dict[str, list[str]]:
+    deps: dict[str, list[str]] = {}
+    for idx, stage_def in enumerate(stage_definitions):
+        if stage_def.depends_on is None:
+            if idx == 0:
+                deps[stage_def.name] = []
+            else:
+                deps[stage_def.name] = [stage_definitions[idx - 1].name]
+        else:
+            deps[stage_def.name] = list(stage_def.depends_on)
+    return deps
+
+
+def _build_dependency_graph(
+    stage_definitions: list[StageDefinition],
+    deps: dict[str, list[str]],
+) -> dict[str, list[str]]:
+    stage_names = {stage_def.name for stage_def in stage_definitions}
+    for stage_name, dependencies in deps.items():
+        for dependency in dependencies:
+            if dependency not in stage_names:
+                raise ValueError(
+                    f"Stage '{stage_name}' depends on unknown stage '{dependency}'"
+                )
+
+    dependents: dict[str, list[str]] = {name: [] for name in stage_names}
+    indegree: dict[str, int] = {name: 0 for name in stage_names}
+    for stage_name, dependencies in deps.items():
+        indegree[stage_name] = len(dependencies)
+        for dependency in dependencies:
+            dependents[dependency].append(stage_name)
+
+    queue = deque(name for name, degree in indegree.items() if degree == 0)
+    visited = 0
+    while queue:
+        node = queue.popleft()
+        visited += 1
+        for child in dependents[node]:
+            indegree[child] -= 1
+            if indegree[child] == 0:
+                queue.append(child)
+
+    if visited != len(stage_names):
+        raise ValueError("Stage dependency cycle detected in template definition")
+
+    return dependents
 
 
 def _parse_reset_time(reset_time: str) -> datetime | None:
@@ -711,17 +781,26 @@ async def call_with_retries(
             if stats:
                 await stats.add_output_chars(len(response_text))
         except ProviderError as exc:
-            if exc.structured_error and use_structured != "none":
-                use_structured = "none"
-                continue
+            quota_hit = False
             if api_key and key_rotator:
                 quota_hit = await key_rotator.mark_quota_exceeded(
                     api_key,
                     str(exc),
                     exc.status_code,
                 )
-                if not quota_hit and should_retry_error(exc):
-                    await key_rotator.mark_error(api_key)
+            if exc.structured_error and use_structured != "none":
+                logger.warning(
+                    "Structured response failed; retrying without structured output "
+                    "(provider=%s, model=%s, status_code=%s): %s",
+                    provider.name,
+                    model,
+                    exc.status_code if exc.status_code is not None else "unknown",
+                    _summarize_error_message(str(exc)),
+                )
+                use_structured = "none"
+                continue
+            if api_key and key_rotator and not quota_hit and should_retry_error(exc):
+                await key_rotator.mark_error(api_key)
             if should_retry_error(exc) and attempt < max_retries:
                 await asyncio.sleep(backoff_delay(backoff_base_seconds, attempt, backoff_max_seconds))
                 continue
@@ -768,6 +847,7 @@ async def extract_documents(
     force_stages: list[str],
     retry_failed: bool,
     retry_failed_stages: bool,
+    stage_dag: bool,
     start_idx: int,
     end_idx: int,
     dry_run: bool,
@@ -827,11 +907,13 @@ async def extract_documents(
     else:
         logger.debug("Discovered %d markdown files", len(markdown_files))
 
+    stage_definitions = get_stage_definitions(prompt_template) if not custom_prompt else []
+    multi_stage = bool(stage_definitions)
+    stage_dag_enabled = stage_dag and multi_stage
+
     if dry_run:
         input_chars = 0
         prompt_chars = 0
-        stage_definitions = get_stage_definitions(prompt_template) if not custom_prompt else []
-        multi_stage = bool(stage_definitions)
         metadata_fields = [
             "paper_title",
             "paper_authors",
@@ -874,6 +956,21 @@ async def extract_documents(
                     prompt_user_path=prompt_user_path,
                 )
                 prompt_chars += _count_prompt_chars(messages)
+
+        if stage_dag_enabled and stage_definitions:
+            stage_dependencies = _resolve_stage_dependencies(stage_definitions)
+            _build_dependency_graph(stage_definitions, stage_dependencies)
+            plan_table = Table(
+                title="stage DAG plan (dry-run)",
+                header_style="bold cyan",
+                title_style="bold magenta",
+            )
+            plan_table.add_column("Stage", style="cyan", no_wrap=True)
+            plan_table.add_column("Depends on", style="white")
+            for stage_def in stage_definitions:
+                deps = stage_dependencies.get(stage_def.name, [])
+                plan_table.add_row(stage_def.name, ", ".join(deps) if deps else "none")
+            Console().print(plan_table)
 
         duration = time.monotonic() - start_time
         prompt_tokens = _estimate_tokens_for_chars(prompt_chars)
@@ -923,11 +1020,13 @@ async def extract_documents(
 
     errors: list[ExtractionError] = []
     results: dict[str, dict[str, Any]] = {}
-    stage_definitions = get_stage_definitions(prompt_template) if not custom_prompt else []
-    multi_stage = bool(stage_definitions)
     stage_output_dir = Path("paper_stage_outputs")
     if multi_stage:
         stage_output_dir.mkdir(parents=True, exist_ok=True)
+        if stage_dag_enabled:
+            logger.info("Multi-stage scheduler: DAG")
+        else:
+            logger.info("Multi-stage scheduler: sequential")
 
     throttle = None
     if sleep_every is not None or sleep_time is not None:
@@ -973,6 +1072,28 @@ async def extract_documents(
         async with results_lock:
             payload = build_output_payload()
         await asyncio.to_thread(write_json, output_path, payload)
+
+    def build_merged(ctx: DocContext) -> dict[str, Any]:
+        merged: dict[str, Any] = {}
+        for stage_def in stage_definitions:
+            merged.update(ctx.stages.get(stage_def.name, {}))
+        return merged
+
+    async def update_results(ctx: DocContext) -> None:
+        merged = build_merged(ctx)
+        data = append_metadata(
+            merged,
+            source_path=ctx.source_path,
+            source_hash=ctx.source_hash,
+            provider=provider.name,
+            model=model,
+            truncation=ctx.truncation,
+            prompt_template=prompt_template,
+            output_language=output_language,
+        )
+        async with results_lock:
+            results[ctx.source_path] = data
+        await persist_output_snapshot()
 
     async def run_single_stage(client: httpx.AsyncClient) -> None:
         async def process_one(path: Path) -> None:
@@ -1130,28 +1251,6 @@ async def extract_documents(
                     )
                 )
 
-        def build_merged(ctx: DocContext) -> dict[str, Any]:
-            merged: dict[str, Any] = {}
-            for stage_def in stage_definitions:
-                merged.update(ctx.stages.get(stage_def.name, {}))
-            return merged
-
-        async def update_results(ctx: DocContext) -> None:
-            merged = build_merged(ctx)
-            data = append_metadata(
-                merged,
-                source_path=ctx.source_path,
-                source_hash=ctx.source_hash,
-                provider=provider.name,
-                model=model,
-                truncation=ctx.truncation,
-                prompt_template=prompt_template,
-                output_language=output_language,
-            )
-            async with results_lock:
-                results[ctx.source_path] = data
-            await persist_output_snapshot()
-
         async def run_task(task: DocTask) -> None:
             ctx = doc_contexts[task.path]
             state = doc_states[task.path]
@@ -1211,17 +1310,9 @@ async def extract_documents(
                     state.event.set()
                     state.event = asyncio.Event()
                 return
-            prompt_hash = _compute_prompt_hash(
-                prompt_template=prompt_template,
-                output_language=output_language,
-                stage_name=current_stage,
-                stage_fields=task.stage_fields,
-                custom_prompt=custom_prompt,
-                prompt_system_path=prompt_system_path,
-                prompt_user_path=prompt_user_path,
-            )
-            stage_schema = build_stage_schema(schema, task.stage_fields)
-            stage_validator = validate_schema(stage_schema)
+            prompt_hash = prompt_hash_map[current_stage]
+            stage_schema = stage_schema_map[current_stage]
+            stage_validator = stage_validator_map[current_stage]
             stage_meta = ctx.stage_meta.get(current_stage, {})
             needs_run = force or current_stage in force_stage_set
             if stage_record is None:
@@ -1359,10 +1450,396 @@ async def extract_documents(
         for w in workers:
             w.cancel()
 
+    async def run_multi_stage_dag(client: httpx.AsyncClient) -> None:
+        metadata_fields = [
+            "paper_title",
+            "paper_authors",
+            "publication_date",
+            "publication_venue",
+        ]
+        force_stage_set = set(force_stages or [])
+        stage_dependencies = _resolve_stage_dependencies(stage_definitions)
+        dependents_map = _build_dependency_graph(stage_definitions, stage_dependencies)
+        stage_index_map = {stage_def.name: idx for idx, stage_def in enumerate(stage_definitions)}
+        stage_fields_map = {
+            stage_def.name: metadata_fields + stage_def.fields for stage_def in stage_definitions
+        }
+        stage_schema_map: dict[str, dict[str, Any]] = {}
+        stage_validator_map: dict[str, Draft7Validator] = {}
+        prompt_hash_map: dict[str, str] = {}
+        for stage_def in stage_definitions:
+            stage_name = stage_def.name
+            stage_schema = build_stage_schema(schema, stage_fields_map[stage_name])
+            stage_schema_map[stage_name] = stage_schema
+            stage_validator_map[stage_name] = validate_schema(stage_schema)
+            prompt_hash_map[stage_name] = _compute_prompt_hash(
+                prompt_template=prompt_template,
+                output_language=output_language,
+                stage_name=stage_name,
+                stage_fields=stage_fields_map[stage_name],
+                custom_prompt=custom_prompt,
+                prompt_system_path=prompt_system_path,
+                prompt_user_path=prompt_user_path,
+            )
+
+        total_reused = 0
+        fully_completed = 0
+
+        doc_contexts: dict[Path, DocContext] = {}
+        doc_states: dict[Path, DocDagState] = {}
+        task_queue: asyncio.Queue[DocTask] = asyncio.Queue()
+
+        async def enqueue_ready(path: Path, stage_names: Iterable[str]) -> None:
+            state = doc_states[path]
+            for stage_name in stage_names:
+                async with state.lock:
+                    if state.failed:
+                        continue
+                    if stage_name in state.completed or stage_name in state.in_flight:
+                        continue
+                    dependencies = stage_dependencies.get(stage_name, [])
+                    if any(dep not in state.completed for dep in dependencies):
+                        continue
+                    state.in_flight.add(stage_name)
+                task_queue.put_nowait(
+                    DocTask(
+                        path=path,
+                        stage_index=stage_index_map[stage_name],
+                        stage_name=stage_name,
+                        stage_fields=stage_fields_map[stage_name],
+                    )
+                )
+
+        for path in markdown_files:
+            source_path = str(path.resolve())
+            if verbose:
+                logger.debug("Preparing %s", source_path)
+            content = read_text(path)
+            await stats.add_input_chars(len(content))
+            source_hash = compute_source_hash(content)
+            truncated_content, truncation = truncate_content(
+                content, config.extract.truncate_max_chars, config.extract.truncate_strategy
+            )
+            stage_path = stage_output_dir / f"{stable_hash(source_path)}.json"
+            stage_state = load_stage_state(stage_path) if not force else None
+            if stage_state and stage_state.get("source_hash") != source_hash:
+                stage_state = None
+            if stage_state is None:
+                stage_state = {
+                    "source_path": source_path,
+                    "source_hash": source_hash,
+                    "prompt_template": prompt_template,
+                    "output_language": output_language,
+                    "stages": {},
+                    "stage_meta": {},
+                }
+            stages: dict[str, dict[str, Any]] = stage_state.get("stages", {})
+            stage_meta: dict[str, dict[str, Any]] = stage_state.get("stage_meta", {})
+            doc_contexts[path] = DocContext(
+                path=path,
+                source_path=source_path,
+                content=content,
+                truncated_content=truncated_content,
+                truncation=truncation,
+                source_hash=source_hash,
+                stage_path=stage_path,
+                stage_state=stage_state,
+                stages=stages,
+                stage_meta=stage_meta,
+            )
+            doc_states[path] = DocDagState(
+                total_stages=len(stage_definitions),
+                remaining=len(stage_definitions),
+            )
+            state = doc_states[path]
+            retry_stages = (
+                retry_stage_map.get(source_path)
+                if retry_failed_stages
+                else None
+            )
+            reused_count = 0
+            for stage_def in stage_definitions:
+                stage_name = stage_def.name
+                stage_record = stages.get(stage_name)
+                if (
+                    retry_failed_stages
+                    and retry_stages is not None
+                    and stage_name not in retry_stages
+                    and stage_record is not None
+                ):
+                    state.completed.add(stage_name)
+                    state.remaining -= 1
+                    reused_count += 1
+                    continue
+
+                stage_meta_entry = stage_meta.get(stage_name, {})
+                needs_run = force or stage_name in force_stage_set
+                if stage_record is None:
+                    needs_run = True
+                if stage_meta_entry.get("prompt_hash") != prompt_hash_map[stage_name]:
+                    needs_run = True
+                if stage_record is not None and not needs_run:
+                    errors_in_stage = sorted(
+                        stage_validator_map[stage_name].iter_errors(stage_record),
+                        key=lambda e: e.path,
+                    )
+                    if errors_in_stage:
+                        needs_run = True
+
+                if not needs_run:
+                    state.completed.add(stage_name)
+                    state.remaining -= 1
+                    reused_count += 1
+
+            if reused_count:
+                total_reused += reused_count
+                if stage_bar:
+                    stage_bar.update(reused_count)
+
+            if state.remaining == 0:
+                state.finalized = True
+                if doc_bar:
+                    doc_bar.update(1)
+                await update_results(doc_contexts[path])
+                merged = build_merged(doc_contexts[path])
+                errors_in_doc = sorted(validator.iter_errors(merged), key=lambda e: e.path)
+                if errors_in_doc:
+                    errors.append(
+                        ExtractionError(
+                            path=path,
+                            provider=provider.name,
+                            model=model,
+                            error_type="validation_error",
+                            error_message=f"Schema validation failed: {errors_in_doc[0].message}",
+                            stage_name=stage_definitions[-1].name if stage_definitions else None,
+                        )
+                    )
+                    state.failed = True
+                fully_completed += 1
+                continue
+
+            await enqueue_ready(path, [stage_def.name for stage_def in stage_definitions])
+
+        if total_reused:
+            logger.info(
+                "DAG precheck reused %d/%d stages",
+                total_reused,
+                len(markdown_files) * len(stage_definitions),
+            )
+        if fully_completed:
+            logger.info("DAG precheck fully satisfied %d docs (no stages queued)", fully_completed)
+
+        async def finalize_stage(
+            ctx: DocContext,
+            stage_name: str,
+            *,
+            failed: bool,
+        ) -> None:
+            state = doc_states[ctx.path]
+            skip_count = 0
+            doc_done = False
+            is_failed = False
+            async with state.lock:
+                state.in_flight.discard(stage_name)
+                if stage_name not in state.completed:
+                    state.completed.add(stage_name)
+                    state.remaining -= 1
+                if failed and not state.failed:
+                    state.failed = True
+                    skip_count = state.remaining - len(state.in_flight)
+                    if skip_count < 0:
+                        skip_count = 0
+                    state.remaining -= skip_count
+                if state.remaining == 0 and not state.finalized:
+                    state.finalized = True
+                    doc_done = True
+                is_failed = state.failed
+
+            if stage_bar:
+                stage_bar.update(1)
+                if skip_count:
+                    stage_bar.update(skip_count)
+
+            if not is_failed:
+                await enqueue_ready(ctx.path, dependents_map.get(stage_name, []))
+
+            if doc_done:
+                if doc_bar:
+                    doc_bar.update(1)
+                if not is_failed:
+                    merged = build_merged(ctx)
+                    errors_in_doc = sorted(validator.iter_errors(merged), key=lambda e: e.path)
+                    if errors_in_doc:
+                        errors.append(
+                            ExtractionError(
+                                path=ctx.path,
+                                provider=provider.name,
+                                model=model,
+                                error_type="validation_error",
+                                error_message=f"Schema validation failed: {errors_in_doc[0].message}",
+                                stage_name=stage_name,
+                            )
+                        )
+                        async with state.lock:
+                            state.failed = True
+
+        async def run_task(task: DocTask) -> None:
+            ctx = doc_contexts[task.path]
+            state = doc_states[task.path]
+            current_stage = task.stage_name
+
+            async with state.lock:
+                if state.failed:
+                    state.in_flight.discard(current_stage)
+            if state.failed:
+                await finalize_stage(ctx, current_stage, failed=False)
+                return
+
+            retry_stages = (
+                retry_stage_map.get(ctx.source_path)
+                if retry_failed_stages
+                else None
+            )
+            stage_record = ctx.stages.get(current_stage)
+            if (
+                retry_failed_stages
+                and retry_stages is not None
+                and current_stage not in retry_stages
+                and stage_record is not None
+            ):
+                await update_results(ctx)
+                await finalize_stage(ctx, current_stage, failed=False)
+                return
+
+            prompt_hash = _compute_prompt_hash(
+                prompt_template=prompt_template,
+                output_language=output_language,
+                stage_name=current_stage,
+                stage_fields=task.stage_fields,
+                custom_prompt=custom_prompt,
+                prompt_system_path=prompt_system_path,
+                prompt_user_path=prompt_user_path,
+            )
+            stage_schema = build_stage_schema(schema, task.stage_fields)
+            stage_validator = validate_schema(stage_schema)
+            stage_meta = ctx.stage_meta.get(current_stage, {})
+            needs_run = force or current_stage in force_stage_set
+            if stage_record is None:
+                needs_run = True
+            if stage_meta.get("prompt_hash") != prompt_hash:
+                needs_run = True
+            if stage_record is not None and not needs_run:
+                errors_in_stage = sorted(
+                    stage_validator.iter_errors(stage_record), key=lambda e: e.path
+                )
+                if errors_in_stage:
+                    needs_run = True
+
+            if not needs_run:
+                await update_results(ctx)
+                await finalize_stage(ctx, current_stage, failed=False)
+                return
+
+            try:
+                dependencies = stage_dependencies.get(current_stage, [])
+                previous_payload = {
+                    dep: ctx.stages.get(dep) for dep in dependencies if dep in ctx.stages
+                }
+                previous_outputs = (
+                    json.dumps(previous_payload, ensure_ascii=False) if previous_payload else ""
+                )
+                messages = build_messages(
+                    ctx.truncated_content,
+                    stage_schema,
+                    provider,
+                    prompt_template,
+                    output_language,
+                    custom_prompt=False,
+                    prompt_system_path=None,
+                    prompt_user_path=None,
+                    stage_name=current_stage,
+                    stage_fields=task.stage_fields,
+                    previous_outputs=previous_outputs,
+                )
+                async with semaphore:
+                    data = await call_with_retries(
+                        provider,
+                        model,
+                        messages,
+                        stage_schema,
+                        None,
+                        timeout=timeout_seconds,
+                        structured_mode=provider.structured_mode,
+                        max_retries=config.extract.max_retries,
+                        backoff_base_seconds=config.extract.backoff_base_seconds,
+                        backoff_max_seconds=config.extract.backoff_max_seconds,
+                        client=client,
+                        validator=stage_validator,
+                        key_rotator=rotator,
+                        throttle=throttle,
+                        stats=stats,
+                    )
+                async with state.lock:
+                    ctx.stages[current_stage] = data
+                    ctx.stage_meta[current_stage] = {"prompt_hash": prompt_hash}
+                    ctx.stage_state["stages"] = ctx.stages
+                    ctx.stage_state["stage_meta"] = ctx.stage_meta
+                    write_json_atomic(ctx.stage_path, ctx.stage_state)
+                await update_results(ctx)
+                await finalize_stage(ctx, current_stage, failed=False)
+            except ProviderError as exc:
+                log_extraction_failure(
+                    ctx.source_path,
+                    exc.error_type,
+                    str(exc),
+                    status_code=exc.status_code,
+                )
+                errors.append(
+                    ExtractionError(
+                        path=task.path,
+                        provider=provider.name,
+                        model=model,
+                        error_type=exc.error_type,
+                        error_message=str(exc),
+                        stage_name=current_stage,
+                    )
+                )
+                await finalize_stage(ctx, current_stage, failed=True)
+            except Exception as exc:  # pragma: no cover - safety net
+                logger.exception("Unexpected error while processing %s", ctx.source_path)
+                errors.append(
+                    ExtractionError(
+                        path=task.path,
+                        provider=provider.name,
+                        model=model,
+                        error_type="unexpected_error",
+                        error_message=str(exc),
+                        stage_name=current_stage,
+                    )
+                )
+                await finalize_stage(ctx, current_stage, failed=True)
+
+        async def worker() -> None:
+            while True:
+                try:
+                    task = task_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    return
+                await run_task(task)
+                task_queue.task_done()
+
+        workers = [asyncio.create_task(worker()) for _ in range(max_concurrency)]
+        await task_queue.join()
+        for w in workers:
+            w.cancel()
+
     try:
         async with httpx.AsyncClient() as client:
             if multi_stage:
-                await run_multi_stage(client)
+                if stage_dag_enabled:
+                    await run_multi_stage_dag(client)
+                else:
+                    await run_multi_stage(client)
             else:
                 await run_single_stage(client)
     finally:
