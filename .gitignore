@@ -240,3 +240,4 @@ pnpm-lock.yaml
 .rumdl_cache/
 fix-mermaid-errors.json
 .gitignore
+fix-math-errors.json
