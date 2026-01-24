@@ -799,6 +799,9 @@ async def call_with_retries(
                 )
                 use_structured = "none"
                 continue
+            if quota_hit:
+                attempt -= 1
+                continue
             if api_key and key_rotator and not quota_hit and should_retry_error(exc):
                 await key_rotator.mark_error(api_key)
             if should_retry_error(exc) and attempt < max_retries:
