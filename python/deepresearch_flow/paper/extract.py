@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 import importlib.resources as resources
+import contextlib
 import logging
 import re
 import time
@@ -148,6 +149,47 @@ class KeyRotator:
             elif self._verbose:
                 logger.debug("All API keys cooling down; waiting %.2fs", wait_for)
             await asyncio.sleep(wait_for)
+
+    async def key_pool_wait(self) -> tuple[float | None, str | None, float | None]:
+        if not self._keys:
+            return None, None, None
+        async with self._lock:
+            now = time.monotonic()
+            now_epoch = time.time()
+            for meta in self._keys:
+                key = meta.key
+                if (
+                    self._cooldowns.get(key, 0.0) <= now
+                    and self._quota_until.get(key, 0.0) <= now_epoch
+                ):
+                    return 0.0, None, None
+
+            waits: list[float] = []
+            has_cooldown_wait = False
+            has_quota_wait = False
+            for meta in self._keys:
+                key = meta.key
+                cooldown_wait = max(self._cooldowns.get(key, 0.0) - now, 0.0)
+                quota_wait = max(self._quota_until.get(key, 0.0) - now_epoch, 0.0)
+                if cooldown_wait > 0:
+                    has_cooldown_wait = True
+                if quota_wait > 0:
+                    has_quota_wait = True
+                waits.append(max(cooldown_wait, quota_wait))
+
+            wait_for = min(waits) if waits else None
+            if wait_for is None:
+                return None, None, None
+            if has_quota_wait and has_cooldown_wait:
+                reason = "quota/cooldown"
+            elif has_quota_wait:
+                reason = "quota"
+            elif has_cooldown_wait:
+                reason = "cooldown"
+            else:
+                reason = "unknown"
+            wait_until_epoch = now_epoch + wait_for
+            return wait_for, reason, wait_until_epoch
 
     async def mark_error(self, key: str) -> None:
         if key not in self._cooldowns:
@@ -1013,8 +1055,9 @@ async def extract_documents(
     }
 
     cooldown_seconds = max(1.0, float(config.extract.backoff_base_seconds))
+    resolved_keys = resolve_api_key_configs(provider.api_keys)
     rotator = KeyRotator(
-        resolve_api_key_configs(provider.api_keys),
+        resolved_keys,
         cooldown_seconds=cooldown_seconds,
         verbose=verbose,
     )
@@ -1053,6 +1096,74 @@ async def extract_documents(
 
     results_lock = asyncio.Lock()
     logger.info("Request timeout set to %.1fs", timeout_seconds)
+
+    pause_threshold_seconds = max(0.0, float(config.extract.pause_threshold_seconds))
+    pause_watchdog_seconds = max(60.0, pause_threshold_seconds * 6.0)
+    pause_gate: asyncio.Event | None = None
+    pause_task: asyncio.Task[None] | None = None
+
+    if resolved_keys:
+        pause_gate = asyncio.Event()
+        pause_gate.set()
+
+        async def pause_watcher() -> None:
+            paused = False
+            try:
+                while True:
+                    wait_for, reason, wait_until_epoch = await rotator.key_pool_wait()
+                    if wait_for is None or wait_for <= 0:
+                        if paused:
+                            paused = False
+                            pause_gate.set()
+                            logger.info("Queue resumed; key pool available")
+                        await asyncio.sleep(0.5)
+                        continue
+                    if wait_for <= pause_threshold_seconds:
+                        if paused:
+                            paused = False
+                            pause_gate.set()
+                            logger.info(
+                                "Queue resumed; key pool wait %.2fs below threshold %.2fs",
+                                wait_for,
+                                pause_threshold_seconds,
+                            )
+                        await asyncio.sleep(min(wait_for, pause_threshold_seconds))
+                        continue
+                    if not paused:
+                        paused = True
+                        pause_gate.clear()
+                        reset_dt = (
+                            datetime.fromtimestamp(wait_until_epoch).astimezone().isoformat()
+                            if wait_until_epoch
+                            else "unknown"
+                        )
+                        logger.warning(
+                            "Queue paused (keys unavailable: %s); waiting %.2fs until %s",
+                            reason or "unknown",
+                            wait_for,
+                            reset_dt,
+                        )
+                    await asyncio.sleep(min(wait_for, max(pause_threshold_seconds, 1.0)))
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Queue pause watcher failed; releasing pause gate")
+                pause_gate.set()
+
+        pause_task = asyncio.create_task(pause_watcher())
+
+    async def await_key_pool_ready() -> None:
+        if not pause_gate or pause_gate.is_set():
+            return
+        try:
+            await asyncio.wait_for(pause_gate.wait(), timeout=pause_watchdog_seconds)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Queue pause watchdog timeout; rechecking key pool availability"
+            )
+            wait_for, _, _ = await rotator.key_pool_wait()
+            if wait_for is None or wait_for <= 0:
+                pause_gate.set()
 
     def build_output_payload() -> dict[str, Any]:
         final_results: list[dict[str, Any]] = []
@@ -1128,6 +1239,7 @@ async def extract_documents(
                     prompt_system_path=prompt_system_path,
                     prompt_user_path=prompt_user_path,
                 )
+                await await_key_pool_ready()
                 async with semaphore:
                     data = await call_with_retries(
                         provider,
@@ -1441,6 +1553,9 @@ async def extract_documents(
 
         async def worker() -> None:
             while True:
+                if task_queue.empty():
+                    return
+                await await_key_pool_ready()
                 try:
                     task = task_queue.get_nowait()
                 except asyncio.QueueEmpty:
@@ -1824,6 +1939,9 @@ async def extract_documents(
 
         async def worker() -> None:
             while True:
+                if task_queue.empty():
+                    return
+                await await_key_pool_ready()
                 try:
                     task = task_queue.get_nowait()
                 except asyncio.QueueEmpty:
@@ -1846,6 +1964,10 @@ async def extract_documents(
             else:
                 await run_single_stage(client)
     finally:
+        if pause_task:
+            pause_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await pause_task
         if doc_bar:
             doc_bar.close()
         if stage_bar:

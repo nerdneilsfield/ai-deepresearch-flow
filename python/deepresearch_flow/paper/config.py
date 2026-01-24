@@ -18,6 +18,7 @@ class ExtractConfig:
     timeout: float
     backoff_base_seconds: float
     backoff_max_seconds: float
+    pause_threshold_seconds: float
     truncate_strategy: str
     truncate_max_chars: int
     cost_estimate: bool
@@ -73,6 +74,7 @@ DEFAULT_EXTRACT = ExtractConfig(
     timeout=60.0,
     backoff_base_seconds=1.0,
     backoff_max_seconds=20.0,
+    pause_threshold_seconds=10.0,
     truncate_strategy="head_tail",
     truncate_max_chars=20000,
     cost_estimate=True,
@@ -188,6 +190,9 @@ def load_config(path: str) -> PaperConfig:
         ),
         backoff_max_seconds=_as_float(
             extract_data.get("backoff_max_seconds"), DEFAULT_EXTRACT.backoff_max_seconds
+        ),
+        pause_threshold_seconds=_as_float(
+            extract_data.get("pause_threshold_seconds"), DEFAULT_EXTRACT.pause_threshold_seconds
         ),
         truncate_strategy=_as_str(
             extract_data.get("truncate_strategy"), DEFAULT_EXTRACT.truncate_strategy

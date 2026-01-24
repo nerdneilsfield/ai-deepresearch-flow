@@ -8,6 +8,8 @@ max_retries = 3
 timeout = 60
 backoff_base_seconds = 1.0
 backoff_max_seconds = 20.0
+# Minimum key wait (seconds) before pausing the queue
+pause_threshold_seconds = 10.0
 truncate_strategy = "head_tail" # head | head_tail
 truncate_max_chars = 20000
 cost_estimate = true
