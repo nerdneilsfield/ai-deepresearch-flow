@@ -22,7 +22,12 @@ from deepresearch_flow.paper.config import load_config, resolve_api_keys
 from deepresearch_flow.paper.extract import parse_model_ref
 from deepresearch_flow.paper.llm import backoff_delay, call_provider
 from deepresearch_flow.paper.providers.base import ProviderError
-from deepresearch_flow.paper.template_registry import list_template_names
+from deepresearch_flow.paper.schema import SchemaError, load_schema
+from deepresearch_flow.paper.template_registry import (
+    get_stage_definitions,
+    list_template_names,
+    load_schema_for_template,
+)
 from deepresearch_flow.paper.render import resolve_render_template, render_papers
 
 try:
@@ -60,6 +65,16 @@ def load_json_payload(path: Path) -> tuple[list[dict[str, Any]], dict[str, Any] 
         raise click.ClickException(f"JSON object missing 'papers' list: {path}")
 
     raise click.ClickException(f"Unsupported JSON structure in {path}")
+
+
+def is_empty_value(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip() == ""
+    if isinstance(value, list) or isinstance(value, dict):
+        return len(value) == 0
+    return False
 
 
 def export_compare_csv(results: list[Any], output_path: Path) -> None:
@@ -1498,6 +1513,166 @@ def register_db_commands(db_group: click.Group) -> None:
             output_path = Path(output_csv)
             export_compare_csv(all_results, output_path)
             click.echo(f"Results exported to: {output_path}")
+
+    @db_group.command("verify")
+    @click.option("--input-json", "input_json", required=True, help="Input JSON file path")
+    @click.option(
+        "--output-json",
+        "output_json",
+        required=True,
+        help="Output verification report JSON path",
+    )
+    @click.option(
+        "--prompt-template",
+        "prompt_template",
+        default=None,
+        type=click.Choice(list_template_names()),
+        help="Prompt template to load schema (e.g., deep_read)",
+    )
+    @click.option(
+        "-s",
+        "--schema-json",
+        "--schema",
+        "schema_json",
+        default=None,
+        help="Custom schema JSON path",
+    )
+    @click.option(
+        "--ignore-field",
+        "ignore_fields",
+        multiple=True,
+        help="Schema field to ignore when checking empties (repeatable)",
+    )
+    def verify(
+        input_json: str,
+        output_json: str,
+        prompt_template: str | None,
+        schema_json: str | None,
+        ignore_fields: tuple[str, ...],
+    ) -> None:
+        if prompt_template and schema_json:
+            raise click.ClickException("Use only one of --prompt-template or --schema-json")
+        if not prompt_template and not schema_json:
+            raise click.ClickException("Provide --prompt-template or --schema-json")
+
+        input_path = Path(input_json)
+        if not input_path.is_file():
+            raise click.ClickException(f"Input JSON not found: {input_path}")
+
+        papers, payload = load_json_payload(input_path)
+        template_tag = (
+            prompt_template
+            or (payload.get("template_tag") if isinstance(payload, dict) else None)
+            or "custom"
+        )
+
+        try:
+            if schema_json:
+                schema = load_schema(schema_json)
+            else:
+                schema = load_schema_for_template(prompt_template or template_tag)
+        except SchemaError as exc:
+            raise click.ClickException(str(exc)) from exc
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
+
+        ignore_set = {field.strip() for field in ignore_fields if field.strip()}
+        properties = schema.get("properties", {})
+        schema_fields = sorted(
+            field
+            for field in (set(properties.keys()) | set(schema.get("required", [])))
+            if field not in ignore_set
+        )
+        if not schema_fields:
+            raise click.ClickException("Schema does not define any properties")
+
+        stage_defs = get_stage_definitions(prompt_template or template_tag)
+        field_stage_map: dict[str, str] = {}
+        for stage_def in stage_defs:
+            for field in stage_def.fields:
+                if field in ignore_set:
+                    continue
+                field_stage_map.setdefault(field, stage_def.name)
+
+        report_items: list[dict[str, Any]] = []
+        for paper in papers:
+            if not isinstance(paper, dict):
+                continue
+            missing_fields = [
+                field
+                for field in schema_fields
+                if field not in paper or is_empty_value(paper.get(field))
+            ]
+            if not missing_fields:
+                continue
+            item: dict[str, Any] = {
+                "source_path": str(paper.get("source_path") or ""),
+                "paper_title": str(paper.get("paper_title") or ""),
+                "missing_fields": missing_fields,
+            }
+            if field_stage_map and all(field in field_stage_map for field in missing_fields):
+                item["retry_stages"] = sorted(
+                    {field_stage_map[field] for field in missing_fields}
+                )
+            report_items.append(item)
+
+        report_payload = {
+            "template_tag": template_tag,
+            "schema_fields": schema_fields,
+            "items": report_items,
+        }
+
+        output_path = Path(output_json)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        write_json(output_path, report_payload)
+
+        console = Console()
+        total_missing = sum(len(item["missing_fields"]) for item in report_items)
+        summary_table = Table(title="db verify summary")
+        summary_table.add_column("Metric", style="cyan")
+        summary_table.add_column("Value", style="white", overflow="fold")
+        summary_table.add_row("Input", str(input_path))
+        summary_table.add_row("Template", template_tag)
+        summary_table.add_row("Items", str(len(papers)))
+        summary_table.add_row("Items with missing fields", str(len(report_items)))
+        summary_table.add_row("Total missing fields", str(total_missing))
+        if ignore_set:
+            summary_table.add_row("Ignored fields", ", ".join(sorted(ignore_set)))
+        summary_table.add_row("Output", str(output_path))
+        console.print(summary_table)
+
+        if report_items:
+            field_counts: dict[str, int] = {field: 0 for field in schema_fields}
+            for item in report_items:
+                for field in item["missing_fields"]:
+                    field_counts[field] = field_counts.get(field, 0) + 1
+
+            count_table = Table(title="Missing field counts")
+            count_table.add_column("Field", style="cyan")
+            count_table.add_column("Missing", style="yellow", justify="right")
+            for field, count in sorted(field_counts.items(), key=lambda x: (-x[1], x[0])):
+                if count:
+                    count_table.add_row(field, str(count))
+            console.print(count_table)
+
+            detail_table = Table(title="Missing field details")
+            detail_table.add_column("#", style="dim", justify="right")
+            detail_table.add_column("Title", style="white", overflow="fold")
+            detail_table.add_column("Source Path", style="cyan", overflow="fold")
+            detail_table.add_column("Missing Fields", style="yellow", overflow="fold")
+            detail_table.add_column("Retry Stages", style="green", overflow="fold")
+            for idx, item in enumerate(report_items, start=1):
+                retry_stages = item.get("retry_stages") or []
+                detail_table.add_row(
+                    str(idx),
+                    item.get("paper_title") or "",
+                    item.get("source_path") or "",
+                    ", ".join(item.get("missing_fields", [])),
+                    ", ".join(retry_stages),
+                )
+            console.print(detail_table)
+        else:
+            console.print(Panel("[green]No missing fields detected.[/green]", expand=False))
 
     @db_group.command("transfer-pdfs")
     @click.option("--input-list", "input_list", required=True, help="Text file containing PDF paths")

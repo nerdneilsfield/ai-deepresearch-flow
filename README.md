@@ -110,6 +110,23 @@ uv run deepresearch-flow paper extract \
   --prompt-template deep_read
 ```
 
+#### Step 1.1: Verify & Retry Missing Fields
+
+Validate extracted JSON against the template schema and retry only the missing items.
+
+```bash
+uv run deepresearch-flow paper db verify \
+  --input-json ./paper_infos.json \
+  --prompt-template deep_read \
+  --output-json ./paper_verify.json
+
+uv run deepresearch-flow paper extract \
+  --input ./docs \
+  --model openai/gpt-4o-mini \
+  --prompt-template deep_read \
+  --retry-list-json ./paper_verify.json
+```
+
 #### Step 2: Translate Safely
 
 Translate papers to Chinese, protecting LaTeX and tables.

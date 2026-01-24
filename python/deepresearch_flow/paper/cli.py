@@ -80,6 +80,12 @@ def paper() -> None:
     help="Retry only failed stages per document (multi-stage templates only)",
 )
 @click.option(
+    "--retry-list-json",
+    "retry_list_json",
+    default=None,
+    help="Retry only documents listed in a verification report",
+)
+@click.option(
     "--stage-dag",
     is_flag=True,
     help="Enable dependency-aware DAG scheduling (multi-stage templates only)",
@@ -144,6 +150,7 @@ def extract(
     force_stages: tuple[str, ...],
     retry_failed: bool,
     retry_failed_stages: bool,
+    retry_list_json: str | None,
     stage_dag: bool,
     start_idx: int,
     end_idx: int,
@@ -191,6 +198,10 @@ def extract(
         raise click.ClickException("--end-idx must be -1 or >= 0")
     if retry_failed and retry_failed_stages:
         raise click.ClickException("--retry-failed and --retry-failed-stages are mutually exclusive")
+    if retry_list_json and (retry_failed or retry_failed_stages):
+        raise click.ClickException(
+            "--retry-list-json cannot be combined with --retry-failed or --retry-failed-stages"
+        )
 
     if provider.type in {
         "openai_compatible",
@@ -283,6 +294,7 @@ def extract(
 
     output = Path(output_path or config.extract.output)
     errors = Path(errors_path or config.extract.errors)
+    retry_list_path = Path(retry_list_json) if retry_list_json else None
     split_out = Path(split_dir) if split_dir else None
     timeout_seconds_effective = timeout_seconds if timeout_seconds is not None else config.extract.timeout
 
@@ -305,6 +317,7 @@ def extract(
             force_stages=list(force_stages),
             retry_failed=retry_failed,
             retry_failed_stages=retry_failed_stages,
+            retry_list_path=retry_list_path,
             stage_dag=stage_dag or config.extract.stage_dag,
             start_idx=start_idx,
             end_idx=end_idx,

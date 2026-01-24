@@ -723,6 +723,22 @@ def load_errors(path: Path) -> list[dict[str, Any]]:
         return []
 
 
+def load_retry_list(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        raise click.ClickException(f"Retry list JSON not found: {path}")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise click.ClickException(f"Invalid retry list JSON: {exc}") from exc
+    if isinstance(data, dict):
+        items = data.get("items")
+        if isinstance(items, list):
+            return [item for item in items if isinstance(item, dict)]
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    raise click.ClickException("Retry list JSON must be a list or contain an 'items' list")
+
+
 def write_json(path: Path, data: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -893,6 +909,7 @@ async def extract_documents(
     force_stages: list[str],
     retry_failed: bool,
     retry_failed_stages: bool,
+    retry_list_path: Path | None,
     stage_dag: bool,
     start_idx: int,
     end_idx: int,
@@ -936,20 +953,57 @@ async def extract_documents(
                 total_files,
             )
 
+    retry_list_entries = load_retry_list(retry_list_path) if retry_list_path else []
     error_entries = load_errors(errors_path) if retry_failed or retry_failed_stages else []
     retry_stage_map: dict[str, set[str]] = {}
+    retry_full_paths: set[str] = set()
+
+    if retry_failed:
+        for entry in error_entries:
+            source_path = entry.get("source_path")
+            if not source_path:
+                continue
+            retry_full_paths.add(str(Path(source_path).resolve()))
+
     if retry_failed_stages:
         for entry in error_entries:
             source_path = entry.get("source_path")
             stage_name = entry.get("stage_name")
-            if not source_path or not stage_name:
+            if not source_path:
                 continue
-            retry_stage_map.setdefault(str(Path(source_path).resolve()), set()).add(stage_name)
+            resolved = str(Path(source_path).resolve())
+            if not stage_name:
+                retry_full_paths.add(resolved)
+                continue
+            retry_stage_map.setdefault(resolved, set()).add(stage_name)
 
-    if retry_failed or retry_failed_stages:
-        retry_paths = {Path(entry.get("source_path", "")).resolve() for entry in error_entries}
-        markdown_files = [path for path in markdown_files if path in retry_paths]
+    if retry_list_entries:
+        for entry in retry_list_entries:
+            source_path = entry.get("source_path")
+            if not source_path:
+                continue
+            resolved = str(Path(source_path).resolve())
+            retry_stages = entry.get("retry_stages")
+            if isinstance(retry_stages, list) and retry_stages:
+                stage_set = {
+                    stage for stage in retry_stages if isinstance(stage, str) and stage.strip()
+                }
+                if stage_set:
+                    retry_stage_map.setdefault(resolved, set()).update(stage_set)
+                    continue
+            retry_full_paths.add(resolved)
+
+    retry_mode = retry_failed or retry_failed_stages or bool(retry_list_entries)
+    retry_stages_mode = retry_failed_stages or bool(retry_stage_map)
+
+    if retry_mode:
+        retry_paths = set(retry_full_paths) | set(retry_stage_map.keys())
+        markdown_files = [
+            path for path in markdown_files if str(path.resolve()) in retry_paths
+        ]
         logger.debug("Retrying %d markdown files", len(markdown_files))
+        if not markdown_files:
+            logger.warning("Retry list produced 0 files to process")
     else:
         logger.debug("Discovered %d markdown files", len(markdown_files))
 
@@ -1294,7 +1348,7 @@ async def extract_documents(
                 await stats.add_input_chars(len(content))
                 source_hash = compute_source_hash(content)
 
-                if not force and not retry_failed:
+                if not force and not retry_mode:
                     existing_entry = existing_by_path.get(source_path)
                     if existing_entry and existing_entry.get("source_hash") == source_hash:
                         results[source_path] = existing_entry
@@ -1489,9 +1543,10 @@ async def extract_documents(
                 await wait_event.wait()
 
             current_stage = task.stage_name
+            is_retry_full = ctx.source_path in retry_full_paths
             retry_stages = (
                 retry_stage_map.get(ctx.source_path)
-                if retry_failed_stages
+                if retry_stages_mode and not is_retry_full
                 else None
             )
             if shutdown_event.is_set():
@@ -1503,7 +1558,8 @@ async def extract_documents(
                 return
             stage_record = ctx.stages.get(current_stage)
             if (
-                retry_failed_stages
+                retry_stages_mode
+                and not is_retry_full
                 and retry_stages is not None
                 and current_stage not in retry_stages
                 and stage_record is not None
@@ -1545,6 +1601,10 @@ async def extract_documents(
             stage_meta = ctx.stage_meta.get(current_stage, {})
             needs_run = force or current_stage in force_stage_set
             if stage_record is None:
+                needs_run = True
+            if is_retry_full:
+                needs_run = True
+            if retry_stages is not None and current_stage in retry_stages:
                 needs_run = True
             if stage_meta.get("prompt_hash") != prompt_hash:
                 needs_run = True
@@ -1790,9 +1850,10 @@ async def extract_documents(
                 remaining=len(stage_definitions),
             )
             state = doc_states[path]
+            is_retry_full = source_path in retry_full_paths
             retry_stages = (
                 retry_stage_map.get(source_path)
-                if retry_failed_stages
+                if retry_stages_mode and not is_retry_full
                 else None
             )
             reused_count = 0
@@ -1800,7 +1861,8 @@ async def extract_documents(
                 stage_name = stage_def.name
                 stage_record = stages.get(stage_name)
                 if (
-                    retry_failed_stages
+                    retry_stages_mode
+                    and not is_retry_full
                     and retry_stages is not None
                     and stage_name not in retry_stages
                     and stage_record is not None
@@ -1813,6 +1875,10 @@ async def extract_documents(
                 stage_meta_entry = stage_meta.get(stage_name, {})
                 needs_run = force or stage_name in force_stage_set
                 if stage_record is None:
+                    needs_run = True
+                if is_retry_full:
+                    needs_run = True
+                if retry_stages is not None and stage_name in retry_stages:
                     needs_run = True
                 if stage_meta_entry.get("prompt_hash") != prompt_hash_map[stage_name]:
                     needs_run = True
@@ -1936,14 +2002,16 @@ async def extract_documents(
                 await finalize_stage(ctx, current_stage, failed=False)
                 return
 
+            is_retry_full = ctx.source_path in retry_full_paths
             retry_stages = (
                 retry_stage_map.get(ctx.source_path)
-                if retry_failed_stages
+                if retry_stages_mode and not is_retry_full
                 else None
             )
             stage_record = ctx.stages.get(current_stage)
             if (
-                retry_failed_stages
+                retry_stages_mode
+                and not is_retry_full
                 and retry_stages is not None
                 and current_stage not in retry_stages
                 and stage_record is not None
@@ -1966,6 +2034,10 @@ async def extract_documents(
             stage_meta = ctx.stage_meta.get(current_stage, {})
             needs_run = force or current_stage in force_stage_set
             if stage_record is None:
+                needs_run = True
+            if is_retry_full:
+                needs_run = True
+            if retry_stages is not None and current_stage in retry_stages:
                 needs_run = True
             if stage_meta.get("prompt_hash") != prompt_hash:
                 needs_run = True
@@ -2177,7 +2249,7 @@ async def extract_documents(
     table.add_row("Successful", str(doc_count - len(errors)))
     failed_stage_count = sum(1 for err in errors if err.stage_name)
     retried_stage_count = 0
-    if retry_failed_stages:
+    if retry_stages_mode:
         retried_stage_count = sum(
             len(retry_stage_map.get(str(path.resolve()), set())) for path in markdown_files
         )

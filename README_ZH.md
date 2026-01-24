@@ -108,6 +108,23 @@ uv run deepresearch-flow paper extract \
   --prompt-template deep_read
 ```
 
+#### 步骤 1.1：校验与重试缺失字段
+
+按模板 schema 校验抽取结果，并仅重跑缺失项。
+
+```bash
+uv run deepresearch-flow paper db verify \
+  --input-json ./paper_infos.json \
+  --prompt-template deep_read \
+  --output-json ./paper_verify.json
+
+uv run deepresearch-flow paper extract \
+  --input ./docs \
+  --model openai/gpt-4o-mini \
+  --prompt-template deep_read \
+  --retry-list-json ./paper_verify.json
+```
+
 #### 步骤 2：安全翻译
 
 ```bash
