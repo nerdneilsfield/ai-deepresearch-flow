@@ -41,6 +41,17 @@ class MermaidIssue:
 
 
 @dataclass
+class DiagramTask:
+    """Global diagram task for parallel processing."""
+    file_path: Path
+    file_line_offset: int
+    field_path: str | None
+    item_index: int | None
+    span: MermaidSpan
+    issue: MermaidIssue | None
+
+
+@dataclass
 class MermaidFixStats:
     diagrams_total: int = 0
     diagrams_invalid: int = 0
@@ -624,16 +635,37 @@ async def fix_mermaid_text(
 
     error_records: list[dict[str, Any]] = []
     if issues and repair_enabled:
-        for batch in iter_batches(issues, batch_size):
-            repairs, error = await repair_batch(
-                batch,
-                provider,
-                model_name,
-                api_key,
-                timeout,
-                max_retries,
-                client,
-            )
+        # Convert to list for parallel processing
+        batches = list(iter_batches(issues, batch_size))
+        
+        # Parallel batch repair
+        batch_results = await asyncio.gather(
+            *[
+                repair_batch(batch, provider, model_name, api_key, timeout, max_retries, client)
+                for batch in batches
+            ],
+            return_exceptions=True,
+        )
+        
+        # Process results
+        for batch, result in zip(batches, batch_results):
+            if isinstance(result, Exception):
+                # Entire batch failed with exception
+                error = str(result)
+                for issue in batch:
+                    stats.diagrams_failed += 1
+                    error_records.append({
+                        "path": file_path,
+                        "line": line_offset + issue.span.line - 1,
+                        "mermaid": issue.span.content,
+                        "errors": issue.errors + [f"batch_exception: {error}"],
+                        "field_path": issue.field_path,
+                        "item_index": issue.item_index,
+                    })
+                continue
+            
+            repairs, error = result
+            
             if error:
                 for issue in batch:
                     stats.diagrams_failed += 1
@@ -698,3 +730,207 @@ async def fix_mermaid_text(
 
     updated = apply_replacements(text, replacements)
     return updated, error_records
+
+
+def extract_diagrams_from_text(
+    text: str,
+    file_path: Path,
+    line_offset: int,
+    field_path: str | None,
+    item_index: int | None,
+    context_chars: int,
+) -> list[DiagramTask]:
+    """Extract all diagram tasks from a text block."""
+    tasks: list[DiagramTask] = []
+    spans = extract_mermaid_spans(text, context_chars)
+    file_id = short_hash(str(file_path))
+    
+    for idx, span in enumerate(spans):
+        validation = validate_mermaid(span.content)
+        issue: MermaidIssue | None = None
+        
+        if validation:
+            # Try cleanup first
+            candidate = cleanup_mermaid(span.content)
+            if candidate != span.content:
+                candidate_validation = validate_mermaid(candidate)
+                if not candidate_validation:
+                    # Cleanup fixed it, no issue
+                    pass
+                else:
+                    validation = candidate_validation
+            
+            if validation:
+                # Still invalid after cleanup
+                issue_id = f"{file_id}:{line_offset + span.line - 1}:{idx}"
+                issue = MermaidIssue(
+                    issue_id=issue_id,
+                    span=span,
+                    errors=[validation],
+                    field_path=field_path,
+                    item_index=item_index,
+                )
+        
+        tasks.append(
+            DiagramTask(
+                file_path=file_path,
+                file_line_offset=line_offset,
+                field_path=field_path,
+                item_index=item_index,
+                span=span,
+                issue=issue,
+            )
+        )
+    
+    return tasks
+
+
+async def repair_all_diagrams_global(
+    tasks: list[DiagramTask],
+    batch_size: int,
+    max_concurrent_batches: int,
+    provider,
+    model_name: str,
+    api_key: str | None,
+    timeout: float,
+    max_retries: int,
+    client: httpx.AsyncClient,
+    stats: MermaidFixStats,
+    progress_cb: Callable[[], None] | None = None,
+) -> tuple[dict[Path, list[tuple[int, int, str]]], list[dict[str, Any]]]:
+    """
+    Globally repair all diagrams in parallel.
+    
+    Returns:
+        - dict mapping file paths to list of (start, end, replacement) tuples
+        - list of error records
+    """
+    from collections import defaultdict
+    
+    # Separate tasks with issues from clean ones
+    issue_tasks = [task for task in tasks if task.issue]
+    clean_tasks = [task for task in tasks if not task.issue]
+    
+    # Update stats for total and clean diagrams
+    stats.diagrams_total += len(tasks)
+    stats.diagrams_invalid += len(issue_tasks)
+    
+    # Progress callback for clean diagrams
+    if progress_cb:
+        for _ in clean_tasks:
+            progress_cb()
+    
+    if not issue_tasks:
+        return {}, []
+    
+    # Build batches from issues
+    issues = [task.issue for task in issue_tasks]
+    batches = list(iter_batches(issues, batch_size))
+    
+    # Concurrent control
+    semaphore = asyncio.Semaphore(max_concurrent_batches)
+    
+    async def process_batch(batch: list[MermaidIssue]) -> tuple[dict[str, str], str | None]:
+        async with semaphore:
+            return await repair_batch(batch, provider, model_name, api_key, timeout, max_retries, client)
+    
+    # Global parallel repair!
+    results = await asyncio.gather(
+        *[process_batch(batch) for batch in batches],
+        return_exceptions=True,
+    )
+    
+    # Process results and organize by file
+    file_replacements: dict[Path, list[tuple[int, int, str]]] = defaultdict(list)
+    error_records: list[dict[str, Any]] = []
+    
+    batch_idx = 0
+    for batch, result in zip(batches, results):
+        if isinstance(result, Exception):
+            # Batch completely failed
+            error_msg = str(result)
+            for issue in batch:
+                stats.diagrams_failed += 1
+                # Find original task
+                task = next(t for t in issue_tasks if t.issue and t.issue.issue_id == issue.issue_id)
+                error_records.append({
+                    "path": str(task.file_path),
+                    "line": task.file_line_offset + issue.span.line - 1,
+                    "mermaid": issue.span.content,
+                    "errors": issue.errors + [f"batch_error: {error_msg}"],
+                    "field_path": issue.field_path,
+                    "item_index": issue.item_index,
+                })
+                if progress_cb:
+                    progress_cb()
+            continue
+        
+        repairs, batch_error = result
+        
+        if batch_error:
+            # LLM call failed for entire batch
+            for issue in batch:
+                stats.diagrams_failed += 1
+                task = next(t for t in issue_tasks if t.issue and t.issue.issue_id == issue.issue_id)
+                error_records.append({
+                    "path": str(task.file_path),
+                    "line": task.file_line_offset + issue.span.line - 1,
+                    "mermaid": issue.span.content,
+                    "errors": issue.errors + [f"llm_error: {batch_error}"],
+                    "field_path": issue.field_path,
+                    "item_index": issue.item_index,
+                })
+                if progress_cb:
+                    progress_cb()
+            continue
+        
+        # Process individual repairs in this batch
+        for issue in batch:
+            task = next(t for t in issue_tasks if t.issue and t.issue.issue_id == issue.issue_id)
+            repaired = repairs.get(issue.issue_id)
+            
+            if not repaired:
+                stats.diagrams_failed += 1
+                error_records.append({
+                    "path": str(task.file_path),
+                    "line": task.file_line_offset + issue.span.line - 1,
+                    "mermaid": issue.span.content,
+                    "errors": issue.errors + ["llm_missing_output"],
+                    "field_path": issue.field_path,
+                    "item_index": issue.item_index,
+                })
+                if progress_cb:
+                    progress_cb()
+                continue
+            
+            # Validate repaired diagram
+            repaired = strip_mermaid_fences(repaired)
+            repaired = cleanup_mermaid(repaired)
+            validation = validate_mermaid(repaired)
+            
+            if validation:
+                stats.diagrams_failed += 1
+                error_records.append({
+                    "path": str(task.file_path),
+                    "line": task.file_line_offset + issue.span.line - 1,
+                    "mermaid": issue.span.content,
+                    "errors": issue.errors + [f"repair_still_invalid: {validation}"],
+                    "field_path": issue.field_path,
+                    "item_index": issue.item_index,
+                })
+                if progress_cb:
+                    progress_cb()
+                continue
+            
+            # Success!
+            stats.diagrams_repaired += 1
+            file_replacements[task.file_path].append(
+                (issue.span.start, issue.span.end, repaired)
+            )
+            if progress_cb:
+                progress_cb()
+        
+        batch_idx += 1
+    
+    return file_replacements, error_records
+

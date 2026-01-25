@@ -651,16 +651,38 @@ async def fix_math_text(
 
     error_records: list[dict[str, Any]] = []
     if issues and repair_enabled:
-        for batch in iter_batches(issues, batch_size):
-            repairs, error = await repair_batch(
-                batch,
-                provider,
-                model_name,
-                api_key,
-                timeout,
-                max_retries,
-                client,
-            )
+        # Convert to list for parallel processing
+        batches = list(iter_batches(issues, batch_size))
+        
+        # Parallel batch repair
+        batch_results = await asyncio.gather(
+            *[
+                repair_batch(batch, provider, model_name, api_key, timeout, max_retries, client)
+                for batch in batches
+            ],
+            return_exceptions=True,
+        )
+        
+        # Process results
+        for batch, result in zip(batches, batch_results):
+            if isinstance(result, Exception):
+                # Entire batch failed with exception
+                error = str(result)
+                for issue in batch:
+                    stats.formulas_failed += 1
+                    error_records.append({
+                        "path": file_path,
+                        "line": line_offset + issue.span.line - 1,
+                        "delimiter": issue.span.delimiter,
+                        "latex": issue.span.content,
+                        "errors": issue.errors + [f"batch_exception: {error}"],
+                        "field_path": issue.field_path,
+                        "item_index": issue.item_index,
+                    })
+                continue
+            
+            repairs, error = result
+            
             if error:
                 for issue in batch:
                     stats.formulas_failed += 1
