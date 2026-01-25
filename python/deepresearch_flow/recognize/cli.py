@@ -1398,6 +1398,7 @@ def recognize_fix_mermaid(
         return
 
     progress = tqdm(total=len(paths), desc="extract", unit="file")
+    field_progress = tqdm(total=0, desc="extract-field", unit="field", disable=not json_mode, leave=False)
     diagram_progress = tqdm(total=0, desc="repair", unit="diagram")
     error_records: list[dict[str, Any]] = []
     
@@ -1413,6 +1414,7 @@ def recognize_fix_mermaid(
         async with httpx.AsyncClient() as client:
             # Phase 1: Extract all diagrams from all files in parallel (flatten to 1D)
             progress_lock = asyncio.Lock()
+            field_progress_lock = asyncio.Lock()
             
             async def extract_from_file(path: Path) -> list[DiagramTask]:
                 tasks: list[DiagramTask] = []
@@ -1446,25 +1448,41 @@ def recognize_fix_mermaid(
                     # Apply retry filter to field locations if needed
                     if retry_targets is not None:
                         retry_keys = retry_targets.get(path.resolve(), set())
-                        filtered_locations = []
-                        for line_start, value, field_path, _, item_index in field_locations:
-                            # Pre-extract to check if any diagram matches retry keys
-                            temp_tasks = extract_diagrams_from_text(
-                                value, path, line_start, field_path, item_index, context_chars
+                        # Prefer filtering by (field_path, item_index) to avoid expensive validation / mmdc calls.
+                        retry_fields = {
+                            (field_path, item_index)
+                            for _, field_path, item_index in retry_keys
+                            if field_path is not None and item_index is not None
+                        }
+                        if retry_fields:
+                            before = len(field_locations)
+                            field_locations = [
+                                loc for loc in field_locations if (loc[2], loc[4]) in retry_fields
+                            ]
+                            logger.info(
+                                "Retry filter: %d/%d fields match (by field_path)",
+                                len(field_locations),
+                                before,
                             )
-                            if any(
-                                (task.file_line_offset + task.span.line - 1, task.field_path, task.item_index) in retry_keys
-                                for task in temp_tasks
-                            ):
-                                filtered_locations.append((line_start, value, field_path, None, item_index))
-                        field_locations = filtered_locations
-                        logger.info("Retry filter: %d fields match", len(field_locations))
+                        else:
+                            # Fallback: filter by line numbers using fast span extraction (no validation).
+                            filtered_locations: list[tuple[int, str, str, str | None, int]] = []
+                            for line_start, value, field_path, _, item_index in field_locations:
+                                spans = extract_mermaid_spans(value, context_chars)
+                                if any(
+                                    (line_start + span.line - 1, field_path, item_index) in retry_keys
+                                    for span in spans
+                                ):
+                                    filtered_locations.append((line_start, value, field_path, None, item_index))
+                            field_locations = filtered_locations
+                            logger.info("Retry filter: %d fields match (by line)", len(field_locations))
                     
                     # Parallel extraction from all fields
                     async def extract_from_field(loc: tuple[int, str, str, str | None, int]) -> list[DiagramTask]:
                         line_start, value, field_path, _, item_index = loc
                         field_tasks = extract_diagrams_from_text(
-                            value, path, line_start, field_path, item_index, context_chars
+                            value, path, line_start, field_path, item_index, context_chars,
+                            skip_validation=not only_show_error  # Skip validation unless validating only
                         )
                         
                         # Apply retry filter to individual tasks
@@ -1479,11 +1497,34 @@ def recognize_fix_mermaid(
                     
                     if field_locations:
                         logger.info("Extracting diagrams from %d fields in parallel...", len(field_locations))
-                        field_task_lists = await asyncio.gather(*[
-                            extract_from_field(loc) for loc in field_locations
-                        ])
-                        for field_tasks in field_task_lists:
-                            tasks.extend(field_tasks)
+
+                        async with field_progress_lock:
+                            field_progress.total += len(field_locations)
+                            field_progress.refresh()
+
+                        # Bounded worker pool (avoid scheduling thousands of coroutines at once).
+                        max_field_workers = 50
+                        field_workers = min(max_field_workers, len(field_locations))
+                        field_queue: asyncio.Queue[tuple[int, str, str, str | None, int] | None] = asyncio.Queue()
+                        for loc in field_locations:
+                            field_queue.put_nowait(loc)
+                        for _ in range(field_workers):
+                            field_queue.put_nowait(None)
+
+                        async def field_worker() -> list[DiagramTask]:
+                            out: list[DiagramTask] = []
+                            while True:
+                                loc = await field_queue.get()
+                                if loc is None:
+                                    break
+                                out.extend(await extract_from_field(loc))
+                                async with field_progress_lock:
+                                    field_progress.update(1)
+                            return out
+
+                        worker_results = await asyncio.gather(*[field_worker() for _ in range(field_workers)])
+                        for batch in worker_results:
+                            tasks.extend(batch)
                     
                     logger.info("Extracted %d diagrams from %s", len(tasks), _relative_path(path))
                 else:
@@ -1493,7 +1534,8 @@ def recognize_fix_mermaid(
                     
                     # Extract diagrams from markdown
                     file_tasks = extract_diagrams_from_text(
-                        content, path, 1, None, None, context_chars
+                        content, path, 1, None, None, context_chars,
+                        skip_validation=not only_show_error  # Skip validation unless validating only
                     )
                     
                     # Apply retry filter if needed
@@ -1516,6 +1558,7 @@ def recognize_fix_mermaid(
             all_tasks = [task for tasks in file_task_lists for task in tasks]
             
             progress.close()
+            field_progress.close()
             nonlocal extract_duration, repair_start_time
             extract_duration = time.monotonic() - extract_start_time
             
@@ -1607,6 +1650,7 @@ def recognize_fix_mermaid(
         stats = asyncio.run(run())
     finally:
         progress.close()
+        field_progress.close()
         diagram_progress.close()
 
     if report_target and error_records:
