@@ -104,8 +104,8 @@ async function toggleSummary(item: SearchResponse['items'][number]) {
     return
   }
   // Try to use existing short summary first
-  if (item.summary) {
-    expandedMarkdown.value = { ...expandedMarkdown.value, [id]: item.summary }
+  if (item.summary_preview) {
+    expandedMarkdown.value = { ...expandedMarkdown.value, [id]: item.summary_preview }
     expanded.value = { ...expanded.value, [id]: true }
     return
   }
