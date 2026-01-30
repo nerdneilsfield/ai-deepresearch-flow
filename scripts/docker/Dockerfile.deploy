@@ -23,6 +23,7 @@ RUN chmod +x /usr/local/bin/start-nginx.sh /usr/local/bin/start-api.sh
 RUN mkdir -p /frontend /static
 
 COPY frontend/dist /frontend
+COPY scripts/docker/robots.txt /frontend/robots.txt
 
 EXPOSE 8899
 
