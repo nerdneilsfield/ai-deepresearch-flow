@@ -1015,11 +1015,18 @@ def register_db_commands(db_group: click.Group) -> None:
     def merge_group() -> None:
         """Merge paper JSON inputs."""
 
-    def _summarize_merge(output_path: Path, merged: list[dict[str, Any]], *, input_count: int) -> None:
+    def _summarize_merge(output_path: Path, merged: Any, *, input_count: int) -> None:
+        items: list[dict[str, Any]] = []
+        if isinstance(merged, dict):
+            raw_items = merged.get("papers")
+            if isinstance(raw_items, list):
+                items = [item for item in raw_items if isinstance(item, dict)]
+        elif isinstance(merged, list):
+            items = [item for item in merged if isinstance(item, dict)]
+
         field_set: set[str] = set()
-        for item in merged:
-            if isinstance(item, dict):
-                field_set.update(item.keys())
+        for item in items:
+            field_set.update(item.keys())
         field_list = sorted(field_set)
 
         console = Console()
@@ -1027,7 +1034,7 @@ def register_db_commands(db_group: click.Group) -> None:
         summary.add_column("Metric", style="bold")
         summary.add_column("Value")
         summary.add_row("Inputs", str(input_count))
-        summary.add_row("Items", str(len(merged)))
+        summary.add_row("Items", str(len(items)))
         summary.add_row("Fields", str(len(field_list)))
         summary.add_row("Output", str(output_path))
         console.print(summary)
@@ -1041,15 +1048,47 @@ def register_db_commands(db_group: click.Group) -> None:
 
     @merge_group.command("library")
     @click.option("-i", "--inputs", "input_paths", multiple=True, required=True, help="Input JSON files")
+    @click.option("--template-tag", "template_tag", default=None, help="Template tag for merged output")
     @click.option("-o", "--output", "output_path", required=True, help="Output JSON file path")
-    def merge_library(input_paths: Iterable[str], output_path: str) -> None:
+    def merge_library(input_paths: Iterable[str], template_tag: str | None, output_path: str) -> None:
         paths = [Path(path) for path in input_paths]
         merged: list[dict[str, Any]] = []
+        tag_candidates: list[str] = []
         for path in paths:
-            merged.extend(load_json(path))
+            payload = load_json(path)
+            if isinstance(payload, dict):
+                tag = str(payload.get("template_tag") or "")
+                if tag:
+                    tag_candidates.append(tag)
+                papers = payload.get("papers")
+                if isinstance(papers, list):
+                    merged.extend(papers)
+                else:
+                    raise click.ClickException("Input JSON must be a list or {template_tag, papers}")
+            elif isinstance(payload, list):
+                merged.extend(payload)
+            else:
+                raise click.ClickException("Input JSON must be a list or {template_tag, papers}")
+        if not template_tag:
+            inferred = ""
+            for paper in merged:
+                if not isinstance(paper, dict):
+                    continue
+                inferred = str(paper.get("prompt_template") or paper.get("template_tag") or "")
+                if inferred:
+                    break
+            if inferred:
+                template_tag = inferred
+        if tag_candidates and not template_tag:
+            template_tag = tag_candidates[0]
+        if not template_tag:
+            template_tag = "unknown"
+        if tag_candidates and any(tag != template_tag for tag in tag_candidates):
+            click.echo("Warning: multiple template_tag values detected in inputs; using first")
         output = Path(output_path)
-        write_json(output, merged)
-        _summarize_merge(output, merged, input_count=len(paths))
+        bundle = {"template_tag": template_tag, "papers": merged}
+        write_json(output, bundle)
+        _summarize_merge(output, bundle, input_count=len(paths))
 
     @merge_group.command("templates")
     @click.option("-i", "--inputs", "input_paths", multiple=True, required=True, help="Input JSON files")
