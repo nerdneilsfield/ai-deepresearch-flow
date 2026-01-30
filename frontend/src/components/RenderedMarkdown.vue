@@ -89,7 +89,7 @@ const processedMarkdown = computed(() => {
   md = newLines.join('\n')
 
   // 1. Fix Mermaid blocks if they contain <br> or HTML entities
-  md = md.replace(/```mermaid\s*([\s\S]*?)```/g, (_match, content) => {
+  md = md.replace(/```mermaid\s*([\s\S]*?)```/g, (_match: string, content: string) => {
     let cleanContent = content.replace(/<br\s*\/?>/gi, '\n')
     cleanContent = cleanContent
       .replace(/&gt;/g, '>')
@@ -104,7 +104,7 @@ const processedMarkdown = computed(() => {
     const isImagesPath = baseUrl.endsWith('/images')
     
     // Markdown Image: ![alt](src)
-    md = md.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, src) => {
+    md = md.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match: string, alt: string, src: string) => {
       if (!src || /^(https?:|data:|blob:)/i.test(src)) return match
       let cleaned = src.replace(/^\.?\//, '')
       if (cleaned.startsWith('paper/images/')) cleaned = cleaned.replace(/^paper\//, '')
@@ -113,17 +113,20 @@ const processedMarkdown = computed(() => {
     })
     
     // HTML Image: <img src="...">
-    md = md.replace(/<img\s+([^>]*?)src=["']([^"']+)["']([^>]*?)>/gi, (match, p1, src, p2) => {
+    md = md.replace(
+      /<img\s+([^>]*?)src=["']([^"']+)["']([^>]*?)>/gi,
+      (match: string, p1: string, src: string, p2: string) => {
        if (!src || /^(https?:|data:|blob:)/i.test(src)) return match
        let cleaned = src.replace(/^\.?\//, '')
        if (cleaned.startsWith('paper/images/')) cleaned = cleaned.replace(/^paper\//, '')
        if (isImagesPath && cleaned.startsWith('images/')) cleaned = cleaned.slice(7)
-       return `<img ${p1}src="${baseUrl}/${cleaned}"${p2}>`
-    })
+        return `<img ${p1}src="${baseUrl}/${cleaned}"${p2}>`
+      }
+    )
   }
 
   // 3. Convert markmap
-  md = md.replace(/```markmap\s*\n([\s\S]*?)\n```/g, (_match, content) => {
+  md = md.replace(/```markmap\s*\n([\s\S]*?)\n```/g, (_match: string, content: string) => {
     const escaped = content
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
