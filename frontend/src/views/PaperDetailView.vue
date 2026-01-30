@@ -9,7 +9,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useUiStore } from '@/stores/ui'
 import { useSelectionStore } from '@/stores/selection'
-import { useElementBounding, useMediaQuery, useWindowSize } from '@vueuse/core'
+import { useElementBounding, useMediaQuery, useWindowSize, refDebounced } from '@vueuse/core'
 import SummaryPanel from '@/components/SummaryPanel.vue'
 import MarkdownPanel from '@/components/MarkdownPanel.vue'
 import PdfViewer from '@/components/PdfViewer.vue'
@@ -64,6 +64,11 @@ const splitRef = ref<HTMLElement | null>(null)
 const { height: windowHeight } = useWindowSize()
 const panelBounds = useElementBounding(panelRef)
 const splitBounds = useElementBounding(splitRef)
+
+// Debounce layout triggers to prevent performance explosion during resize/scroll
+const windowHeightDebounced = refDebounced(windowHeight, 200)
+const panelTopDebounced = refDebounced(panelBounds.top, 200)
+const splitTopDebounced = refDebounced(splitBounds.top, 200)
 
 const imagesBaseUrl = computed(() => {
   const translatedUrl = detail.value?.translated_md_urls
@@ -121,8 +126,8 @@ const splitGridStyle = computed(() => {
 const splitAreaStyle = computed(() => {
   if (!isLarge.value) return {}
   if (isZenMode.value) return { height: 'calc(100vh - 60px)' }
-  const top = splitBounds.top.value || 0
-  const viewport = windowHeight.value || 0
+  const top = splitTopDebounced.value || 0
+  const viewport = windowHeightDebounced.value || 0
   if (!viewport) return {}
   const height = Math.max(320, Math.floor(viewport - top - 24))
   return { height: `${height}px` }
@@ -137,8 +142,8 @@ const contentWidthStyle = computed(() => {
 })
 const panelHeightStyle = computed(() => {
   if (isZenMode.value) return { height: '100%' }
-  const top = panelBounds.top.value || 0
-  const viewport = windowHeight.value || 0
+  const top = panelTopDebounced.value || 0
+  const viewport = windowHeightDebounced.value || 0
   if (!viewport) return { minHeight: '70vh' }
   const height = Math.max(320, Math.floor(viewport - top - 24))
   return { height: `${height}px`, minHeight: '70vh' }
