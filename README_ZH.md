@@ -298,6 +298,41 @@ uv run deepresearch-flow paper db merge templates \
 
 说明：`paper db merge` 已拆分为 `merge library` 与 `merge templates`。
 
+### 合并多个数据库（PDF + Markdown + BibTeX）
+
+```bash
+# 1) 把 PDF 拷到同一个目录
+rsync -av ./pdfs_a/ ./pdfs_merged/
+rsync -av ./pdfs_b/ ./pdfs_merged/
+
+# 2) 把 Markdown 拷到同一个目录
+rsync -av ./md_a/ ./md_merged/
+rsync -av ./md_b/ ./md_merged/
+
+# 3) 合并 JSON 文献库
+uv run deepresearch-flow paper db merge library \
+  --inputs ./paper_infos_a.json \
+  --inputs ./paper_infos_b.json \
+  --output ./paper_infos_merged.json
+
+# 4) 合并 BibTeX
+uv run deepresearch-flow paper db merge bibtex \
+  -i ./library_a.bib \
+  -i ./library_b.bib \
+  -o ./library_merged.bib
+```
+
+### 合并 BibTeX 文件
+
+```bash
+uv run deepresearch-flow paper db merge bibtex \
+  -i ./library_a.bib \
+  -i ./library_b.bib \
+  -o ./library_merged.bib
+```
+
+重复 key 会保留字段数最多的条目；字段数相同则按输入顺序保留第一个。
+
 ### 推荐流程：先合并模板再用 BibTeX 过滤
 
 ```bash

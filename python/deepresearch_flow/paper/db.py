@@ -31,7 +31,8 @@ from deepresearch_flow.paper.template_registry import (
 from deepresearch_flow.paper.render import resolve_render_template, render_papers
 
 try:
-    from pybtex.database import parse_file
+    from pybtex.database import BibliographyData, parse_file
+    from pybtex.database.output.bibtex import Writer
     PYBTEX_AVAILABLE = True
 except ImportError:
     PYBTEX_AVAILABLE = False
@@ -1046,6 +1047,22 @@ def register_db_commands(db_group: click.Group) -> None:
                 field_table.add_row(name)
             console.print(field_table)
 
+    def _bibtex_entry_score(entry: Any) -> int:
+        fields = getattr(entry, "fields", {}) or {}
+        persons = getattr(entry, "persons", {}) or {}
+        person_count = sum(len(people) for people in persons.values())
+        return len(fields) + len(persons) + person_count
+
+    def _summarize_bibtex_merge(output_path: Path, *, input_count: int, entry_count: int, duplicate_count: int) -> None:
+        summary = Table(title="BibTeX Merge Summary")
+        summary.add_column("Metric", style="bold")
+        summary.add_column("Value")
+        summary.add_row("Inputs", str(input_count))
+        summary.add_row("Entries", str(entry_count))
+        summary.add_row("Duplicates", str(duplicate_count))
+        summary.add_row("Output", str(output_path))
+        Console().print(summary)
+
     @merge_group.command("library")
     @click.option("-i", "--inputs", "input_paths", multiple=True, required=True, help="Input JSON files")
     @click.option("--template-tag", "template_tag", default=None, help="Template tag for merged output")
@@ -1239,6 +1256,62 @@ def register_db_commands(db_group: click.Group) -> None:
             for row in diff_samples:
                 sample_table.add_row(*row)
             Console().print(sample_table)
+
+    @merge_group.command("bibtex")
+    @click.option("-i", "--input", "input_paths", multiple=True, required=True, help="Input BibTeX file paths")
+    @click.option("-o", "--output", "output_path", required=True, help="Output BibTeX file path")
+    def merge_bibtex(input_paths: Iterable[str], output_path: str) -> None:
+        if not PYBTEX_AVAILABLE:
+            raise click.ClickException("pybtex is required for merge bibtex")
+
+        paths = [Path(path) for path in input_paths]
+        if not paths:
+            raise click.ClickException("No BibTeX inputs provided")
+
+        for path in paths:
+            if not path.is_file():
+                raise click.ClickException(f"BibTeX file not found: {path}")
+
+        merged_entries: dict[str, tuple[Any, int]] = {}
+        duplicate_keys: list[str] = []
+        duplicate_seen: set[str] = set()
+
+        for path in paths:
+            bib_data = parse_file(str(path))
+            for key, entry in bib_data.entries.items():
+                score = _bibtex_entry_score(entry)
+                if key not in merged_entries:
+                    merged_entries[key] = (entry, score)
+                    continue
+                if key not in duplicate_seen:
+                    duplicate_seen.add(key)
+                    duplicate_keys.append(key)
+                _, existing_score = merged_entries[key]
+                if score > existing_score:
+                    merged_entries[key] = (entry, score)
+
+        output = Path(output_path)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        out_data = BibliographyData()
+        for key, (entry, _) in merged_entries.items():
+            out_data.entries[key] = entry
+        with output.open("w", encoding="utf-8") as handle:
+            Writer().write_stream(out_data, handle)
+
+        _summarize_bibtex_merge(
+            output,
+            input_count=len(paths),
+            entry_count=len(merged_entries),
+            duplicate_count=len(duplicate_keys),
+        )
+
+        if duplicate_keys:
+            preview_limit = 20
+            preview = ", ".join(duplicate_keys[:preview_limit])
+            if len(duplicate_keys) > preview_limit:
+                preview = f"{preview}, ... (+{len(duplicate_keys) - preview_limit} more)"
+            note = "Kept entry with most fields; ties keep first input order."
+            Console().print(Panel(f"{note}\n{preview}", title=f"Duplicate keys ({len(duplicate_keys)})", style="yellow"))
 
     @db_group.command("render-md")
     @click.option("-i", "--input", "input_path", required=True, help="Input JSON file path")

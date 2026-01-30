@@ -338,6 +338,41 @@ uv run deepresearch-flow paper db merge templates \
 
 Note: `paper db merge` is now split into `merge library` and `merge templates`.
 
+### Merge multiple databases (PDF + Markdown + BibTeX)
+
+```bash
+# 1) Copy PDFs into a single folder
+rsync -av ./pdfs_a/ ./pdfs_merged/
+rsync -av ./pdfs_b/ ./pdfs_merged/
+
+# 2) Copy Markdown folders into a single folder
+rsync -av ./md_a/ ./md_merged/
+rsync -av ./md_b/ ./md_merged/
+
+# 3) Merge JSON libraries
+uv run deepresearch-flow paper db merge library \
+  --inputs ./paper_infos_a.json \
+  --inputs ./paper_infos_b.json \
+  --output ./paper_infos_merged.json
+
+# 4) Merge BibTeX files
+uv run deepresearch-flow paper db merge bibtex \
+  -i ./library_a.bib \
+  -i ./library_b.bib \
+  -o ./library_merged.bib
+```
+
+### Merge BibTeX files
+
+```bash
+uv run deepresearch-flow paper db merge bibtex \
+  -i ./library_a.bib \
+  -i ./library_b.bib \
+  -o ./library_merged.bib
+```
+
+Duplicate keys keep the entry with the most fields; ties keep the first input order.
+
 ### Recommended: Merge templates then filter by BibTeX
 
 ```bash
