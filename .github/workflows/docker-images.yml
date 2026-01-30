@@ -68,17 +68,19 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "25"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
       - name: Install frontend dependencies
-        working-directory: frontend
-        run: npm ci
+        run: |
+          cd frontend
+          npm install
 
       - name: Build frontend
-        working-directory: frontend
-        run: npm run build
+        run: |
+          cd frontend
+          npm run build
 
       - name: Upload frontend dist
         uses: actions/upload-artifact@v4

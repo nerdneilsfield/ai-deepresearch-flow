@@ -12,7 +12,6 @@ click==8.3.1
 coloredlogs==15.0.1
 cryptography==46.0.3
 dashscope==1.25.10
--e file:///home/dengqi/Source/langs/python/ai-deepresearch-flow
 distro==1.9.0
 docstring-parser==0.17.0
 frozenlist==1.8.0
