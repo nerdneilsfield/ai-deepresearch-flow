@@ -108,6 +108,10 @@ uv run deepresearch-flow paper extract \
   --prompt-template deep_read
 ```
 
+<p align="center">
+  <img src=".github/assets/extract.png" width="70%" alt="extract" />
+</p>
+
 #### 步骤 1.1：校验与重试缺失字段
 
 按模板 schema 校验抽取结果，并仅重跑缺失项。
@@ -124,6 +128,10 @@ uv run deepresearch-flow paper extract \
   --prompt-template deep_read \
   --retry-list-json ./paper_verify.json
 ```
+
+<p align="center">
+  <img src=".github/assets/verify.png" width="70%" alt="verify" />
+</p>
 
 #### 步骤 2：安全翻译
 
@@ -144,20 +152,56 @@ uv run deepresearch-flow translator translate \
 uv run deepresearch-flow recognize fix \
   --input ./docs \
   --in-place
+```
 
+<p align="center">
+  <img src=".github/assets/fix.png" width="70%" alt="fix" />
+</p>
+
+```bash
 # 2) 修复 LaTeX 公式
 uv run deepresearch-flow recognize fix-math \
   --input ./docs \
   --model openai/gpt-4o-mini \
   --in-place
+```
 
+<p align="center">
+  <img src=".github/assets/fix-math.png" width="70%" alt="fix math" />
+</p>
+
+```bash
 # 3) 修复 Mermaid 图
 uv run deepresearch-flow recognize fix-mermaid \
   --input ./paper_outputs \
   --json \
   --model openai/gpt-4o-mini \
   --in-place
+```
 
+<p align="center">
+  <img src=".github/assets/fix-mermaid.png" width="70%" alt="fix mermaid" />
+</p>
+
+```bash
+# （可选）仅重试失败的公式/图
+uv run deepresearch-flow recognize fix-math \
+  --input ./docs \
+  --model openai/gpt-4o-mini \
+  --retry-failed
+
+uv run deepresearch-flow recognize fix-mermaid \
+  --input ./paper_outputs \
+  --json \
+  --model openai/gpt-4o-mini \
+  --retry-failed
+```
+
+<p align="center">
+  <img src=".github/assets/fix-retry-failed.png" width="70%" alt="fix retry failed" />
+</p>
+
+```bash
 # 4) 再修一遍统一格式
 uv run deepresearch-flow recognize fix \
   --input ./docs \
@@ -273,23 +317,31 @@ uv run deepresearch-flow paper db extract \
 
 ## 部署（静态 CDN）
 
-推荐用两台服务器：一台跑 API/UI，另一台只提供静态资源（PDF/Markdown/图片）。
+推荐的生产方案是 **前后端分离**：
 
-### 1) 导出静态资源
+- **静态 CDN**：PDF/Markdown/图片/summary 静态资源
+- **API 服务**：只读 Snapshot DB
+- **前端**：独立静态站点（Vite build 或任意静态托管）
+
+<p align="center">
+  <img src=".github/assets/frontend.png" width="80%" alt="frontend" />
+</p>
+
+### 1) 构建 snapshot + 导出静态资源
 
 ```bash
-uv run deepresearch-flow paper db serve \
-  --input paper_infos.json \
+uv run deepresearch-flow paper db snapshot build \
+  --input ./paper_infos.json \
+  --bibtex ./papers.bib \
   --md-root ./docs \
   --md-translated-root ./docs \
   --pdf-root ./pdfs \
-  --static-mode prod \
-  --static-base-url https://static.example.com \
+  --output-db ./dist/paper_snapshot.db \
   --static-export-dir /data/paper-static
 ```
 
 说明：
-- API 服务器需要能读取原始 PDF/Markdown 根目录，用于建索引和计算哈希。
+- 构建机器需要能读取原始 PDF/Markdown 根目录。
 - CDN 服务器只需要导出的目录（例如 `/data/paper-static`）。
 
 ### 2) 静态服务器开启 CORS 和缓存（Caddy 示例）
@@ -314,19 +366,72 @@ uv run deepresearch-flow paper db serve \
 }
 ```
 
-### 3) 启动 API/UI 并指向静态域名
+### 2.1) Nginx 示例（API + 前端同域名，静态资源独立域名）
+
+```nginx
+# 前端 + API（同域名）
+server {
+  listen 80;
+  server_name frontend.example.com;
+
+  root /var/www/paper-frontend;
+  index index.html;
+
+  location / {
+    try_files $uri /index.html;
+  }
+
+  location /api/ {
+    proxy_pass http://127.0.0.1:8001/;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  }
+}
+
+# 静态资源（独立域名）
+server {
+  listen 80;
+  server_name static.example.com;
+
+  root /data/paper-static;
+
+  location / {
+    add_header Access-Control-Allow-Origin *;
+    add_header Access-Control-Allow-Methods "GET,HEAD,OPTIONS";
+    add_header Access-Control-Allow-Headers "*";
+    add_header Cache-Control "public, max-age=31536000, immutable";
+    try_files $uri =404;
+  }
+}
+```
+
+### 3) 启动 API 服务（只读）
 
 ```bash
 export PAPER_DB_STATIC_BASE_URL="https://static.example.com"
-export PAPER_DB_STATIC_MODE="prod"
-export PAPER_DB_STATIC_EXPORT_DIR="/data/paper-static"
-export PAPER_DB_PDFJS_CDN_BASE_URL="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379"
 
-uv run deepresearch-flow paper db serve \
-  --input paper_infos.json \
-  --md-root ./docs \
-  --md-translated-root ./docs \
-  --pdf-root ./pdfs
+uv run deepresearch-flow paper db api serve \
+  --snapshot-db /data/paper_snapshot.db \
+  --cors-origin https://frontend.example.com \
+  --host 0.0.0.0 --port 8001
+```
+
+### 4) 前端（开发 / 构建）
+
+```bash
+cd frontend
+npm install
+
+# 开发
+VITE_PAPER_DB_API_BASE=https://api.example.com/api/v1 \
+VITE_PAPER_DB_STATIC_BASE=https://static.example.com \
+npm run dev
+
+# 构建后部署静态站点
+VITE_PAPER_DB_API_BASE=https://api.example.com/api/v1 \
+VITE_PAPER_DB_STATIC_BASE=https://static.example.com \
+npm run build
 ```
 
 ---

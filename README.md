@@ -60,6 +60,7 @@ DeepResearch Flow provides a unified pipeline to **Repair**, **Translate**, **Ex
 - **Smart Extraction**: Turn unstructured Markdown into schema-enforced JSON (summaries, metadata, Q&A) using LLMs (OpenAI, Claude, Gemini, etc.).
 - **Precision Translation**: Translate OCR Markdown to Chinese/Japanese (`.zh.md`, `.ja.md`) while **freezing** formulas, code, tables, and references. No more broken layout.
 - **Local Knowledge DB**: A high-performance local Web UI to browse papers with **Split View** (Source vs. Translated vs. Summary), full-text search, and multi-dimensional filtering.
+- **Snapshot + API Serve**: Build a production-ready SQLite snapshot with static assets, then serve a read-only JSON API for a separate frontend.
 - **Coverage Compare**: Compare JSON/PDF/Markdown/Translated datasets to find missing artifacts and export CSV reports.
 - **Matched Export**: Extract matched JSON or translated Markdown after coverage checks.
 - **OCR Post-Processing**: Automatically fix broken references (`[1]` -> `[^1]`), merge split paragraphs, and standardize layouts.
@@ -110,6 +111,10 @@ uv run deepresearch-flow paper extract \
   --prompt-template deep_read
 ```
 
+<p align="center">
+  <img src=".github/assets/extract.png" width="70%" alt="extract" />
+</p>
+
 #### Step 1.1: Verify & Retry Missing Fields
 
 Validate extracted JSON against the template schema and retry only the missing items.
@@ -126,6 +131,10 @@ uv run deepresearch-flow paper extract \
   --prompt-template deep_read \
   --retry-list-json ./paper_verify.json
 ```
+
+<p align="center">
+  <img src=".github/assets/verify.png" width="70%" alt="verify" />
+</p>
 
 #### Step 2: Translate Safely
 
@@ -148,20 +157,56 @@ Recommended sequence to stabilize markdown before serving:
 uv run deepresearch-flow recognize fix \
   --input ./docs \
   --in-place
+```
 
+<p align="center">
+  <img src=".github/assets/fix.png" width="70%" alt="fix" />
+</p>
+
+```bash
 # 2) Fix LaTeX formulas
 uv run deepresearch-flow recognize fix-math \
   --input ./docs \
   --model openai/gpt-4o-mini \
   --in-place
+```
 
+<p align="center">
+  <img src=".github/assets/fix-math.png" width="70%" alt="fix math" />
+</p>
+
+```bash
 # 3) Fix Mermaid diagrams
 uv run deepresearch-flow recognize fix-mermaid \
   --input ./paper_outputs \
   --json \
   --model openai/gpt-4o-mini \
   --in-place
+```
 
+<p align="center">
+  <img src=".github/assets/fix-mermaid.png" width="70%" alt="fix mermaid" />
+</p>
+
+```bash
+# (optional) Retry failed formulas/diagrams only
+uv run deepresearch-flow recognize fix-math \
+  --input ./docs \
+  --model openai/gpt-4o-mini \
+  --retry-failed
+
+uv run deepresearch-flow recognize fix-mermaid \
+  --input ./paper_outputs \
+  --json \
+  --model openai/gpt-4o-mini \
+  --retry-failed
+```
+
+<p align="center">
+  <img src=".github/assets/fix-retry-failed.png" width="70%" alt="fix retry failed" />
+</p>
+
+```bash
 # 4) Fix again to normalize formatting
 uv run deepresearch-flow recognize fix \
   --input ./docs \
@@ -178,6 +223,39 @@ uv run deepresearch-flow paper db serve \
   --md-root ./docs \
   --md-translated-root ./docs \
   --host 127.0.0.1
+```
+
+#### Step 4.5: Build Snapshot + Serve API + Frontend (Recommended)
+
+Build a production snapshot (SQLite + static assets), serve a read-only API, and run the frontend.
+
+```bash
+# 1) Build snapshot + static export
+uv run deepresearch-flow paper db snapshot build \
+  --input ./paper_infos.json \
+  --bibtex ./papers.bib \
+  --md-root ./docs \
+  --md-translated-root ./docs \
+  --pdf-root ./pdfs \
+  --output-db ./dist/paper_snapshot.db \
+  --static-export-dir ./dist/paper-static
+
+# 2) Serve static assets (CORS required for ZIP export)
+npx http-server ./dist/paper-static -p 8002 --cors
+
+# 3) Serve API (read-only)
+PAPER_DB_STATIC_BASE_URL=http://127.0.0.1:8002 \
+uv run deepresearch-flow paper db api serve \
+  --snapshot-db ./dist/paper_snapshot.db \
+  --cors-origin http://127.0.0.1:5173 \
+  --host 127.0.0.1 --port 8001
+
+# 4) Run frontend
+cd frontend
+npm install
+VITE_PAPER_DB_API_BASE=http://127.0.0.1:8001/api/v1 \
+VITE_PAPER_DB_STATIC_BASE=http://127.0.0.1:8002 \
+npm run dev
 ```
 
 ---
@@ -279,26 +357,34 @@ uv run deepresearch-flow paper db extract \
 
 ## Deployment (Static CDN)
 
-Use a separate static server (CDN) for PDFs/Markdown/images and keep the API/UI on another host.
+The recommended production setup is **front/back separation**:
 
-### 1) Export static assets
+- **Static CDN** hosts PDFs/Markdown/images/summaries.
+- **API server** serves a read-only snapshot DB.
+- **Frontend** is a separate static app (Vite build or any static host).
+
+<p align="center">
+  <img src=".github/assets/frontend.png" width="80%" alt="frontend" />
+</p>
+
+### 1) Build snapshot + static export
 
 ```bash
-uv run deepresearch-flow paper db serve \
-  --input paper_infos.json \
+uv run deepresearch-flow paper db snapshot build \
+  --input ./paper_infos.json \
+  --bibtex ./papers.bib \
   --md-root ./docs \
   --md-translated-root ./docs \
   --pdf-root ./pdfs \
-  --static-mode prod \
-  --static-base-url https://static.example.com \
+  --output-db ./dist/paper_snapshot.db \
   --static-export-dir /data/paper-static
 ```
 
 Notes:
-- The API host must be able to read the original PDF/Markdown roots to build the index and hashes.
-- The CDN host only needs the exported directory (e.g. `/data/paper-static`).
+- The build host must be able to read the original PDF/Markdown roots.
+- The CDN only needs the exported directory (e.g. `/data/paper-static`).
 
-### 2) Serve the export directory with CORS + cache headers (Caddy example)
+### 2) Serve static assets with CORS + cache headers (Caddy example)
 
 ```caddyfile
 :8002 {
@@ -320,19 +406,72 @@ Notes:
 }
 ```
 
-### 3) Start the API/UI with static base
+### 2.1) Nginx example (API + frontend on one domain, static on another)
+
+```nginx
+# Frontend + API (same domain)
+server {
+  listen 80;
+  server_name frontend.example.com;
+
+  root /var/www/paper-frontend;
+  index index.html;
+
+  location / {
+    try_files $uri /index.html;
+  }
+
+  location /api/ {
+    proxy_pass http://127.0.0.1:8001/;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  }
+}
+
+# Static assets (separate domain)
+server {
+  listen 80;
+  server_name static.example.com;
+
+  root /data/paper-static;
+
+  location / {
+    add_header Access-Control-Allow-Origin *;
+    add_header Access-Control-Allow-Methods "GET,HEAD,OPTIONS";
+    add_header Access-Control-Allow-Headers "*";
+    add_header Cache-Control "public, max-age=31536000, immutable";
+    try_files $uri =404;
+  }
+}
+```
+
+### 3) Start the API server (read-only)
 
 ```bash
 export PAPER_DB_STATIC_BASE_URL="https://static.example.com"
-export PAPER_DB_STATIC_MODE="prod"
-export PAPER_DB_STATIC_EXPORT_DIR="/data/paper-static"
-export PAPER_DB_PDFJS_CDN_BASE_URL="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379"
 
-uv run deepresearch-flow paper db serve \
-  --input paper_infos.json \
-  --md-root ./docs \
-  --md-translated-root ./docs \
-  --pdf-root ./pdfs
+uv run deepresearch-flow paper db api serve \
+  --snapshot-db /data/paper_snapshot.db \
+  --cors-origin https://frontend.example.com \
+  --host 0.0.0.0 --port 8001
+```
+
+### 4) Frontend (static build or dev)
+
+```bash
+cd frontend
+npm install
+
+# Dev
+VITE_PAPER_DB_API_BASE=https://api.example.com/api/v1 \
+VITE_PAPER_DB_STATIC_BASE=https://static.example.com \
+npm run dev
+
+# Build for static hosting
+VITE_PAPER_DB_API_BASE=https://api.example.com/api/v1 \
+VITE_PAPER_DB_STATIC_BASE=https://static.example.com \
+npm run build
 ```
 
 ---
