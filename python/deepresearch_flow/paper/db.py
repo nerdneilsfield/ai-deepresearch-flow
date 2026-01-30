@@ -354,6 +354,131 @@ def parse_tag_list(text: str) -> list[str]:
 
 
 def register_db_commands(db_group: click.Group) -> None:
+    @db_group.group("snapshot")
+    def snapshot_group() -> None:
+        """Build production snapshot artifacts (SQLite + static export)."""
+
+    @snapshot_group.command("build")
+    @click.option("-i", "--input", "input_paths", multiple=True, required=True, help="Input JSON file path")
+    @click.option("-b", "--bibtex", "bibtex_path", default=None, help="Optional BibTeX file path")
+    @click.option(
+        "--md-root",
+        "md_roots",
+        multiple=True,
+        default=(),
+        help="Optional markdown root directory (repeatable) for source viewing",
+    )
+    @click.option(
+        "--md-translated-root",
+        "md_translated_roots",
+        multiple=True,
+        default=(),
+        help="Optional markdown root directory (repeatable) for translated viewing",
+    )
+    @click.option(
+        "--pdf-root",
+        "pdf_roots",
+        multiple=True,
+        default=(),
+        help="Optional PDF root directory (repeatable) for PDF discovery",
+    )
+    @click.option("--output-db", "output_db", default="paper_snapshot.db", show_default=True, help="Output DB path")
+    @click.option(
+        "--static-export-dir",
+        "static_export_dir",
+        default="paper-static",
+        show_default=True,
+        help="Output directory for hashed static assets",
+    )
+    @click.option(
+        "--previous-snapshot-db",
+        "previous_snapshot_db",
+        default=None,
+        help="Optional previous snapshot DB path for identity continuity",
+    )
+    def snapshot_build(
+        input_paths: tuple[str, ...],
+        bibtex_path: str | None,
+        md_roots: tuple[str, ...],
+        md_translated_roots: tuple[str, ...],
+        pdf_roots: tuple[str, ...],
+        output_db: str,
+        static_export_dir: str,
+        previous_snapshot_db: str | None,
+    ) -> None:
+        """Build a production snapshot (SQLite + static export)."""
+        from deepresearch_flow.paper.snapshot.builder import SnapshotBuildOptions, build_snapshot
+
+        opts = SnapshotBuildOptions(
+            input_paths=[Path(path) for path in input_paths],
+            bibtex_path=Path(bibtex_path) if bibtex_path else None,
+            md_roots=[Path(root) for root in md_roots],
+            md_translated_roots=[Path(root) for root in md_translated_roots],
+            pdf_roots=[Path(root) for root in pdf_roots],
+            output_db=Path(output_db),
+            static_export_dir=Path(static_export_dir),
+            previous_snapshot_db=Path(previous_snapshot_db) if previous_snapshot_db else None,
+        )
+        build_snapshot(opts)
+        click.echo(f"Wrote snapshot DB: {opts.output_db}")
+        click.echo(f"Wrote static export: {opts.static_export_dir}")
+
+    @db_group.group("api")
+    def api_group() -> None:
+        """Read-only JSON API server backed by a snapshot DB."""
+
+    @api_group.command("serve")
+    @click.option("--snapshot-db", "snapshot_db", required=True, help="Path to paper_snapshot.db")
+    @click.option(
+        "--static-base-url",
+        "static_base_url",
+        default=None,
+        help="Static asset base URL (e.g. https://static.example.com)",
+    )
+    @click.option(
+        "--cors-origin",
+        "cors_origins",
+        multiple=True,
+        default=(),
+        help="Allowed CORS origin (repeatable; default is '*')",
+    )
+    @click.option("--max-query-length", "max_query_length", type=int, default=500, show_default=True)
+    @click.option("--max-page-size", "max_page_size", type=int, default=100, show_default=True)
+    @click.option("--max-pagination-offset", "max_pagination_offset", type=int, default=10000, show_default=True)
+    @click.option("--host", default="127.0.0.1", show_default=True, help="Bind host")
+    @click.option("--port", default=8001, type=int, show_default=True, help="Bind port")
+    def api_serve(
+        snapshot_db: str,
+        static_base_url: str | None,
+        cors_origins: tuple[str, ...],
+        max_query_length: int,
+        max_page_size: int,
+        max_pagination_offset: int,
+        host: str,
+        port: int,
+    ) -> None:
+        """Serve the snapshot-backed JSON API."""
+        import os
+        import uvicorn
+
+        from deepresearch_flow.paper.snapshot.api import ApiLimits, create_app
+
+        static_base_url_value = static_base_url or os.getenv("PAPER_DB_STATIC_BASE_URL") or ""
+        cors_allowed = list(cors_origins) if cors_origins else ["*"]
+        limits = ApiLimits(
+            max_query_length=max_query_length,
+            max_page_size=max_page_size,
+            max_pagination_offset=max_pagination_offset,
+        )
+        app = create_app(
+            snapshot_db=Path(snapshot_db),
+            static_base_url=static_base_url_value,
+            cors_allowed_origins=cors_allowed,
+            limits=limits,
+        )
+        click.echo(f"Serving API on http://{host}:{port} (Ctrl+C to stop)")
+        uvicorn.run(app, host=host, port=port, log_level="info")
+
     @db_group.command("append-bibtex")
     @click.option("-i", "--input", "input_path", required=True, help="Input JSON file path")
     @click.option("-b", "--bibtex", "bibtex_path", required=True, help="Input BibTeX file path")
