@@ -1,0 +1,17 @@
+{
+  "components": [
+    { "name": "Button", "path": "src/components/ui/button/Button.vue", "source": "shadcn-vue" },
+    { "name": "Input", "path": "src/components/ui/input/Input.vue", "source": "shadcn-vue" },
+    { "name": "Badge", "path": "src/components/ui/badge/Badge.vue", "source": "shadcn-vue" },
+    { "name": "Card", "path": "src/components/ui/card/Card.vue", "source": "shadcn-vue" },
+    { "name": "Tabs", "path": "src/components/ui/tabs/Tabs.vue", "source": "shadcn-vue" },
+    { "name": "Select", "path": "src/components/ui/select/Select.vue", "source": "shadcn-vue" },
+    { "name": "Separator", "path": "src/components/ui/separator/Separator.vue", "source": "shadcn-vue" },
+    { "name": "Pagination", "path": "src/components/ui/pagination/Pagination.vue", "source": "shadcn-vue" },
+    { "name": "Tooltip", "path": "src/components/ui/tooltip/Tooltip.vue", "source": "shadcn-vue" },
+    { "name": "Progress", "path": "src/components/ui/progress/Progress.vue", "source": "shadcn-vue" },
+    { "name": "Toast", "path": "src/components/ui/toast/Toast.vue", "source": "shadcn-vue" },
+    { "name": "DropdownMenu", "path": "src/components/ui/dropdown-menu/DropdownMenu.vue", "source": "shadcn-vue" },
+    { "name": "Sheet", "path": "src/components/ui/sheet/Sheet.vue", "source": "shadcn-vue" }
+  ]
+}
