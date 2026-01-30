@@ -1,0 +1,12 @@
+## 1. Implementation
+- [ ] 1.1 Move root Dockerfile content into `scripts/docker/Dockerfile.base`, add sqlite packages, and improve layer caching for dependencies
+- [ ] 1.2 Create `scripts/docker/Dockerfile.deploy` that installs nginx, bundles frontend assets, and runs nginx + API via supervisord
+- [ ] 1.3 Create Docker workflow - base image build
+- [ ] 1.4 Create Docker workflow - frontend build (produce `frontend/dist`)
+- [ ] 1.5 Create Docker workflow - deploy image build (depends on 1.3 and 1.4 artifacts)
+- [ ] 1.6 Create Docker workflow - tag and push logic for base/deploy images
+- [ ] 1.7 Remove Docker steps from PyPI workflow
+- [ ] 1.8 Add nginx config for /api proxy and SPA static routing
+- [ ] 1.9 Add supervisord config for nginx + API
+- [ ] 1.10 Update README/README_ZH with new Docker usage and runtime env vars
+- [ ] 1.11 Validate workflows and Dockerfiles align with tag rules and run instructions

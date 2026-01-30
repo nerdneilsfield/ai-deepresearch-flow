@@ -91,7 +91,7 @@ def create_app(
         pdf_roots=pdf_roots,
     )
     md = create_md_renderer()
-    static_base_url = static_base_url or os.getenv("PAPER_DB_STATIC_BASE_URL")
+    static_base_url = static_base_url or os.getenv("PAPER_DB_STATIC_BASE") or os.getenv("PAPER_DB_STATIC_BASE_URL")
     static_mode = _normalize_static_mode(static_mode or os.getenv("PAPER_DB_STATIC_MODE"))
     resolved_mode = _resolve_static_mode(static_mode, static_base_url)
     export_dir_value = static_export_dir or os.getenv("PAPER_DB_STATIC_EXPORT_DIR")

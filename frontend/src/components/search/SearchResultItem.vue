@@ -7,6 +7,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { ChevronDown, ChevronUp } from 'lucide-vue-next'
 import RenderedMarkdown from '@/components/RenderedMarkdown.vue'
 import { resolveStaticBaseUrl } from '@/lib/static-base'
+import { useRuntimeConfigStore } from '@/stores/runtime-config'
 
 const props = withDefaults(defineProps<{
   item: SearchResponse['items'][number]
@@ -26,8 +27,10 @@ const props = withDefaults(defineProps<{
 })
 
 const translatedUrl = computed(() => Object.values(props.item.translated_md_urls || {})[0] || '')
+const runtimeConfig = useRuntimeConfigStore()
 const imagesBaseUrl = computed(() =>
   resolveStaticBaseUrl(
+    runtimeConfig.staticBaseUrl,
     props.item.images_base_url,
     props.item.manifest_url,
     props.item.summary_url,

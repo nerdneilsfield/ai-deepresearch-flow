@@ -7,12 +7,16 @@ import router from './router'
 import i18n from './i18n'
 import { VueQueryPlugin } from '@tanstack/vue-query'
 import { queryClient } from './lib/query-client'
+import { useRuntimeConfigStore } from './stores/runtime-config'
 
 const app = createApp(App)
-app.use(createPinia())
+const pinia = createPinia()
+app.use(pinia)
 app.use(router)
 app.use(i18n)
 app.use(VueQueryPlugin, { queryClient })
+const runtimeConfig = useRuntimeConfigStore(pinia)
+runtimeConfig.load().catch(() => {})
 app.mount('#app')
 
 // Performance monitoring in development

@@ -1,0 +1,29 @@
+ARG BASE_IMAGE=deepresearch-flow:latest
+FROM ${BASE_IMAGE}
+
+ENV PAPER_DB_API_BASE=http://127.0.0.1:8000 \
+    PAPER_DB_STATIC_BASE=/static \
+    PAPER_DB_SNAPSHOT_DB=/db/papers.db
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        nginx \
+        supervisor \
+        gettext-base \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY scripts/docker/nginx.conf.root.template /etc/nginx/templates/nginx.conf.root.template
+COPY scripts/docker/nginx.conf.prefix.template /etc/nginx/templates/nginx.conf.prefix.template
+COPY scripts/docker/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+COPY scripts/docker/start-nginx.sh /usr/local/bin/start-nginx.sh
+COPY scripts/docker/start-api.sh /usr/local/bin/start-api.sh
+
+RUN chmod +x /usr/local/bin/start-nginx.sh /usr/local/bin/start-api.sh
+
+RUN mkdir -p /frontend /static
+
+COPY frontend/dist /frontend
+
+EXPOSE 8899
+
+ENTRYPOINT ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]

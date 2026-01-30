@@ -657,7 +657,39 @@ uv run deepresearch-flow recognize fix-mermaid \
 ## Docker 支持
 
 ```bash
-docker run --rm -v $(pwd):/app -it ghcr.io/nerdneilsfield/deepresearch-flow --help
+docker run --rm -v $(pwd):/app -it ghcr.io/nerdneilsfield/deepresearch-flow:latest --help
+```
+
+Deploy 镜像（nginx + API + 前端）：
+
+```bash
+docker run --rm -p 8899:8899 \
+  -v $(pwd)/paper_snapshot.db:/db/papers.db \
+  -v $(pwd)/paper-static:/static \
+  ghcr.io/nerdneilsfield/deepresearch-flow:deploy-latest
+```
+
+说明：
+- nginx 对外监听 8899，并将 `/api` 代理到内部 API `127.0.0.1:8000`。
+- 将 snapshot 数据库挂载到容器内 `/db/papers.db`。
+- 如果静态资源由此容器提供，请将 snapshot 静态目录挂载到 `/static`（默认 `PAPER_DB_STATIC_BASE` 为 `/static`）。
+- 如果 `PAPER_DB_STATIC_BASE` 是完整 URL（例如 `https://static.example.com`），nginx 仍仅提供本地前端，API 响应中的静态资源链接会使用该外部域名。
+
+Docker Compose 示例（两种模式）：
+
+```bash
+docker compose -f scripts/docker/docker-compose.example.yml --profile local-static up
+# 或者
+docker compose -f scripts/docker/docker-compose.example.yml --profile external-static up
+```
+
+外部静态资源示例：
+
+```bash
+docker run --rm -p 8899:8899 \
+  -v $(pwd)/paper_snapshot.db:/db/papers.db \
+  -e PAPER_DB_STATIC_BASE=https://static.example.com \
+  ghcr.io/nerdneilsfield/deepresearch-flow:deploy-latest
 ```
 
 ## 配置说明

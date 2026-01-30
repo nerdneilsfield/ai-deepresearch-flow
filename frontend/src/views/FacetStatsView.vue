@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { useFacetStats } from '@/composables/useFacetStats'
 import { useSelectionStore } from '@/stores/selection'
-import { fetchJson } from '@/lib/api'
+import { fetchJson, type SearchResponse } from '@/lib/api'
 import { lazySnippet } from '@/lib/lazy'
 import SearchResultItem from '@/components/search/SearchResultItem.vue'
 
@@ -91,7 +91,7 @@ const expanded = ref<Record<string, boolean>>({})
 const expandedLoading = ref<Record<string, boolean>>({})
 const expandedMarkdown = ref<Record<string, string>>({})
 
-async function toggleSummary(item: { paper_id: string; summary?: string | null; is_short?: boolean }) {
+async function toggleSummary(item: SearchResponse['items'][number]) {
   const id = item.paper_id
   const currently = expanded.value[id]
   if (currently) {
@@ -112,7 +112,12 @@ async function toggleSummary(item: { paper_id: string; summary?: string | null; 
   // Fetch full summary
   expandedLoading.value = { ...expandedLoading.value, [id]: true }
   try {
-    const result = await fetchJson<{ summary: string; is_short: boolean }>(`/api/v1/papers/${encodeURIComponent(id)}/summary`)
+    if (!item.summary_url) {
+      expandedMarkdown.value = { ...expandedMarkdown.value, [id]: '' }
+      expanded.value = { ...expanded.value, [id]: true }
+      return
+    }
+    const result = await fetchJson<{ summary: string; is_short: boolean }>(item.summary_url)
     expandedMarkdown.value = { ...expandedMarkdown.value, [id]: result.summary }
     expanded.value = { ...expanded.value, [id]: true }
   } catch {

@@ -1,0 +1,36 @@
+worker_processes 1;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+    sendfile on;
+    keepalive_timeout 65;
+
+    server {
+        listen 8899;
+        server_name _;
+
+        location /api/ {
+            proxy_pass ${PAPER_DB_API_BASE};
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+        }
+
+        location /static/ {
+            alias /static/;
+            try_files $uri $uri/ =404;
+        }
+
+        location / {
+            root /frontend;
+            try_files $uri $uri/ /index.html;
+        }
+    }
+}

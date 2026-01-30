@@ -898,6 +898,11 @@ async def _api_stats(request: Request) -> Response:
         conn.close()
 
 
+async def _api_config(request: Request) -> Response:
+    cfg: SnapshotApiConfig = request.app.state.cfg
+    return JSONResponse({"static_base_url": cfg.static_base_url})
+
+
 def create_app(
     *,
     snapshot_db: Path,
@@ -913,6 +918,7 @@ def create_app(
     )
 
     routes = [
+        Route("/api/v1/config", _api_config, methods=["GET"]),
         Route("/api/v1/search", _api_search, methods=["GET"]),
         Route("/api/v1/stats", _api_stats, methods=["GET"]),
         Route("/api/v1/papers/{paper_id:str}", _api_paper_detail, methods=["GET"]),

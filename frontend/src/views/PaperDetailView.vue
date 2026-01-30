@@ -9,6 +9,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useUiStore } from '@/stores/ui'
 import { useSelectionStore } from '@/stores/selection'
+import { useRuntimeConfigStore } from '@/stores/runtime-config'
 import { useElementBounding, useMediaQuery, useWindowSize, refDebounced } from '@vueuse/core'
 import SummaryPanel from '@/components/SummaryPanel.vue'
 import MarkdownPanel from '@/components/MarkdownPanel.vue'
@@ -24,6 +25,7 @@ const router = useRouter()
 const { t } = useI18n()
 const ui = useUiStore()
 const selection = useSelectionStore()
+const runtimeConfig = useRuntimeConfigStore()
 
 const paperId = computed(() => String(route.params.paperId || ''))
 const { detailQuery } = usePaperDetail(paperId)
@@ -75,6 +77,7 @@ const imagesBaseUrl = computed(() => {
     ? Object.values(detail.value.translated_md_urls)[0]
     : undefined
   return resolveStaticBaseUrl(
+    runtimeConfig.staticBaseUrl,
     detail.value?.images_base_url,
     detail.value?.manifest_url,
     detail.value?.summary_url,

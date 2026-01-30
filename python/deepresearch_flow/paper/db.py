@@ -463,7 +463,23 @@ def register_db_commands(db_group: click.Group) -> None:
 
         from deepresearch_flow.paper.snapshot.api import ApiLimits, create_app
 
-        static_base_url_value = static_base_url or os.getenv("PAPER_DB_STATIC_BASE_URL") or ""
+        static_base_url_value = (
+            static_base_url
+            or os.getenv("PAPER_DB_STATIC_BASE")
+            or os.getenv("PAPER_DB_STATIC_BASE_URL")
+            or ""
+        )
+        api_base_url = os.getenv("PAPER_DB_API_BASE") or ""
+        if api_base_url and host == "127.0.0.1" and port == 8001:
+            from urllib.parse import urlparse
+
+            parsed = urlparse(api_base_url)
+            if not parsed.scheme:
+                parsed = urlparse(f"http://{api_base_url}")
+            if parsed.hostname:
+                host = parsed.hostname
+            if parsed.port:
+                port = parsed.port
         cors_allowed = list(cors_origins) if cors_origins else ["*"]
         limits = ApiLimits(
             max_query_length=max_query_length,

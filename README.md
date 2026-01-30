@@ -700,7 +700,39 @@ uv run deepresearch-flow recognize fix-mermaid \
 Don't want to manage Python environments?
 
 ```bash
-docker run --rm -v $(pwd):/app -it ghcr.io/nerdneilsfield/deepresearch-flow --help
+docker run --rm -v $(pwd):/app -it ghcr.io/nerdneilsfield/deepresearch-flow:latest --help
+```
+
+Deploy image (API + frontend via nginx):
+
+```bash
+docker run --rm -p 8899:8899 \
+  -v $(pwd)/paper_snapshot.db:/db/papers.db \
+  -v $(pwd)/paper-static:/static \
+  ghcr.io/nerdneilsfield/deepresearch-flow:deploy-latest
+```
+
+Notes:
+- nginx listens on 8899 and proxies `/api` to the internal API at `127.0.0.1:8000`.
+- Mount your snapshot DB to `/db/papers.db` inside the container.
+- Mount snapshot static assets to `/static` when serving assets from this container (default `PAPER_DB_STATIC_BASE` is `/static`).
+- If `PAPER_DB_STATIC_BASE` is a full URL (e.g. `https://static.example.com`), nginx still serves the frontend locally, while API responses use that external static base for asset links.
+
+Docker Compose example (two modes):
+
+```bash
+docker compose -f scripts/docker/docker-compose.example.yml --profile local-static up
+# or
+docker compose -f scripts/docker/docker-compose.example.yml --profile external-static up
+```
+
+External static assets example:
+
+```bash
+docker run --rm -p 8899:8899 \
+  -v $(pwd)/paper_snapshot.db:/db/papers.db \
+  -e PAPER_DB_STATIC_BASE=https://static.example.com \
+  ghcr.io/nerdneilsfield/deepresearch-flow:deploy-latest
 ```
 
 ## Configuration
