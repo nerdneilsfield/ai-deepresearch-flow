@@ -1,0 +1,14 @@
+## 1. Implementation
+- [ ] 1.1 Add CLI: `paper db snapshot build` (inputs + bibtex + roots + output dirs + optional `--config`).
+- [ ] 1.2 Implement `paper_key` extraction and deterministic `paper_id` hashing (DOI → arXiv → bibtex → meta), including DOI URL-decoding and arXiv version stripping.
+- [ ] 1.3 Implement identity continuity across rebuilds (optional `--previous-snapshot-db`, alias mapping, key strength conflict resolution, weak-key collision guard via a structured `meta_fingerprint`, and `paper_key_type` storage).
+- [ ] 1.4 Implement Markdown→plain-text extraction for indexing (strip tags; drop tables; normalize whitespace).
+- [ ] 1.5 Implement CJK character-spacing preprocessor for indexing and query rewrite for searching (including mixed CJK/Latin queries).
+- [ ] 1.6 Create `paper_snapshot.db` schema (papers, facets, join tables, precomputed counts).
+- [ ] 1.7 Build FTS5 tables: `unicode61` full corpus + `trigram` small-fields index (default scope: title + venue); produce marker-based `snippet_markdown`.
+- [ ] 1.8 Export static assets (`paper-static/`) using content hashes (reuse existing static export where possible).
+- [ ] 1.9 Export per-paper `summary/<paper_id>.json` and `manifest/<paper_id>.json` (download-ready asset list + image list with missing status + sanitized folder/file names including `folder_name_short`) and store `snapshot_build_id` in the snapshot DB for cache-busting.
+- [ ] 1.10 Precompute metadata relationship caches for all facets (authors, institutions, venues, keywords, tags, years, months, templates, output_language, provider, model, prompt_template, translation languages) and store them in the snapshot DB.
+- [ ] 1.11 Add CLI: `paper db api serve` (reads snapshot DB; exposes versioned search/browse/detail/stats endpoints; by-value facet routes; facet-scoped stats endpoints under `/facets/*`; pagination depth limit; query limits; cache-busting URLs for summary/manifest; configurable CORS + static_base_url; optional `--config`).
+- [ ] 1.12 Document production deployment (build artifacts, static hosting with CORS, API config; include static host CORS requirement for ZIP export).
+- [ ] 1.13 Add tests for DOI canonicalization (URL-decoding), arXiv normalization, `paper_id` stability across rebuilds, weak-key collision guard, mixed CJK/Latin query rewrite, table stripping, snippet markers, manifest path sanitization/fallback naming, and pagination/query limit validation.
