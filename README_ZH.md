@@ -218,9 +218,9 @@ uv run deepresearch-flow paper db serve \
   --host 127.0.0.1
 ```
 
-#### 步骤 5：启用 MCP（FastMCP Streamable HTTP）
+#### 步骤 5：启用 MCP（FastMCP Streamable HTTP + SSE）
 
-本项目使用 [FastMCP](https://gofastmcp.com) 提供 MCP 服务，挂载在 snapshot API 的 `/mcp` 路径下。
+本项目使用 [FastMCP](https://gofastmcp.com) 提供 MCP 服务，挂载在 snapshot API 的 `/mcp` 与 `/mcp-sse` 路径下。
 
 ```bash
 # 启动 snapshot API（包含 MCP）
@@ -234,13 +234,16 @@ uv run deepresearch-flow paper db api serve \
 ```
 
 MCP 客户端配置：
-- MCP 端点：`http://<host>:8001/mcp`
-- 仅支持 HTTP POST（Streamable HTTP），不支持 SSE
+- Streamable HTTP 端点：`http://<host>:8001/mcp`
+- SSE 端点：`http://<host>:8001/mcp-sse`
+- 传输行为：
+  - `/mcp`：仅支持 HTTP POST（GET 返回 405）
+  - `/mcp-sse`：支持 SSE（允许 GET 握手）
 - Summary/Source/Translation 由 MCP 服务器代理读取静态资源并返回文本内容（不返回 URL）
 
 **FastMCP 特性**：
 - 使用 `fastmcp>=3.0.0b1`，支持 stateless HTTP 模式
-- 所有 Tools 和 Resources 均在同一个 `/mcp` 路径下暴露
+- 所有 Tools 和 Resources 同时支持 `/mcp` 与 `/mcp-sse`
 - 支持 CORS 配置，可限制 Origin 访问
 
 **补充说明**：
@@ -584,6 +587,22 @@ server {
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
   }
+
+  # 给需要 SSE 的 MCP 客户端使用
+  location ^~ /mcp-sse {
+    proxy_pass http://127.0.0.1:8001;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+    chunked_transfer_encoding off;
+    add_header X-Accel-Buffering no;
+  }
 }
 
 # 静态资源（独立域名）
@@ -867,7 +886,7 @@ docker run --rm -p 8899:8899 \
 ```
 
 说明：
-- nginx 对外监听 8899，并将 `/api` 和 `/mcp` 代理到内部 API `127.0.0.1:8000`。
+- nginx 对外监听 8899，并将 `/api`、`/mcp`、`/mcp-sse` 代理到内部 API `127.0.0.1:8000`。
 - 将 snapshot 数据库挂载到容器内 `/db/papers.db`。
 - 如果静态资源由此容器提供，请将 snapshot 静态目录挂载到 `/static`（默认 `PAPER_DB_STATIC_BASE` 为 `/static`）。
 - 如果 `PAPER_DB_STATIC_BASE` 是完整 URL（例如 `https://static.example.com`），nginx 仍仅提供本地前端，API 响应中的静态资源链接会使用该外部域名。

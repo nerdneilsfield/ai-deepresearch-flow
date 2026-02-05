@@ -469,6 +469,22 @@ server {
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
   }
+
+  # SSE transport for MCP clients that require Server-Sent Events
+  location ^~ /mcp-sse {
+    proxy_pass http://127.0.0.1:8001;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+    chunked_transfer_encoding off;
+    add_header X-Accel-Buffering no;
+  }
 }
 
 # Static assets (separate domain)
@@ -499,12 +515,15 @@ uv run deepresearch-flow paper db api serve \
   --host 0.0.0.0 --port 8001
 ```
 
-### 3.1) MCP (FastMCP Streamable HTTP)
+### 3.1) MCP (FastMCP Streamable HTTP + SSE)
 
-This project exposes an MCP server mounted at `/mcp` on the snapshot API:
+This project exposes MCP servers mounted on the snapshot API:
 
-- Endpoint: `http://<host>:8001/mcp` (same host/port as `paper db api serve`)
-- Transport: Streamable HTTP via `POST` only (no SSE; `GET` returns 405)
+- Streamable HTTP endpoint: `http://<host>:8001/mcp`
+- SSE endpoint: `http://<host>:8001/mcp-sse`
+- Transport behavior:
+  - `/mcp`: Streamable HTTP via `POST` only (`GET` returns 405)
+  - `/mcp-sse`: SSE-enabled transport (supports `GET` handshake)
 - Protocol header: optional `mcp-protocol-version` (`2025-03-26` or `2025-06-18`)
 - Static reads: summary/source/translation are served as **text content** by reading snapshot static assets (local-first via `PAPER_DB_STATIC_EXPORT_DIR`, HTTP fallback via `PAPER_DB_STATIC_BASE` / `PAPER_DB_STATIC_BASE_URL`)
 
@@ -896,7 +915,7 @@ docker run --rm -p 8899:8899 \
 ```
 
 Notes:
-- nginx listens on 8899 and proxies `/api` and `/mcp` to the internal API at `127.0.0.1:8000`.
+- nginx listens on 8899 and proxies `/api`, `/mcp`, and `/mcp-sse` to the internal API at `127.0.0.1:8000`.
 - Mount your snapshot DB to `/db/papers.db` inside the container.
 - Mount snapshot static assets to `/static` when serving assets from this container (default `PAPER_DB_STATIC_BASE` is `/static`).
 - If `PAPER_DB_STATIC_BASE` is a full URL (e.g. `https://static.example.com`), nginx still serves the frontend locally, while API responses use that external static base for asset links.

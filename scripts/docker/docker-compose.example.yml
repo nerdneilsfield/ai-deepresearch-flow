@@ -11,6 +11,7 @@ services:
     environment:
       PAPER_DB_API_BASE: http://127.0.0.1:8000
       PAPER_DB_STATIC_BASE: /static
+    # Exposes frontend + API, including MCP streamable (/mcp) and SSE (/mcp-sse).
     profiles: ["local-static"]
 
   deploy-external-static:
@@ -22,4 +23,5 @@ services:
     environment:
       PAPER_DB_API_BASE: http://127.0.0.1:8000
       PAPER_DB_STATIC_BASE: https://static.example.com
+    # Exposes frontend + API, including MCP streamable (/mcp) and SSE (/mcp-sse).
     profiles: ["external-static"]
