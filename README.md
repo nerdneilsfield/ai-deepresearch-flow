@@ -457,7 +457,14 @@ server {
   }
 
   location /api/ {
-    proxy_pass http://127.0.0.1:8001/;
+    proxy_pass http://127.0.0.1:8001;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  }
+
+  location ^~ /mcp {
+    proxy_pass http://127.0.0.1:8001;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -491,6 +498,147 @@ uv run deepresearch-flow paper db api serve \
   --cors-origin https://frontend.example.com \
   --host 0.0.0.0 --port 8001
 ```
+
+### 3.1) MCP (FastMCP Streamable HTTP)
+
+This project exposes an MCP server mounted at `/mcp` on the snapshot API:
+
+- Endpoint: `http://<host>:8001/mcp` (same host/port as `paper db api serve`)
+- Transport: Streamable HTTP via `POST` only (no SSE; `GET` returns 405)
+- Protocol header: optional `mcp-protocol-version` (`2025-03-26` or `2025-06-18`)
+- Static reads: summary/source/translation are served as **text content** by reading snapshot static assets (local-first via `PAPER_DB_STATIC_EXPORT_DIR`, HTTP fallback via `PAPER_DB_STATIC_BASE` / `PAPER_DB_STATIC_BASE_URL`)
+
+Optional (avoid HTTP fetch by reading exported assets directly on the API host):
+
+```bash
+export PAPER_DB_STATIC_EXPORT_DIR=/data/paper-static
+```
+
+#### MCP Tools (API functions)
+
+<details>
+<summary><strong>search_papers(query, limit=10)</strong> — full-text search (relevance-ranked)</summary>
+
+- Args:
+  - `query` (str): keywords / topic query
+  - `limit` (int): number of results (clamped to API max page size)
+- Returns: list of `{ paper_id, title, year, venue, snippet_markdown }`
+
+</details>
+
+<details>
+<summary><strong>search_papers_by_keyword(keyword, limit=10)</strong> — facet keyword search</summary>
+
+- Args:
+  - `keyword` (str): keyword substring
+  - `limit` (int): number of results (clamped)
+- Returns: list of `{ paper_id, title, year, venue, snippet_markdown }`
+
+</details>
+
+<details>
+<summary><strong>get_paper_metadata(paper_id)</strong> — metadata + available summary templates</summary>
+
+- Args:
+  - `paper_id` (str)
+- Returns: dict with:
+  - `paper_id`, `title`, `year`, `venue`
+  - `doi`, `arxiv_id`, `openreview_id`, `paper_pw_url`
+  - `preferred_summary_template`, `available_summary_templates`
+
+</details>
+
+<details>
+<summary><strong>get_paper_summary(paper_id, template=None, max_chars=None)</strong> — summary JSON as raw text</summary>
+
+- Notes:
+  - Uses `preferred_summary_template` if `template` is omitted
+  - Returns the **full JSON content** (not a URL)
+- Args:
+  - `paper_id` (str)
+  - `template` (str | null)
+  - `max_chars` (int | null): truncation limit
+- Returns: JSON string (may include a `[truncated: ...]` marker)
+
+</details>
+
+<details>
+<summary><strong>get_paper_source(paper_id, max_chars=None)</strong> — source markdown as raw text</summary>
+
+- Args:
+  - `paper_id` (str)
+  - `max_chars` (int | null): truncation limit
+- Returns: markdown string (may include a `[truncated: ...]` marker)
+
+</details>
+
+<details>
+<summary><strong>get_database_stats()</strong> — snapshot-level stats</summary>
+
+- Returns:
+  - `total`
+  - `years`, `months`: list of `{ value, paper_count }`
+  - `authors`, `venues`, `institutions`, `keywords`, `tags`: top lists of `{ value, paper_count }`
+
+</details>
+
+<details>
+<summary><strong>list_top_facets(category, limit=20)</strong> — top values for one facet</summary>
+
+- Args:
+  - `category`: `author | venue | keyword | institution | tag`
+  - `limit` (int)
+- Returns: list of `{ value, paper_count }`
+
+</details>
+
+<details>
+<summary><strong>filter_papers(author=None, venue=None, year=None, keyword=None, tag=None, limit=10)</strong> — structured filtering</summary>
+
+- Args (all optional except `limit`):
+  - `author`, `venue`, `keyword`, `tag`: substring match
+  - `year`: exact match
+  - `limit` (int): number of results (clamped)
+- Returns: list of `{ paper_id, title, year, venue }`
+
+</details>
+
+#### MCP Resources (URI access)
+
+<details>
+<summary><strong>paper://{paper_id}/metadata</strong> — metadata JSON</summary>
+
+Returns the same content as `get_paper_metadata(paper_id)` (as a JSON string).
+
+</details>
+
+<details>
+<summary><strong>paper://{paper_id}/summary</strong> — preferred summary JSON</summary>
+
+Returns the same content as `get_paper_summary(paper_id)` (preferred template; JSON string).
+
+</details>
+
+<details>
+<summary><strong>paper://{paper_id}/summary/{template}</strong> — summary JSON for template</summary>
+
+Returns the same content as `get_paper_summary(paper_id, template=template)` (JSON string).
+
+</details>
+
+<details>
+<summary><strong>paper://{paper_id}/source</strong> — source markdown</summary>
+
+Returns the same content as `get_paper_source(paper_id)` (markdown string).
+
+</details>
+
+<details>
+<summary><strong>paper://{paper_id}/translation/{lang}</strong> — translated markdown</summary>
+
+Returns translated markdown for `lang` (e.g. `zh`, `ja`) when available.
+
+</details>
 
 ### 4) Frontend (static build or dev)
 
@@ -748,7 +896,7 @@ docker run --rm -p 8899:8899 \
 ```
 
 Notes:
-- nginx listens on 8899 and proxies `/api` to the internal API at `127.0.0.1:8000`.
+- nginx listens on 8899 and proxies `/api` and `/mcp` to the internal API at `127.0.0.1:8000`.
 - Mount your snapshot DB to `/db/papers.db` inside the container.
 - Mount snapshot static assets to `/static` when serving assets from this container (default `PAPER_DB_STATIC_BASE` is `/static`).
 - If `PAPER_DB_STATIC_BASE` is a full URL (e.g. `https://static.example.com`), nginx still serves the frontend locally, while API responses use that external static base for asset links.

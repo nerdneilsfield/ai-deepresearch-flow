@@ -243,6 +243,136 @@ MCP 客户端配置：
 - 所有 Tools 和 Resources 均在同一个 `/mcp` 路径下暴露
 - 支持 CORS 配置，可限制 Origin 访问
 
+**补充说明**：
+- 可选请求头：`mcp-protocol-version`（支持 `2025-03-26` / `2025-06-18`）
+- 静态资源读取优先级：`PAPER_DB_STATIC_EXPORT_DIR`（本地目录优先）→ `PAPER_DB_STATIC_BASE` / `PAPER_DB_STATIC_BASE_URL`（HTTP 拉取兜底）
+
+##### MCP Tools（函数）
+
+<details>
+<summary><strong>search_papers(query, limit=10)</strong> — 全文检索（相关性排序）</summary>
+
+- 参数：
+  - `query`（str）：主题关键词
+  - `limit`（int）：返回数量（会被限制到 API 的最大 page size）
+- 返回：`[{ paper_id, title, year, venue, snippet_markdown }, ...]`
+
+</details>
+
+<details>
+<summary><strong>search_papers_by_keyword(keyword, limit=10)</strong> — 按关键词 facet 检索</summary>
+
+- 参数：
+  - `keyword`（str）：关键词子串
+  - `limit`（int）：返回数量（会被限制）
+- 返回：`[{ paper_id, title, year, venue, snippet_markdown }, ...]`
+
+</details>
+
+<details>
+<summary><strong>get_paper_metadata(paper_id)</strong> — 元信息 + 可用 summary 模板</summary>
+
+- 参数：
+  - `paper_id`（str）
+- 返回（dict）包含：
+  - `paper_id`, `title`, `year`, `venue`
+  - `doi`, `arxiv_id`, `openreview_id`, `paper_pw_url`
+  - `preferred_summary_template`, `available_summary_templates`
+
+</details>
+
+<details>
+<summary><strong>get_paper_summary(paper_id, template=None, max_chars=None)</strong> — summary JSON 原文</summary>
+
+- 说明：
+  - `template` 为空时使用 `preferred_summary_template`
+  - 返回 **JSON 内容本身**（不是 URL）
+- 参数：
+  - `paper_id`（str）
+  - `template`（str | null）
+  - `max_chars`（int | null）：截断上限
+- 返回：JSON 字符串（可能包含 `[truncated: ...]` 标记）
+
+</details>
+
+<details>
+<summary><strong>get_paper_source(paper_id, max_chars=None)</strong> — source Markdown 原文</summary>
+
+- 参数：
+  - `paper_id`（str）
+  - `max_chars`（int | null）：截断上限
+- 返回：Markdown 字符串（可能包含 `[truncated: ...]` 标记）
+
+</details>
+
+<details>
+<summary><strong>get_database_stats()</strong> — 数据库统计</summary>
+
+- 返回：
+  - `total`
+  - `years`, `months`：`[{ value, paper_count }, ...]`
+  - `authors`, `venues`, `institutions`, `keywords`, `tags`：top 列表 `[{ value, paper_count }, ...]`
+
+</details>
+
+<details>
+<summary><strong>list_top_facets(category, limit=20)</strong> — 列出某类 facet Top 值</summary>
+
+- 参数：
+  - `category`：`author | venue | keyword | institution | tag`
+  - `limit`（int）
+- 返回：`[{ value, paper_count }, ...]`
+
+</details>
+
+<details>
+<summary><strong>filter_papers(author=None, venue=None, year=None, keyword=None, tag=None, limit=10)</strong> — 结构化过滤</summary>
+
+- 参数（除 `limit` 外均可选）：
+  - `author`, `venue`, `keyword`, `tag`：子串匹配
+  - `year`：精确匹配
+  - `limit`（int）：返回数量（会被限制）
+- 返回：`[{ paper_id, title, year, venue }, ...]`
+
+</details>
+
+##### MCP Resources（URI）
+
+<details>
+<summary><strong>paper://{paper_id}/metadata</strong> — 元信息 JSON</summary>
+
+返回与 `get_paper_metadata(paper_id)` 等价的内容（JSON 字符串）。
+
+</details>
+
+<details>
+<summary><strong>paper://{paper_id}/summary</strong> — 默认 summary JSON</summary>
+
+返回与 `get_paper_summary(paper_id)` 等价的内容（preferred template；JSON 字符串）。
+
+</details>
+
+<details>
+<summary><strong>paper://{paper_id}/summary/{template}</strong> — 指定模板 summary JSON</summary>
+
+返回与 `get_paper_summary(paper_id, template=template)` 等价的内容（JSON 字符串）。
+
+</details>
+
+<details>
+<summary><strong>paper://{paper_id}/source</strong> — source Markdown</summary>
+
+返回与 `get_paper_source(paper_id)` 等价的内容（Markdown 字符串）。
+
+</details>
+
+<details>
+<summary><strong>paper://{paper_id}/translation/{lang}</strong> — 翻译 Markdown</summary>
+
+返回指定 `lang`（例如 `zh` / `ja`）的翻译 Markdown（若存在）。
+
+</details>
+
 ---
 
 ## 增量构建 PDF 文献库流程
@@ -442,7 +572,14 @@ server {
   }
 
   location /api/ {
-    proxy_pass http://127.0.0.1:8001/;
+    proxy_pass http://127.0.0.1:8001;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  }
+
+  location ^~ /mcp {
+    proxy_pass http://127.0.0.1:8001;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -730,7 +867,7 @@ docker run --rm -p 8899:8899 \
 ```
 
 说明：
-- nginx 对外监听 8899，并将 `/api` 代理到内部 API `127.0.0.1:8000`。
+- nginx 对外监听 8899，并将 `/api` 和 `/mcp` 代理到内部 API `127.0.0.1:8000`。
 - 将 snapshot 数据库挂载到容器内 `/db/papers.db`。
 - 如果静态资源由此容器提供，请将 snapshot 静态目录挂载到 `/static`（默认 `PAPER_DB_STATIC_BASE` 为 `/static`）。
 - 如果 `PAPER_DB_STATIC_BASE` 是完整 URL（例如 `https://static.example.com`），nginx 仍仅提供本地前端，API 响应中的静态资源链接会使用该外部域名。
