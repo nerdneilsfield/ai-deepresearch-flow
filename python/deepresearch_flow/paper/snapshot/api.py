@@ -11,8 +11,9 @@ from starlette.applications import Starlette
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
-from starlette.routing import Route
+from starlette.routing import Mount, Route
 
+from deepresearch_flow.paper.snapshot.common import ApiLimits, _open_ro_conn
 from deepresearch_flow.paper.snapshot.text import merge_adjacent_markers, remove_cjk_spaces, rewrite_search_query
 
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -88,13 +89,6 @@ _FACET_TYPE_TO_KEY = {
 
 
 @dataclass(frozen=True)
-class ApiLimits:
-    max_query_length: int = 500
-    max_page_size: int = 100
-    max_pagination_offset: int = 10_000  # page * page_size
-
-
-@dataclass(frozen=True)
 class SnapshotApiConfig:
     snapshot_db: Path
     static_base_url: str
@@ -110,12 +104,6 @@ def _json_error(status_code: int, *, error: str, detail: str) -> JSONResponse:
     return JSONResponse({"error": error, "detail": detail}, status_code=status_code)
 
 
-def _open_ro_conn(db_path: Path) -> sqlite3.Connection:
-    uri = f"file:{db_path.as_posix()}?mode=ro"
-    conn = sqlite3.connect(uri, uri=True)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA query_only=ON;")
-    return conn
 
 
 def _snapshot_build_id(conn: sqlite3.Connection) -> str:
@@ -917,6 +905,22 @@ def create_app(
         limits=limits or ApiLimits(),
     )
 
+    # Lazy import to avoid circular dependency
+    from deepresearch_flow.paper.snapshot.mcp_server import (
+        McpSnapshotConfig,
+        create_mcp_app,
+        resolve_static_export_dir,
+    )
+
+    mcp_config = McpSnapshotConfig(
+        snapshot_db=snapshot_db,
+        static_base_url=_normalize_base_url(static_base_url),
+        static_export_dir=resolve_static_export_dir(),
+        limits=limits or ApiLimits(),
+        origin_allowlist=cors_allowed_origins or ["*"],
+    )
+    mcp_app, mcp_lifespan = create_mcp_app(mcp_config)
+
     routes = [
         Route("/api/v1/config", _api_config, methods=["GET"]),
         Route("/api/v1/search", _api_search, methods=["GET"]),
@@ -927,9 +931,15 @@ def create_app(
         Route("/api/v1/facets/{facet:str}/{facet_id:str}/stats", _api_facet_stats, methods=["GET"]),
         Route("/api/v1/facets/{facet:str}/by-value/{value:str}/papers", _api_facet_by_value_papers, methods=["GET"]),
         Route("/api/v1/facets/{facet:str}/by-value/{value:str}/stats", _api_facet_by_value_stats, methods=["GET"]),
+        Mount("/mcp", app=mcp_app),
     ]
 
-    app = Starlette(routes=routes)
+    # Pass MCP lifespan to ensure session manager initializes properly
+    # https://gofastmcp.com/deployment/http#mounting-in-starlette
+    app = Starlette(
+        routes=routes,
+        lifespan=mcp_lifespan,
+    )
     if cfg.cors_allowed_origins:
         app.add_middleware(
             CORSMiddleware,

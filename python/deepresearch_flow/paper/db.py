@@ -424,6 +424,87 @@ def register_db_commands(db_group: click.Group) -> None:
         click.echo(f"Wrote snapshot DB: {opts.output_db}")
         click.echo(f"Wrote static export: {opts.static_export_dir}")
 
+    @snapshot_group.group("unpack")
+    def snapshot_unpack_group() -> None:
+        """Unpack snapshot artifacts."""
+
+    @snapshot_unpack_group.command("md")
+    @click.option("--snapshot-db", "snapshot_db", required=True, help="Path to snapshot database")
+    @click.option(
+        "--static-export-dir",
+        "static_export_dir",
+        required=True,
+        help="Path to static export directory",
+    )
+    @click.option(
+        "--pdf-root",
+        "pdf_roots",
+        multiple=True,
+        required=True,
+        help="PDF root directories for name alignment (repeatable)",
+    )
+    @click.option("--md-output-dir", "md_output_dir", required=True, help="Output directory for Markdown")
+    @click.option(
+        "--md-translated-output-dir",
+        "md_translated_output_dir",
+        required=True,
+        help="Output directory for translated Markdown",
+    )
+    def snapshot_unpack_md(
+        snapshot_db: str,
+        static_export_dir: str,
+        pdf_roots: tuple[str, ...],
+        md_output_dir: str,
+        md_translated_output_dir: str,
+    ) -> None:
+        """Unpack source/translated markdown and align filenames to PDFs."""
+        from deepresearch_flow.paper.snapshot.unpacker import SnapshotUnpackMdOptions, unpack_md
+
+        opts = SnapshotUnpackMdOptions(
+            snapshot_db=Path(snapshot_db),
+            static_export_dir=Path(static_export_dir),
+            pdf_roots=[Path(path) for path in pdf_roots],
+            md_output_dir=Path(md_output_dir),
+            md_translated_output_dir=Path(md_translated_output_dir),
+        )
+        unpack_md(opts)
+
+    @snapshot_unpack_group.command("info")
+    @click.option("--snapshot-db", "snapshot_db", required=True, help="Path to snapshot database")
+    @click.option(
+        "--static-export-dir",
+        "static_export_dir",
+        required=True,
+        help="Path to static export directory",
+    )
+    @click.option(
+        "--pdf-root",
+        "pdf_roots",
+        multiple=True,
+        required=True,
+        help="PDF root directories for name alignment (repeatable)",
+    )
+    @click.option("--template", "template", required=True, help="Summary template tag")
+    @click.option("--output-json", "output_json", required=True, help="Output JSON file path")
+    def snapshot_unpack_info(
+        snapshot_db: str,
+        static_export_dir: str,
+        pdf_roots: tuple[str, ...],
+        template: str,
+        output_json: str,
+    ) -> None:
+        """Unpack aggregated paper_infos.json from snapshot summaries."""
+        from deepresearch_flow.paper.snapshot.unpacker import SnapshotUnpackInfoOptions, unpack_info
+
+        opts = SnapshotUnpackInfoOptions(
+            snapshot_db=Path(snapshot_db),
+            static_export_dir=Path(static_export_dir),
+            pdf_roots=[Path(path) for path in pdf_roots],
+            template=template,
+            output_json=Path(output_json),
+        )
+        unpack_info(opts)
+
     @db_group.group("api")
     def api_group() -> None:
         """Read-only JSON API server backed by a snapshot DB."""

@@ -30,6 +30,7 @@ jsonschema-specifications==2025.9.1
 latexcodec==3.0.1
 markdown-it-py==4.0.0
 markupsafe==3.0.3
+fastmcp==3.0.0b1
 mdit-py-plugins==0.5.0
 mdurl==0.1.2
 multidict==6.7.0

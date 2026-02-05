@@ -1,0 +1,11 @@
+## 1. Implementation
+- [ ] 1.1 Add MCP server module for snapshot DB (FastMCP, Streamable HTTP only)
+- [ ] 1.2 Implement tools: `search_papers`, `search_papers_by_keyword`, `get_paper_metadata`, `get_paper_summary`, `get_paper_source`, `get_database_stats`, `list_top_facets`, `filter_papers`
+- [ ] 1.3 Implement resources: `paper://{paper_id}/metadata`, `paper://{paper_id}/summary`, `paper://{paper_id}/summary/{template}`, `paper://{paper_id}/source`, `paper://{paper_id}/translation/{lang}`
+- [ ] 1.4 Implement static asset proxy reads (summary/source/translation) and return extracted content (no URL leakage)
+- [ ] 1.5 Add tool metadata: clear titles/descriptions and JSON Schema input constraints for LLM guidance
+- [ ] 1.6 Mount MCP server under `/mcp` in snapshot API app and wire snapshot DB path + limits
+- [ ] 1.7 Enforce read-only DB connections and guardrails (q length, page_size, max offset, limit defaults)
+- [ ] 1.8 Document MCP Streamable HTTP usage and client connection examples
+- [ ] 1.9 Add MCP SDK dependency and update packaging metadata
+- [ ] 1.10 Run `openspec validate add-db-mcp-server --strict`

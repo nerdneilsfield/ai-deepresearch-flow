@@ -218,6 +218,31 @@ uv run deepresearch-flow paper db serve \
   --host 127.0.0.1
 ```
 
+#### 步骤 5：启用 MCP（FastMCP Streamable HTTP）
+
+本项目使用 [FastMCP](https://gofastmcp.com) 提供 MCP 服务，挂载在 snapshot API 的 `/mcp` 路径下。
+
+```bash
+# 启动 snapshot API（包含 MCP）
+export PAPER_DB_STATIC_BASE_URL="https://static.example.com"
+export PAPER_DB_STATIC_EXPORT_DIR="/data/paper-static"  # 本地静态目录可选
+
+uv run deepresearch-flow paper db api serve \
+  --snapshot-db /data/paper_snapshot.db \
+  --cors-origin https://frontend.example.com \
+  --host 0.0.0.0 --port 8001
+```
+
+MCP 客户端配置：
+- MCP 端点：`http://<host>:8001/mcp`
+- 仅支持 HTTP POST（Streamable HTTP），不支持 SSE
+- Summary/Source/Translation 由 MCP 服务器代理读取静态资源并返回文本内容（不返回 URL）
+
+**FastMCP 特性**：
+- 使用 `fastmcp>=3.0.0b1`，支持 stateless HTTP 模式
+- 所有 Tools 和 Resources 均在同一个 `/mcp` 路径下暴露
+- 支持 CORS 配置，可限制 Origin 访问
+
 ---
 
 ## 增量构建 PDF 文献库流程

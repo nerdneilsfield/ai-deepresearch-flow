@@ -241,3 +241,4 @@ pnpm-lock.yaml
 fix-mermaid-errors.json
 .gitignore
 fix-math-errors.json
+test-data/
