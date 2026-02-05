@@ -908,7 +908,7 @@ def create_app(
     # Lazy import to avoid circular dependency
     from deepresearch_flow.paper.snapshot.mcp_server import (
         McpSnapshotConfig,
-        create_mcp_app,
+        create_mcp_apps,
         resolve_static_export_dir,
     )
 
@@ -919,7 +919,7 @@ def create_app(
         limits=limits or ApiLimits(),
         origin_allowlist=cors_allowed_origins or ["*"],
     )
-    mcp_app, mcp_lifespan = create_mcp_app(mcp_config)
+    mcp_apps, mcp_lifespan = create_mcp_apps(mcp_config)
 
     routes = [
         Route("/api/v1/config", _api_config, methods=["GET"]),
@@ -931,7 +931,8 @@ def create_app(
         Route("/api/v1/facets/{facet:str}/{facet_id:str}/stats", _api_facet_stats, methods=["GET"]),
         Route("/api/v1/facets/{facet:str}/by-value/{value:str}/papers", _api_facet_by_value_papers, methods=["GET"]),
         Route("/api/v1/facets/{facet:str}/by-value/{value:str}/stats", _api_facet_by_value_stats, methods=["GET"]),
-        Mount("/mcp", app=mcp_app),
+        Mount("/mcp", app=mcp_apps["streamable-http"]),
+        Mount("/mcp-sse", app=mcp_apps["sse"]),
     ]
 
     # Pass MCP lifespan to ensure session manager initializes properly

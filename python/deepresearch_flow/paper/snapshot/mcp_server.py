@@ -5,7 +5,7 @@ import json
 import os
 from pathlib import Path
 import re
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from starlette.applications import Starlette
@@ -76,14 +76,13 @@ class McpSnapshotConfig:
 
 
 class McpRequestGuardMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, *, origin_allowlist: list[str]) -> None:
+    def __init__(self, app, *, origin_allowlist: list[str], allowed_methods: set[str] | None = None) -> None:
         super().__init__(app)
         self._allowlist = [origin.lower() for origin in origin_allowlist]
+        self._allowed_methods = {method.upper() for method in (allowed_methods or {"POST", "OPTIONS"})}
 
     async def dispatch(self, request: Request, call_next):  # type: ignore[override]
-        if request.method == "GET":
-            return Response("Method Not Allowed", status_code=405)
-        if request.method not in {"POST", "OPTIONS"}:
+        if request.method.upper() not in self._allowed_methods:
             return Response("Method Not Allowed", status_code=405)
         origin = request.headers.get("origin")
         if origin and not self._is_allowed_origin(origin):
@@ -108,21 +107,47 @@ def configure(config: McpSnapshotConfig) -> None:
     _CONFIG = config
 
 
-def create_mcp_app(config: McpSnapshotConfig) -> tuple[Starlette, Any]:
-    """Create MCP app with middleware and return it along with lifespan.
-    
-    Returns:
-        Tuple of (wrapped_app, lifespan_context) for use by parent Starlette.
-    """
+def _allowed_methods_for_transport(transport: Literal["streamable-http", "sse"]) -> set[str]:
+    if transport == "sse":
+        return {"GET", "POST", "OPTIONS"}
+    return {"POST", "OPTIONS"}
+
+
+def create_mcp_transport_app(
+    config: McpSnapshotConfig,
+    *,
+    transport: Literal["streamable-http", "sse"] = "streamable-http",
+) -> tuple[Starlette, Any]:
+    """Create MCP app for a specific transport with transport-aware method guard."""
     configure(config)
-    mcp_app = mcp.http_app(path="/", stateless_http=True)
+    mcp_app = mcp.http_app(path="/", transport=transport, stateless_http=(transport == "streamable-http"))
     wrapped = Starlette(
         routes=[Mount("/", app=mcp_app)],
         middleware=[
-            Middleware(McpRequestGuardMiddleware, origin_allowlist=config.origin_allowlist),
+            Middleware(
+                McpRequestGuardMiddleware,
+                origin_allowlist=config.origin_allowlist,
+                allowed_methods=_allowed_methods_for_transport(transport),
+            ),
         ],
     )
     return wrapped, mcp_app.lifespan
+
+
+def create_mcp_apps(config: McpSnapshotConfig) -> tuple[dict[str, Starlette], Any]:
+    """Create streamable-http and sse MCP apps.
+
+    Returns:
+        A tuple of (apps_by_transport, lifespan_context).
+    """
+    streamable_app, lifespan = create_mcp_transport_app(config, transport="streamable-http")
+    sse_app, _ = create_mcp_transport_app(config, transport="sse")
+    return {"streamable-http": streamable_app, "sse": sse_app}, lifespan
+
+
+def create_mcp_app(config: McpSnapshotConfig) -> tuple[Starlette, Any]:
+    """Backward-compatible helper returning streamable-http MCP app."""
+    return create_mcp_transport_app(config, transport="streamable-http")
 
 
 def _get_config() -> McpSnapshotConfig:
