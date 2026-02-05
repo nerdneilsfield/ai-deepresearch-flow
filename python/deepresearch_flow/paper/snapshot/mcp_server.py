@@ -227,18 +227,24 @@ def _load_summary_json(paper_id: str, template: str | None) -> tuple[str | None,
     conn = _open_ro_conn(cfg.snapshot_db)
     try:
         row = conn.execute(
-            "SELECT preferred_summary_template, summary_asset_paths_json FROM paper WHERE paper_id = ?",
+            "SELECT preferred_summary_template FROM paper WHERE paper_id = ?",
             (paper_id,),
         ).fetchone()
         if not row:
             return None, None
-        preferred = row["preferred_summary_template"]
-        asset_paths = json.loads(row["summary_asset_paths_json"] or "{}")
-        available = sorted(asset_paths.keys())
-        selected = template if template else preferred
-        if not selected or selected not in asset_paths:
+        preferred = str(row["preferred_summary_template"] or "")
+        template_rows = conn.execute(
+            "SELECT template_tag FROM paper_summary WHERE paper_id = ?",
+            (paper_id,),
+        ).fetchall()
+        available = sorted((str(item["template_tag"]) for item in template_rows), key=str.lower)
+        selected = (template or preferred).strip()
+        if not selected or selected not in set(available):
             return None, available
-        rel_path = asset_paths[selected]
+        if template:
+            rel_path = f"summary/{paper_id}/{selected}.json"
+        else:
+            rel_path = f"summary/{paper_id}.json"
         return _load_static_text(rel_path), available
     finally:
         conn.close()
@@ -267,15 +273,12 @@ def _load_translation_markdown(paper_id: str, lang: str) -> str | None:
     conn = _open_ro_conn(cfg.snapshot_db)
     try:
         row = conn.execute(
-            "SELECT translations_json FROM paper WHERE paper_id = ?",
-            (paper_id,),
+            "SELECT md_content_hash FROM paper_translation WHERE paper_id = ? AND lang = ?",
+            (paper_id, lang),
         ).fetchone()
-        if not row or not row["translations_json"]:
+        if not row or not row["md_content_hash"]:
             return None
-        translations = json.loads(row["translations_json"])
-        rel_path = translations.get(lang)
-        if not rel_path:
-            return None
+        rel_path = f"md_translate/{lang}/{row['md_content_hash']}.md"
         return _load_static_text(rel_path)
     finally:
         conn.close()
@@ -296,22 +299,32 @@ def search_papers(query: str, limit: int = 10) -> list[dict[str, Any]]:
     
     conn = _open_ro_conn(cfg.snapshot_db)
     try:
+        match_expr = rewrite_search_query(query)
+        if not match_expr:
+            return []
         cur = conn.execute(
             """
-            SELECT paper_id, title, year, venue, abstract
-            FROM paper_search
-            WHERE paper_search MATCH ?
+            SELECT
+              p.paper_id,
+              p.title,
+              p.year,
+              p.venue,
+              snippet(paper_fts, -1, '[[[', ']]]', '…', 30) AS snippet_markdown,
+              bm25(paper_fts, 5.0, 3.0, 1.0, 1.0, 2.0) AS rank
+            FROM paper_fts
+            JOIN paper p ON p.paper_id = paper_fts.paper_id
+            WHERE paper_fts MATCH ?
             ORDER BY rank
             LIMIT ?
             """,
-            (rewrite_search_query(query), limit),
+            (match_expr, limit),
         )
         rows = cur.fetchall()
         results: list[dict[str, Any]] = []
         for row in rows:
-            snippet = str(row["abstract"] or "")
+            snippet = str(row["snippet_markdown"] or "")
             snippet = remove_cjk_spaces(snippet)
-            snippet, markers = merge_adjacent_markers(snippet)
+            snippet = merge_adjacent_markers(snippet)
             results.append({
                 "paper_id": str(row["paper_id"]),
                 "title": str(row["title"]),
@@ -337,7 +350,7 @@ def search_papers_by_keyword(keyword: str, limit: int = 10) -> list[dict[str, An
     try:
         rows = conn.execute(
             """
-            SELECT DISTINCT p.paper_id, p.title, p.year, p.venue, p.abstract
+            SELECT DISTINCT p.paper_id, p.title, p.year, p.venue, p.summary_preview
             FROM paper p
             JOIN paper_keyword pk ON pk.paper_id = p.paper_id
             JOIN keyword k ON k.keyword_id = pk.keyword_id
@@ -349,9 +362,9 @@ def search_papers_by_keyword(keyword: str, limit: int = 10) -> list[dict[str, An
         ).fetchall()
         results: list[dict[str, Any]] = []
         for row in rows:
-            snippet = str(row["abstract"] or "")
+            snippet = str(row["summary_preview"] or "")
             snippet = remove_cjk_spaces(snippet)
-            snippet, markers = merge_adjacent_markers(snippet)
+            snippet = merge_adjacent_markers(snippet)
             results.append({
                 "paper_id": str(row["paper_id"]),
                 "title": str(row["title"]),
@@ -377,26 +390,27 @@ def get_paper_metadata(paper_id: str) -> dict[str, Any]:
     try:
         row = conn.execute(
             """
-            SELECT paper_id, title, year, venue, doi, arxiv_id, openreview_id, paper_pw_url,
-                   preferred_summary_template, summary_asset_paths_json
+            SELECT paper_id, title, year, venue, preferred_summary_template
             FROM paper WHERE paper_id = ?
             """,
             (paper_id,),
         ).fetchone()
         if not row:
             raise McpToolError("not_found", "paper not found", paper_id=paper_id)
-        
-        asset_paths = json.loads(row["summary_asset_paths_json"] or "{}")
-        available = sorted(asset_paths.keys())
+        template_rows = conn.execute(
+            "SELECT template_tag FROM paper_summary WHERE paper_id = ?",
+            (paper_id,),
+        ).fetchall()
+        available = sorted((str(item["template_tag"]) for item in template_rows), key=str.lower)
         return {
             "paper_id": str(row["paper_id"]),
             "title": str(row["title"]),
             "year": str(row["year"]),
             "venue": str(row["venue"]),
-            "doi": row["doi"],
-            "arxiv_id": row["arxiv_id"],
-            "openreview_id": row["openreview_id"],
-            "paper_pw_url": row["paper_pw_url"],
+            "doi": None,
+            "arxiv_id": None,
+            "openreview_id": None,
+            "paper_pw_url": None,
             "preferred_summary_template": row["preferred_summary_template"],
             "available_summary_templates": available,
         }
