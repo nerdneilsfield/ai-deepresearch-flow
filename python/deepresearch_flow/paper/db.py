@@ -514,6 +514,28 @@ def register_db_commands(db_group: click.Group) -> None:
         )
         unpack_info(opts)
 
+    @snapshot_group.command("identify-gaps")
+    @click.option("--snapshot-db", "snapshot_db", required=True, help="Path to snapshot database")
+    @click.option("--template", "template", required=True, help="Template tag to check (e.g., deep_read)")
+    @click.option("--output", "output", default=None, help="Output file path (JSON format)")
+    @click.option("--txt-output", "txt_output", default=None, help="Output file path (TXT format, one ID per line)")
+    def snapshot_identify_gaps(
+        snapshot_db: str,
+        template: str,
+        output: str | None,
+        txt_output: str | None,
+    ) -> None:
+        """Identify papers missing specified template summary."""
+        from deepresearch_flow.paper.snapshot import gaps
+
+        opts = gaps.GapIdentifyOptions(
+            snapshot_db=Path(snapshot_db),
+            template=template,
+            output_json=Path(output) if output else None,
+            output_txt=Path(txt_output) if txt_output else None,
+        )
+        gaps.identify_gaps(opts)
+
     @db_group.group("api")
     def api_group() -> None:
         """Read-only JSON API server backed by a snapshot DB."""
