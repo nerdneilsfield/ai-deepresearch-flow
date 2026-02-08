@@ -115,8 +115,14 @@ def translator() -> None:
     "--input",
     "inputs",
     multiple=True,
-    required=True,
+    required=False,
     help="Input markdown file or directory (repeatable)",
+)
+@click.option(
+    "--input-list",
+    "input_list",
+    default=None,
+    help="Text file containing markdown file paths (one per line)",
 )
 @click.option("--count", "count_limit", default=None, type=int, help="Translate up to N files")
 @click.option("-g", "--glob", "glob_pattern", default=None, help="Glob filter when input is a directory")
@@ -177,6 +183,7 @@ def translator() -> None:
 def translate(
     config_path: str,
     inputs: tuple[str, ...],
+    input_list: str | None,
     count_limit: int | None,
     glob_pattern: str | None,
     model_ref: str,
@@ -272,7 +279,7 @@ def translate(
     if (sleep_every is None) != (sleep_time is None):
         raise click.ClickException("Both --sleep-every and --sleep-time are required")
 
-    markdown_files = discover_markdown(inputs, glob_pattern)
+    markdown_files = discover_markdown(tuple(all_inputs), glob_pattern)
     if not markdown_files:
         raise click.ClickException("No markdown files discovered")
     if count_limit is not None and dry_run:

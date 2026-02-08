@@ -366,7 +366,7 @@ def _get_missing_template(conn: sqlite3.Connection, template: str) -> list[dict[
 def _get_missing_translation(conn: sqlite3.Connection, lang: str) -> list[dict[str, Any]]:
     """Get papers missing specified translation."""
     cursor = conn.execute("""
-        SELECT p.paper_id, p.title, p.source_hash
+        SELECT p.paper_id, p.title, p.source_hash, p.source_md_content_hash
         FROM paper p
         WHERE p.paper_id NOT IN (
             SELECT paper_id FROM paper_translation WHERE lang = ?
@@ -378,6 +378,7 @@ def _get_missing_translation(conn: sqlite3.Connection, lang: str) -> list[dict[s
             "paper_id": row["paper_id"],
             "title": row["title"] or "",
             "source_hash": row["source_hash"] or "",
+            "source_md_content_hash": row["source_md_content_hash"] or "",
         }
         for row in cursor.fetchall()
     ]
