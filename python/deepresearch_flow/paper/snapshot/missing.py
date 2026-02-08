@@ -26,6 +26,7 @@ class ExportMissingOptions:
     lang: str | None = None  # for "translation" type
     output_json: Path | None = None
     output_txt: Path | None = None
+    output_paths: Path | None = None  # Export file paths for extraction
 
 
 def _open_db(path: Path) -> sqlite3.Connection:
@@ -267,6 +268,23 @@ def export_missing(opts: ExportMissingOptions) -> None:
             )
             Console().print(f"[green]Exported TXT to: {opts.output_txt}[/green]")
         
+        # Export file paths (for use with --input-list)
+        if opts.output_paths and missing_papers:
+            # Build file paths from source_md_content_hash
+            paths = []
+            for p in missing_papers:
+                md_hash = p.get("source_md_content_hash")
+                if md_hash:
+                    # Path relative to md root: {hash}.md or {hash}/{filename}.md
+                    # Try common patterns
+                    paths.append(f"{md_hash}.md")
+            
+            if paths:
+                opts.output_paths.parent.mkdir(parents=True, exist_ok=True)
+                opts.output_paths.write_text("\n".join(paths), encoding="utf-8")
+                Console().print(f"[green]Exported file paths to: {opts.output_paths}[/green]")
+                Console().print(f"[cyan]Use with: paper extract --input ./md --input-list {opts.output_paths}[/cyan]")
+        
         # Show first 10 examples
         if missing_papers:
             table = Table(
@@ -339,6 +357,7 @@ def _get_missing_template(conn: sqlite3.Connection, template: str) -> list[dict[
             "title": row["title"] or "",
             "source_hash": row["source_hash"] or "",
             "has_source_md": bool(row["source_md_content_hash"]),
+            "source_md_content_hash": row["source_md_content_hash"] or "",
         }
         for row in cursor.fetchall()
     ]

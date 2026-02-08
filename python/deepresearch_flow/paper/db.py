@@ -548,6 +548,12 @@ def register_db_commands(db_group: click.Group) -> None:
     @click.option("--lang", "lang", default=None, help="Language code (required for --type=translation)")
     @click.option("--output", "output_json", default=None, help="Output JSON file path")
     @click.option("--txt-output", "output_txt", default=None, help="Output TXT file path (paper IDs only)")
+    @click.option(
+        "--output-paths",
+        "output_paths",
+        default=None,
+        help="Output file paths for extraction (use with --input-list)",
+    )
     def snapshot_export_missing(
         snapshot_db: str,
         missing_type: str,
@@ -555,6 +561,7 @@ def register_db_commands(db_group: click.Group) -> None:
         lang: str | None,
         output_json: str | None,
         output_txt: str | None,
+        output_paths: str | None,
     ) -> None:
         """Export list of papers missing specified artifacts."""
         from deepresearch_flow.paper.snapshot.missing import ExportMissingOptions, export_missing
@@ -566,6 +573,7 @@ def register_db_commands(db_group: click.Group) -> None:
             lang=lang,
             output_json=Path(output_json) if output_json else None,
             output_txt=Path(output_txt) if output_txt else None,
+            output_paths=Path(output_paths) if output_paths else None,
         )
         export_missing(opts)
 
