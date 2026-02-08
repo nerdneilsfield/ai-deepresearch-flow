@@ -210,7 +210,7 @@ def _open_snapshot_db(path: Path) -> sqlite3.Connection:
     return conn
 
 
-def _print_summary(title: str, counts: UnpackCounts) -> None:
+def _print_summary(title: str, counts: UnpackCounts, is_info: bool = False) -> None:
     table = Table(title=title, header_style="bold cyan", title_style="bold magenta")
     table.add_column("Metric", style="cyan", no_wrap=True)
     table.add_column("Value", style="white", overflow="fold")
@@ -223,22 +223,37 @@ def _print_summary(title: str, counts: UnpackCounts) -> None:
         table.add_row("Translated failed", str(counts.translated_failed))
     Console().print(table)
 
-    # Show detailed failure reasons for source Markdown
+    # Show detailed failure reasons
     if counts.failed > 0:
-        fail_table = Table(
-            title="Source Markdown Failed Reasons",
-            header_style="bold red",
-            title_style="bold magenta"
-        )
-        fail_table.add_column("Reason", style="cyan", no_wrap=True)
-        fail_table.add_column("Count", style="white", overflow="fold")
-        fail_table.add_row("No source Markdown hash", str(counts.failed_no_md_hash))
-        fail_table.add_row("Source Markdown file missing", str(counts.failed_md_file_missing))
-        fail_table.add_row("Write error (OSError)", str(counts.failed_md_write_error))
-        Console().print(fail_table)
+        if is_info:
+            # Failure reasons for unpack info
+            fail_table = Table(
+                title="Failed Reasons",
+                header_style="bold red",
+                title_style="bold magenta"
+            )
+            fail_table.add_column("Reason", style="cyan", no_wrap=True)
+            fail_table.add_column("Count", style="white", overflow="fold")
+            fail_table.add_row("Template not found (using fallback)", str(counts.failed_no_md_hash))
+            fail_table.add_row("Summary file missing", str(counts.failed_md_file_missing))
+            fail_table.add_row("JSON decode / invalid payload", str(counts.failed_md_write_error))
+            Console().print(fail_table)
+        else:
+            # Failure reasons for unpack md
+            fail_table = Table(
+                title="Source Markdown Failed Reasons",
+                header_style="bold red",
+                title_style="bold magenta"
+            )
+            fail_table.add_column("Reason", style="cyan", no_wrap=True)
+            fail_table.add_column("Count", style="white", overflow="fold")
+            fail_table.add_row("No source Markdown hash", str(counts.failed_no_md_hash))
+            fail_table.add_row("Source Markdown file missing", str(counts.failed_md_file_missing))
+            fail_table.add_row("Write error (OSError)", str(counts.failed_md_write_error))
+            Console().print(fail_table)
 
-    # Show detailed failure reasons for translations
-    if counts.translated_failed > 0:
+    # Show detailed failure reasons for translations (only for unpack md)
+    if not is_info and counts.translated_failed > 0:
         tr_fail_table = Table(
             title="Translated Markdown Failed Reasons",
             header_style="bold red",
@@ -389,6 +404,10 @@ def unpack_info(opts: SnapshotUnpackInfoOptions) -> None:
 
     conn = _open_snapshot_db(opts.snapshot_db)
     try:
+        # First, get total count for progress bar
+        cursor = conn.execute("SELECT COUNT(*) as total FROM paper")
+        total_papers = cursor.fetchone()["total"]
+
         cursor = conn.execute(
             """
             SELECT
@@ -400,49 +419,67 @@ def unpack_info(opts: SnapshotUnpackInfoOptions) -> None:
             ORDER BY paper_index, title
             """
         )
-        for row in cursor.fetchall():
-            counts.total += 1
-            paper_id = str(row["paper_id"])
-            pdf_hash = row["pdf_content_hash"]
-            if not (pdf_hash and pdf_hash in pdf_index):
-                counts.missing_pdf += 1
+        
+        with tqdm(total=total_papers, desc="Unpacking info", unit="paper") as pbar:
+            for row in cursor.fetchall():
+                counts.total += 1
+                paper_id = str(row["paper_id"])
+                title = str(row["title"] or "")
+                pdf_hash = row["pdf_content_hash"]
+                if not (pdf_hash and pdf_hash in pdf_index):
+                    counts.missing_pdf += 1
 
-            summary_path = opts.static_export_dir / "summary" / paper_id / f"{opts.template}.json"
-            fallback_path = opts.static_export_dir / "summary" / f"{paper_id}.json"
-            target_path = summary_path if summary_path.exists() else fallback_path
-            used_fallback = target_path == fallback_path
-            if not target_path.exists():
-                counts.failed += 1
-                continue
-            try:
-                payload = json.loads(target_path.read_text(encoding="utf-8"))
-            except json.JSONDecodeError:
-                counts.failed += 1
-                continue
-            if not isinstance(payload, dict):
-                counts.failed += 1
-                continue
+                summary_path = opts.static_export_dir / "summary" / paper_id / f"{opts.template}.json"
+                fallback_path = opts.static_export_dir / "summary" / f"{paper_id}.json"
+                target_path = summary_path if summary_path.exists() else fallback_path
+                used_fallback = target_path == fallback_path
+                
+                if not target_path.exists():
+                    counts.failed += 1
+                    counts.failed_no_md_hash += 1  # Using this field for "Summary file missing"
+                    counts.failed_details.append((paper_id, title, f"Summary not found for template '{opts.template}'"))
+                    pbar.update(1)
+                    continue
+                    
+                try:
+                    payload = json.loads(target_path.read_text(encoding="utf-8"))
+                except json.JSONDecodeError as e:
+                    counts.failed += 1
+                    counts.failed_md_file_missing += 1  # Using this field for "JSON decode error"
+                    counts.failed_details.append((paper_id, title, f"JSON decode error: {e}"))
+                    pbar.update(1)
+                    continue
+                    
+                if not isinstance(payload, dict):
+                    counts.failed += 1
+                    counts.failed_md_write_error += 1  # Using this field for "Invalid payload type"
+                    counts.failed_details.append((paper_id, title, "Invalid payload type (not a dict)"))
+                    pbar.update(1)
+                    continue
 
-            base = ""
-            if pdf_hash and pdf_hash in pdf_index:
-                base = pdf_index[pdf_hash].stem
-            else:
-                base = _sanitize_filename(str(row["title"] or ""))
-            source_path = f"{base}.md" if base else ""
+                base = ""
+                if pdf_hash and pdf_hash in pdf_index:
+                    base = pdf_index[pdf_hash].stem
+                else:
+                    base = _sanitize_filename(str(row["title"] or ""))
+                source_path = f"{base}.md" if base else ""
 
-            payload["paper_id"] = paper_id
-            payload["paper_title"] = str(row["title"] or "")
-            payload["source_path"] = source_path
-            payload["source_hash"] = str(row["source_hash"] or "")
+                payload["paper_id"] = paper_id
+                payload["paper_title"] = title
+                payload["source_path"] = source_path
+                payload["source_hash"] = str(row["source_hash"] or "")
 
-            if used_fallback:
-                counts.failed += 1
-            else:
-                counts.succeeded += 1
-            items.append(payload)
+                if used_fallback:
+                    counts.failed += 1
+                    counts.failed_no_md_hash += 1  # Using this field for "Template not found, using fallback"
+                    counts.failed_details.append((paper_id, title, f"Using fallback summary (template '{opts.template}' not found)"))
+                else:
+                    counts.succeeded += 1
+                items.append(payload)
+                pbar.update(1)
     finally:
         conn.close()
 
     opts.output_json.parent.mkdir(parents=True, exist_ok=True)
     opts.output_json.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
-    _print_summary("snapshot unpack info summary", counts)
+    _print_summary("snapshot unpack info summary", counts, is_info=True)
