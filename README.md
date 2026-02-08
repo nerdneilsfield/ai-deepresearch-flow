@@ -267,20 +267,21 @@ If some papers are missing specific templates (e.g., `deep_read`), you can ident
 uv run deepresearch-flow paper db snapshot show-missing \
   --snapshot-db ./dist/paper_snapshot.db
 
-# 2) Export papers missing specific template
+# 2) Export papers missing specific template (with file paths for extraction)
 uv run deepresearch-flow paper db snapshot export-missing \
   --snapshot-db ./dist/paper_snapshot.db \
   --type template \
   --template deep_read \
   --output ./missing_deep_read.json \
-  --txt-output ./extractable_deep_read.txt
+  --txt-output ./missing_ids.txt \
+  --output-paths ./extractable_paths.txt
 
 # 3) Extract missing templates (only for papers with source markdown)
 uv run deepresearch-flow paper extract \
   --input ./docs \
   --model openai/gpt-4o-mini \
   --prompt-template deep_read \
-  --input-list ./extractable_deep_read.txt \
+  --input-list ./extractable_paths.txt \
   --output ./deep_read_supplement.json
 
 # 4) Merge with existing paper_infos.json

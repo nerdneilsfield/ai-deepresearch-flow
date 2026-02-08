@@ -659,20 +659,21 @@ npm run build
 uv run deepresearch-flow paper db snapshot show-missing \
   --snapshot-db ./dist/paper_snapshot.db
 
-# 2) 导出缺少特定模板的论文
+# 2) 导出缺少特定模板的论文（包含文件路径用于提取）
 uv run deepresearch-flow paper db snapshot export-missing \
   --snapshot-db ./dist/paper_snapshot.db \
   --type template \
   --template deep_read \
   --output ./missing_deep_read.json \
-  --txt-output ./extractable_deep_read.txt
+  --txt-output ./missing_ids.txt \
+  --output-paths ./extractable_paths.txt
 
 # 3) 补充提取缺失的模板（仅针对有 source markdown 的论文）
 uv run deepresearch-flow paper extract \
   --input ./docs \
   --model openai/gpt-4o-mini \
   --prompt-template deep_read \
-  --input-list ./extractable_deep_read.txt \
+  --input-list ./extractable_paths.txt \
   --output ./deep_read_supplement.json
 
 # 4) 与现有的 paper_infos.json 合并
