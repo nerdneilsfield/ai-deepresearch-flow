@@ -129,12 +129,14 @@ class SnapshotUnpackMdOptions(SnapshotUnpackBaseOptions):
     md_output_dir: Path
     md_translated_output_dir: Path
     dry_run: bool = False
+    log_json: Path | None = None
 
 
 @dataclass(frozen=True)
 class SnapshotUnpackInfoOptions(SnapshotUnpackBaseOptions):
     template: str
     output_json: Path
+    log_json: Path | None = None
 
 
 @dataclass
@@ -394,6 +396,43 @@ def unpack_md(opts: SnapshotUnpackMdOptions) -> None:
         conn.close()
 
     _print_summary("snapshot unpack md summary", counts)
+    
+    # Export error log if requested
+    if opts.log_json and counts.failed_details:
+        _export_error_log(opts.log_json, counts, "unpack_md")
+
+
+def _export_error_log(log_path: Path, counts: UnpackCounts, command: str) -> None:
+    """Export detailed error log to JSON file."""
+    log_data = {
+        "command": command,
+        "summary": {
+            "total": counts.total,
+            "succeeded": counts.succeeded,
+            "failed": counts.failed,
+            "missing_pdf": counts.missing_pdf,
+        },
+        "failure_reasons": {
+            "no_source_md_hash": counts.failed_no_md_hash,
+            "source_md_file_missing": counts.failed_md_file_missing,
+            "write_error": counts.failed_md_write_error,
+            "translation_no_hash": counts.failed_tr_no_hash,
+            "translation_file_missing": counts.failed_tr_file_missing,
+            "translation_write_error": counts.failed_tr_write_error,
+        },
+        "failed_papers": [
+            {
+                "paper_id": pid,
+                "title": title,
+                "reason": reason,
+            }
+            for pid, title, reason in counts.failed_details
+        ],
+    }
+    
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text(json.dumps(log_data, ensure_ascii=False, indent=2), encoding="utf-8")
+    Console().print(f"[green]Error log exported to: {log_path}[/green]")
 
 
 def unpack_info(opts: SnapshotUnpackInfoOptions) -> None:
@@ -483,3 +522,7 @@ def unpack_info(opts: SnapshotUnpackInfoOptions) -> None:
     opts.output_json.parent.mkdir(parents=True, exist_ok=True)
     opts.output_json.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
     _print_summary("snapshot unpack info summary", counts, is_info=True)
+    
+    # Export error log if requested
+    if opts.log_json and counts.failed_details:
+        _export_error_log(opts.log_json, counts, "unpack_info")

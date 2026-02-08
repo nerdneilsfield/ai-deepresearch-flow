@@ -451,6 +451,7 @@ def register_db_commands(db_group: click.Group) -> None:
         help="Output directory for translated Markdown",
     )
     @click.option("--dry-run", is_flag=True, help="Show what would be done without writing files")
+    @click.option("--log", "log_json", default=None, help="Path to export error log JSON")
     def snapshot_unpack_md(
         snapshot_db: str,
         static_export_dir: str,
@@ -458,6 +459,7 @@ def register_db_commands(db_group: click.Group) -> None:
         md_output_dir: str,
         md_translated_output_dir: str,
         dry_run: bool,
+        log_json: str | None,
     ) -> None:
         """Unpack source/translated markdown and align filenames to PDFs."""
         from deepresearch_flow.paper.snapshot.unpacker import SnapshotUnpackMdOptions, unpack_md
@@ -469,6 +471,7 @@ def register_db_commands(db_group: click.Group) -> None:
             md_output_dir=Path(md_output_dir),
             md_translated_output_dir=Path(md_translated_output_dir),
             dry_run=dry_run,
+            log_json=Path(log_json) if log_json else None,
         )
         unpack_md(opts)
 
@@ -489,12 +492,14 @@ def register_db_commands(db_group: click.Group) -> None:
     )
     @click.option("--template", "template", required=True, help="Summary template tag")
     @click.option("--output-json", "output_json", required=True, help="Output JSON file path")
+    @click.option("--log", "log_json", default=None, help="Path to export error log JSON")
     def snapshot_unpack_info(
         snapshot_db: str,
         static_export_dir: str,
         pdf_roots: tuple[str, ...],
         template: str,
         output_json: str,
+        log_json: str | None,
     ) -> None:
         """Unpack aggregated paper_infos.json from snapshot summaries."""
         from deepresearch_flow.paper.snapshot.unpacker import SnapshotUnpackInfoOptions, unpack_info
@@ -505,6 +510,7 @@ def register_db_commands(db_group: click.Group) -> None:
             pdf_roots=[Path(path) for path in pdf_roots],
             template=template,
             output_json=Path(output_json),
+            log_json=Path(log_json) if log_json else None,
         )
         unpack_info(opts)
 
