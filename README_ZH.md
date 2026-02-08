@@ -692,6 +692,22 @@ uv run deepresearch-flow paper db snapshot build \
   --static-export-dir ./dist/paper-static-complete
 ```
 
+**替代方案：增量更新（更快）**
+
+无需重建整个 snapshot，可以增量补充到现有 snapshot：
+
+```bash
+# 增量补充现有 snapshot
+uv run deepresearch-flow paper db snapshot supplement \
+  --existing-db ./dist/paper_snapshot.db \
+  --static-export-dir ./dist/paper-static \
+  --supplement-json ./deep_read_supplement.json \
+  --output-db ./dist/paper_snapshot_supplemented.db \
+  --output-static-dir ./dist/paper-static-supplemented
+```
+
+当你只需要向现有 snapshot 添加少量论文或模板时，这种方式要快得多。
+
 其他有用的导出类型：
 - `--type source_md` - 没有源 Markdown 的论文
 - `--type pdf` - 没有 PDF 的论文

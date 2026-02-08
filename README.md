@@ -300,6 +300,22 @@ uv run deepresearch-flow paper db snapshot build \
   --static-export-dir ./dist/paper-static-complete
 ```
 
+**Alternative: Incremental Update (Faster)**
+
+Instead of rebuilding the entire snapshot, you can incrementally supplement the existing snapshot:
+
+```bash
+# Supplement existing snapshot with additional papers
+uv run deepresearch-flow paper db snapshot supplement \
+  --existing-db ./dist/paper_snapshot.db \
+  --static-export-dir ./dist/paper-static \
+  --supplement-json ./deep_read_supplement.json \
+  --output-db ./dist/paper_snapshot_supplemented.db \
+  --output-static-dir ./dist/paper-static-supplemented
+```
+
+This is much faster when you only need to add a few papers or templates to an existing snapshot.
+
 Other useful export types:
 - `--type source_md` - Papers without source markdown
 - `--type pdf` - Papers without PDF

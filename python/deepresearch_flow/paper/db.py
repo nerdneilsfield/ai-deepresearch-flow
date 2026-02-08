@@ -569,6 +569,59 @@ def register_db_commands(db_group: click.Group) -> None:
         )
         export_missing(opts)
 
+    @snapshot_group.command("supplement")
+    @click.option(
+        "--existing-db",
+        "existing_snapshot_db",
+        required=True,
+        help="Path to existing snapshot database",
+    )
+    @click.option(
+        "--static-export-dir",
+        "static_export_dir",
+        required=True,
+        help="Path to existing static export directory",
+    )
+    @click.option(
+        "--supplement-json",
+        "supplement_json",
+        required=True,
+        help="JSON file with papers to add/update",
+    )
+    @click.option(
+        "--output-db",
+        "output_db",
+        required=True,
+        help="Output snapshot database path",
+    )
+    @click.option(
+        "--output-static-dir",
+        "output_static_dir",
+        default=None,
+        help="Output static directory (defaults to --static-export-dir)",
+    )
+    def snapshot_supplement(
+        existing_snapshot_db: str,
+        static_export_dir: str,
+        supplement_json: str,
+        output_db: str,
+        output_static_dir: str | None,
+    ) -> None:
+        """Supplement existing snapshot with additional papers (incremental update)."""
+        from deepresearch_flow.paper.snapshot.supplement import (
+            SnapshotSupplementOptions,
+            supplement_snapshot,
+        )
+
+        opts = SnapshotSupplementOptions(
+            existing_snapshot_db=Path(existing_snapshot_db),
+            static_export_dir=Path(static_export_dir),
+            supplement_json=Path(supplement_json),
+            output_db=Path(output_db),
+            output_static_dir=Path(output_static_dir) if output_static_dir else None,
+        )
+        supplement_snapshot(opts)
+
     @db_group.group("api")
     def api_group() -> None:
         """Read-only JSON API server backed by a snapshot DB."""
