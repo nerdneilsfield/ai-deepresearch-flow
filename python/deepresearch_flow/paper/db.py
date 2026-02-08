@@ -514,27 +514,60 @@ def register_db_commands(db_group: click.Group) -> None:
         )
         unpack_info(opts)
 
-    @snapshot_group.command("identify-gaps")
+    @snapshot_group.command("show-missing")
     @click.option("--snapshot-db", "snapshot_db", required=True, help="Path to snapshot database")
-    @click.option("--template", "template", required=True, help="Template tag to check (e.g., deep_read)")
-    @click.option("--output", "output", default=None, help="Output file path (JSON format)")
-    @click.option("--txt-output", "txt_output", default=None, help="Output file path (TXT format, one ID per line)")
-    def snapshot_identify_gaps(
+    @click.option(
+        "--static-export-dir",
+        "static_export_dir",
+        default=None,
+        help="Path to static export directory (optional, for checking file existence)",
+    )
+    def snapshot_show_missing(
         snapshot_db: str,
-        template: str,
-        output: str | None,
-        txt_output: str | None,
+        static_export_dir: str | None,
     ) -> None:
-        """Identify papers missing specified template summary."""
-        from deepresearch_flow.paper.snapshot import gaps
+        """Show comprehensive report of missing artifacts."""
+        from deepresearch_flow.paper.snapshot.missing import ShowMissingOptions, show_missing
 
-        opts = gaps.GapIdentifyOptions(
+        opts = ShowMissingOptions(
             snapshot_db=Path(snapshot_db),
-            template=template,
-            output_json=Path(output) if output else None,
-            output_txt=Path(txt_output) if txt_output else None,
+            static_export_dir=Path(static_export_dir) if static_export_dir else None,
         )
-        gaps.identify_gaps(opts)
+        show_missing(opts)
+
+    @snapshot_group.command("export-missing")
+    @click.option("--snapshot-db", "snapshot_db", required=True, help="Path to snapshot database")
+    @click.option(
+        "--type",
+        "missing_type",
+        type=click.Choice(["source_md", "pdf", "template", "translation"]),
+        required=True,
+        help="Type of missing artifact to export",
+    )
+    @click.option("--template", "template", default=None, help="Template name (required for --type=template)")
+    @click.option("--lang", "lang", default=None, help="Language code (required for --type=translation)")
+    @click.option("--output", "output_json", default=None, help="Output JSON file path")
+    @click.option("--txt-output", "output_txt", default=None, help="Output TXT file path (paper IDs only)")
+    def snapshot_export_missing(
+        snapshot_db: str,
+        missing_type: str,
+        template: str | None,
+        lang: str | None,
+        output_json: str | None,
+        output_txt: str | None,
+    ) -> None:
+        """Export list of papers missing specified artifacts."""
+        from deepresearch_flow.paper.snapshot.missing import ExportMissingOptions, export_missing
+
+        opts = ExportMissingOptions(
+            snapshot_db=Path(snapshot_db),
+            missing_type=missing_type,
+            template=template,
+            lang=lang,
+            output_json=Path(output_json) if output_json else None,
+            output_txt=Path(output_txt) if output_txt else None,
+        )
+        export_missing(opts)
 
     @db_group.group("api")
     def api_group() -> None:
