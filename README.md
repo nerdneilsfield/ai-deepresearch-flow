@@ -258,6 +258,53 @@ VITE_PAPER_DB_STATIC_BASE=http://127.0.0.1:8002 \
 npm run dev
 ```
 
+#### Step 4.6: Supplement Missing Templates (Optional)
+
+If some papers are missing specific templates (e.g., `deep_read`), you can identify gaps and supplement extract them:
+
+```bash
+# 1) Check missing templates in snapshot
+uv run deepresearch-flow paper db snapshot show-missing \
+  --snapshot-db ./dist/paper_snapshot.db
+
+# 2) Export papers missing specific template
+uv run deepresearch-flow paper db snapshot export-missing \
+  --snapshot-db ./dist/paper_snapshot.db \
+  --type template \
+  --template deep_read \
+  --output ./missing_deep_read.json \
+  --txt-output ./extractable_deep_read.txt
+
+# 3) Extract missing templates (only for papers with source markdown)
+uv run deepresearch-flow paper extract \
+  --input ./docs \
+  --model openai/gpt-4o-mini \
+  --prompt-template deep_read \
+  --input-list ./extractable_deep_read.txt \
+  --output ./deep_read_supplement.json
+
+# 4) Merge with existing paper_infos.json
+uv run deepresearch-flow paper db merge library \
+  --inputs ./paper_infos.json \
+  --inputs ./deep_read_supplement.json \
+  --output ./paper_infos_complete.json
+
+# 5) Rebuild snapshot with complete data
+uv run deepresearch-flow paper db snapshot build \
+  --input ./paper_infos_complete.json \
+  --bibtex ./papers.bib \
+  --md-root ./docs \
+  --md-translated-root ./docs \
+  --pdf-root ./pdfs \
+  --output-db ./dist/paper_snapshot_complete.db \
+  --static-export-dir ./dist/paper-static-complete
+```
+
+Other useful export types:
+- `--type source_md` - Papers without source markdown
+- `--type pdf` - Papers without PDF
+- `--type translation --lang zh` - Papers without Chinese translation
+
 ---
 
 ## Incremental PDF Library Workflow

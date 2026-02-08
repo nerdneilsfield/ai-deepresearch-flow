@@ -650,6 +650,53 @@ VITE_PAPER_DB_STATIC_BASE=https://static.example.com \
 npm run build
 ```
 
+### 5) 补充缺失的模板（可选）
+
+如果某些论文缺少特定模板（如 `deep_read`），可以识别缺口并补充提取：
+
+```bash
+# 1) 检查 snapshot 中缺失的模板
+uv run deepresearch-flow paper db snapshot show-missing \
+  --snapshot-db ./dist/paper_snapshot.db
+
+# 2) 导出缺少特定模板的论文
+uv run deepresearch-flow paper db snapshot export-missing \
+  --snapshot-db ./dist/paper_snapshot.db \
+  --type template \
+  --template deep_read \
+  --output ./missing_deep_read.json \
+  --txt-output ./extractable_deep_read.txt
+
+# 3) 补充提取缺失的模板（仅针对有 source markdown 的论文）
+uv run deepresearch-flow paper extract \
+  --input ./docs \
+  --model openai/gpt-4o-mini \
+  --prompt-template deep_read \
+  --input-list ./extractable_deep_read.txt \
+  --output ./deep_read_supplement.json
+
+# 4) 与现有的 paper_infos.json 合并
+uv run deepresearch-flow paper db merge library \
+  --inputs ./paper_infos.json \
+  --inputs ./deep_read_supplement.json \
+  --output ./paper_infos_complete.json
+
+# 5) 用完整数据重建 snapshot
+uv run deepresearch-flow paper db snapshot build \
+  --input ./paper_infos_complete.json \
+  --bibtex ./papers.bib \
+  --md-root ./docs \
+  --md-translated-root ./docs \
+  --pdf-root ./pdfs \
+  --output-db ./dist/paper_snapshot_complete.db \
+  --static-export-dir ./dist/paper-static-complete
+```
+
+其他有用的导出类型：
+- `--type source_md` - 没有源 Markdown 的论文
+- `--type pdf` - 没有 PDF 的论文
+- `--type translation --lang zh` - 没有中文翻译的论文
+
 ---
 
 ## 详细说明
