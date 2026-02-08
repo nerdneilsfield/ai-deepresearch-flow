@@ -5,9 +5,11 @@ This is the reverse operation of builder.build_snapshot().
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import base64
+from dataclasses import dataclass, field
 import hashlib
 import json
+import mimetypes
 from pathlib import Path
 import re
 import sqlite3
@@ -15,6 +17,104 @@ from typing import Any, Iterable
 
 from rich.console import Console
 from rich.table import Table
+from tqdm import tqdm
+
+
+# Image embedding helpers
+IMAGE_PATTERN = re.compile(r"!\[([^\]]*)\]\(([^)]+)")
+ALLOWED_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg"}
+
+
+def _mime_from_path(path: Path) -> str | None:
+    mime, _ = mimetypes.guess_type(path.name)
+    if mime:
+        return mime
+    if path.suffix.lower() in {".jpg", ".jpeg"}:
+        return "image/jpeg"
+    if path.suffix.lower() == ".png":
+        return "image/png"
+    if path.suffix.lower() == ".gif":
+        return "image/gif"
+    if path.suffix.lower() == ".webp":
+        return "image/webp"
+    if path.suffix.lower() == ".svg":
+        return "image/svg+xml"
+    return None
+
+
+def _data_url_from_bytes(mime: str, data: bytes) -> str:
+    encoded = base64.b64encode(data).decode("ascii")
+    return f"data:{mime};base64,{encoded}"
+
+
+def _embed_images_in_markdown(content: str, md_file_path: Path, images_root: Path) -> str:
+    """Embed local images as base64 data URLs in markdown content.
+    
+    Args:
+        content: Markdown file content
+        md_file_path: Path to the markdown file (for resolving relative paths)
+        images_root: Root directory where images are stored
+    """
+    output: list[str] = []
+    last_idx = 0
+    
+    for match in IMAGE_PATTERN.finditer(content):
+        output.append(content[last_idx:match.start()])
+        alt_text = match.group(1)
+        raw_link = match.group(2)
+        
+        # Parse link (handle possible title/suffix)
+        target = raw_link.strip()
+        suffix = ""
+        if target.startswith("<"):
+            end = target.find(">")
+            if end != -1:
+                target = target[1:end]
+                suffix = target[end + 1:]
+        else:
+            parts = target.split(maxsplit=1)
+            if len(parts) > 1:
+                target = parts[0]
+                suffix = " " + parts[1]
+        
+        # Skip if already data URL or http URL
+        if target.startswith("data:") or target.startswith("http://") or target.startswith("https://"):
+            output.append(match.group(0))
+            last_idx = match.end()
+            continue
+        
+        # Resolve image path - images are in images_root
+        # Target could be like "images/xxx.png" or just "xxx.png"
+        img_path = images_root / Path(target).name
+        
+        if not img_path.exists():
+            # Try full path
+            img_path = images_root / target
+            if not img_path.exists():
+                output.append(match.group(0))
+                last_idx = match.end()
+                continue
+        
+        # Check if it's an image
+        mime = _mime_from_path(img_path)
+        if not mime or not mime.startswith("image/"):
+            output.append(match.group(0))
+            last_idx = match.end()
+            continue
+        
+        # Read and embed
+        try:
+            data = img_path.read_bytes()
+            data_url = _data_url_from_bytes(mime, data)
+            new_link = f"{data_url}{suffix}"
+            output.append(f"![{alt_text}]({new_link})")
+        except Exception:
+            output.append(match.group(0))
+        
+        last_idx = match.end()
+    
+    output.append(content[last_idx:])
+    return "".join(output)
 
 
 @dataclass(frozen=True)
@@ -28,6 +128,7 @@ class SnapshotUnpackBaseOptions:
 class SnapshotUnpackMdOptions(SnapshotUnpackBaseOptions):
     md_output_dir: Path
     md_translated_output_dir: Path
+    dry_run: bool = False
 
 
 @dataclass(frozen=True)
@@ -44,11 +145,20 @@ class UnpackCounts:
     missing_pdf: int = 0
     translated_succeeded: int = 0
     translated_failed: int = 0
+    # Detailed failure reason statistics
+    failed_no_md_hash: int = 0  # No source Markdown hash
+    failed_md_file_missing: int = 0  # Source Markdown file does not exist
+    failed_md_write_error: int = 0  # Write error (OSError)
+    failed_tr_no_hash: int = 0  # No translation hash or language
+    failed_tr_file_missing: int = 0  # Translation file does not exist
+    failed_tr_write_error: int = 0  # Translation write error
+    # Failed paper details: list of (paper_id, title, reason)
+    failed_details: list[tuple[str, str, str]] = field(default_factory=list)
 
 
 def _sanitize_filename(title: str) -> str:
     """Convert title to safe filename."""
-    sanitized = re.sub(r'[<>:"/\\|?*]', "_", title)
+    sanitized = re.sub(r'[<>:"/\|?*]', "_", title)
     if len(sanitized) > 200:
         sanitized = sanitized[:200]
     sanitized = sanitized.strip()
@@ -113,11 +223,56 @@ def _print_summary(title: str, counts: UnpackCounts) -> None:
         table.add_row("Translated failed", str(counts.translated_failed))
     Console().print(table)
 
+    # Show detailed failure reasons for source Markdown
+    if counts.failed > 0:
+        fail_table = Table(
+            title="Source Markdown Failed Reasons",
+            header_style="bold red",
+            title_style="bold magenta"
+        )
+        fail_table.add_column("Reason", style="cyan", no_wrap=True)
+        fail_table.add_column("Count", style="white", overflow="fold")
+        fail_table.add_row("No source Markdown hash", str(counts.failed_no_md_hash))
+        fail_table.add_row("Source Markdown file missing", str(counts.failed_md_file_missing))
+        fail_table.add_row("Write error (OSError)", str(counts.failed_md_write_error))
+        Console().print(fail_table)
+
+    # Show detailed failure reasons for translations
+    if counts.translated_failed > 0:
+        tr_fail_table = Table(
+            title="Translated Markdown Failed Reasons",
+            header_style="bold red",
+            title_style="bold magenta"
+        )
+        tr_fail_table.add_column("Reason", style="cyan", no_wrap=True)
+        tr_fail_table.add_column("Count", style="white", overflow="fold")
+        tr_fail_table.add_row("No translation hash or lang", str(counts.failed_tr_no_hash))
+        tr_fail_table.add_row("Translation file missing", str(counts.failed_tr_file_missing))
+        tr_fail_table.add_row("Write error (OSError)", str(counts.failed_tr_write_error))
+        Console().print(tr_fail_table)
+
+    # Show examples of failed papers with title and reason
+    if counts.failed_details:
+        examples_table = Table(
+            title=f"Failed Paper Examples (showing up to 10 of {len(counts.failed_details)})",
+            header_style="bold yellow",
+            title_style="bold magenta"
+        )
+        examples_table.add_column("Paper ID", style="yellow", no_wrap=True, overflow="fold")
+        examples_table.add_column("Title", style="white", overflow="fold")
+        examples_table.add_column("Reason", style="red", overflow="fold")
+        for pid, title, reason in counts.failed_details[:10]:
+            # Truncate title if too long
+            display_title = title[:60] + "..." if len(title) > 60 else title
+            examples_table.add_row(pid, display_title or "(No title)", reason)
+        Console().print(examples_table)
+
 
 def unpack_md(opts: SnapshotUnpackMdOptions) -> None:
     """Unpack source/translated markdown and align filenames to PDFs."""
-    opts.md_output_dir.mkdir(parents=True, exist_ok=True)
-    opts.md_translated_output_dir.mkdir(parents=True, exist_ok=True)
+    if not opts.dry_run:
+        opts.md_output_dir.mkdir(parents=True, exist_ok=True)
+        opts.md_translated_output_dir.mkdir(parents=True, exist_ok=True)
 
     pdf_index = _build_pdf_hash_index(opts.pdf_roots)
     used_names: set[str] = set()
@@ -125,6 +280,10 @@ def unpack_md(opts: SnapshotUnpackMdOptions) -> None:
 
     conn = _open_snapshot_db(opts.snapshot_db)
     try:
+        # First, get total count for progress bar
+        cursor = conn.execute("SELECT COUNT(*) as total FROM paper")
+        total_papers = cursor.fetchone()["total"]
+
         cursor = conn.execute(
             """
             SELECT
@@ -137,55 +296,85 @@ def unpack_md(opts: SnapshotUnpackMdOptions) -> None:
             ORDER BY paper_index, title
             """
         )
-        for row in cursor.fetchall():
-            counts.total += 1
-            paper_id = str(row["paper_id"])
-            title = str(row["title"] or "")
-            pdf_hash = row["pdf_content_hash"]
-            md_hash = row["source_md_content_hash"]
 
-            base = ""
-            if pdf_hash and pdf_hash in pdf_index:
-                base = pdf_index[pdf_hash].stem
-            else:
-                counts.missing_pdf += 1
-                base = _sanitize_filename(title)
-            base = _unique_base_name(base, paper_id, used_names)
+        with tqdm(total=total_papers, desc="Unpacking", unit="paper") as pbar:
+            for row in cursor.fetchall():
+                counts.total += 1
+                paper_id = str(row["paper_id"])
+                title = str(row["title"] or "")
+                pdf_hash = row["pdf_content_hash"]
+                md_hash = row["source_md_content_hash"]
 
-            if md_hash:
-                src_md = opts.static_export_dir / "md" / f"{md_hash}.md"
-                if src_md.exists():
-                    dst_md = opts.md_output_dir / f"{base}.md"
-                    try:
-                        dst_md.write_text(src_md.read_text(encoding="utf-8"), encoding="utf-8")
+                base = ""
+                if pdf_hash and pdf_hash in pdf_index:
+                    base = pdf_index[pdf_hash].stem
+                else:
+                    counts.missing_pdf += 1
+                    base = _sanitize_filename(title)
+                base = _unique_base_name(base, paper_id, used_names)
+
+                if md_hash:
+                    src_md = opts.static_export_dir / "md" / f"{md_hash}.md"
+                    if src_md.exists():
+                        dst_md = opts.md_output_dir / f"{base}.md"
+                        if not opts.dry_run:
+                            try:
+                                content = src_md.read_text(encoding="utf-8")
+                                # Embed images as base64
+                                images_root = opts.static_export_dir / "images"
+                                if images_root.exists():
+                                    content = _embed_images_in_markdown(content, src_md, images_root)
+                                dst_md.write_text(content, encoding="utf-8")
+                            except OSError as e:
+                                counts.failed += 1
+                                counts.failed_md_write_error += 1
+                                counts.failed_details.append((paper_id, title, f"Write error: {e}"))
+                                pbar.update(1)
+                                continue
                         counts.succeeded += 1
-                    except OSError:
+                    else:
                         counts.failed += 1
+                        counts.failed_md_file_missing += 1
+                        counts.failed_details.append((paper_id, title, "Source Markdown file missing"))
                 else:
                     counts.failed += 1
-            else:
-                counts.failed += 1
+                    counts.failed_no_md_hash += 1
+                    counts.failed_details.append((paper_id, title, "No source Markdown hash"))
+                    pbar.update(1)
+                    continue  # Skip translation if no source MD
 
-
-            for tr_row in conn.execute(
-                "SELECT lang, md_content_hash FROM paper_translation WHERE paper_id = ?",
-                (paper_id,),
-            ):
-                lang = str(tr_row["lang"] or "").lower()
-                tr_hash = tr_row["md_content_hash"]
-                if not lang or not tr_hash:
-                    counts.translated_failed += 1
-                    continue
-                src_tr = opts.static_export_dir / "md_translate" / lang / f"{tr_hash}.md"
-                if not src_tr.exists():
-                    counts.translated_failed += 1
-                    continue
-                dst_tr = opts.md_translated_output_dir / f"{base}.{lang}.md"
-                try:
-                    dst_tr.write_text(src_tr.read_text(encoding="utf-8"), encoding="utf-8")
+                # Process translations
+                for tr_row in conn.execute(
+                    "SELECT lang, md_content_hash FROM paper_translation WHERE paper_id = ?",
+                    (paper_id,),
+                ):
+                    lang = str(tr_row["lang"] or "").lower()
+                    tr_hash = tr_row["md_content_hash"]
+                    if not lang or not tr_hash:
+                        counts.translated_failed += 1
+                        counts.failed_tr_no_hash += 1
+                        continue
+                    src_tr = opts.static_export_dir / "md_translate" / lang / f"{tr_hash}.md"
+                    if not src_tr.exists():
+                        counts.translated_failed += 1
+                        counts.failed_tr_file_missing += 1
+                        continue
+                    dst_tr = opts.md_translated_output_dir / f"{base}.{lang}.md"
+                    if not opts.dry_run:
+                        try:
+                            content = src_tr.read_text(encoding="utf-8")
+                            # Embed images as base64
+                            images_root = opts.static_export_dir / "images"
+                            if images_root.exists():
+                                content = _embed_images_in_markdown(content, src_tr, images_root)
+                            dst_tr.write_text(content, encoding="utf-8")
+                        except OSError:
+                            counts.translated_failed += 1
+                            counts.failed_tr_write_error += 1
+                            continue
                     counts.translated_succeeded += 1
-                except OSError:
-                    counts.translated_failed += 1
+
+                pbar.update(1)
     finally:
         conn.close()
 

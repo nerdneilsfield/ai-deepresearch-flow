@@ -450,12 +450,14 @@ def register_db_commands(db_group: click.Group) -> None:
         required=True,
         help="Output directory for translated Markdown",
     )
+    @click.option("--dry-run", is_flag=True, help="Show what would be done without writing files")
     def snapshot_unpack_md(
         snapshot_db: str,
         static_export_dir: str,
         pdf_roots: tuple[str, ...],
         md_output_dir: str,
         md_translated_output_dir: str,
+        dry_run: bool,
     ) -> None:
         """Unpack source/translated markdown and align filenames to PDFs."""
         from deepresearch_flow.paper.snapshot.unpacker import SnapshotUnpackMdOptions, unpack_md
@@ -466,6 +468,7 @@ def register_db_commands(db_group: click.Group) -> None:
             pdf_roots=[Path(path) for path in pdf_roots],
             md_output_dir=Path(md_output_dir),
             md_translated_output_dir=Path(md_translated_output_dir),
+            dry_run=dry_run,
         )
         unpack_md(opts)
 
