@@ -26,8 +26,14 @@ def paper() -> None:
     "--input",
     "inputs",
     multiple=True,
-    required=True,
+    required=False,
     help="Input markdown file or directory (repeatable)",
+)
+@click.option(
+    "--input-list",
+    "input_list",
+    default=None,
+    help="Text file containing markdown file paths (one per line)",
 )
 @click.option("-g", "--glob", "glob_pattern", default=None, help="Glob filter when input is a directory")
 @click.option(
@@ -134,6 +140,7 @@ def paper() -> None:
 def extract(
     config_path: str,
     inputs: tuple[str, ...],
+    input_list: str | None,
     glob_pattern: str | None,
     schema_path: str | None,
     prompt_template: str,
@@ -167,6 +174,33 @@ def extract(
     verbose: bool,
 ) -> None:
     """Extract structured information from markdown documents."""
+    # Process input_list if provided
+    all_inputs = list(inputs)
+    if input_list:
+        list_path = Path(input_list)
+        if not list_path.exists():
+            raise click.ClickException(f"Input list file not found: {input_list}")
+        list_content = list_path.read_text(encoding="utf-8")
+        list_items = [line.strip() for line in list_content.splitlines() if line.strip()]
+        
+        # Find base directory from inputs if available
+        base_dir = None
+        for inp in inputs:
+            path = Path(inp)
+            if path.is_dir():
+                base_dir = path
+                break
+        
+        # Resolve relative paths against base_dir
+        for item in list_items:
+            item_path = Path(item)
+            if not item_path.is_absolute() and base_dir:
+                item_path = base_dir / item_path
+            all_inputs.append(str(item_path))
+    
+    if not all_inputs:
+        raise click.ClickException("At least one --input or --input-list is required")
+    
     config = load_config(config_path)
     provider, model_name = parse_model_ref(model_ref, config.providers)
 
@@ -302,7 +336,7 @@ def extract(
 
     asyncio.run(
         extract_documents(
-            inputs=inputs,
+            inputs=tuple(all_inputs) if all_inputs else inputs,
             glob_pattern=glob_pattern,
             provider=provider,
             model=model_name,
