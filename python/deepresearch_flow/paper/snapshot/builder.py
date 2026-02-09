@@ -5,6 +5,7 @@ import base64
 from datetime import datetime, timezone
 import hashlib
 import json
+import logging
 import mimetypes
 from pathlib import Path
 import re
@@ -16,9 +17,16 @@ from deepresearch_flow.paper.db_ops import build_index, load_and_merge_papers
 
 from deepresearch_flow.paper.render import load_default_template
 from deepresearch_flow.paper.template_registry import load_render_template
+from deepresearch_flow.paper.snapshot.bibtex_utils import (
+    extract_canonical_doi,
+    extract_current_bibtex_payload,
+    extract_doi_from_bibtex_raw,
+)
+from deepresearch_flow.paper.snapshot.common import _column_exists, _table_exists
 from deepresearch_flow.paper.snapshot.identity import (
     PaperKeyCandidate,
     build_paper_key_candidates,
+    canonicalize_doi,
     choose_preferred_key,
     meta_fingerprint_divergent,
     paper_id_for_key,
@@ -33,6 +41,8 @@ from deepresearch_flow.paper.snapshot.text import (
     markdown_to_plain_text,
 )
 from deepresearch_flow.paper.utils import stable_hash
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -54,6 +64,14 @@ class PreviousAlias:
     paper_id: str
     paper_key_type: str
     meta_fingerprint: str | None
+
+
+@dataclass(frozen=True)
+class PreviousPaperMetadata:
+    doi: str | None
+    bibtex_raw: str | None
+    bibtex_key: str | None
+    entry_type: str | None
 
 
 def _hash_file(path: Path) -> str:
@@ -356,6 +374,61 @@ def _load_previous_aliases(db_path: Path) -> dict[str, PreviousAlias]:
     return out
 
 
+def _load_previous_metadata(db_path: Path) -> dict[str, PreviousPaperMetadata]:
+    if not db_path or not db_path.exists():
+        return {}
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        has_paper = _table_exists(conn, "paper")
+        has_doi = _column_exists(conn, "paper", "doi")
+        has_bibtex = _table_exists(conn, "paper_bibtex")
+        if not has_paper:
+            return {}
+
+        out: dict[str, PreviousPaperMetadata] = {}
+        if has_doi:
+            rows = conn.execute("SELECT paper_id, doi FROM paper").fetchall()
+            for row in rows:
+                paper_id = str(row["paper_id"])
+                doi = canonicalize_doi(str(row["doi"])) if row["doi"] else None
+                out[paper_id] = PreviousPaperMetadata(
+                    doi=doi,
+                    bibtex_raw=None,
+                    bibtex_key=None,
+                    entry_type=None,
+                )
+        else:
+            rows = conn.execute("SELECT paper_id FROM paper").fetchall()
+            for row in rows:
+                paper_id = str(row["paper_id"])
+                out[paper_id] = PreviousPaperMetadata(
+                    doi=None,
+                    bibtex_raw=None,
+                    bibtex_key=None,
+                    entry_type=None,
+                )
+
+        if has_bibtex:
+            rows = conn.execute(
+                "SELECT paper_id, bibtex_raw, bibtex_key, entry_type FROM paper_bibtex"
+            ).fetchall()
+            for row in rows:
+                paper_id = str(row["paper_id"])
+                prev = out.get(paper_id) or PreviousPaperMetadata(None, None, None, None)
+                out[paper_id] = PreviousPaperMetadata(
+                    doi=prev.doi,
+                    bibtex_raw=str(row["bibtex_raw"]) if row["bibtex_raw"] else None,
+                    bibtex_key=str(row["bibtex_key"]) if row["bibtex_key"] else None,
+                    entry_type=str(row["entry_type"]).lower() if row["entry_type"] else None,
+                )
+        return out
+    except sqlite3.Error:
+        return {}
+    finally:
+        conn.close()
+
+
 def _pick_paper_id(
     candidates: list[PaperKeyCandidate],
     *,
@@ -518,6 +591,7 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
     )
 
     previous_aliases = _load_previous_aliases(opts.previous_snapshot_db) if opts.previous_snapshot_db else {}
+    previous_metadata = _load_previous_metadata(opts.previous_snapshot_db) if opts.previous_snapshot_db else {}
     snapshot_build_id = uuid.uuid4().hex
 
     opts.output_db.parent.mkdir(parents=True, exist_ok=True)
@@ -544,6 +618,8 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
 
         written_images: set[str] = set()
         facet_node_cache: dict[tuple[str, str], int] = {}
+        doi_bibtex_mismatch_count = 0
+        doi_bibtex_mismatch_samples: list[str] = []
 
         def get_facet_node_id(facet_type: str, value: str | None) -> int | None:
             normalized = _normalize_facet_value(value)
@@ -585,6 +661,26 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
 
                 bib = paper.get("bibtex") if isinstance(paper.get("bibtex"), dict) else None
                 bib_fields = (bib.get("fields") if isinstance(bib, dict) else None) or {}
+                current_doi = extract_canonical_doi(paper, bib_fields)
+                current_bibtex_raw, current_bibtex_key, current_entry_type, current_bib_doi = extract_current_bibtex_payload(
+                    paper
+                )
+                previous_meta = previous_metadata.get(paper_id)
+                doi = current_doi or (previous_meta.doi if previous_meta else None)
+                bibtex_raw = current_bibtex_raw or (previous_meta.bibtex_raw if previous_meta else None)
+                bibtex_key = current_bibtex_key or (previous_meta.bibtex_key if previous_meta else None)
+                entry_type = current_entry_type or (previous_meta.entry_type if previous_meta else None)
+                if preferred.key_type == "bib" and preferred.paper_key.startswith("bib:") and not bibtex_key:
+                    bibtex_key = preferred.paper_key.split(":", 1)[1]
+
+                bib_doi_for_compare = current_bib_doi
+                if not bib_doi_for_compare and bibtex_raw:
+                    bib_doi_for_compare = extract_doi_from_bibtex_raw(bibtex_raw)
+                if doi and bib_doi_for_compare and doi != bib_doi_for_compare:
+                    doi_bibtex_mismatch_count += 1
+                    if len(doi_bibtex_mismatch_samples) < 10:
+                        doi_bibtex_mismatch_samples.append(paper_id)
+
                 bib_year = str(bib_fields.get("year") or "").strip()
                 bib_month = str(bib_fields.get("month") or "").strip()
                 if bib_year and not year.isdigit():
@@ -769,15 +865,16 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
                 conn.execute(
                     """
                     INSERT OR REPLACE INTO paper(
-                      paper_id, paper_key, paper_key_type, title, year, month, publication_date, venue, preferred_summary_template, summary_preview, paper_index,
+                      paper_id, paper_key, paper_key_type, doi, title, year, month, publication_date, venue, preferred_summary_template, summary_preview, paper_index,
                       source_hash, output_language, provider, model, prompt_template, extracted_at,
                       pdf_content_hash, source_md_content_hash
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         paper_id,
                         preferred.paper_key,
                         preferred.key_type,
+                        doi,
                         title,
                         year,
                         month,
@@ -796,6 +893,15 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
                         source_md_hash,
                     ),
                 )
+
+                if bibtex_raw:
+                    conn.execute(
+                        """
+                        INSERT OR REPLACE INTO paper_bibtex(paper_id, bibtex_raw, bibtex_key, entry_type)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (paper_id, bibtex_raw, bibtex_key, entry_type),
+                    )
 
                 for template_tag in sorted(template_summaries.keys(), key=lambda item: item.lower()):
                     conn.execute(
@@ -936,6 +1042,7 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
                         " ".join(str(k) for k in (keywords if isinstance(keywords, list) else [])),
                         " ".join(str(i) for i in (institutions if isinstance(institutions, list) else [])),
                         year,
+                        doi or "",
                     ]
                     if part
                 )
@@ -961,5 +1068,12 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
 
             recompute_paper_index(conn)
             recompute_facet_counts(conn)
+            if doi_bibtex_mismatch_count:
+                sample = ", ".join(doi_bibtex_mismatch_samples)
+                logger.warning(
+                    "Detected %d DOI/BibTeX DOI mismatches during snapshot build (sample paper_ids: %s)",
+                    doi_bibtex_mismatch_count,
+                    sample,
+                )
     finally:
         conn.close()

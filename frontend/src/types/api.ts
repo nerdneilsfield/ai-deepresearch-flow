@@ -79,6 +79,7 @@ export const PaperDetailSchema = z
     title: z.string(),
     year: StringOrNumber,
     venue: z.string(),
+    doi: z.string().nullable().optional(),
     authors: z.array(z.string()).default([]),
     keywords: z.array(z.string()).default([]),
     institutions: z.array(z.string()).default([]),

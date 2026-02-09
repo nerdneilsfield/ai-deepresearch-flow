@@ -13,7 +13,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Mount, Route
 
-from deepresearch_flow.paper.snapshot.common import ApiLimits, _open_ro_conn
+from deepresearch_flow.paper.snapshot.common import ApiLimits, _column_exists, _open_ro_conn, _table_exists
 from deepresearch_flow.paper.snapshot.text import merge_adjacent_markers, remove_cjk_spaces, rewrite_search_query
 
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -367,9 +367,12 @@ async def _api_paper_detail(request: Request) -> Response:
     conn = _open_ro_conn(cfg.snapshot_db)
     try:
         build_id = _snapshot_build_id(conn)
+        has_doi_column = _column_exists(conn, "paper", "doi")
+        doi_select = "doi" if has_doi_column else "NULL AS doi"
         row = conn.execute(
-            """
+            f"""
             SELECT paper_id, title, year, venue, preferred_summary_template,
+                   {doi_select},
                    output_language, provider, model, prompt_template,
                    pdf_content_hash, source_md_content_hash
             FROM paper
@@ -418,6 +421,7 @@ async def _api_paper_detail(request: Request) -> Response:
                 "title": str(row["title"]),
                 "year": str(row["year"]),
                 "venue": str(row["venue"]),
+                "doi": str(row["doi"]) if row["doi"] else None,
                 "authors": authors,
                 "keywords": keywords,
                 "institutions": institutions,
@@ -429,6 +433,47 @@ async def _api_paper_detail(request: Request) -> Response:
                 "preferred_summary_template": preferred_template,
                 "summary_urls": summary_urls,
                 **assets,
+            }
+        )
+    finally:
+        conn.close()
+
+
+async def _api_paper_bibtex(request: Request) -> Response:
+    cfg: SnapshotApiConfig = request.app.state.cfg
+    paper_id = str(request.path_params["paper_id"])
+    conn = _open_ro_conn(cfg.snapshot_db)
+    try:
+        has_doi_column = _column_exists(conn, "paper", "doi")
+        doi_select = "doi" if has_doi_column else "NULL AS doi"
+        paper_row = conn.execute(
+            f"SELECT paper_id, {doi_select} FROM paper WHERE paper_id = ?",
+            (paper_id,),
+        ).fetchone()
+        if not paper_row:
+            return _json_error(404, error="paper_not_found", detail="paper not found")
+
+        if not _table_exists(conn, "paper_bibtex"):
+            return _json_error(404, error="bibtex_not_found", detail="bibtex not found")
+
+        bib_row = conn.execute(
+            """
+            SELECT bibtex_raw, bibtex_key, entry_type
+            FROM paper_bibtex
+            WHERE paper_id = ?
+            """,
+            (paper_id,),
+        ).fetchone()
+        if not bib_row:
+            return _json_error(404, error="bibtex_not_found", detail="bibtex not found")
+
+        return JSONResponse(
+            {
+                "paper_id": paper_id,
+                "doi": str(paper_row["doi"]) if paper_row["doi"] else None,
+                "bibtex_raw": str(bib_row["bibtex_raw"]),
+                "bibtex_key": str(bib_row["bibtex_key"]) if bib_row["bibtex_key"] else None,
+                "entry_type": str(bib_row["entry_type"]) if bib_row["entry_type"] else None,
             }
         )
     finally:
@@ -926,6 +971,7 @@ def create_app(
         Route("/api/v1/search", _api_search, methods=["GET"]),
         Route("/api/v1/stats", _api_stats, methods=["GET"]),
         Route("/api/v1/papers/{paper_id:str}", _api_paper_detail, methods=["GET"]),
+        Route("/api/v1/papers/{paper_id:str}/bibtex", _api_paper_bibtex, methods=["GET"]),
         Route("/api/v1/facets/{facet:str}", _api_facet_list, methods=["GET"]),
         Route("/api/v1/facets/{facet:str}/{facet_id:str}/papers", _api_facet_papers, methods=["GET"]),
         Route("/api/v1/facets/{facet:str}/{facet_id:str}/stats", _api_facet_stats, methods=["GET"]),

@@ -643,6 +643,14 @@ uv run deepresearch-flow paper db api serve \
   --host 0.0.0.0 --port 8001
 ```
 
+BibTeX metadata endpoint:
+
+- `GET /api/v1/papers/{paper_id}/bibtex`
+- Success payload: `{ paper_id, doi, bibtex_raw, bibtex_key, entry_type }`
+- Error codes:
+  - `paper_not_found`
+  - `bibtex_not_found`
+
 ### 3.1) MCP (FastMCP Streamable HTTP + SSE)
 
 This project exposes MCP servers mounted on the snapshot API:
@@ -691,7 +699,21 @@ export PAPER_DB_STATIC_EXPORT_DIR=/data/paper-static
 - Returns: dict with:
   - `paper_id`, `title`, `year`, `venue`
   - `doi`, `arxiv_id`, `openreview_id`, `paper_pw_url`
+  - `has_bibtex`
   - `preferred_summary_template`, `available_summary_templates`
+
+</details>
+
+<details>
+<summary><strong>get_paper_bibtex(paper_id)</strong> — persisted BibTeX payload</summary>
+
+- Args:
+  - `paper_id` (str)
+- Returns: dict with:
+  - `paper_id`, `doi`, `bibtex_raw`, `bibtex_key`, `entry_type`
+- Errors:
+  - `paper_not_found`
+  - `bibtex_not_found`
 
 </details>
 

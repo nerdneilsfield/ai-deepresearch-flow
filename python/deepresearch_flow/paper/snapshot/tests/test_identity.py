@@ -97,9 +97,11 @@ class TestSearchText(unittest.TestCase):
             init_snapshot_db(conn)
             tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             self.assertIn("month_count", tables)
+            self.assertIn("paper_bibtex", tables)
             cols = {row[1] for row in conn.execute("PRAGMA table_info(paper)")}
             self.assertIn("month", cols)
             self.assertIn("publication_date", cols)
+            self.assertIn("doi", cols)
         finally:
             conn.close()
 

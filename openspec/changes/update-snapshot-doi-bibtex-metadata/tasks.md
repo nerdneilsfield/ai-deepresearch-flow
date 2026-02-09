@@ -1,0 +1,15 @@
+## 1. Implementation
+- [ ] 1.1 Extend snapshot schema: add `paper.doi` and add `paper_bibtex` table with FK/indexes.
+- [ ] 1.2 Update BibTeX parse/enrichment path to retain deterministic per-entry text for `bibtex_raw` persistence.
+- [ ] 1.3 Update snapshot build pipeline to persist DOI and BibTeX metadata (`bibtex_raw`, `bibtex_key`, `entry_type`).
+- [ ] 1.4 Update snapshot update pipeline to persist DOI and BibTeX for newly added papers.
+- [ ] 1.5 Implement rebuild inheritance with `--previous-snapshot-db`: reuse previous DOI/BibTeX by matched `paper_id` when current inputs are missing values (current input wins).
+- [ ] 1.6 Extend paper detail API response to include `doi`.
+- [ ] 1.7 Add API endpoint `GET /api/v1/papers/{paper_id}/bibtex` with explicit error codes: `paper_not_found` and `bibtex_not_found`.
+- [ ] 1.8 Update MCP `get_paper_metadata` to return persisted DOI and `has_bibtex`.
+- [ ] 1.9 Add MCP tool `get_paper_bibtex(paper_id)` with explicit errors: `paper_not_found` and `bibtex_not_found`.
+- [ ] 1.10 Include DOI in snapshot FTS metadata text assembly.
+- [ ] 1.11 Add defensive old-schema reads for API/MCP paths when `doi` column or `paper_bibtex` table is absent.
+- [ ] 1.12 Add aggregated mismatch reporting for DOI vs inherited BibTeX DOI inconsistencies.
+- [ ] 1.13 Add/adjust tests for schema, build/update persistence, rebuild inheritance precedence, DOI canonical persistence, API endpoint error semantics, legacy fallback semantics (`doi=null`, `has_bibtex=false`), DOI search coverage, mismatch summary behavior, and MCP metadata/tool behavior.
+- [ ] 1.14 Update README/README_ZH for new metadata behavior, API endpoint, and MCP tool.

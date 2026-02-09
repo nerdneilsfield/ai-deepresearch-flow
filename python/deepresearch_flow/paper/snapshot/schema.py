@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import sqlite3
 
+from deepresearch_flow.paper.snapshot.common import _column_exists
+
 
 def init_snapshot_db(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA foreign_keys=ON;")
@@ -18,6 +20,7 @@ def init_snapshot_db(conn: sqlite3.Connection) -> None:
           paper_id TEXT PRIMARY KEY,
           paper_key TEXT NOT NULL,
           paper_key_type TEXT NOT NULL,
+          doi TEXT,
           title TEXT NOT NULL,
           year TEXT NOT NULL,
           month TEXT NOT NULL,
@@ -49,6 +52,14 @@ def init_snapshot_db(conn: sqlite3.Connection) -> None:
           lang TEXT NOT NULL,
           md_content_hash TEXT NOT NULL,
           PRIMARY KEY (paper_id, lang),
+          FOREIGN KEY (paper_id) REFERENCES paper(paper_id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS paper_bibtex (
+          paper_id TEXT PRIMARY KEY,
+          bibtex_raw TEXT NOT NULL,
+          bibtex_key TEXT,
+          entry_type TEXT,
           FOREIGN KEY (paper_id) REFERENCES paper(paper_id) ON DELETE CASCADE
         );
 
@@ -189,6 +200,10 @@ def init_snapshot_db(conn: sqlite3.Connection) -> None:
         );
         """
     )
+
+    # Backward-compatible migrations for older snapshots.
+    if not _column_exists(conn, "paper", "doi"):
+        conn.execute("ALTER TABLE paper ADD COLUMN doi TEXT")
 
 
 def recompute_facet_counts(conn: sqlite3.Connection) -> None:

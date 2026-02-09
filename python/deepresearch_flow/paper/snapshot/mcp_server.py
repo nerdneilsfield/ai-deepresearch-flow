@@ -17,7 +17,7 @@ from starlette.routing import Mount
 
 from fastmcp import FastMCP
 
-from deepresearch_flow.paper.snapshot.common import ApiLimits, _open_ro_conn
+from deepresearch_flow.paper.snapshot.common import ApiLimits, _column_exists, _open_ro_conn, _table_exists
 from deepresearch_flow.paper.snapshot.text import merge_adjacent_markers, remove_cjk_spaces, rewrite_search_query
 
 _SUPPORTED_PROTOCOL_VERSIONS = {"2025-03-26", "2025-06-18"}
@@ -413,9 +413,11 @@ def get_paper_metadata(paper_id: str) -> dict[str, Any]:
     
     conn = _open_ro_conn(cfg.snapshot_db)
     try:
+        has_doi_column = _column_exists(conn, "paper", "doi")
+        doi_select = "doi" if has_doi_column else "NULL AS doi"
         row = conn.execute(
-            """
-            SELECT paper_id, title, year, venue, preferred_summary_template
+            f"""
+            SELECT paper_id, title, year, venue, preferred_summary_template, {doi_select}
             FROM paper WHERE paper_id = ?
             """,
             (paper_id,),
@@ -427,17 +429,66 @@ def get_paper_metadata(paper_id: str) -> dict[str, Any]:
             (paper_id,),
         ).fetchall()
         available = sorted((str(item["template_tag"]) for item in template_rows), key=str.lower)
+        has_bibtex = False
+        if _table_exists(conn, "paper_bibtex"):
+            bib_row = conn.execute(
+                "SELECT 1 FROM paper_bibtex WHERE paper_id = ? LIMIT 1",
+                (paper_id,),
+            ).fetchone()
+            has_bibtex = bib_row is not None
         return {
             "paper_id": str(row["paper_id"]),
             "title": str(row["title"]),
             "year": str(row["year"]),
             "venue": str(row["venue"]),
-            "doi": None,
+            "doi": str(row["doi"]) if row["doi"] else None,
             "arxiv_id": None,
             "openreview_id": None,
             "paper_pw_url": None,
             "preferred_summary_template": row["preferred_summary_template"],
             "available_summary_templates": available,
+            "has_bibtex": has_bibtex,
+        }
+    finally:
+        conn.close()
+
+
+@mcp.tool()
+def get_paper_bibtex(paper_id: str) -> dict[str, Any]:
+    """Get persisted BibTeX payload for a paper.
+
+    Returns canonical DOI from paper metadata and BibTeX entry text when available.
+    """
+    cfg = _get_config()
+    paper_id = _validate_paper_id(paper_id, cfg)
+
+    conn = _open_ro_conn(cfg.snapshot_db)
+    try:
+        has_doi_column = _column_exists(conn, "paper", "doi")
+        doi_select = "doi" if has_doi_column else "NULL AS doi"
+        paper_row = conn.execute(
+            f"SELECT paper_id, {doi_select} FROM paper WHERE paper_id = ?",
+            (paper_id,),
+        ).fetchone()
+        if not paper_row:
+            raise McpToolError("paper_not_found", "paper not found", paper_id=paper_id)
+
+        if not _table_exists(conn, "paper_bibtex"):
+            raise McpToolError("bibtex_not_found", "bibtex not found", paper_id=paper_id)
+
+        bib_row = conn.execute(
+            "SELECT bibtex_raw, bibtex_key, entry_type FROM paper_bibtex WHERE paper_id = ?",
+            (paper_id,),
+        ).fetchone()
+        if not bib_row:
+            raise McpToolError("bibtex_not_found", "bibtex not found", paper_id=paper_id)
+
+        return {
+            "paper_id": paper_id,
+            "doi": str(paper_row["doi"]) if paper_row["doi"] else None,
+            "bibtex_raw": str(bib_row["bibtex_raw"]),
+            "bibtex_key": str(bib_row["bibtex_key"]) if bib_row["bibtex_key"] else None,
+            "entry_type": str(bib_row["entry_type"]) if bib_row["entry_type"] else None,
         }
     finally:
         conn.close()

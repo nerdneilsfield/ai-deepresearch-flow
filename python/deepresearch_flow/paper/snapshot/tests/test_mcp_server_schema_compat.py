@@ -10,6 +10,7 @@ from deepresearch_flow.paper.snapshot.mcp_server import (
     McpSnapshotConfig,
     McpToolError,
     configure,
+    get_paper_bibtex,
     get_paper_metadata,
     get_paper_source,
     get_paper_summary,
@@ -28,6 +29,7 @@ class TestMcpServerSchemaCompat(unittest.TestCase):
         cls.db_path = root / "snapshot.db"
         cls.static_dir = root / "static"
         cls.paper_id = "eb87c02de5b908dff9f91edda47364a5"
+        cls.no_bib_paper_id = "11111111111111111111111111111111"
 
         (cls.static_dir / "summary" / cls.paper_id).mkdir(parents=True, exist_ok=True)
         (cls.static_dir / "md").mkdir(parents=True, exist_ok=True)
@@ -60,10 +62,10 @@ class TestMcpServerSchemaCompat(unittest.TestCase):
                 """
                 INSERT INTO paper(
                   paper_id, paper_key, paper_key_type, title, year, month, publication_date,
-                  venue, preferred_summary_template, summary_preview, paper_index, source_hash,
+                  venue, doi, preferred_summary_template, summary_preview, paper_index, source_hash,
                   output_language, provider, model, prompt_template, extracted_at,
                   pdf_content_hash, source_md_content_hash
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     cls.paper_id,
@@ -74,6 +76,7 @@ class TestMcpServerSchemaCompat(unittest.TestCase):
                     "01",
                     "2024-01-01",
                     "ICLR",
+                    "10.1145/example.doi",
                     "deep_read",
                     "Graph methods preview",
                     1,
@@ -88,6 +91,38 @@ class TestMcpServerSchemaCompat(unittest.TestCase):
                 ),
             )
             conn.execute(
+                """
+                INSERT INTO paper(
+                  paper_id, paper_key, paper_key_type, title, year, month, publication_date,
+                  venue, doi, preferred_summary_template, summary_preview, paper_index, source_hash,
+                  output_language, provider, model, prompt_template, extracted_at,
+                  pdf_content_hash, source_md_content_hash
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    cls.no_bib_paper_id,
+                    "meta:key:2",
+                    "meta",
+                    "No BibTeX Paper",
+                    "2024",
+                    "02",
+                    "2024-02-01",
+                    "NeurIPS",
+                    None,
+                    "simple",
+                    "No bib preview",
+                    2,
+                    "sourcekey2",
+                    "en",
+                    "provider-x",
+                    "model-y",
+                    "simple",
+                    "2025-01-01T00:00:00Z",
+                    None,
+                    None,
+                ),
+            )
+            conn.execute(
                 "INSERT INTO paper_summary(paper_id, template_tag) VALUES (?, ?)",
                 (cls.paper_id, "deep_read"),
             )
@@ -98,6 +133,15 @@ class TestMcpServerSchemaCompat(unittest.TestCase):
             conn.execute(
                 "INSERT INTO paper_translation(paper_id, lang, md_content_hash) VALUES (?, ?, ?)",
                 (cls.paper_id, "zh", "trhash"),
+            )
+            conn.execute(
+                "INSERT INTO paper_bibtex(paper_id, bibtex_raw, bibtex_key, entry_type) VALUES (?, ?, ?, ?)",
+                (
+                    cls.paper_id,
+                    "@article{example, title={Graph Neural Networks}, doi={10.1145/example.doi}}",
+                    "example",
+                    "article",
+                ),
             )
             conn.execute("INSERT INTO keyword(value) VALUES (?)", ("machine learning",))
             keyword_row = conn.execute(
@@ -145,10 +189,34 @@ class TestMcpServerSchemaCompat(unittest.TestCase):
         self.assertEqual(payload["paper_id"], self.paper_id)
         self.assertEqual(payload["preferred_summary_template"], "deep_read")
         self.assertEqual(payload["available_summary_templates"], ["deep_read", "simple"])
-        self.assertIsNone(payload["doi"])
+        self.assertEqual(payload["doi"], "10.1145/example.doi")
+        self.assertTrue(payload["has_bibtex"])
         self.assertIsNone(payload["arxiv_id"])
         self.assertIsNone(payload["openreview_id"])
         self.assertIsNone(payload["paper_pw_url"])
+
+    def test_get_paper_bibtex(self) -> None:
+        payload = get_paper_bibtex(self.paper_id)
+        self.assertEqual(payload["paper_id"], self.paper_id)
+        self.assertEqual(payload["doi"], "10.1145/example.doi")
+        self.assertEqual(payload["bibtex_key"], "example")
+        self.assertEqual(payload["entry_type"], "article")
+        self.assertIn("@article{example", payload["bibtex_raw"])
+
+    def test_get_paper_metadata_has_bibtex_false(self) -> None:
+        payload = get_paper_metadata(self.no_bib_paper_id)
+        self.assertIsNone(payload["doi"])
+        self.assertFalse(payload["has_bibtex"])
+
+    def test_get_paper_bibtex_missing(self) -> None:
+        with self.assertRaises(McpToolError) as ctx:
+            get_paper_bibtex(self.no_bib_paper_id)
+        self.assertEqual(ctx.exception.code, "bibtex_not_found")
+
+    def test_get_paper_bibtex_not_found(self) -> None:
+        with self.assertRaises(McpToolError) as ctx:
+            get_paper_bibtex("missing-paper-id")
+        self.assertEqual(ctx.exception.code, "paper_not_found")
 
     def test_get_paper_summary_default_and_template(self) -> None:
         default_summary = get_paper_summary(self.paper_id)

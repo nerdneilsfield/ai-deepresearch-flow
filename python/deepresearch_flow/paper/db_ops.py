@@ -1333,6 +1333,47 @@ def _normalize_bibtex_title(title: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 
+def bibtex_entry_to_text(entry: dict[str, Any]) -> str:
+    """Render a deterministic BibTeX entry text from structured dict data."""
+    if not isinstance(entry, dict):
+        return ""
+
+    entry_type = str(entry.get("type") or "misc").strip().lower() or "misc"
+    entry_key = str(entry.get("key") or "").strip() or "unknown"
+
+    fields_obj = entry.get("fields")
+    fields: dict[str, Any] = fields_obj if isinstance(fields_obj, dict) else {}
+    persons_obj = entry.get("persons")
+    persons: dict[str, Any] = persons_obj if isinstance(persons_obj, dict) else {}
+
+    lines = [f"@{entry_type}{{{entry_key},"]
+
+    for role, people in sorted(persons.items(), key=lambda item: str(item[0]).lower()):
+        role_name = str(role).strip().lower()
+        if not role_name:
+            continue
+        if isinstance(people, list):
+            names = [str(name).strip() for name in people if str(name).strip()]
+        else:
+            value = str(people).strip()
+            names = [value] if value else []
+        if not names:
+            continue
+        lines.append(f"  {role_name} = {{{' and '.join(names)}}},")
+
+    for field_key, field_value in sorted(fields.items(), key=lambda item: str(item[0]).lower()):
+        key_name = str(field_key).strip().lower()
+        if not key_name:
+            continue
+        value = str(field_value).replace("\n", " ").strip()
+        lines.append(f"  {key_name} = {{{value}}},")
+
+    if len(lines) > 1 and lines[-1].endswith(","):
+        lines[-1] = lines[-1][:-1]
+    lines.append("}")
+    return "\n".join(lines)
+
+
 def enrich_with_bibtex(papers: list[dict[str, Any]], bibtex_path: Path) -> None:
     """Enrich papers with bibtex metadata."""
     if not PYBTEX_AVAILABLE:
@@ -1354,6 +1395,7 @@ def enrich_with_bibtex(papers: list[dict[str, Any]], bibtex_path: Path) -> None:
             "persons": {role: [str(p) for p in persons] for role, persons in entry.persons.items()},
             "_title_norm": title_norm,
         }
+        record["raw_entry"] = bibtex_entry_to_text(record)
         idx = len(entries)
         entries.append(record)
         prefix = title_norm[:16]
@@ -1414,6 +1456,16 @@ def load_and_merge_papers(
         for bundle in inputs:
             enrich_with_bibtex(bundle["papers"], bibtex_path)
     papers = _merge_paper_inputs(inputs)
+    for paper in papers:
+        bib = paper.get("bibtex")
+        if not isinstance(bib, dict):
+            continue
+        raw_entry = bib.get("raw_entry")
+        if isinstance(raw_entry, str) and raw_entry.strip():
+            continue
+        rendered = bibtex_entry_to_text(bib)
+        if rendered:
+            bib["raw_entry"] = rendered
     if pdf_paths:
         pdf_index = _build_file_index_from_paths(pdf_paths, suffixes={".pdf"})
         papers.extend(_build_pdf_only_entries(papers, pdf_paths, pdf_index))

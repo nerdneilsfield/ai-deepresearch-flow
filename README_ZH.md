@@ -233,6 +233,14 @@ uv run deepresearch-flow paper db api serve \
   --host 0.0.0.0 --port 8001
 ```
 
+BibTeX 元数据接口：
+
+- `GET /api/v1/papers/{paper_id}/bibtex`
+- 成功返回：`{ paper_id, doi, bibtex_raw, bibtex_key, entry_type }`
+- 错误码：
+  - `paper_not_found`
+  - `bibtex_not_found`
+
 MCP 客户端配置：
 - Streamable HTTP 端点：`http://<host>:8001/mcp`
 - SSE 端点：`http://<host>:8001/mcp-sse`
@@ -280,7 +288,21 @@ MCP 客户端配置：
 - 返回（dict）包含：
   - `paper_id`, `title`, `year`, `venue`
   - `doi`, `arxiv_id`, `openreview_id`, `paper_pw_url`
+  - `has_bibtex`
   - `preferred_summary_template`, `available_summary_templates`
+
+</details>
+
+<details>
+<summary><strong>get_paper_bibtex(paper_id)</strong> — 持久化 BibTeX 数据</summary>
+
+- 参数：
+  - `paper_id`（str）
+- 返回（dict）包含：
+  - `paper_id`, `doi`, `bibtex_raw`, `bibtex_key`, `entry_type`
+- 错误：
+  - `paper_not_found`
+  - `bibtex_not_found`
 
 </details>
 

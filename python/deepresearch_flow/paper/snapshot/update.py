@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 import json
 from pathlib import Path
@@ -15,12 +15,16 @@ from rich.console import Console
 from rich.table import Table
 
 from deepresearch_flow.paper.db_ops import build_index, load_and_merge_papers
+from deepresearch_flow.paper.snapshot.bibtex_utils import (
+    extract_canonical_doi,
+    extract_current_bibtex_payload,
+)
 from deepresearch_flow.paper.snapshot.identity import (
     build_paper_key_candidates,
     choose_preferred_key,
     paper_id_for_key,
 )
-from deepresearch_flow.paper.snapshot.schema import recompute_facet_counts, recompute_paper_index
+from deepresearch_flow.paper.snapshot.schema import init_snapshot_db, recompute_facet_counts, recompute_paper_index
 from deepresearch_flow.paper.snapshot.text import insert_cjk_spaces, markdown_to_plain_text
 from deepresearch_flow.paper.utils import stable_hash
 
@@ -50,6 +54,8 @@ class UpdateStats:
     templates_added: int = 0
     translations_added: int = 0
     files_copied: int = 0
+    doi_bibtex_mismatches: int = 0
+    mismatch_samples: list[str] = field(default_factory=list)
 
 
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -338,6 +344,16 @@ def _add_new_paper(
     year, month = _parse_year_month(paper)
     publication_date = str(paper.get("publication_date") or "").strip()
     venue = _extract_venue(paper)
+    bib = paper.get("bibtex") if isinstance(paper.get("bibtex"), dict) else None
+    bib_fields = bib.get("fields") if isinstance(bib, dict) and isinstance(bib.get("fields"), dict) else {}
+    doi = extract_canonical_doi(paper, bib_fields or {})
+    bibtex_raw, bibtex_key, entry_type, bib_doi = extract_current_bibtex_payload(paper)
+    if paper_key_type == "bib" and paper_key.startswith("bib:") and not bibtex_key:
+        bibtex_key = paper_key.split(":", 1)[1]
+    if doi and bib_doi and doi != bib_doi:
+        stats.doi_bibtex_mismatches += 1
+        if len(stats.mismatch_samples) < 10:
+            stats.mismatch_samples.append(paper_id)
 
     output_language = str(paper.get("output_language") or "").strip()
     provider = str(paper.get("provider") or "").strip()
@@ -370,16 +386,17 @@ def _add_new_paper(
     conn.execute(
         """
         INSERT INTO paper (
-            paper_id, paper_key, paper_key_type, title, year, month,
+            paper_id, paper_key, paper_key_type, doi, title, year, month,
             publication_date, venue, preferred_summary_template, summary_preview,
             source_hash, output_language, provider, model, prompt_template,
             extracted_at, pdf_content_hash, source_md_content_hash
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             paper_id,
             paper_key,
             paper_key_type,
+            doi,
             title,
             year,
             month,
@@ -398,6 +415,15 @@ def _add_new_paper(
         ),
     )
     stats.papers_added += 1
+
+    if bibtex_raw:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO paper_bibtex(paper_id, bibtex_raw, bibtex_key, entry_type)
+            VALUES (?, ?, ?, ?)
+            """,
+            (paper_id, bibtex_raw, bibtex_key, entry_type),
+        )
 
     for cand in candidates:
         conn.execute(
@@ -576,6 +602,7 @@ def _add_new_paper(
             " ".join(keywords),
             " ".join(institutions),
             year,
+            doi or "",
         ]
         if part
     )
@@ -660,6 +687,8 @@ def update_snapshot(opts: SnapshotUpdateOptions) -> None:
     conn.row_factory = sqlite3.Row
 
     try:
+        # Ensure new schema additions exist when updating older snapshots.
+        init_snapshot_db(conn)
         for paper in papers:
             stats.papers_checked += 1
 
@@ -723,7 +752,12 @@ def _print_update_summary(
     table.add_row("Templates added", str(stats.templates_added))
     table.add_row("Translations added", str(stats.translations_added))
     table.add_row("Files copied", str(stats.files_copied))
+    table.add_row("DOI/BibTeX mismatches", str(stats.doi_bibtex_mismatches))
 
     Console().print(table)
+    if stats.mismatch_samples:
+        Console().print(
+            f"[yellow]Mismatch sample paper_ids: {', '.join(stats.mismatch_samples)}[/yellow]"
+        )
     Console().print(f"[green]{action} snapshot DB: {output_db}[/green]")
     Console().print(f"[green]{action} static dir: {output_static}[/green]")
