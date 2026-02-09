@@ -577,6 +577,52 @@ def register_db_commands(db_group: click.Group) -> None:
         )
         export_missing(opts)
 
+    @snapshot_group.command("update")
+    @click.option(
+        "--snapshot-db",
+        "snapshot_db",
+        required=True,
+        help="Path to existing snapshot database",
+    )
+    @click.option(
+        "--static-export-dir",
+        "static_export_dir",
+        required=True,
+        help="Path to static export directory",
+    )
+    @click.option(
+        "--mode",
+        "mode",
+        type=click.Choice(["all", "translations", "summaries", "metadata"]),
+        default="all",
+        show_default=True,
+        help="What to update",
+    )
+    @click.option(
+        "--dry-run",
+        is_flag=True,
+        help="Preview changes without modifying database",
+    )
+    def snapshot_update(
+        snapshot_db: str,
+        static_export_dir: str,
+        mode: str,
+        dry_run: bool,
+    ) -> None:
+        """Update existing snapshot incrementally by scanning static directory."""
+        from deepresearch_flow.paper.snapshot.update import (
+            SnapshotUpdateOptions,
+            update_snapshot,
+        )
+
+        opts = SnapshotUpdateOptions(
+            snapshot_db=Path(snapshot_db),
+            static_export_dir=Path(static_export_dir),
+            mode=mode,
+            dry_run=dry_run,
+        )
+        update_snapshot(opts)
+
     @snapshot_group.command("supplement")
     @click.option(
         "--existing-db",
