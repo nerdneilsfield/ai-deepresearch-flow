@@ -63,3 +63,8 @@ include-package-data = true
 "deepresearch_flow.paper.examples" = ["*.toml"]
 "deepresearch_flow.paper.web" = ["pdfjs/**/*", "templates/**/*", "static/**/*"]
 "deepresearch_flow.recognize" = ["*.js"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]
