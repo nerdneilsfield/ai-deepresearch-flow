@@ -686,13 +686,13 @@ uv run deepresearch-flow paper db snapshot export-missing \
   --snapshot-db ./dist/paper_snapshot.db \
   --type template \
   --template deep_read \
+  --static-export-dir ./dist/paper-static \
   --output ./missing_deep_read.json \
   --txt-output ./missing_ids.txt \
   --output-paths ./extractable_paths.txt
 
 # 3) 补充提取缺失的模板（仅针对有 source markdown 的论文）
 uv run deepresearch-flow paper extract \
-  --input ./docs \
   --model openai/gpt-4o-mini \
   --prompt-template deep_read \
   --input-list ./extractable_paths.txt \
@@ -780,6 +780,7 @@ uv run deepresearch-flow paper db snapshot export-missing \
   --snapshot-db ./dist/paper_snapshot.db \
   --type translation \
   --lang zh \
+  --static-export-dir ./dist/paper-static \
   --output-paths ./to_translate_paths.txt
 
 # 2) 翻译缺失的论文

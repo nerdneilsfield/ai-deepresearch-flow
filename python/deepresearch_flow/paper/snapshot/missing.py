@@ -12,6 +12,8 @@ import click
 from rich.console import Console
 from rich.table import Table
 
+from deepresearch_flow.paper.utils import stable_hash
+
 
 @dataclass(frozen=True)
 class ShowMissingOptions:
@@ -28,6 +30,8 @@ class ExportMissingOptions:
     output_json: Path | None = None
     output_txt: Path | None = None
     output_paths: Path | None = None  # Export file paths for extraction
+    md_roots: list[Path] | None = None  # Markdown roots for resolving source paths
+    static_export_dir: Path | None = None  # Static export directory for resolving md/{hash}.md
 
 
 def _open_db(path: Path) -> sqlite3.Connection:
@@ -262,21 +266,55 @@ def export_missing(opts: ExportMissingOptions) -> None:
             Console().print(f"[green]Exported TXT to: {opts.output_txt}[/green]")
         
         # Export file paths (for use with --input-list)
-        if opts.output_paths and missing_papers:
-            # Build file paths from source_md_content_hash
-            paths = []
+        if opts.output_paths:
+            hash_to_md_path = _build_source_hash_to_md_path_map(opts.md_roots or [])
+            static_md_root = (
+                (opts.static_export_dir / "md").resolve()
+                if opts.static_export_dir
+                else None
+            )
+            paths: list[str] = []
+            unresolved = 0
             for p in missing_papers:
-                md_hash = p.get("source_md_content_hash")
+                source_hash = str(p.get("source_hash") or "").strip()
+                if source_hash and source_hash in hash_to_md_path:
+                    paths.append(str(hash_to_md_path[source_hash]))
+                    continue
+                md_hash = str(p.get("source_md_content_hash") or "").strip()
                 if md_hash:
-                    # Path relative to md root: {hash}.md or {hash}/{filename}.md
-                    # Try common patterns
+                    if static_md_root:
+                        candidate = static_md_root / f"{md_hash}.md"
+                        if candidate.exists():
+                            paths.append(str(candidate))
+                            continue
                     paths.append(f"{md_hash}.md")
-            
-            if paths:
-                opts.output_paths.parent.mkdir(parents=True, exist_ok=True)
-                opts.output_paths.write_text("\n".join(paths), encoding="utf-8")
-                Console().print(f"[green]Exported file paths to: {opts.output_paths}[/green]")
-                Console().print(f"[cyan]Use with: paper extract --input ./md --input-list {opts.output_paths}[/cyan]")
+                    continue
+                unresolved += 1
+
+            deduped_paths = list(dict.fromkeys(paths))
+            opts.output_paths.parent.mkdir(parents=True, exist_ok=True)
+            opts.output_paths.write_text("\n".join(deduped_paths), encoding="utf-8")
+            Console().print(f"[green]Exported file paths to: {opts.output_paths}[/green]")
+
+            if opts.md_roots:
+                Console().print(
+                    f"[cyan]Resolved {len(deduped_paths)} paths with --md-root (absolute paths, can be used directly with --input-list)[/cyan]"
+                )
+            elif opts.static_export_dir:
+                Console().print(
+                    f"[cyan]Resolved {len(deduped_paths)} paths with --static-export-dir (absolute paths under static/md)[/cyan]"
+                )
+            else:
+                Console().print(
+                    f"[cyan]Use with: paper extract --input ./md --input-list {opts.output_paths}[/cyan]"
+                )
+                Console().print(
+                    "[cyan]Tip: pass --md-root or --static-export-dir to export absolute markdown paths[/cyan]"
+                )
+            if unresolved:
+                Console().print(
+                    f"[yellow]{unresolved} papers do not have resolvable markdown paths and were skipped in --output-paths[/yellow]"
+                )
         
         # Show first 10 examples
         if missing_papers:
@@ -296,6 +334,23 @@ def export_missing(opts: ExportMissingOptions) -> None:
             
     finally:
         conn.close()
+
+
+def _build_source_hash_to_md_path_map(md_roots: list[Path]) -> dict[str, Path]:
+    mapping: dict[str, Path] = {}
+    for root in md_roots:
+        if not root.exists() or not root.is_dir():
+            continue
+        for path in root.rglob("*.md"):
+            try:
+                if not path.is_file():
+                    continue
+            except OSError:
+                continue
+            resolved = path.resolve()
+            source_hash = stable_hash(str(resolved))
+            mapping.setdefault(source_hash, resolved)
+    return mapping
 
 
 def _get_missing_source_md(conn: sqlite3.Connection) -> list[dict[str, Any]]:

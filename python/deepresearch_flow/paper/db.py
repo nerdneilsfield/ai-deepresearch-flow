@@ -549,10 +549,23 @@ def register_db_commands(db_group: click.Group) -> None:
     @click.option("--output", "output_json", default=None, help="Output JSON file path")
     @click.option("--txt-output", "output_txt", default=None, help="Output TXT file path (paper IDs only)")
     @click.option(
+        "--md-root",
+        "md_roots",
+        multiple=True,
+        default=[],
+        help="Markdown root directories for resolving source paths (repeatable)",
+    )
+    @click.option(
+        "--static-export-dir",
+        "static_export_dir",
+        default=None,
+        help="Static export directory for resolving md/{source_md_content_hash}.md paths",
+    )
+    @click.option(
         "--output-paths",
         "output_paths",
         default=None,
-        help="Output file paths for extraction (use with --input-list)",
+        help="Output markdown paths for extraction (use with --input-list)",
     )
     def snapshot_export_missing(
         snapshot_db: str,
@@ -561,6 +574,8 @@ def register_db_commands(db_group: click.Group) -> None:
         lang: str | None,
         output_json: str | None,
         output_txt: str | None,
+        md_roots: tuple[str, ...],
+        static_export_dir: str | None,
         output_paths: str | None,
     ) -> None:
         """Export list of papers missing specified artifacts."""
@@ -574,6 +589,8 @@ def register_db_commands(db_group: click.Group) -> None:
             output_json=Path(output_json) if output_json else None,
             output_txt=Path(output_txt) if output_txt else None,
             output_paths=Path(output_paths) if output_paths else None,
+            md_roots=[Path(root) for root in md_roots] if md_roots else None,
+            static_export_dir=Path(static_export_dir) if static_export_dir else None,
         )
         export_missing(opts)
 
