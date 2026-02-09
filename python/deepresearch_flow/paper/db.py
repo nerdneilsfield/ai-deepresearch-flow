@@ -590,43 +590,50 @@ def register_db_commands(db_group: click.Group) -> None:
         required=True,
         help="Path to static export directory",
     )
-    @click.option(
-        "--mode",
-        "mode",
-        type=click.Choice(["all", "translations", "summaries", "metadata"]),
-        default="all",
-        show_default=True,
-        help="What to update",
-    )
-    @click.option(
-        "--dry-run",
-        is_flag=True,
-        help="Preview changes without modifying database",
-    )
+    @click.option("-i", "--input", "input_paths", multiple=True, required=True, help="Input JSON file path (repeatable)")
+    @click.option("-b", "--bibtex", "bibtex_path", default=None, help="Optional BibTeX file path")
+    @click.option("--md-root", "md_roots", multiple=True, default=[], help="Markdown root directories (repeatable)")
+    @click.option("--md-translated-root", "md_translated_roots", multiple=True, default=[], help="Translated markdown directories (repeatable)")
+    @click.option("--pdf-root", "pdf_roots", multiple=True, default=[], help="PDF root directories (repeatable)")
+    @click.option("--in-place", is_flag=True, help="Modify existing snapshot in place (creates backup)")
+    @click.option("--output-db", "output_db", default=None, help="Output database path (if not --in-place)")
+    @click.option("--output-static-dir", "output_static_dir", default=None, help="Output static directory (if not --in-place)")
     def snapshot_update(
         snapshot_db: str,
         static_export_dir: str,
-        mode: str,
-        dry_run: bool,
+        input_paths: tuple[str, ...],
+        bibtex_path: str | None,
+        md_roots: tuple[str, ...],
+        md_translated_roots: tuple[str, ...],
+        pdf_roots: tuple[str, ...],
+        in_place: bool,
+        output_db: str | None,
+        output_static_dir: str | None,
     ) -> None:
-        """Update existing snapshot incrementally by scanning static directory."""
-        from deepresearch_flow.paper.snapshot.update import (
-            SnapshotUpdateOptions,
-            update_snapshot,
-        )
+        """Add new papers to existing snapshot."""
+        from deepresearch_flow.paper.snapshot.update import SnapshotUpdateOptions, update_snapshot
+
+        if not in_place and not output_db:
+            raise click.ClickException("Must specify either --in-place or --output-db")
 
         opts = SnapshotUpdateOptions(
             snapshot_db=Path(snapshot_db),
             static_export_dir=Path(static_export_dir),
-            mode=mode,
-            dry_run=dry_run,
+            input_paths=[Path(p) for p in input_paths],
+            bibtex_path=Path(bibtex_path) if bibtex_path else None,
+            md_roots=[Path(r) for r in md_roots] if md_roots else None,
+            md_translated_roots=[Path(r) for r in md_translated_roots] if md_translated_roots else None,
+            pdf_roots=[Path(r) for r in pdf_roots] if pdf_roots else None,
+            in_place=in_place,
+            output_db=Path(output_db) if output_db else None,
+            output_static_dir=Path(output_static_dir) if output_static_dir else None,
         )
         update_snapshot(opts)
 
     @snapshot_group.command("supplement")
     @click.option(
-        "--existing-db",
-        "existing_snapshot_db",
+        "--snapshot-db",
+        "snapshot_db",
         required=True,
         help="Path to existing snapshot database",
     )
@@ -634,44 +641,44 @@ def register_db_commands(db_group: click.Group) -> None:
         "--static-export-dir",
         "static_export_dir",
         required=True,
-        help="Path to existing static export directory",
+        help="Path to static export directory",
     )
-    @click.option(
-        "--supplement-json",
-        "supplement_json",
-        required=True,
-        help="JSON file with papers to add/update",
-    )
-    @click.option(
-        "--output-db",
-        "output_db",
-        required=True,
-        help="Output snapshot database path",
-    )
-    @click.option(
-        "--output-static-dir",
-        "output_static_dir",
-        default=None,
-        help="Output static directory (defaults to --static-export-dir)",
-    )
+    @click.option("-i", "--input", "input_paths", multiple=True, required=True, help="Input JSON file path (repeatable)")
+    @click.option("-b", "--bibtex", "bibtex_path", default=None, help="Optional BibTeX file path")
+    @click.option("--md-root", "md_roots", multiple=True, default=[], help="Markdown root directories (repeatable)")
+    @click.option("--md-translated-root", "md_translated_roots", multiple=True, default=[], help="Translated markdown directories (repeatable)")
+    @click.option("--pdf-root", "pdf_roots", multiple=True, default=[], help="PDF root directories (repeatable)")
+    @click.option("--in-place", is_flag=True, help="Modify existing snapshot in place (creates backup)")
+    @click.option("--output-db", "output_db", default=None, help="Output database path (if not --in-place)")
+    @click.option("--output-static-dir", "output_static_dir", default=None, help="Output static directory (if not --in-place)")
     def snapshot_supplement(
-        existing_snapshot_db: str,
+        snapshot_db: str,
         static_export_dir: str,
-        supplement_json: str,
-        output_db: str,
+        input_paths: tuple[str, ...],
+        bibtex_path: str | None,
+        md_roots: tuple[str, ...],
+        md_translated_roots: tuple[str, ...],
+        pdf_roots: tuple[str, ...],
+        in_place: bool,
+        output_db: str | None,
         output_static_dir: str | None,
     ) -> None:
-        """Supplement existing snapshot with additional papers (incremental update)."""
-        from deepresearch_flow.paper.snapshot.supplement import (
-            SnapshotSupplementOptions,
-            supplement_snapshot,
-        )
+        """Supplement existing snapshot with missing templates/translations for existing papers."""
+        from deepresearch_flow.paper.snapshot.supplement import SnapshotSupplementOptions, supplement_snapshot
+
+        if not in_place and not output_db:
+            raise click.ClickException("Must specify either --in-place or --output-db")
 
         opts = SnapshotSupplementOptions(
-            existing_snapshot_db=Path(existing_snapshot_db),
+            snapshot_db=Path(snapshot_db),
             static_export_dir=Path(static_export_dir),
-            supplement_json=Path(supplement_json),
-            output_db=Path(output_db),
+            input_paths=[Path(p) for p in input_paths],
+            bibtex_path=Path(bibtex_path) if bibtex_path else None,
+            md_roots=[Path(r) for r in md_roots] if md_roots else None,
+            md_translated_roots=[Path(r) for r in md_translated_roots] if md_translated_roots else None,
+            pdf_roots=[Path(r) for r in pdf_roots] if pdf_roots else None,
+            in_place=in_place,
+            output_db=Path(output_db) if output_db else None,
             output_static_dir=Path(output_static_dir) if output_static_dir else None,
         )
         supplement_snapshot(opts)

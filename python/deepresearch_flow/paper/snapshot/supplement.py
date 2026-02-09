@@ -1,4 +1,4 @@
-"""Supplement snapshot with additional papers or templates (incremental update)."""
+"""Supplement snapshot with missing templates or translations for existing papers."""
 
 from __future__ import annotations
 
@@ -13,97 +13,82 @@ from typing import Any
 from rich.console import Console
 from rich.table import Table
 
-from deepresearch_flow.paper.snapshot.builder import (
-    SnapshotBuildOptions,
-    build_snapshot,
-    load_and_merge_papers,
-)
+from deepresearch_flow.paper.db_ops import load_and_merge_papers, build_index
 
 
 @dataclass(frozen=True)
 class SnapshotSupplementOptions:
     """Options for supplementing an existing snapshot."""
-    existing_snapshot_db: Path
+    snapshot_db: Path
     static_export_dir: Path
-    supplement_json: Path  # JSON file with papers to add/update
-    output_db: Path
-    output_static_dir: Path | None = None  # If None, update in-place
+    input_paths: list[Path]
+    bibtex_path: Path | None = None
+    md_roots: list[Path] | None = None
+    md_translated_roots: list[Path] | None = None
+    pdf_roots: list[Path] | None = None
+    in_place: bool = False
+    output_db: Path | None = None
+    output_static_dir: Path | None = None
+
+
+@dataclass
+class SupplementStats:
+    """Statistics for supplement operation."""
+    papers_checked: int = 0
+    templates_added: int = 0
+    translations_added: int = 0
+    files_copied: int = 0
 
 
 def supplement_snapshot(opts: SnapshotSupplementOptions) -> None:
-    """
-    Supplement an existing snapshot with additional papers or templates.
-    
-    This performs an incremental update:
-    1. Copy existing snapshot DB
-    2. Load existing static files
-    3. Add/update papers from supplement JSON
-    4. Write updated snapshot
-    """
+    """Supplement existing snapshot with missing templates/translations."""
     console = Console()
+    stats = SupplementStats()
     
-    # Check existing snapshot
-    if not opts.existing_snapshot_db.exists():
-        raise FileNotFoundError(f"Existing snapshot not found: {opts.existing_snapshot_db}")
+    # Validate inputs
+    if not opts.snapshot_db.exists():
+        raise FileNotFoundError(f"Snapshot DB not found: {opts.snapshot_db}")
+    if not opts.static_export_dir.exists():
+        raise FileNotFoundError(f"Static export dir not found: {opts.static_export_dir}")
     
-    # Load supplement papers
-    supplement_papers = _load_supplement_papers(opts.supplement_json)
-    if not supplement_papers:
-        console.print("[yellow]No papers to supplement[/yellow]")
+    # Determine output paths
+    if opts.in_place:
+        output_db = opts.snapshot_db
+        output_static = opts.static_export_dir
+        # Backup original
+        backup_db = opts.snapshot_db.with_suffix('.db.backup')
+        shutil.copy2(opts.snapshot_db, backup_db)
+        console.print(f"[yellow]Backup created: {backup_db}[/yellow]")
+    elif opts.output_db:
+        output_db = opts.output_db
+        output_static = opts.output_static_dir or opts.static_export_dir
+        # Copy to new location
+        _copy_snapshot(opts.snapshot_db, opts.static_export_dir, output_db, output_static)
+    else:
+        raise ValueError("Must specify either --in-place or --output-db")
+    
+    # Load and merge input papers
+    if not opts.input_paths:
+        console.print("[yellow]No inputs provided, nothing to supplement[/yellow]")
         return
     
-    console.print(f"[cyan]Supplementing with {len(supplement_papers)} papers...[/cyan]")
+    console.print("[cyan]Loading input papers...[/cyan]")
+    papers = load_and_merge_papers(
+        opts.input_paths,
+        opts.bibtex_path,
+        cache_dir=None,
+        use_cache=False,
+        pdf_roots=opts.pdf_roots or [],
+    )
     
-    # Setup output paths
-    output_db = opts.output_db
-    output_static = opts.output_static_dir or opts.static_export_dir
+    if not papers:
+        console.print("[yellow]No papers found in inputs[/yellow]")
+        return
     
-    # Copy existing snapshot
-    _copy_existing_snapshot(opts.existing_snapshot_db, opts.static_export_dir, 
-                           output_db, output_static)
+    console.print(f"[cyan]Checking {len(papers)} papers for missing content...[/cyan]")
     
-    # Update database with supplement papers
-    stats = _update_snapshot_db(output_db, output_static, supplement_papers)
-    
-    # Print summary
-    _print_supplement_summary(stats, output_db, output_static)
-
-
-def _load_supplement_papers(json_path: Path) -> list[dict[str, Any]]:
-    """Load papers from supplement JSON file."""
-    data = json.loads(json_path.read_text(encoding="utf-8"))
-    if isinstance(data, list):
-        return data
-    elif isinstance(data, dict) and "papers" in data:
-        return data["papers"]
-    return [data] if data else []
-
-
-def _copy_existing_snapshot(existing_db: Path, existing_static: Path,
-                           output_db: Path, output_static: Path) -> None:
-    """Copy existing snapshot DB and static files to output location."""
-    # Copy database
-    output_db.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(existing_db, output_db)
-    
-    # Copy static files if output is different from existing
-    if output_static != existing_static:
-        output_static.mkdir(parents=True, exist_ok=True)
-        for subdir in ["pdf", "md", "md_translate", "images", "summary", "manifest"]:
-            src = existing_static / subdir
-            dst = output_static / subdir
-            if src.exists():
-                if dst.exists():
-                    shutil.rmtree(dst)
-                shutil.copytree(src, dst)
-
-
-def _update_snapshot_db(db_path: Path, static_dir: Path, 
-                       papers: list[dict[str, Any]]) -> dict[str, int]:
-    """Update snapshot database with supplement papers."""
-    stats = {"added": 0, "updated": 0, "summaries_added": 0}
-    
-    conn = sqlite3.connect(str(db_path))
+    # Process each paper
+    conn = sqlite3.connect(str(output_db))
     conn.row_factory = sqlite3.Row
     
     try:
@@ -112,87 +97,171 @@ def _update_snapshot_db(db_path: Path, static_dir: Path,
             if not paper_id:
                 continue
             
-            # Check if paper exists
+            stats.papers_checked += 1
+            
+            # Check if paper exists in DB
             existing = conn.execute(
                 "SELECT 1 FROM paper WHERE paper_id = ?", (paper_id,)
             ).fetchone()
             
-            if existing:
-                # Update existing paper - mainly add new templates
-                stats["updated"] += 1
-            else:
-                # Insert new paper
-                _insert_paper(conn, paper)
-                stats["added"] += 1
+            if not existing:
+                # Skip non-existing papers
+                continue
             
-            # Add/update summaries
-            template_count = _update_summaries(conn, static_dir, paper_id, paper)
-            stats["summaries_added"] += template_count
+            # Supplement missing templates
+            template_count = _supplement_templates(conn, output_static, paper_id, paper)
+            stats.templates_added += template_count
             
+            # Supplement missing translations
+            translation_count = _supplement_translations(
+                conn, output_static, paper_id, paper,
+                opts.md_translated_roots or []
+            )
+            stats.templates_added += translation_count
+        
         conn.commit()
+        _print_supplement_summary(stats, output_db, output_static, opts.in_place)
+        
     finally:
         conn.close()
+
+
+def _copy_snapshot(src_db: Path, src_static: Path, dst_db: Path, dst_static: Path) -> None:
+    """Copy snapshot DB and static files to new location."""
+    # Copy DB
+    dst_db.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src_db, dst_db)
     
-    return stats
+    # Copy static if different
+    if dst_static != src_static:
+        dst_static.mkdir(parents=True, exist_ok=True)
+        for subdir in ["pdf", "md", "md_translate", "images", "summary", "manifest"]:
+            src = src_static / subdir
+            dst = dst_static / subdir
+            if src.exists():
+                if dst.exists():
+                    shutil.rmtree(dst)
+                shutil.copytree(src, dst)
 
 
-def _insert_paper(conn: sqlite3.Connection, paper: dict[str, Any]) -> None:
-    """Insert a new paper into the database."""
-    # This is a simplified version - full implementation would need all fields
-    conn.execute(
-        """
-        INSERT OR IGNORE INTO paper (
-            paper_id, paper_key, title, year, venue, 
-            source_hash, pdf_content_hash, source_md_content_hash
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            paper.get("paper_id") or paper.get("id"),
-            paper.get("paper_key", ""),
-            paper.get("title", ""),
-            paper.get("year", ""),
-            paper.get("venue", ""),
-            paper.get("source_hash", ""),
-            paper.get("pdf_content_hash", ""),
-            paper.get("source_md_content_hash", ""),
-        ),
-    )
-
-
-def _update_summaries(conn: sqlite3.Connection, static_dir: Path,
-                     paper_id: str, paper: dict[str, Any]) -> int:
-    """Update summaries for a paper. Returns number of summaries added."""
+def _supplement_templates(
+    conn: sqlite3.Connection,
+    static_dir: Path,
+    paper_id: str,
+    paper: dict[str, Any]
+) -> int:
+    """Add missing templates for a paper. Returns count added."""
     count = 0
     
-    # Get template from paper
-    template = paper.get("prompt_template") or paper.get("template_tag") or "default"
+    # Get template tag from paper
+    template_tag = paper.get("prompt_template") or paper.get("template_tag") or "default"
     
-    # Check if this template already exists
+    # Check if template already exists
     existing = conn.execute(
         "SELECT 1 FROM paper_summary WHERE paper_id = ? AND template_tag = ?",
-        (paper_id, template),
+        (paper_id, template_tag),
     ).fetchone()
     
     if not existing:
-        # Add summary reference
+        # Add template reference
         conn.execute(
             "INSERT INTO paper_summary (paper_id, template_tag) VALUES (?, ?)",
-            (paper_id, template),
+            (paper_id, template_tag),
         )
-        count += 1
         
-        # Write summary JSON to static dir
+        # Write summary JSON
         summary_dir = static_dir / "summary" / paper_id
         summary_dir.mkdir(parents=True, exist_ok=True)
-        summary_file = summary_dir / f"{template}.json"
+        summary_file = summary_dir / f"{template_tag}.json"
         summary_file.write_text(json.dumps(paper, ensure_ascii=False, indent=2))
+        
+        count += 1
     
     return count
 
 
-def _print_supplement_summary(stats: dict[str, int], output_db: Path, 
-                             output_static: Path) -> None:
+def _supplement_translations(
+    conn: sqlite3.Connection,
+    static_dir: Path,
+    paper_id: str,
+    paper: dict[str, Any],
+    md_translated_roots: list[Path]
+) -> int:
+    """Add missing translations for a paper. Returns count added."""
+    count = 0
+    
+    # Get source hash to find translation files
+    source_hash = paper.get("source_hash") or paper.get("source_md_content_hash")
+    if not source_hash:
+        return 0
+    
+    # Scan translated directories for this paper
+    for root in md_translated_roots:
+        if not root.exists():
+            continue
+        
+        for lang_dir in root.iterdir():
+            if not lang_dir.is_dir():
+                continue
+            
+            lang = lang_dir.name
+            
+            # Check if translation already exists in DB
+            existing = conn.execute(
+                "SELECT 1 FROM paper_translation WHERE paper_id = ? AND lang = ?",
+                (paper_id, lang),
+            ).fetchone()
+            
+            if existing:
+                continue
+            
+            # Look for translation file
+            # Try different naming patterns
+            possible_names = [
+                f"{source_hash}.{lang}.md",
+                f"{source_hash}.md",
+                f"{paper_id}.{lang}.md",
+            ]
+            
+            for trans_file in lang_dir.iterdir():
+                if trans_file.suffix != ".md":
+                    continue
+                
+                # Check if this file belongs to our paper
+                if any(name in trans_file.name for name in possible_names):
+                    # Compute hash
+                    content = trans_file.read_bytes()
+                    md_hash = hashlib.sha256(content).hexdigest()
+                    
+                    # Add translation reference
+                    conn.execute(
+                        "INSERT INTO paper_translation (paper_id, lang, md_content_hash) VALUES (?, ?, ?)",
+                        (paper_id, lang, md_hash),
+                    )
+                    
+                    # Copy to static dir
+                    dst_dir = static_dir / "md_translate" / lang
+                    dst_dir.mkdir(parents=True, exist_ok=True)
+                    dst_file = dst_dir / f"{md_hash}.md"
+                    
+                    if not dst_file.exists():
+                        shutil.copy2(trans_file, dst_file)
+                    
+                    count += 1
+                    break
+    
+    return count
+
+
+def _print_supplement_summary(
+    stats: SupplementStats,
+    output_db: Path,
+    output_static: Path,
+    in_place: bool
+) -> None:
     """Print supplement operation summary."""
+    action = "Updated" if in_place else "Created"
+    
     table = Table(
         title="Snapshot Supplement Summary",
         header_style="bold cyan",
@@ -201,10 +270,11 @@ def _print_supplement_summary(stats: dict[str, int], output_db: Path,
     table.add_column("Metric", style="cyan")
     table.add_column("Count", style="green", justify="right")
     
-    table.add_row("Papers Added", str(stats["added"]))
-    table.add_row("Papers Updated", str(stats["updated"]))
-    table.add_row("Summaries Added", str(stats["summaries_added"]))
+    table.add_row("Papers checked", str(stats.papers_checked))
+    table.add_row("Templates added", str(stats.templates_added))
+    table.add_row("Translations added", str(stats.translations_added))
+    table.add_row("Files copied", str(stats.files_copied))
     
     Console().print(table)
-    Console().print(f"[green]Updated snapshot DB: {output_db}[/green]")
-    Console().print(f"[green]Updated static dir: {output_static}[/green]")
+    Console().print(f"[green]{action} snapshot DB: {output_db}[/green]")
+    Console().print(f"[green]{action} static dir: {output_static}[/green]")

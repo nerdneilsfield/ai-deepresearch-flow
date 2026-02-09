@@ -1,265 +1,366 @@
-"""Update existing snapshot incrementally without rebuilding."""
+"""Update snapshot by adding new papers incrementally."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import json
 from pathlib import Path
+import shutil
 import sqlite3
 from typing import Any
 
 from rich.console import Console
 from rich.table import Table
 
+from deepresearch_flow.paper.db_ops import load_and_merge_papers
+
 
 @dataclass(frozen=True)
 class SnapshotUpdateOptions:
-    """Options for updating an existing snapshot."""
+    """Options for updating a snapshot with new papers."""
     snapshot_db: Path
     static_export_dir: Path
-    mode: str = "all"  # "all", "translations", "summaries", "metadata"
-    dry_run: bool = False
+    input_paths: list[Path]
+    bibtex_path: Path | None = None
+    md_roots: list[Path] | None = None
+    md_translated_roots: list[Path] | None = None
+    pdf_roots: list[Path] | None = None
+    in_place: bool = False
+    output_db: Path | None = None
+    output_static_dir: Path | None = None
 
 
 @dataclass
 class UpdateStats:
     """Statistics for update operation."""
+    papers_checked: int = 0
+    papers_added: int = 0
+    templates_added: int = 0
     translations_added: int = 0
-    translations_updated: int = 0
-    summaries_added: int = 0
-    summaries_updated: int = 0
-    papers_updated: int = 0
-    files_processed: int = 0
+    files_copied: int = 0
 
 
 def update_snapshot(opts: SnapshotUpdateOptions) -> None:
-    """
-    Update existing snapshot incrementally.
-    
-    Scans the static export directory for changes and updates the database:
-    - New translations in md_translate/
-    - New summaries in summary/
-    - Updated metadata from JSON files
-    """
+    """Add new papers to existing snapshot."""
     console = Console()
     stats = UpdateStats()
     
+    # Validate inputs
     if not opts.snapshot_db.exists():
         raise FileNotFoundError(f"Snapshot DB not found: {opts.snapshot_db}")
     if not opts.static_export_dir.exists():
         raise FileNotFoundError(f"Static export dir not found: {opts.static_export_dir}")
     
-    conn = sqlite3.connect(str(opts.snapshot_db))
+    # Determine output paths
+    if opts.in_place:
+        output_db = opts.snapshot_db
+        output_static = opts.static_export_dir
+        # Backup original
+        backup_db = opts.snapshot_db.with_suffix('.db.backup')
+        shutil.copy2(opts.snapshot_db, backup_db)
+        console.print(f"[yellow]Backup created: {backup_db}[/yellow]")
+    elif opts.output_db:
+        output_db = opts.output_db
+        output_static = opts.output_static_dir or opts.static_export_dir
+        # Copy to new location
+        _copy_snapshot(opts.snapshot_db, opts.static_export_dir, output_db, output_static)
+    else:
+        raise ValueError("Must specify either --in-place or --output-db")
+    
+    # Load and merge input papers
+    if not opts.input_paths:
+        console.print("[yellow]No inputs provided, nothing to update[/yellow]")
+        return
+    
+    console.print("[cyan]Loading input papers...[/cyan]")
+    papers = load_and_merge_papers(
+        opts.input_paths,
+        opts.bibtex_path,
+        cache_dir=None,
+        use_cache=False,
+        pdf_roots=opts.pdf_roots or [],
+    )
+    
+    if not papers:
+        console.print("[yellow]No papers found in inputs[/yellow]")
+        return
+    
+    console.print(f"[cyan]Processing {len(papers)} papers...[/cyan]")
+    
+    # Process each paper
+    conn = sqlite3.connect(str(output_db))
     conn.row_factory = sqlite3.Row
     
     try:
-        if opts.mode in ("all", "translations"):
-            _update_translations(conn, opts.static_export_dir, stats, opts.dry_run, console)
+        for paper in papers:
+            paper_id = paper.get("paper_id") or paper.get("id")
+            if not paper_id:
+                continue
+            
+            stats.papers_checked += 1
+            
+            # Check if paper already exists
+            existing = conn.execute(
+                "SELECT 1 FROM paper WHERE paper_id = ?", (paper_id,)
+            ).fetchone()
+            
+            if existing:
+                # Skip existing papers
+                continue
+            
+            # Add new paper
+            _add_new_paper(conn, output_static, paper, opts, stats)
         
-        if opts.mode in ("all", "summaries"):
-            _update_summaries(conn, opts.static_export_dir, stats, opts.dry_run, console)
+        # Recompute facet counts and paper index
+        _recompute_metadata(conn)
         
-        if opts.mode in ("all", "metadata"):
-            _update_metadata(conn, opts.static_export_dir, stats, opts.dry_run, console)
-        
-        if not opts.dry_run:
-            conn.commit()
-            console.print("[green]Snapshot updated successfully![/green]")
-        else:
-            console.print("[yellow]Dry run completed. No changes made.[/yellow]")
-        
-        _print_update_summary(stats, opts.dry_run)
+        conn.commit()
+        _print_update_summary(stats, output_db, output_static, opts.in_place)
         
     finally:
         conn.close()
 
 
-def _update_translations(conn: sqlite3.Connection, static_dir: Path, 
-                        stats: UpdateStats, dry_run: bool, console: Console) -> None:
-    """Update translations from md_translate/ directory."""
-    md_translate_dir = static_dir / "md_translate"
-    if not md_translate_dir.exists():
-        return
+def _copy_snapshot(src_db: Path, src_static: Path, dst_db: Path, dst_static: Path) -> None:
+    """Copy snapshot DB and static files to new location."""
+    dst_db.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src_db, dst_db)
     
-    # Scan all language subdirectories
-    for lang_dir in md_translate_dir.iterdir():
-        if not lang_dir.is_dir():
-            continue
-        
-        lang = lang_dir.name
-        for md_file in lang_dir.glob("*.md"):
-            stats.files_processed += 1
-            
-            # Extract paper_id from filename (remove .md extension)
-            paper_id = md_file.stem
-            
-            # Compute hash of translation file
-            content = md_file.read_bytes()
-            md_hash = hashlib.sha256(content).hexdigest()
-            
-            # Check if translation already exists
-            existing = conn.execute(
-                """SELECT md_content_hash FROM paper_translation 
-                   WHERE paper_id = ? AND lang = ?""",
-                (paper_id, lang),
-            ).fetchone()
-            
-            if existing:
-                if existing["md_content_hash"] != md_hash:
-                    if not dry_run:
-                        conn.execute(
-                            """UPDATE paper_translation 
-                               SET md_content_hash = ? 
-                               WHERE paper_id = ? AND lang = ?""",
-                            (md_hash, paper_id, lang),
-                        )
-                    stats.translations_updated += 1
-            else:
-                if not dry_run:
-                    conn.execute(
-                        """INSERT INTO paper_translation (paper_id, lang, md_content_hash) 
-                           VALUES (?, ?, ?)""",
-                        (paper_id, lang, md_hash),
-                    )
-                stats.translations_added += 1
+    if dst_static != src_static:
+        dst_static.mkdir(parents=True, exist_ok=True)
+        for subdir in ["pdf", "md", "md_translate", "images", "summary", "manifest"]:
+            src = src_static / subdir
+            dst = dst_static / subdir
+            if src.exists():
+                if dst.exists():
+                    shutil.rmtree(dst)
+                shutil.copytree(src, dst)
 
 
-def _update_summaries(conn: sqlite3.Connection, static_dir: Path,
-                     stats: UpdateStats, dry_run: bool, console: Console) -> None:
-    """Update summaries from summary/ directory."""
-    summary_dir = static_dir / "summary"
-    if not summary_dir.exists():
-        return
+def _add_new_paper(
+    conn: sqlite3.Connection,
+    static_dir: Path,
+    paper: dict[str, Any],
+    opts: SnapshotUpdateOptions,
+    stats: UpdateStats
+) -> None:
+    """Add a completely new paper to the snapshot."""
+    paper_id = paper.get("paper_id") or paper.get("id")
     
-    # Scan paper subdirectories
-    for paper_dir in summary_dir.iterdir():
-        if not paper_dir.is_dir():
-            continue
-        
-        paper_id = paper_dir.name
-        
-        # Check all template JSON files
-        for json_file in paper_dir.glob("*.json"):
-            stats.files_processed += 1
-            
-            template_tag = json_file.stem
-            
-            # Check if summary already exists
-            existing = conn.execute(
-                "SELECT 1 FROM paper_summary WHERE paper_id = ? AND template_tag = ?",
-                (paper_id, template_tag),
-            ).fetchone()
-            
-            if existing:
-                stats.summaries_updated += 1
-            else:
-                if not dry_run:
-                    conn.execute(
-                        "INSERT INTO paper_summary (paper_id, template_tag) VALUES (?, ?)",
-                        (paper_id, template_tag),
-                    )
-                stats.summaries_added += 1
-        
-        # Also check for fallback summary (direct json file in summary/)
-        fallback_file = summary_dir / f"{paper_id}.json"
-        if fallback_file.exists():
-            # Use a default template tag for fallback
-            template_tag = "default"
-            
-            existing = conn.execute(
-                "SELECT 1 FROM paper_summary WHERE paper_id = ? AND template_tag = ?",
-                (paper_id, template_tag),
-            ).fetchone()
-            
-            if not existing:
-                if not dry_run:
-                    conn.execute(
-                        "INSERT INTO paper_summary (paper_id, template_tag) VALUES (?, ?)",
-                        (paper_id, template_tag),
-                    )
-                stats.summaries_added += 1
-
-
-def _update_metadata(conn: sqlite3.Connection, static_dir: Path,
-                    stats: UpdateStats, dry_run: bool, console: Console) -> None:
-    """Update paper metadata from summary JSON files."""
-    summary_dir = static_dir / "summary"
-    if not summary_dir.exists():
-        return
+    # Insert paper record
+    conn.execute(
+        """
+        INSERT INTO paper (
+            paper_id, paper_key, paper_key_type, title, year, month,
+            publication_date, venue, preferred_summary_template, summary_preview,
+            source_hash, output_language, provider, model, prompt_template,
+            extracted_at, pdf_content_hash, source_md_content_hash
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            paper_id,
+            paper.get("paper_key", ""),
+            paper.get("paper_key_type", ""),
+            paper.get("title", ""),
+            paper.get("year", ""),
+            paper.get("month", ""),
+            paper.get("publication_date", ""),
+            paper.get("venue", ""),
+            paper.get("preferred_summary_template", ""),
+            paper.get("summary_preview", ""),
+            paper.get("source_hash", ""),
+            paper.get("output_language", "en"),
+            paper.get("provider", ""),
+            paper.get("model", ""),
+            paper.get("prompt_template", ""),
+            paper.get("extracted_at", ""),
+            paper.get("pdf_content_hash", ""),
+            paper.get("source_md_content_hash", ""),
+        ),
+    )
     
-    for paper_dir in summary_dir.iterdir():
-        if not paper_dir.is_dir():
-            # Check for fallback file
-            if paper_dir.suffix == ".json":
-                json_file = paper_dir
-                paper_id = paper_dir.stem
-            else:
+    stats.papers_added += 1
+    
+    # Add authors
+    authors = paper.get("authors", [])
+    if isinstance(authors, list):
+        for author in authors:
+            name = author.get("name") if isinstance(author, dict) else str(author)
+            if name:
+                conn.execute("INSERT OR IGNORE INTO author (name) VALUES (?)", (name,))
+                conn.execute(
+                    "INSERT INTO paper_author (paper_id, author_name) VALUES (?, ?)",
+                    (paper_id, name),
+                )
+    
+    # Add keywords
+    keywords = paper.get("keywords", [])
+    if isinstance(keywords, list):
+        for keyword in keywords:
+            if isinstance(keyword, str) and keyword:
+                conn.execute("INSERT OR IGNORE INTO keyword (value) VALUES (?)", (keyword,))
+                conn.execute(
+                    "INSERT INTO paper_keyword (paper_id, keyword_value) VALUES (?, ?)",
+                    (paper_id, keyword),
+                )
+    
+    # Add institutions
+    institutions = paper.get("institutions", [])
+    if isinstance(institutions, list):
+        for inst in institutions:
+            if isinstance(inst, str) and inst:
+                conn.execute("INSERT OR IGNORE INTO institution (name) VALUES (?)", (inst,))
+                conn.execute(
+                    "INSERT INTO paper_institution (paper_id, institution_name) VALUES (?, ?)",
+                    (paper_id, inst),
+                )
+    
+    # Add tags
+    tags = paper.get("tags", [])
+    if isinstance(tags, list):
+        for tag in tags:
+            if isinstance(tag, str) and tag:
+                conn.execute("INSERT OR IGNORE INTO tag (value) VALUES (?)", (tag,))
+                conn.execute(
+                    "INSERT INTO paper_tag (paper_id, tag_value) VALUES (?, ?)",
+                    (paper_id, tag),
+                )
+    
+    # Add templates (summaries)
+    template_tag = paper.get("prompt_template") or paper.get("template_tag") or "default"
+    conn.execute(
+        "INSERT INTO paper_summary (paper_id, template_tag) VALUES (?, ?)",
+        (paper_id, template_tag),
+    )
+    stats.templates_added += 1
+    
+    # Write summary JSON
+    summary_dir = static_dir / "summary" / paper_id
+    summary_dir.mkdir(parents=True, exist_ok=True)
+    summary_file = summary_dir / f"{template_tag}.json"
+    summary_file.write_text(json.dumps(paper, ensure_ascii=False, indent=2))
+    
+    # Copy source markdown if available
+    md_hash = paper.get("source_md_content_hash")
+    if md_hash and opts.md_roots:
+        for md_root in opts.md_roots:
+            src_md = md_root / f"{md_hash}.md"
+            if src_md.exists():
+                dst_md = static_dir / "md" / f"{md_hash}.md"
+                dst_md.parent.mkdir(parents=True, exist_ok=True)
+                if not dst_md.exists():
+                    shutil.copy2(src_md, dst_md)
+                    stats.files_copied += 1
+                break
+    
+    # Copy PDF if available
+    pdf_hash = paper.get("pdf_content_hash")
+    if pdf_hash and opts.pdf_roots:
+        for pdf_root in opts.pdf_roots:
+            # Try to find PDF with matching hash
+            for pdf_file in pdf_root.rglob("*.pdf"):
+                if pdf_file.is_file():
+                    content = pdf_file.read_bytes()
+                    file_hash = hashlib.sha256(content).hexdigest()
+                    if file_hash == pdf_hash:
+                        dst_pdf = static_dir / "pdf" / f"{pdf_hash}.pdf"
+                        dst_pdf.parent.mkdir(parents=True, exist_ok=True)
+                        if not dst_pdf.exists():
+                            shutil.copy2(pdf_file, dst_pdf)
+                            stats.files_copied += 1
+                        break
+    
+    # Add translations
+    if opts.md_translated_roots:
+        for root in opts.md_translated_roots:
+            if not root.exists():
                 continue
-        else:
-            # Use preferred template or first available
-            paper_id = paper_dir.name
-            json_files = list(paper_dir.glob("*.json"))
-            if not json_files:
-                continue
-            json_file = json_files[0]  # Use first template
-        
-        try:
-            data = json.loads(json_file.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, IOError):
-            continue
-        
-        if not isinstance(data, dict):
-            continue
-        
-        # Update paper metadata
-        title = data.get("title") or data.get("paper_title")
-        year = data.get("year")
-        venue = data.get("venue")
-        
-        if title or year or venue:
-            if not dry_run:
-                # Build update query dynamically
-                updates = []
-                params = []
-                if title:
-                    updates.append("title = ?")
-                    params.append(title)
-                if year:
-                    updates.append("year = ?")
-                    params.append(year)
-                if venue:
-                    updates.append("venue = ?")
-                    params.append(venue)
+            for lang_dir in root.iterdir():
+                if not lang_dir.is_dir():
+                    continue
+                lang = lang_dir.name
                 
-                if updates:
-                    params.append(paper_id)
-                    conn.execute(
-                        f"UPDATE paper SET {', '.join(updates)} WHERE paper_id = ?",
-                        params,
-                    )
-            stats.papers_updated += 1
+                # Look for translation files for this paper
+                if md_hash:
+                    possible_files = [
+                        lang_dir / f"{md_hash}.{lang}.md",
+                        lang_dir / f"{md_hash}.md",
+                        lang_dir / f"{paper_id}.{lang}.md",
+                    ]
+                    
+                    for trans_file in possible_files:
+                        if trans_file.exists():
+                            content = trans_file.read_bytes()
+                            trans_hash = hashlib.sha256(content).hexdigest()
+                            
+                            conn.execute(
+                                "INSERT INTO paper_translation (paper_id, lang, md_content_hash) VALUES (?, ?, ?)",
+                                (paper_id, lang, trans_hash),
+                            )
+                            
+                            dst_trans = static_dir / "md_translate" / lang / f"{trans_hash}.md"
+                            dst_trans.parent.mkdir(parents=True, exist_ok=True)
+                            if not dst_trans.exists():
+                                shutil.copy2(trans_file, dst_trans)
+                                stats.files_copied += 1
+                            
+                            stats.translations_added += 1
+                            break
 
 
-def _print_update_summary(stats: UpdateStats, dry_run: bool) -> None:
-    """Print update summary table."""
-    action = "Would update" if dry_run else "Updated"
+def _recompute_metadata(conn: sqlite3.Connection) -> None:
+    """Recompute facet counts and paper index after adding papers."""
+    # Update paper_index
+    conn.execute("""
+        UPDATE paper SET paper_index = (
+            SELECT ROW_NUMBER() OVER (ORDER BY paper_id) - 1
+            FROM (SELECT paper_id FROM paper) AS sub
+            WHERE sub.paper_id = paper.paper_id
+        )
+    """)
+    
+    # Recompute year counts
+    conn.execute("DELETE FROM year_count")
+    conn.execute("""
+        INSERT INTO year_count (year, paper_count)
+        SELECT year, COUNT(*) FROM paper WHERE year IS NOT NULL AND year != ''
+        GROUP BY year
+    """)
+    
+    # Recompute month counts
+    conn.execute("DELETE FROM month_count")
+    conn.execute("""
+        INSERT INTO month_count (year_month, paper_count)
+        SELECT year || '-' || month, COUNT(*) FROM paper
+        WHERE year IS NOT NULL AND year != '' AND month IS NOT NULL AND month != ''
+        GROUP BY year, month
+    """)
+
+
+def _print_update_summary(
+    stats: UpdateStats,
+    output_db: Path,
+    output_static: Path,
+    in_place: bool
+) -> None:
+    """Print update operation summary."""
+    action = "Updated" if in_place else "Created"
     
     table = Table(
-        title=f"Snapshot Update Summary {'(Dry Run)' if dry_run else ''}",
+        title="Snapshot Update Summary",
         header_style="bold cyan",
         title_style="bold magenta"
     )
     table.add_column("Metric", style="cyan")
     table.add_column("Count", style="green", justify="right")
     
-    table.add_row(f"{action} translations (added)", str(stats.translations_added))
-    table.add_row(f"{action} translations (updated)", str(stats.translations_updated))
-    table.add_row(f"{action} summaries (added)", str(stats.summaries_added))
-    table.add_row(f"{action} summaries (updated)", str(stats.summaries_updated))
-    table.add_row(f"{action} paper metadata", str(stats.papers_updated))
-    table.add_row("Files processed", str(stats.files_processed))
+    table.add_row("Papers checked", str(stats.papers_checked))
+    table.add_row("Papers added", str(stats.papers_added))
+    table.add_row("Templates added", str(stats.templates_added))
+    table.add_row("Translations added", str(stats.translations_added))
+    table.add_row("Files copied", str(stats.files_copied))
     
     Console().print(table)
-
-
-import hashlib  # Import added at top
+    Console().print(f"[green]{action} snapshot DB: {output_db}[/green]")
+    Console().print(f"[green]{action} static dir: {output_static}[/green]")
