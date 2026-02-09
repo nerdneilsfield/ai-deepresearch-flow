@@ -214,6 +214,30 @@ def translate(
 ) -> None:
     """Translate OCR markdown while preserving structure."""
     configure_logging(verbose)
+    all_inputs = list(inputs)
+    if input_list:
+        list_path = Path(input_list)
+        if not list_path.exists():
+            raise click.ClickException(f"Input list file not found: {input_list}")
+        list_content = list_path.read_text(encoding="utf-8")
+        list_items = [line.strip() for line in list_content.splitlines() if line.strip()]
+
+        base_dir = None
+        for inp in inputs:
+            path = Path(inp)
+            if path.is_dir():
+                base_dir = path
+                break
+
+        for item in list_items:
+            item_path = Path(item)
+            if not item_path.is_absolute() and base_dir:
+                item_path = base_dir / item_path
+            all_inputs.append(str(item_path))
+
+    if not all_inputs:
+        raise click.ClickException("At least one --input or --input-list is required")
+
     config = load_config(config_path)
     provider, model_name = parse_model_ref(model_ref, config.providers)
     if provider.type in {
