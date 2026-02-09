@@ -21,7 +21,7 @@ from tqdm import tqdm
 
 
 # Image embedding helpers
-IMAGE_PATTERN = re.compile(r"!\[([^\]]*)\]\(([^)]+)")
+IMAGE_PATTERN = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 ALLOWED_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg"}
 
 
@@ -47,6 +47,20 @@ def _data_url_from_bytes(mime: str, data: bytes) -> str:
     return f"data:{mime};base64,{encoded}"
 
 
+def _split_link_target(raw_link: str) -> tuple[str, str, str, str]:
+    link = raw_link.strip()
+    if link.startswith("<"):
+        end = link.find(">")
+        if end != -1:
+            return link[1:end], link[end + 1 :], "<", ">"
+    parts = link.split(maxsplit=1)
+    if not parts:
+        return "", "", "", ""
+    target = parts[0]
+    suffix = link[len(target) :]
+    return target, suffix, "", ""
+
+
 def _embed_images_in_markdown(content: str, md_file_path: Path, images_root: Path) -> str:
     """Embed local images as base64 data URLs in markdown content.
     
@@ -63,19 +77,8 @@ def _embed_images_in_markdown(content: str, md_file_path: Path, images_root: Pat
         alt_text = match.group(1)
         raw_link = match.group(2)
         
-        # Parse link (handle possible title/suffix)
-        target = raw_link.strip()
-        suffix = ""
-        if target.startswith("<"):
-            end = target.find(">")
-            if end != -1:
-                target = target[1:end]
-                suffix = target[end + 1:]
-        else:
-            parts = target.split(maxsplit=1)
-            if len(parts) > 1:
-                target = parts[0]
-                suffix = " " + parts[1]
+        # Parse link (handle optional angle bracket and title suffix)
+        target, suffix, wrap_prefix, wrap_suffix = _split_link_target(raw_link)
         
         # Skip if already data URL or http URL
         if target.startswith("data:") or target.startswith("http://") or target.startswith("https://"):
@@ -106,7 +109,7 @@ def _embed_images_in_markdown(content: str, md_file_path: Path, images_root: Pat
         try:
             data = img_path.read_bytes()
             data_url = _data_url_from_bytes(mime, data)
-            new_link = f"{data_url}{suffix}"
+            new_link = f"{wrap_prefix}{data_url}{wrap_suffix}{suffix}"
             output.append(f"![{alt_text}]({new_link})")
         except Exception:
             output.append(match.group(0))

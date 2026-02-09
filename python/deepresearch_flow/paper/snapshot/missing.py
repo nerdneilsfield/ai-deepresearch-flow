@@ -8,6 +8,7 @@ from pathlib import Path
 import sqlite3
 from typing import Any
 
+import click
 from rich.console import Console
 from rich.table import Table
 
@@ -78,22 +79,14 @@ def _show_basic_missing(conn: sqlite3.Connection) -> None:
     table.add_column("Total Papers", style="white", justify="right")
     table.add_column("Percentage", style="yellow", justify="right")
     
-    total = row["total"]
-    no_source_md = row["no_source_md"]
-    no_pdf = row["no_pdf"]
+    total = int(row["total"] or 0)
+    no_source_md = int(row["no_source_md"] or 0)
+    no_pdf = int(row["no_pdf"] or 0)
     
-    table.add_row(
-        "Source Markdown",
-        str(no_source_md),
-        str(total),
-        f"{no_source_md/total*100:.1f}%"
-    )
-    table.add_row(
-        "PDF Content",
-        str(no_pdf),
-        str(total),
-        f"{no_pdf/total*100:.1f}%"
-    )
+    source_ratio = (no_source_md / total * 100) if total else 0.0
+    pdf_ratio = (no_pdf / total * 100) if total else 0.0
+    table.add_row("Source Markdown", str(no_source_md), str(total), f"{source_ratio:.1f}%")
+    table.add_row("PDF Content", str(no_pdf), str(total), f"{pdf_ratio:.1f}%")
     
     Console().print(table)
     Console().print()
@@ -131,7 +124,7 @@ def _show_template_coverage(conn: sqlite3.Connection) -> None:
         )
         has_count = cursor.fetchone()["cnt"]
         missing = total - has_count
-        coverage = has_count / total * 100
+        coverage = has_count / total * 100 if total else 0.0
         
         table.add_row(
             template,
@@ -175,7 +168,7 @@ def _show_translation_coverage(conn: sqlite3.Connection) -> None:
         )
         has_count = cursor.fetchone()["cnt"]
         missing = total - has_count
-        coverage = has_count / total * 100
+        coverage = has_count / total * 100 if total else 0.0
         
         table.add_row(
             lang,
@@ -236,16 +229,16 @@ def export_missing(opts: ExportMissingOptions) -> None:
             title = "PDF"
         elif opts.missing_type == "template":
             if not opts.template:
-                raise ValueError("--template is required when exporting missing templates")
+                raise click.ClickException("--template is required when exporting missing templates")
             missing_papers = _get_missing_template(conn, opts.template)
             title = f"Template '{opts.template}'"
         elif opts.missing_type == "translation":
             if not opts.lang:
-                raise ValueError("--lang is required when exporting missing translations")
+                raise click.ClickException("--lang is required when exporting missing translations")
             missing_papers = _get_missing_translation(conn, opts.lang)
             title = f"Translation '{opts.lang}'"
         else:
-            raise ValueError(f"Unknown missing_type: {opts.missing_type}")
+            raise click.ClickException(f"Unknown missing_type: {opts.missing_type}")
         
         # Print summary
         Console().print(f"[bold cyan]Exporting {len(missing_papers)} papers missing {title}[/bold cyan]")

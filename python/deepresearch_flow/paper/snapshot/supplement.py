@@ -113,11 +113,12 @@ def supplement_snapshot(opts: SnapshotSupplementOptions) -> None:
             stats.templates_added += template_count
             
             # Supplement missing translations
-            translation_count = _supplement_translations(
+            translation_count, copied_count = _supplement_translations(
                 conn, output_static, paper_id, paper,
                 opts.md_translated_roots or []
             )
-            stats.templates_added += translation_count
+            stats.translations_added += translation_count
+            stats.files_copied += copied_count
         
         conn.commit()
         _print_supplement_summary(stats, output_db, output_static, opts.in_place)
@@ -186,14 +187,15 @@ def _supplement_translations(
     paper_id: str,
     paper: dict[str, Any],
     md_translated_roots: list[Path]
-) -> int:
-    """Add missing translations for a paper. Returns count added."""
+) -> tuple[int, int]:
+    """Add missing translations for a paper. Returns (count_added, files_copied)."""
     count = 0
+    copied = 0
     
     # Get source hash to find translation files
     source_hash = paper.get("source_hash") or paper.get("source_md_content_hash")
     if not source_hash:
-        return 0
+        return 0, 0
     
     # Scan translated directories for this paper
     for root in md_translated_roots:
@@ -235,7 +237,7 @@ def _supplement_translations(
                     
                     # Add translation reference
                     conn.execute(
-                        "INSERT INTO paper_translation (paper_id, lang, md_content_hash) VALUES (?, ?, ?)",
+                        "INSERT OR REPLACE INTO paper_translation (paper_id, lang, md_content_hash) VALUES (?, ?, ?)",
                         (paper_id, lang, md_hash),
                     )
                     
@@ -246,11 +248,12 @@ def _supplement_translations(
                     
                     if not dst_file.exists():
                         shutil.copy2(trans_file, dst_file)
+                        copied += 1
                     
                     count += 1
                     break
     
-    return count
+    return count, copied
 
 
 def _print_supplement_summary(
