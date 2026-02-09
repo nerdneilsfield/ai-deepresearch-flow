@@ -709,6 +709,31 @@ uv run deepresearch-flow paper db snapshot supplement \
 
 当你只需要向现有 snapshot 添加少量论文或模板时，这种方式要快得多。
 
+#### 补充缺失的翻译
+
+如果某些论文缺少翻译（如 `zh`），可以导出并翻译它们：
+
+```bash
+# 1) 导出缺少中文翻译的论文（包含文件路径）
+uv run deepresearch-flow paper db snapshot export-missing \
+  --snapshot-db ./dist/paper_snapshot.db \
+  --type translation \
+  --lang zh \
+  --output-paths ./to_translate_paths.txt
+
+# 2) 翻译缺失的论文
+uv run deepresearch-flow translator translate \
+  --input ./docs \
+  --target-lang zh \
+  --model openai/gpt-4o-mini \
+  --input-list ./to_translate_paths.txt \
+  --output-dir ./docs_translated
+
+# 3) 用新的翻译重建或补充 snapshot
+uv run deepresearch-flow paper db snapshot build ...
+# 或者使用 snapshot supplement 仅添加翻译
+```
+
 其他有用的导出类型：
 - `--type source_md` - 没有源 Markdown 的论文
 - `--type pdf` - 没有 PDF 的论文

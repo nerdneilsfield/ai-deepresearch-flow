@@ -317,6 +317,31 @@ uv run deepresearch-flow paper db snapshot supplement \
 
 This is much faster when you only need to add a few papers or templates to an existing snapshot.
 
+#### Supplement Missing Translations
+
+If some papers are missing translations (e.g., `zh`), you can export and translate them:
+
+```bash
+# 1) Export papers missing Chinese translation (with file paths)
+uv run deepresearch-flow paper db snapshot export-missing \
+  --snapshot-db ./dist/paper_snapshot.db \
+  --type translation \
+  --lang zh \
+  --output-paths ./to_translate_paths.txt
+
+# 2) Translate missing papers
+uv run deepresearch-flow translator translate \
+  --input ./docs \
+  --target-lang zh \
+  --model openai/gpt-4o-mini \
+  --input-list ./to_translate_paths.txt \
+  --output-dir ./docs_translated
+
+# 3) Rebuild or supplement snapshot with new translations
+uv run deepresearch-flow paper db snapshot build ...
+# Or use snapshot supplement if only adding translations
+```
+
 Other useful export types:
 - `--type source_md` - Papers without source markdown
 - `--type pdf` - Papers without PDF
