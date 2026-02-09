@@ -13,8 +13,7 @@
   ],
   "properties": {
     "paper_title": {
-      "type": "string",
-      "minLength": 1
+      "type": "string"
     },
     "paper_authors": {
       "type": "array",
