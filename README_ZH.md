@@ -709,6 +709,30 @@ uv run deepresearch-flow paper db snapshot supplement \
 
 当你只需要向现有 snapshot 添加少量论文或模板时，这种方式要快得多。
 
+**更快：原地更新（无需复制）**
+
+如果你只是向 static 目录添加了翻译或摘要，想同步数据库而不复制文件：
+
+```bash
+# 通过扫描 static 目录更新数据库
+uv run deepresearch-flow paper db snapshot update \
+  --snapshot-db ./dist/paper_snapshot.db \
+  --static-export-dir ./dist/paper-static \
+  --mode all
+
+# 或仅更新翻译
+uv run deepresearch-flow paper db snapshot update \
+  --snapshot-db ./dist/paper_snapshot.db \
+  --static-export-dir ./dist/paper-static \
+  --mode translations
+
+# 预览更改而不修改
+uv run deepresearch-flow paper db snapshot update \
+  --snapshot-db ./dist/paper_snapshot.db \
+  --static-export-dir ./dist/paper-static \
+  --dry-run
+```
+
 #### 补充缺失的翻译
 
 如果某些论文缺少翻译（如 `zh`），可以导出并翻译它们：

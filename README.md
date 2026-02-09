@@ -317,6 +317,30 @@ uv run deepresearch-flow paper db snapshot supplement \
 
 This is much faster when you only need to add a few papers or templates to an existing snapshot.
 
+**Even Faster: In-place Update (No Copy)**
+
+If you only added/updated translations or summaries to the static directory and want to sync the database without copying files:
+
+```bash
+# Update database by scanning static directory
+uv run deepresearch-flow paper db snapshot update \
+  --snapshot-db ./dist/paper_snapshot.db \
+  --static-export-dir ./dist/paper-static \
+  --mode all
+
+# Or update only translations
+uv run deepresearch-flow paper db snapshot update \
+  --snapshot-db ./dist/paper_snapshot.db \
+  --static-export-dir ./dist/paper-static \
+  --mode translations
+
+# Preview changes without modifying
+uv run deepresearch-flow paper db snapshot update \
+  --snapshot-db ./dist/paper_snapshot.db \
+  --static-export-dir ./dist/paper-static \
+  --dry-run
+```
+
 #### Supplement Missing Translations
 
 If some papers are missing translations (e.g., `zh`), you can export and translate them:
