@@ -693,45 +693,60 @@ uv run deepresearch-flow paper db snapshot build \
   --static-export-dir ./dist/paper-static-complete
 ```
 
-**替代方案：增量更新（更快）**
+**替代方案 1：补充缺失内容（模板/翻译）**
 
-无需重建整个 snapshot，可以增量补充到现有 snapshot：
+如果现有论文缺少模板或翻译，无需重建即可补充：
 
 ```bash
-# 增量补充现有 snapshot
+# 为现有论文补充缺失的模板（原地修改）
 uv run deepresearch-flow paper db snapshot supplement \
-  --existing-db ./dist/paper_snapshot.db \
+  --snapshot-db ./dist/paper_snapshot.db \
   --static-export-dir ./dist/paper-static \
-  --supplement-json ./deep_read_supplement.json \
+  -i ./deep_read_supplement.json \
+  --md-root ./docs \
+  --md-translated-root ./docs_translated \
+  --in-place
+
+# 或输出到新位置
+uv run deepresearch-flow paper db snapshot supplement \
+  --snapshot-db ./dist/paper_snapshot.db \
+  --static-export-dir ./dist/paper-static \
+  -i ./deep_read_supplement.json \
+  --md-root ./docs \
   --output-db ./dist/paper_snapshot_supplemented.db \
   --output-static-dir ./dist/paper-static-supplemented
 ```
 
-当你只需要向现有 snapshot 添加少量论文或模板时，这种方式要快得多。
+**替代方案 2：添加新论文**
 
-**更快：原地更新（无需复制）**
-
-如果你只是向 static 目录添加了翻译或摘要，想同步数据库而不复制文件：
+如果有全新的论文要添加到 snapshot：
 
 ```bash
-# 通过扫描 static 目录更新数据库
+# 添加新论文到现有 snapshot（原地修改）
 uv run deepresearch-flow paper db snapshot update \
   --snapshot-db ./dist/paper_snapshot.db \
   --static-export-dir ./dist/paper-static \
-  --mode all
+  -i ./new_papers.json \
+  -b ./new_papers.bib \
+  --md-root ./docs \
+  --md-translated-root ./docs_translated \
+  --pdf-root ./pdfs \
+  --in-place
 
-# 或仅更新翻译
+# 或输出到新位置
 uv run deepresearch-flow paper db snapshot update \
   --snapshot-db ./dist/paper_snapshot.db \
   --static-export-dir ./dist/paper-static \
-  --mode translations
-
-# 预览更改而不修改
-uv run deepresearch-flow paper db snapshot update \
-  --snapshot-db ./dist/paper_snapshot.db \
-  --static-export-dir ./dist/paper-static \
-  --dry-run
+  -i ./new_papers.json \
+  -b ./new_papers.bib \
+  --md-root ./docs \
+  --output-db ./dist/paper_snapshot_updated.db \
+  --output-static-dir ./dist/paper-static-updated
 ```
+
+**区别：**
+- `supplement`：只为**已有**论文补充缺失的模板/翻译（跳过新论文）
+- `update`：只添加**全新**论文（跳过已有论文）
 
 #### 补充缺失的翻译
 

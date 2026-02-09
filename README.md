@@ -301,45 +301,60 @@ uv run deepresearch-flow paper db snapshot build \
   --static-export-dir ./dist/paper-static-complete
 ```
 
-**Alternative: Incremental Update (Faster)**
+**Alternative 1: Supplement Missing Content (Templates/Translations)**
 
-Instead of rebuilding the entire snapshot, you can incrementally supplement the existing snapshot:
+If existing papers are missing templates or translations, supplement them without rebuilding:
 
 ```bash
-# Supplement existing snapshot with additional papers
+# Supplement missing templates for existing papers (in-place)
 uv run deepresearch-flow paper db snapshot supplement \
-  --existing-db ./dist/paper_snapshot.db \
+  --snapshot-db ./dist/paper_snapshot.db \
   --static-export-dir ./dist/paper-static \
-  --supplement-json ./deep_read_supplement.json \
+  -i ./deep_read_supplement.json \
+  --md-root ./docs \
+  --md-translated-root ./docs_translated \
+  --in-place
+
+# Or output to new location
+uv run deepresearch-flow paper db snapshot supplement \
+  --snapshot-db ./dist/paper_snapshot.db \
+  --static-export-dir ./dist/paper-static \
+  -i ./deep_read_supplement.json \
+  --md-root ./docs \
   --output-db ./dist/paper_snapshot_supplemented.db \
   --output-static-dir ./dist/paper-static-supplemented
 ```
 
-This is much faster when you only need to add a few papers or templates to an existing snapshot.
+**Alternative 2: Add New Papers**
 
-**Even Faster: In-place Update (No Copy)**
-
-If you only added/updated translations or summaries to the static directory and want to sync the database without copying files:
+If you have completely new papers to add to the snapshot:
 
 ```bash
-# Update database by scanning static directory
+# Add new papers to existing snapshot (in-place)
 uv run deepresearch-flow paper db snapshot update \
   --snapshot-db ./dist/paper_snapshot.db \
   --static-export-dir ./dist/paper-static \
-  --mode all
+  -i ./new_papers.json \
+  -b ./new_papers.bib \
+  --md-root ./docs \
+  --md-translated-root ./docs_translated \
+  --pdf-root ./pdfs \
+  --in-place
 
-# Or update only translations
+# Or output to new location
 uv run deepresearch-flow paper db snapshot update \
   --snapshot-db ./dist/paper_snapshot.db \
   --static-export-dir ./dist/paper-static \
-  --mode translations
-
-# Preview changes without modifying
-uv run deepresearch-flow paper db snapshot update \
-  --snapshot-db ./dist/paper_snapshot.db \
-  --static-export-dir ./dist/paper-static \
-  --dry-run
+  -i ./new_papers.json \
+  -b ./new_papers.bib \
+  --md-root ./docs \
+  --output-db ./dist/paper_snapshot_updated.db \
+  --output-static-dir ./dist/paper-static-updated
 ```
+
+**Differences:**
+- `supplement`: Only adds missing templates/translations for **existing** papers (skips new papers)
+- `update`: Only adds **completely new** papers (skips existing papers)
 
 #### Supplement Missing Translations
 
