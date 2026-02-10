@@ -4,9 +4,9 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useSelectionStore } from '@/stores/selection'
 import { useUiStore } from '@/stores/ui'
-import { fetchJson, type SearchResponse } from '@/lib/api'
 import { lazySnippet } from '@/lib/lazy'
 import { useSearchData, useSearchState } from '@/composables/useSearch'
+import { useExpandableSummary } from '@/composables/useExpandableSummary'
 import { RecycleScroller } from 'vue-virtual-scroller'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -55,9 +55,7 @@ const loading = computed(() => searchQuery.isFetching.value)
 const error = computed(() => (searchQuery.error.value ? 'Failed to fetch results. Please retry.' : ''))
 
 const snippetRenderer = ref<(value: string) => string>((v) => v)
-const expanded = ref<Record<string, boolean>>({})
-const expandedMarkdown = ref<Record<string, string>>({})
-const expandedLoading = ref<Record<string, boolean>>({})
+const { expanded, expandedMarkdown, expandedLoading, toggleSummary } = useExpandableSummary()
 
 const facetLabel = computed(() => {
   const labels: Record<string, string> = {
@@ -87,26 +85,6 @@ const totalPages = computed(() => {
   return Math.max(1, Math.ceil(results.value.total / results.value.page_size))
 })
 
-async function toggleSummary(item: SearchResponse['items'][number]) {
-  const id = item.paper_id
-  if (expanded.value[id]) {
-    expanded.value = { ...expanded.value, [id]: false }
-    return
-  }
-
-  if (!expandedMarkdown.value[id] && item.summary_url) {
-    expandedLoading.value = { ...expandedLoading.value, [id]: true }
-    try {
-      const data = await fetchJson<{ summary?: string }>(item.summary_url)
-      expandedMarkdown.value = { ...expandedMarkdown.value, [id]: data.summary || '' }
-    } catch {
-      ui.pushToast('Failed to load summary', 'error')
-    } finally {
-      expandedLoading.value = { ...expandedLoading.value, [id]: false }
-    }
-  }
-  expanded.value = { ...expanded.value, [id]: true }
-}
 function forceSearch() {
   syncToRoute()
   searchQuery.refetch()
@@ -220,12 +198,12 @@ watch(facetQuery.error, (err) => {
             <SelectItem value="tags">{{ t('resources') }}</SelectItem>
             <SelectItem value="years">{{ t('years') }}</SelectItem>
             <SelectItem value="months">{{ t('months') }}</SelectItem>
-            <SelectItem value="summary_templates">Summary Templates</SelectItem>
-            <SelectItem value="output_languages">Output Languages</SelectItem>
-            <SelectItem value="providers">Providers</SelectItem>
-            <SelectItem value="models">Models</SelectItem>
-            <SelectItem value="prompt_templates">Prompt Templates</SelectItem>
-            <SelectItem value="translation_langs">Translation Languages</SelectItem>
+            <SelectItem value="summary_templates">{{ t('summaryTemplates') }}</SelectItem>
+            <SelectItem value="output_languages">{{ t('outputLanguages') }}</SelectItem>
+            <SelectItem value="providers">{{ t('providers') }}</SelectItem>
+            <SelectItem value="models">{{ t('models') }}</SelectItem>
+            <SelectItem value="prompt_templates">{{ t('promptTemplates') }}</SelectItem>
+            <SelectItem value="translation_langs">{{ t('translationLanguages') }}</SelectItem>
           </SelectContent>
         </Select>
           <Input
@@ -370,8 +348,8 @@ watch(facetQuery.error, (err) => {
           :expanded-markdown="expandedMarkdown[item.paper_id]"
           :expanded-loading="expandedLoading[item.paper_id]"
           :snippet-renderer="snippetRenderer"
-          :on-toggle-select="() => selection.toggle(item)"
-          :on-toggle-summary="() => toggleSummary(item)"
+          @toggle-select="selection.toggle(item)"
+          @toggle-summary="toggleSummary(item)"
         />
 
         <div class="flex items-center justify-between pt-2 text-sm text-ink-500">

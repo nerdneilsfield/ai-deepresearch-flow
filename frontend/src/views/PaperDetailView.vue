@@ -42,6 +42,7 @@ function navigateTo(id: string | null) {
 
 const summaryTemplate = ref('')
 const summaryMarkdown = ref('')
+const summaryLoading = ref(false)
 const summaryUrls = ref<Record<string, string>>({})
 const summaryAvailable = ref<string[]>([])
 const summaryMeta = ref<Record<string, any> | null>(null)
@@ -68,9 +69,9 @@ const panelBounds = useElementBounding(panelRef)
 const splitBounds = useElementBounding(splitRef)
 
 // Debounce layout triggers to prevent performance explosion during resize/scroll
-const windowHeightDebounced = refDebounced(windowHeight, 200)
-const panelTopDebounced = refDebounced(panelBounds.top, 200)
-const splitTopDebounced = refDebounced(splitBounds.top, 200)
+const windowHeightDebounced = refDebounced(windowHeight, 300)
+const panelTopDebounced = refDebounced(panelBounds.top, 300)
+const splitTopDebounced = refDebounced(splitBounds.top, 300)
 
 const imagesBaseUrl = computed(() => {
   const translatedUrl = detail.value?.translated_md_urls
@@ -153,10 +154,9 @@ const panelHeightStyle = computed(() => {
 })
 
 async function loadSummary(url: string) {
+  summaryLoading.value = true
   try {
-    const data = await fetchJson<any>(url)
-    summaryMarkdown.value = ''
-    summaryMeta.value = null
+    const data = await fetchJson(url) as Record<string, any>
     summaryMarkdown.value = data.summary || ''
     summaryMeta.value = {
       title: data.paper_title || data.title || '',
@@ -173,6 +173,8 @@ async function loadSummary(url: string) {
     }
   } catch (err) {
     ui.pushToast('Failed to load summary', 'error')
+  } finally {
+    summaryLoading.value = false
   }
 }
 
@@ -197,6 +199,16 @@ function toggleZenMode() {
 watch(summaryTemplate, async (value) => {
   if (value && summaryUrls.value?.[value]) {
     await loadSummary(summaryUrls.value[value])
+  }
+})
+
+// When switching to markdown mode, ensure contentTab points to a valid option
+watch(viewMode, (mode) => {
+  if (mode === 'markdown') {
+    const validValues = markdownOptions.value.map(o => o.value)
+    if (!validValues.includes(contentTab.value)) {
+      contentTab.value = validValues[0] || 'source'
+    }
   }
 })
 
@@ -344,10 +356,11 @@ watch([viewMode, leftView, rightView, summaryTemplate], () => {
                 </Button>
               </div>
             </template>
-            <span class="font-semibold text-ink-700">{{ t('view') }}</span>
+            <span class="font-semibold text-ink-700 dark:text-ink-300">{{ t('view') }}</span>
             <Button
               size="sm"
-              :variant="viewMode === 'summary' ? 'default' : 'outline'"
+              :variant="viewMode === 'summary' ? 'default' : 'ghost'"
+              :class="viewMode === 'summary' ? 'bg-ink-900 text-white hover:bg-ink-800' : 'text-ink-600 hover:text-ink-900 dark:text-ink-400 dark:hover:text-ink-100'"
               :aria-pressed="viewMode === 'summary'"
               @click="viewMode = 'summary'"
             >
@@ -355,7 +368,8 @@ watch([viewMode, leftView, rightView, summaryTemplate], () => {
             </Button>
             <Button
               size="sm"
-              :variant="viewMode === 'markdown' ? 'default' : 'outline'"
+              :variant="viewMode === 'markdown' ? 'default' : 'ghost'"
+              :class="viewMode === 'markdown' ? 'bg-ink-900 text-white hover:bg-ink-800' : 'text-ink-600 hover:text-ink-900 dark:text-ink-400 dark:hover:text-ink-100'"
               :aria-pressed="viewMode === 'markdown'"
               :disabled="!hasMarkdown"
               @click="viewMode = 'markdown'"
@@ -364,7 +378,8 @@ watch([viewMode, leftView, rightView, summaryTemplate], () => {
             </Button>
             <Button
               size="sm"
-              :variant="viewMode === 'pdf' ? 'default' : 'outline'"
+              :variant="viewMode === 'pdf' ? 'default' : 'ghost'"
+              :class="viewMode === 'pdf' ? 'bg-ink-900 text-white hover:bg-ink-800' : 'text-ink-600 hover:text-ink-900 dark:text-ink-400 dark:hover:text-ink-100'"
               :aria-pressed="viewMode === 'pdf'"
               :disabled="!hasPdf"
               @click="viewMode = 'pdf'"
@@ -374,7 +389,8 @@ watch([viewMode, leftView, rightView, summaryTemplate], () => {
             <Button
               v-if="isLarge"
               size="sm"
-              :variant="viewMode === 'split' ? 'default' : 'outline'"
+              :variant="viewMode === 'split' ? 'default' : 'ghost'"
+              :class="viewMode === 'split' ? 'bg-ink-900 text-white hover:bg-ink-800' : 'text-ink-600 hover:text-ink-900 dark:text-ink-400 dark:hover:text-ink-100'"
               :aria-pressed="viewMode === 'split'"
               :disabled="!hasMarkdown"
               @click="viewMode = 'split'"
@@ -382,8 +398,8 @@ watch([viewMode, leftView, rightView, summaryTemplate], () => {
               {{ t('split') }}
             </Button>
             <template v-if="viewMode === 'split' && isLarge">
-              <span class="mx-2 hidden h-4 w-px bg-ink-200 lg:inline-block"></span>
-              <span class="font-semibold text-ink-700">{{ t('split') }}</span>
+              <span class="mx-2 hidden h-4 w-px bg-ink-200 dark:bg-ink-700 lg:inline-block"></span>
+              <span class="font-semibold text-ink-700 dark:text-ink-300">{{ t('split') }}</span>
               <Button size="sm" variant="outline" @click="tightenLeft">Left -</Button>
               <Button size="sm" variant="outline" @click="swapSplit">Swap</Button>
               <Button size="sm" variant="outline" @click="widenLeft">Left +</Button>
@@ -400,8 +416,8 @@ watch([viewMode, leftView, rightView, summaryTemplate], () => {
               </div>
             </template>
             <template v-else>
-              <span class="mx-2 hidden h-4 w-px bg-ink-200 lg:inline-block"></span>
-              <span class="font-semibold text-ink-700">Width</span>
+              <span class="mx-2 hidden h-4 w-px bg-ink-200 dark:bg-ink-700 lg:inline-block"></span>
+              <span class="font-semibold text-ink-700 dark:text-ink-300">{{ t('width') }}</span>
               <div class="flex items-center gap-2">
                 <input
                   v-model.lazy.number="detailWidthPercent"
@@ -414,7 +430,12 @@ watch([viewMode, leftView, rightView, summaryTemplate], () => {
                 <span class="text-[11px] text-ink-500">{{ detailWidthPercent }}%</span>
               </div>
             </template>
-            <Button size="sm" :variant="isZenMode ? 'default' : 'outline'" @click="toggleZenMode">
+            <Button
+              size="sm"
+              :variant="isZenMode ? 'default' : 'outline'"
+              :class="isZenMode ? 'bg-ink-900 text-white hover:bg-ink-800' : ''"
+              @click="toggleZenMode"
+            >
               {{ isZenMode ? t('exitZenMode') : t('zenMode') }}
             </Button>
           </div>
@@ -430,24 +451,33 @@ watch([viewMode, leftView, rightView, summaryTemplate], () => {
                 <CardTitle class="text-sm">{{ t('summaryTemplate') }}</CardTitle>
               </CardHeader>
               <CardContent>
-                <SummaryPanel
-                  v-model="summaryTemplate"
-                  :summary-urls="summaryUrls"
-                  :summary-available="summaryAvailable"
-                  :summary-markdown="summaryMarkdown"
-                  :summary-meta="summaryMeta"
-                  :images-base-url="imagesBaseUrl"
-                />
-                <div class="mt-3 flex flex-wrap gap-2 text-xs">
-                  <Button
-                    v-if="summaryTemplate"
-                    size="sm"
-                    variant="outline"
-                    @click="goFacet('summary_templates', summaryTemplate)"
-                  >
-                    {{ t('viewTemplateStats') }}
-                  </Button>
+                <div v-if="summaryLoading" class="flex items-center gap-2 py-8 text-sm text-ink-500">
+                  <svg class="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  {{ t('loading') }}
                 </div>
+                <template v-else>
+                  <SummaryPanel
+                    v-model="summaryTemplate"
+                    :summary-urls="summaryUrls"
+                    :summary-available="summaryAvailable"
+                    :summary-markdown="summaryMarkdown"
+                    :summary-meta="summaryMeta"
+                    :images-base-url="imagesBaseUrl"
+                  />
+                  <div class="mt-3 flex flex-wrap gap-2 text-xs">
+                    <Button
+                      v-if="summaryTemplate"
+                      size="sm"
+                      variant="outline"
+                      @click="goFacet('summary_templates', summaryTemplate)"
+                    >
+                      {{ t('viewTemplateStats') }}
+                    </Button>
+                  </div>
+                </template>
               </CardContent>
             </Card>
           </div>
@@ -491,7 +521,7 @@ watch([viewMode, leftView, rightView, summaryTemplate], () => {
             <div class="grid flex-1 min-h-0 gap-4" :style="splitGridStyle">
               <Card class="flex h-full min-h-0 flex-col">
                 <CardHeader class="flex-row items-center justify-between">
-                  <CardTitle class="text-sm">Left</CardTitle>
+                  <CardTitle class="text-sm">{{ t('left') }}</CardTitle>
                   <Select v-model="leftView">
                     <SelectTrigger class="w-[200px]">
                       <SelectValue placeholder="Select view" />
@@ -510,19 +540,28 @@ watch([viewMode, leftView, rightView, summaryTemplate], () => {
                   ]"
                 >
                   <template v-if="leftView === 'summary'">
-                    <SummaryPanel
-                      v-model="summaryTemplate"
-                      :summary-urls="summaryUrls"
-                      :summary-available="summaryAvailable"
-                      :summary-markdown="summaryMarkdown"
-                      :summary-meta="summaryMeta"
-                      :images-base-url="imagesBaseUrl"
-                    />
-                    <div v-if="summaryTemplate" class="mt-2">
-                      <Button size="sm" variant="outline" @click="goFacet('summary_templates', summaryTemplate)" >
-                        {{ t('viewTemplateStats') }}
-                      </Button>
+                    <div v-if="summaryLoading" class="flex items-center gap-2 py-8 text-sm text-ink-500">
+                      <svg class="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
+                      {{ t('loading') }}
                     </div>
+                    <template v-else>
+                      <SummaryPanel
+                        v-model="summaryTemplate"
+                        :summary-urls="summaryUrls"
+                        :summary-available="summaryAvailable"
+                        :summary-markdown="summaryMarkdown"
+                        :summary-meta="summaryMeta"
+                        :images-base-url="imagesBaseUrl"
+                      />
+                      <div v-if="summaryTemplate" class="mt-2">
+                        <Button size="sm" variant="outline" @click="goFacet('summary_templates', summaryTemplate)" >
+                          {{ t('viewTemplateStats') }}
+                        </Button>
+                      </div>
+                    </template>
                   </template>
                   <PdfViewer v-else-if="leftView === 'pdf'" :url="detail.pdf_url" fit />
                   <MarkdownPanel
@@ -536,7 +575,7 @@ watch([viewMode, leftView, rightView, summaryTemplate], () => {
 
               <Card class="flex h-full min-h-0 flex-col">
                 <CardHeader class="flex-row items-center justify-between">
-                  <CardTitle class="text-sm">Right</CardTitle>
+                  <CardTitle class="text-sm">{{ t('right') }}</CardTitle>
                   <Select v-model="rightView">
                     <SelectTrigger class="w-[200px]">
                       <SelectValue placeholder="Select view" />
@@ -555,19 +594,28 @@ watch([viewMode, leftView, rightView, summaryTemplate], () => {
                   ]"
                 >
                   <template v-if="rightView === 'summary'">
-                    <SummaryPanel
-                      v-model="summaryTemplate"
-                      :summary-urls="summaryUrls"
-                      :summary-available="summaryAvailable"
-                      :summary-markdown="summaryMarkdown"
-                      :summary-meta="summaryMeta"
-                      :images-base-url="imagesBaseUrl"
-                    />
-                    <div v-if="summaryTemplate" class="mt-2">
-                      <Button size="sm" variant="outline" @click="goFacet('summary_templates', summaryTemplate)">
-                        {{ t('viewTemplateStats') }}
-                      </Button>
+                    <div v-if="summaryLoading" class="flex items-center gap-2 py-8 text-sm text-ink-500">
+                      <svg class="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
+                      {{ t('loading') }}
                     </div>
+                    <template v-else>
+                      <SummaryPanel
+                        v-model="summaryTemplate"
+                        :summary-urls="summaryUrls"
+                        :summary-available="summaryAvailable"
+                        :summary-markdown="summaryMarkdown"
+                        :summary-meta="summaryMeta"
+                        :images-base-url="imagesBaseUrl"
+                      />
+                      <div v-if="summaryTemplate" class="mt-2">
+                        <Button size="sm" variant="outline" @click="goFacet('summary_templates', summaryTemplate)">
+                          {{ t('viewTemplateStats') }}
+                        </Button>
+                      </div>
+                    </template>
                   </template>
                   <PdfViewer v-else-if="rightView === 'pdf'" :url="detail.pdf_url" fit />
                   <MarkdownPanel

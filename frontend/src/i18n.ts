@@ -108,6 +108,42 @@ const messages = {
     translated: 'Translated',
     abstract: 'Abstract',
     loadingPaperDetail: 'Loading paper detail...',
+    // SearchResultItem
+    selected_btn: 'Selected',
+    selectionLimitReached: 'Selection limit reached',
+    collapseSummary: 'Collapse summary',
+    expandSummary: 'Expand summary',
+    // Offline
+    offlineNotice: 'You are offline. Some data may be unavailable.',
+    // Facet select items
+    summaryTemplates: 'Summary Templates',
+    outputLanguages: 'Output Languages',
+    promptTemplates: 'Prompt Templates',
+    translationLanguages: 'Translation Languages',
+    // SummaryPanel
+    available: 'Available',
+    authorsLabel: 'Authors',
+    institutionsLabel: 'Institutions',
+    outputLanguageLabel: 'Output Language',
+    publicationDateLabel: 'Publication Date',
+    venueLabel: 'Publication Venue',
+    keywordsLabel: 'Keywords',
+    abstractLabel: 'Abstract',
+    // DOI & BibTeX
+    doi: 'DOI',
+    bibtex: 'BibTeX',
+    copyBibtex: 'Copy BibTeX',
+    copiedBibtex: 'Copied!',
+    loadingBibtex: 'Loading BibTeX...',
+    noBibtex: 'No BibTeX available',
+    // PaperDetailView split
+    left: 'Left',
+    right: 'Right',
+    width: 'Width',
+    // Theme
+    themeLight: 'Light',
+    themeDark: 'Dark',
+    themeSystem: 'System',
   },
   zh: {
     appTitle: '论文库',
@@ -216,6 +252,42 @@ const messages = {
     translated: '翻译',
     abstract: '摘要 (Abstract)',
     loadingPaperDetail: '正在加载论文详情...',
+    // SearchResultItem
+    selected_btn: '已选',
+    selectionLimitReached: '已达选择上限',
+    collapseSummary: '收起摘要',
+    expandSummary: '展开摘要',
+    // Offline
+    offlineNotice: '当前处于离线状态，部分数据可能不可用。',
+    // Facet select items
+    summaryTemplates: '摘要模板',
+    outputLanguages: '输出语言',
+    promptTemplates: '提示词模板',
+    translationLanguages: '翻译语言',
+    // SummaryPanel
+    available: '可用',
+    authorsLabel: '作者',
+    institutionsLabel: '单位',
+    outputLanguageLabel: '输出语言',
+    publicationDateLabel: '发表日期',
+    venueLabel: '期刊/会议',
+    keywordsLabel: '关键词',
+    abstractLabel: '摘要',
+    // DOI & BibTeX
+    doi: 'DOI',
+    bibtex: 'BibTeX',
+    copyBibtex: '复制 BibTeX',
+    copiedBibtex: '已复制!',
+    loadingBibtex: '加载 BibTeX 中...',
+    noBibtex: '暂无 BibTeX',
+    // PaperDetailView split
+    left: '左侧',
+    right: '右侧',
+    width: '宽度',
+    // Theme
+    themeLight: '浅色',
+    themeDark: '深色',
+    themeSystem: '系统',
   },
 }
 

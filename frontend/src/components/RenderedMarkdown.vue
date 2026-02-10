@@ -148,18 +148,24 @@ function handleCatalog(list: HeadList[]) {
 }
 
 let markmapDepsPromise: Promise<any> | null = null
-let transformTimer: any = null
+let transformTimer: ReturnType<typeof setTimeout> | null = null
+let lastTransformedMarkdown = ''
 
 async function handleHtmlChanged() {
+  // Skip if the markdown content hasn't actually changed (e.g., resize-triggered events)
+  const currentMd = processedMarkdown.value
+  if (currentMd === lastTransformedMarkdown) return
+  lastTransformedMarkdown = currentMd
+
   if (transformTimer) clearTimeout(transformTimer)
-  
+
   transformTimer = setTimeout(async () => {
     await nextTick()
     const root = document.getElementById(editorId)
     if (!root) return
 
     // 1. Footnote Hover
-    const refs = root.querySelectorAll('sup.footnote-ref a')
+    const refs = root.querySelectorAll('sup.footnote-ref a:not([title])')
     refs.forEach((ref) => {
       const href = ref.getAttribute('href')
       if (!href) return
@@ -172,7 +178,7 @@ async function handleHtmlChanged() {
       }
     })
 
-    // 2. Markmap Rendering
+    // 2. Markmap Rendering — only process new (unrendered) divs
     const markmapDivs = root.querySelectorAll('.paperdb-markmap-raw')
     if (markmapDivs.length > 0) {
       if (!markmapDepsPromise) {
@@ -181,7 +187,7 @@ async function handleHtmlChanged() {
           import('markmap-view'),
         ])
       }
-      
+
       const [{ Transformer }, { Markmap }] = await markmapDepsPromise
       const transformer = new Transformer()
 
@@ -192,9 +198,9 @@ async function handleHtmlChanged() {
         const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
         svg.setAttribute('class', 'w-full h-full')
         wrapper.appendChild(svg)
-        
+
         div.replaceWith(wrapper)
-        
+
         try {
           const { root: tree } = transformer.transform(source)
           const mmInstance = Markmap.create(svg, undefined, tree)
@@ -207,7 +213,7 @@ async function handleHtmlChanged() {
         }
       })
     }
-  }, 100)
+  }, 150)
 }
 
 onBeforeUnmount(() => {
@@ -223,7 +229,7 @@ onBeforeUnmount(() => {
       :noMermaid="false"
       @onGetCatalog="handleCatalog"
       @onHtmlChanged="handleHtmlChanged"
-      class="bg-transparent"
+      class="bg-transparent [&_.md-editor]:bg-transparent"
     />
   </div>
 </template>

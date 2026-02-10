@@ -14,10 +14,11 @@ export const useRuntimeConfigStore = defineStore('runtimeConfig', {
       const ui = useUiStore()
       this.loading = true
       try {
-        const data = await fetchJson<{ static_base_url?: string }>(buildUrl('/config'), {
+        const data = await fetchJson(buildUrl('/config'), {
           timeoutMs: 10_000,
         })
-        this.staticBaseUrl = (data.static_base_url || '').replace(/\/+$/, '')
+        const config = data as { static_base_url?: string }
+        this.staticBaseUrl = (config.static_base_url || '').replace(/\/+$/, '')
         this.loaded = true
       } catch {
         this.loaded = true

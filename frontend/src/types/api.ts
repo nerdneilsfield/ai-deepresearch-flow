@@ -128,6 +128,16 @@ export const ManifestSchema = z
   })
   .passthrough()
 
+export const PaperBibtexSchema = z
+  .object({
+    paper_id: z.string(),
+    doi: z.string().nullable().optional(),
+    bibtex_raw: z.string(),
+    bibtex_key: z.string().nullable().optional(),
+    entry_type: z.string().nullable().optional(),
+  })
+  .passthrough()
+
 export const FacetStatsResponseSchema = z
   .object({
     facet_type: z.string(),
@@ -144,4 +154,5 @@ export type FacetResponse = z.infer<typeof FacetResponseSchema>
 export type StatsResponse = z.infer<typeof StatsResponseSchema>
 export type PaperDetail = z.infer<typeof PaperDetailSchema>
 export type Manifest = z.infer<typeof ManifestSchema>
+export type PaperBibtex = z.infer<typeof PaperBibtexSchema>
 export type FacetStatsResponse = z.infer<typeof FacetStatsResponseSchema>

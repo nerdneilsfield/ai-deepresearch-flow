@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { getStats, type StatsResponse } from '@/lib/api'
@@ -10,9 +10,9 @@ import { use } from 'echarts/core'
 import { BarChart, PieChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent, LegendComponent, TitleComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
-import { ChevronDown, ChevronUp } from 'lucide-vue-next'
 import { useQuery } from '@tanstack/vue-query'
 import { QUERY_CACHE_POLICY } from '@/lib/query-client'
+import StatsFacetCard from '@/components/stats/StatsFacetCard.vue'
 
 const router = useRouter()
 const { t } = useI18n()
@@ -46,59 +46,7 @@ function goFacet(facet: string, value: string) {
   router.push(`/facet/${facet}/${encodeURIComponent(value)}`)
 }
 
-const expanded = ref<Record<string, boolean>>({})
-
-function toggleExpanded(key: string) {
-  expanded.value = { ...expanded.value, [key]: !expanded.value[key] }
-}
-
-function sliceItems(list: Array<{ value: string; paper_count: number }>, key: string, count = 10) {
-  if (expanded.value[key]) return list
-  return list.slice(0, count)
-}
-
-const chartColor = '#3b82f6' // Blue-500
-const pieColors = [
-  '#3b82f6', // Blue
-  '#10b981', // Emerald
-  '#f59e0b', // Amber
-  '#f43f5e', // Rose
-  '#8b5cf6', // Violet
-  '#06b6d4', // Cyan
-  '#6366f1', // Indigo
-  '#ec4899', // Pink
-  '#84cc16', // Lime
-  '#14b8a6', // Teal
-  '#d946ef', // Fuchsia
-]
-
-function buildPieOption(list: Array<{ value: string; paper_count: number }>, title: string) {
-  const sorted = [...list].sort((a, b) => b.paper_count - a.paper_count)
-  const top = sorted.slice(0, 10)
-  const others = sorted.slice(10)
-  const otherCount = others.reduce((sum, item) => sum + item.paper_count, 0)
-  const data = top.map((item) => ({ name: String(item.value), value: item.paper_count }))
-  if (otherCount > 0) {
-    data.push({ name: 'Others', value: otherCount })
-  }
-  return {
-    animation: false,
-    title: { text: title, left: 'center', textStyle: { fontSize: 12, color: '#334155' } },
-    tooltip: { trigger: 'item' },
-    legend: { bottom: 0, type: 'scroll', textStyle: { color: '#64748b', fontSize: 11 } },
-    series: [
-      {
-        type: 'pie',
-        radius: ['35%', '60%'],
-        center: ['50%', '45%'],
-        data,
-        label: { color: '#475569', fontSize: 11 },
-        itemStyle: { borderRadius: 4 },
-        color: pieColors,
-      },
-    ],
-  }
-}
+const chartColor = '#3b82f6'
 
 const yearOption = computed(() => ({
   animation: false,
@@ -151,7 +99,6 @@ const monthOption = computed(() => ({
     },
   ],
 }))
-
 </script>
 
 <template>
@@ -190,243 +137,12 @@ const monthOption = computed(() => ({
         </CardContent>
       </Card>
 
-      <Card class="space-y-0">
-        <CardHeader class="flex flex-row items-center justify-between">
-          <CardTitle class="text-sm">{{ t('keywords') }}</CardTitle>
-          <Button
-            size="icon-sm"
-            variant="outline"
-            :aria-label="expanded.keywords ? 'Collapse' : 'Expand'"
-            @click="toggleExpanded('keywords')"
-          >
-            <ChevronUp v-if="expanded.keywords" />
-            <ChevronDown v-else />
-          </Button>
-        </CardHeader>
-        <CardContent class="pt-0">
-          <VChart
-            v-if="stats.keywords.length"
-            class="h-64 w-full"
-            :option="buildPieOption(stats.keywords, t('keywords'))"
-            autoresize
-          />
-          <div class="my-4 h-px bg-ink-100"></div>
-          <table class="w-full text-sm">
-            <thead class="text-xs uppercase text-ink-400">
-              <tr>
-                <th class="py-2 text-left">{{ t('keywords') }}</th>
-                <th class="py-2 text-right">{{ t('count') }}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="item in sliceItems(stats.keywords, 'keywords')" :key="item.value" class="border-t border-ink-100">
-                <td class="py-2">
-                  <button type="button" class="text-ink-700 hover:text-accent-600" @click="goFacet('keywords', item.value)">
-                    {{ item.value }}
-                  </button>
-                </td>
-                <td class="py-2 text-right text-ink-500">{{ item.paper_count }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </CardContent>
-      </Card>
-
-      <Card class="space-y-0">
-        <CardHeader class="flex flex-row items-center justify-between">
-          <CardTitle class="text-sm">{{ t('authors') }}</CardTitle>
-          <Button
-            size="icon-sm"
-            variant="outline"
-            :aria-label="expanded.authors ? 'Collapse' : 'Expand'"
-            @click="toggleExpanded('authors')"
-          >
-            <ChevronUp v-if="expanded.authors" />
-            <ChevronDown v-else />
-          </Button>
-        </CardHeader>
-        <CardContent class="pt-0">
-          <VChart
-            v-if="stats.authors.length"
-            class="h-64 w-full"
-            :option="buildPieOption(stats.authors, t('authors'))"
-            autoresize
-          />
-          <div class="my-4 h-px bg-ink-100"></div>
-          <table class="w-full text-sm">
-            <thead class="text-xs uppercase text-ink-400">
-              <tr>
-                <th class="py-2 text-left">{{ t('authors') }}</th>
-                <th class="py-2 text-right">{{ t('count') }}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="item in sliceItems(stats.authors, 'authors')" :key="item.value" class="border-t border-ink-100">
-                <td class="py-2">
-                  <button type="button" class="text-ink-700 hover:text-accent-600" @click="goFacet('authors', item.value)">
-                    {{ item.value }}
-                  </button>
-                </td>
-                <td class="py-2 text-right text-ink-500">{{ item.paper_count }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </CardContent>
-      </Card>
-
-      <Card class="space-y-0">
-        <CardHeader class="flex flex-row items-center justify-between">
-          <CardTitle class="text-sm">{{ t('venues') }}</CardTitle>
-          <Button
-            size="icon-sm"
-            variant="outline"
-            :aria-label="expanded.venues ? 'Collapse' : 'Expand'"
-            @click="toggleExpanded('venues')"
-          >
-            <ChevronUp v-if="expanded.venues" />
-            <ChevronDown v-else />
-          </Button>
-        </CardHeader>
-        <CardContent class="pt-0">
-          <VChart
-            v-if="stats.venues.length"
-            class="h-64 w-full"
-            :option="buildPieOption(stats.venues, t('venues'))"
-            autoresize
-          />
-          <div class="my-4 h-px bg-ink-100"></div>
-          <table class="w-full text-sm">
-            <thead class="text-xs uppercase text-ink-400">
-              <tr>
-                <th class="py-2 text-left">{{ t('venues') }}</th>
-                <th class="py-2 text-right">{{ t('count') }}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="item in sliceItems(stats.venues, 'venues')" :key="item.value" class="border-t border-ink-100">
-                <td class="py-2">
-                  <button type="button" class="text-ink-700 hover:text-accent-600" @click="goFacet('venues', item.value)">
-                    {{ item.value }}
-                  </button>
-                </td>
-                <td class="py-2 text-right text-ink-500">{{ item.paper_count }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </CardContent>
-      </Card>
-
-      <Card class="space-y-0">
-        <CardHeader class="flex flex-row items-center justify-between">
-          <CardTitle class="text-sm">{{ t('institutions') }}</CardTitle>
-          <Button
-            size="icon-sm"
-            variant="outline"
-            :aria-label="expanded.institutions ? 'Collapse' : 'Expand'"
-            @click="toggleExpanded('institutions')"
-          >
-            <ChevronUp v-if="expanded.institutions" />
-            <ChevronDown v-else />
-          </Button>
-        </CardHeader>
-        <CardContent class="pt-0">
-          <VChart
-            v-if="stats.institutions.length"
-            class="h-64 w-full"
-            :option="buildPieOption(stats.institutions, t('institutions'))"
-            autoresize
-          />
-          <div class="my-4 h-px bg-ink-100"></div>
-          <table class="w-full text-sm">
-            <thead class="text-xs uppercase text-ink-400">
-              <tr>
-                <th class="py-2 text-left">{{ t('institutions') }}</th>
-                <th class="py-2 text-right">{{ t('count') }}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="item in sliceItems(stats.institutions, 'institutions')" :key="item.value" class="border-t border-ink-100">
-                <td class="py-2">
-                  <button type="button" class="text-ink-700 hover:text-accent-600" @click="goFacet('institutions', item.value)">
-                    {{ item.value }}
-                  </button>
-                </td>
-                <td class="py-2 text-right text-ink-500">{{ item.paper_count }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </CardContent>
-      </Card>
-
-      <Card class="space-y-0">
-        <CardHeader class="flex flex-row items-center justify-between">
-          <CardTitle class="text-sm">{{ t('years') }}</CardTitle>
-          <Button
-            size="icon-sm"
-            variant="outline"
-            :aria-label="expanded.years ? 'Collapse' : 'Expand'"
-            @click="toggleExpanded('years')"
-          >
-            <ChevronUp v-if="expanded.years" />
-            <ChevronDown v-else />
-          </Button>
-        </CardHeader>
-        <CardContent class="pt-0">
-          <table class="w-full text-sm">
-            <thead class="text-xs uppercase text-ink-400">
-              <tr>
-                <th class="py-2 text-left">{{ t('years') }}</th>
-                <th class="py-2 text-right">{{ t('count') }}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="item in sliceItems(stats.years, 'years')" :key="item.value" class="border-t border-ink-100">
-                <td class="py-2">
-                  <button type="button" class="text-ink-700 hover:text-accent-600" @click="goFacet('years', item.value)">
-                    {{ item.value }}
-                  </button>
-                </td>
-                <td class="py-2 text-right text-ink-500">{{ item.paper_count }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </CardContent>
-      </Card>
-
-      <Card class="space-y-0">
-        <CardHeader class="flex flex-row items-center justify-between">
-          <CardTitle class="text-sm">{{ t('months') }}</CardTitle>
-          <Button
-            size="icon-sm"
-            variant="outline"
-            :aria-label="expanded.months ? 'Collapse' : 'Expand'"
-            @click="toggleExpanded('months')"
-          >
-            <ChevronUp v-if="expanded.months" />
-            <ChevronDown v-else />
-          </Button>
-        </CardHeader>
-        <CardContent class="pt-0">
-          <table class="w-full text-sm">
-            <thead class="text-xs uppercase text-ink-400">
-              <tr>
-                <th class="py-2 text-left">{{ t('months') }}</th>
-                <th class="py-2 text-right">{{ t('count') }}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="item in sliceItems(stats.months, 'months')" :key="item.value" class="border-t border-ink-100">
-                <td class="py-2">
-                  <button type="button" class="text-ink-700 hover:text-accent-600" @click="goFacet('months', item.value)">
-                    {{ item.value }}
-                  </button>
-                </td>
-                <td class="py-2 text-right text-ink-500">{{ item.paper_count }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </CardContent>
-      </Card>
+      <StatsFacetCard :title="t('keywords')" :items="stats.keywords" @facet-click="(v) => goFacet('keywords', v)" />
+      <StatsFacetCard :title="t('authors')" :items="stats.authors" @facet-click="(v) => goFacet('authors', v)" />
+      <StatsFacetCard :title="t('venues')" :items="stats.venues" @facet-click="(v) => goFacet('venues', v)" />
+      <StatsFacetCard :title="t('institutions')" :items="stats.institutions" @facet-click="(v) => goFacet('institutions', v)" />
+      <StatsFacetCard :title="t('years')" :items="stats.years" :show-chart="false" @facet-click="(v) => goFacet('years', v)" />
+      <StatsFacetCard :title="t('months')" :items="stats.months" :show-chart="false" @facet-click="(v) => goFacet('months', v)" />
     </div>
   </div>
 </template>

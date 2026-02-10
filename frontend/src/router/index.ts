@@ -1,11 +1,4 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import SearchView from '../views/SearchView.vue'
-import PaperDetailView from '../views/PaperDetailView.vue'
-import SelectedView from '../views/SelectedView.vue'
-import StatsView from '../views/StatsView.vue'
-import FacetStatsView from '../views/FacetStatsView.vue'
-import HelpView from '../views/HelpView.vue'
-import { useRuntimeConfigStore } from '@/stores/runtime-config'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -13,37 +6,37 @@ const router = createRouter({
     {
       path: '/',
       name: 'search',
-      component: SearchView,
+      component: () => import('../views/SearchView.vue'),
     },
     {
       path: '/paper/:paperId',
       name: 'paper',
-      component: PaperDetailView,
+      component: () => import('../views/PaperDetailView.vue'),
     },
     {
       path: '/selected',
       name: 'selected',
-      component: SelectedView,
+      component: () => import('../views/SelectedView.vue'),
     },
     {
       path: '/stats',
       name: 'stats',
-      component: StatsView,
+      component: () => import('../views/StatsView.vue'),
     },
     {
       path: '/help',
       name: 'help',
-      component: HelpView,
+      component: () => import('../views/HelpView.vue'),
     },
     {
       path: '/stats/:facet/:value',
       name: 'facet-stats',
-      component: FacetStatsView,
+      component: () => import('../views/FacetStatsView.vue'),
     },
     {
       path: '/facet/:facet/:value',
       name: 'facet',
-      component: FacetStatsView,
+      component: () => import('../views/FacetStatsView.vue'),
     }
   ],
   scrollBehavior(_to, _from, savedPosition) {
@@ -53,11 +46,6 @@ const router = createRouter({
       return { top: 0 }
     }
   },
-})
-
-router.beforeEach(async (_to, _from) => {
-  const runtimeConfig = useRuntimeConfigStore()
-  await runtimeConfig.load()
 })
 
 export default router

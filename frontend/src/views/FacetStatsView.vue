@@ -117,7 +117,7 @@ async function toggleSummary(item: SearchResponse['items'][number]) {
       expanded.value = { ...expanded.value, [id]: true }
       return
     }
-    const result = await fetchJson<{ summary: string; is_short: boolean }>(item.summary_url)
+    const result = await fetchJson(item.summary_url) as { summary: string; is_short: boolean }
     expandedMarkdown.value = { ...expandedMarkdown.value, [id]: result.summary }
     expanded.value = { ...expanded.value, [id]: true }
   } catch {
@@ -233,8 +233,8 @@ onMounted(async () => {
             :expanded-loading="expandedLoading[item.paper_id]"
             :expanded-markdown="expandedMarkdown[item.paper_id]"
             :snippet-renderer="snippetRenderer"
-            :on-toggle-select="() => selection.toggle(item)"
-            :on-toggle-summary="() => toggleSummary(item)"
+            @toggle-select="selection.toggle(item)"
+            @toggle-summary="toggleSummary(item)"
           />
           <div class="flex items-center justify-between pt-4">
             <Button

@@ -3,6 +3,7 @@ import {
   FacetResponseSchema,
   FacetStatsResponseSchema,
   ManifestSchema,
+  PaperBibtexSchema,
   PaperDetailSchema,
   SearchResponseSchema,
   StatsResponseSchema,
@@ -11,6 +12,7 @@ import type {
   FacetResponse,
   FacetStatsResponse,
   Manifest,
+  PaperBibtex,
   PaperDetail,
   SearchResponse,
   StatsResponse,
@@ -20,10 +22,12 @@ async function sleep(ms: number) {
   await new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-export async function fetchJson<T>(
+type FetchOptions = RequestInit & { timeoutMs?: number; retry?: number }
+
+async function fetchWithRetry(
   url: string,
-  options: RequestInit & { timeoutMs?: number; retry?: number } = {}
-): Promise<T> {
+  options: FetchOptions = {}
+): Promise<Response> {
   const { timeoutMs = SEARCH_TIMEOUT_MS, retry = 2, ...rest } = options
   let attempt = 0
   let lastError: unknown
@@ -43,7 +47,7 @@ export async function fetchJson<T>(
         const message = await response.text()
         throw new Error(message || response.statusText)
       }
-      return (await response.json()) as T
+      return response
     } catch (err) {
       clearTimeout(timeout)
       lastError = err
@@ -58,42 +62,20 @@ export async function fetchJson<T>(
   throw lastError
 }
 
+export async function fetchJson(
+  url: string,
+  options: FetchOptions = {}
+): Promise<unknown> {
+  const response = await fetchWithRetry(url, options)
+  return response.json()
+}
+
 export async function fetchText(
   url: string,
-  options: RequestInit & { timeoutMs?: number; retry?: number } = {}
+  options: FetchOptions = {}
 ): Promise<string> {
-  const { timeoutMs = SEARCH_TIMEOUT_MS, retry = 2, ...rest } = options
-  let attempt = 0
-  let lastError: unknown
-
-  while (attempt <= retry) {
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), timeoutMs)
-    try {
-      const response = await fetch(url, { ...rest, signal: controller.signal })
-      clearTimeout(timeout)
-      if (!response.ok) {
-        if (response.status >= 500 && response.status < 600 && attempt < retry) {
-          attempt += 1
-          await sleep(300 * Math.pow(2, attempt))
-          continue
-        }
-        const message = await response.text()
-        throw new Error(message || response.statusText)
-      }
-      return await response.text()
-    } catch (err) {
-      clearTimeout(timeout)
-      lastError = err
-      if (attempt >= retry) {
-        throw err
-      }
-      attempt += 1
-      await sleep(300 * Math.pow(2, attempt))
-    }
-  }
-
-  throw lastError
+  const response = await fetchWithRetry(url, options)
+  return response.text()
 }
 
 export function buildUrl(path: string, params?: Record<string, string | number | undefined | null>) {
@@ -119,25 +101,25 @@ export async function searchPapers(
   signal?: AbortSignal
 ) {
   const url = buildUrl('/search', { q: query, page, page_size: pageSize, sort })
-  const data = await fetchJson<unknown>(url, { signal })
+  const data = await fetchJson(url, { signal })
   return SearchResponseSchema.parse(data)
 }
 
 export async function listPapers(page: number, pageSize: number, sort?: string, signal?: AbortSignal) {
   const url = buildUrl('/search', { page, page_size: pageSize, sort })
-  const data = await fetchJson<unknown>(url, { signal })
+  const data = await fetchJson(url, { signal })
   return SearchResponseSchema.parse(data)
 }
 
 export async function getPaperDetail(paperId: string): Promise<PaperDetail> {
   const url = buildUrl(`/papers/${paperId}`)
-  const data = await fetchJson<unknown>(url)
+  const data = await fetchJson(url)
   return PaperDetailSchema.parse(data)
 }
 
 export async function getFacet(facet: string, page: number, pageSize: number): Promise<FacetResponse> {
   const url = buildUrl(`/facets/${facet}`, { page, page_size: pageSize })
-  const data = await fetchJson<unknown>(url)
+  const data = await fetchJson(url)
   return FacetResponseSchema.parse(data)
 }
 
@@ -148,7 +130,7 @@ export async function getFacetPapers(
   pageSize: number
 ): Promise<SearchResponse> {
   const url = buildUrl(`/facets/${facet}/${facetId}/papers`, { page, page_size: pageSize })
-  const data = await fetchJson<unknown>(url)
+  const data = await fetchJson(url)
   return SearchResponseSchema.parse(data)
 }
 
@@ -160,7 +142,7 @@ export async function getFacetByValuePapers(
 ): Promise<SearchResponse> {
   const encoded = encodeURIComponent(value)
   const url = buildUrl(`/facets/${facet}/by-value/${encoded}/papers`, { page, page_size: pageSize })
-  const data = await fetchJson<unknown>(url)
+  const data = await fetchJson(url)
   return SearchResponseSchema.parse(data)
 }
 
@@ -170,18 +152,24 @@ export async function getFacetByValueStats(
 ): Promise<FacetStatsResponse> {
   const encoded = encodeURIComponent(value)
   const url = buildUrl(`/facets/${facet}/by-value/${encoded}/stats`)
-  const data = await fetchJson<unknown>(url)
+  const data = await fetchJson(url)
   return FacetStatsResponseSchema.parse(data)
 }
 
 export async function getStats(): Promise<StatsResponse> {
   const url = buildUrl('/stats')
-  const data = await fetchJson<unknown>(url)
+  const data = await fetchJson(url)
   return StatsResponseSchema.parse(data)
 }
 
+export async function getPaperBibtex(paperId: string): Promise<PaperBibtex> {
+  const url = buildUrl(`/papers/${paperId}/bibtex`)
+  const data = await fetchJson(url)
+  return PaperBibtexSchema.parse(data)
+}
+
 export async function fetchManifest(url: string): Promise<Manifest> {
-  const data = await fetchJson<unknown>(url)
+  const data = await fetchJson(url)
   return ManifestSchema.parse(data)
 }
 
@@ -189,6 +177,7 @@ export type {
   FacetResponse,
   FacetStatsResponse,
   Manifest,
+  PaperBibtex,
   PaperDetail,
   SearchResponse,
   StatsResponse,

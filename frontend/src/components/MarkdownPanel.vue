@@ -3,7 +3,17 @@ import { ref, watch } from 'vue'
 import { fetchText } from '@/lib/api'
 import MarkdownContent from './MarkdownContent.vue'
 
+const MAX_CACHE_SIZE = 50
 const markdownCache = new Map<string, string>()
+
+function cacheSet(key: string, value: string) {
+  if (markdownCache.has(key)) markdownCache.delete(key)
+  markdownCache.set(key, value)
+  if (markdownCache.size > MAX_CACHE_SIZE) {
+    const oldest = markdownCache.keys().next().value
+    if (oldest) markdownCache.delete(oldest)
+  }
+}
 
 const props = defineProps<{
   url?: string | null
@@ -14,22 +24,27 @@ const props = defineProps<{
 const markdown = ref('')
 const loading = ref(false)
 const error = ref('')
+let loadGeneration = 0
 
 async function load(url: string) {
   if (markdownCache.has(url)) {
     markdown.value = markdownCache.get(url) || ''
     return
   }
+  const gen = ++loadGeneration
   loading.value = true
   error.value = ''
   try {
     const raw = await fetchText(url)
-    markdownCache.set(url, raw)
+    // Guard against stale responses when URL changed during fetch
+    if (gen !== loadGeneration) return
+    cacheSet(url, raw)
     markdown.value = raw
   } catch (err) {
+    if (gen !== loadGeneration) return
     error.value = 'Failed to load markdown.'
   } finally {
-    loading.value = false
+    if (gen === loadGeneration) loading.value = false
   }
 }
 
@@ -37,6 +52,7 @@ watch(
   () => props.url,
   (next) => {
     if (!next) {
+      loadGeneration++
       markdown.value = ''
       error.value = ''
       loading.value = false

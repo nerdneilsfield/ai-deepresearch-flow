@@ -18,7 +18,8 @@ import { Sheet, SheetContent, SheetTrigger, SheetTitle, SheetDescription } from 
 import { Button } from '@/components/ui/button'
 import ErrorBoundary from '@/components/ErrorBoundary.vue'
 import { useOnline, useWindowScroll } from '@vueuse/core'
-import { Github, ArrowUp } from 'lucide-vue-next'
+import { Github, ArrowUp, Sun, Moon, Monitor } from 'lucide-vue-next'
+import { useTheme } from '@/composables/useTheme'
 
 const route = useRoute()
 const router = useRouter()
@@ -27,6 +28,7 @@ const selection = useSelectionStore()
 const ui = useUiStore()
 const isOnline = useOnline()
 const { y: scrollY } = useWindowScroll()
+const { themeMode, setTheme } = useTheme()
 
 const activeRoute = computed(() => String(route.name || ''))
 const isDetail = computed(() => activeRoute.value === 'paper')
@@ -55,16 +57,16 @@ onMounted(() => {
 
 <template>
   <div class="flex min-h-screen flex-col">
-    <header class="sticky top-0 z-50 border-b border-ink-100 bg-white/80 backdrop-blur-md">
-      <div class="mx-auto grid w-full max-w-6xl grid-cols-[auto_1fr_auto] items-center gap-4 px-4 py-3 md:grid-cols-[1fr_auto_1fr]">
-        <div class="flex items-center gap-4">
-          <button class="text-base font-semibold text-ink-900 shrink-0" type="button" @click="goto('/')">
+    <header class="sticky top-0 z-50 border-b border-ink-800/10 bg-ink-900 text-white shadow-md">
+      <div class="mx-auto grid w-full max-w-6xl grid-cols-[auto_1fr_auto] items-center gap-4 px-4 py-2.5 md:grid-cols-[1fr_auto_1fr]">
+        <div class="flex items-center gap-5">
+          <button class="text-base font-bold tracking-tight text-white shrink-0" type="button" @click="goto('/')">
             {{ t('appTitle') }}
           </button>
-          <nav class="hidden items-center gap-4 text-sm text-ink-500 md:flex">
+          <nav class="hidden items-center gap-0.5 text-sm md:flex">
             <button
-              class="transition hover:text-ink-900"
-              :class="{ 'text-ink-900 font-semibold': activeRoute === 'search' }"
+              class="rounded-md px-3 py-1.5 font-medium transition-all"
+              :class="activeRoute === 'search' ? 'bg-white/15 text-white' : 'text-white/70 hover:text-white hover:bg-white/10'"
               :aria-current="activeRoute === 'search' ? 'page' : undefined"
               type="button"
               @click="goto('/')"
@@ -72,8 +74,8 @@ onMounted(() => {
               {{ t('papers') }}
             </button>
             <button
-              class="transition hover:text-ink-900"
-              :class="{ 'text-ink-900 font-semibold': activeRoute === 'stats' }"
+              class="rounded-md px-3 py-1.5 font-medium transition-all"
+              :class="activeRoute === 'stats' ? 'bg-white/15 text-white' : 'text-white/70 hover:text-white hover:bg-white/10'"
               :aria-current="activeRoute === 'stats' ? 'page' : undefined"
               type="button"
               @click="goto('/stats')"
@@ -81,8 +83,8 @@ onMounted(() => {
               {{ t('stats') }}
             </button>
             <button
-              class="transition hover:text-ink-900"
-              :class="{ 'text-ink-900 font-semibold': activeRoute === 'selected' }"
+              class="rounded-md px-3 py-1.5 font-medium transition-all"
+              :class="activeRoute === 'selected' ? 'bg-white/15 text-white' : 'text-white/70 hover:text-white hover:bg-white/10'"
               :aria-current="activeRoute === 'selected' ? 'page' : undefined"
               type="button"
               @click="goto('/selected')"
@@ -90,8 +92,8 @@ onMounted(() => {
               {{ t('selected', { count: selection.count }) }}
             </button>
             <button
-              class="transition hover:text-ink-900"
-              :class="{ 'text-ink-900 font-semibold': activeRoute === 'help' }"
+              class="rounded-md px-3 py-1.5 font-medium transition-all"
+              :class="activeRoute === 'help' ? 'bg-white/15 text-white' : 'text-white/70 hover:text-white hover:bg-white/10'"
               :aria-current="activeRoute === 'help' ? 'page' : undefined"
               type="button"
               @click="goto('/help')"
@@ -102,15 +104,36 @@ onMounted(() => {
         </div>
 
         <div v-if="isDetail && detailTitle" class="flex max-w-[40vw] flex-col items-center px-2 text-center md:max-w-[48vw]">
-          <div class="line-clamp-2 text-xs font-semibold leading-tight text-ink-900 md:text-sm">{{ detailTitle }}</div>
-          <div v-if="detailSubtitle" class="line-clamp-1 text-[10px] text-ink-500 md:text-xs">{{ detailSubtitle }}</div>
+          <div class="line-clamp-2 text-xs font-semibold leading-tight text-white md:text-sm">{{ detailTitle }}</div>
+          <div v-if="detailSubtitle" class="line-clamp-1 text-[10px] text-white/60 md:text-xs">{{ detailSubtitle }}</div>
         </div>
         <div v-else class="hidden md:block"></div>
 
         <div class="flex items-center justify-end gap-2 text-sm">
           <DropdownMenu>
             <DropdownMenuTrigger as-child>
-              <Button variant="outline" size="sm" aria-label="Switch language">
+              <Button variant="outline" size="icon" class="h-8 w-8 border-white/20 bg-white/10 text-white hover:bg-white/20 hover:text-white" aria-label="Switch theme">
+                <Sun v-if="themeMode === 'light'" class="h-4 w-4" />
+                <Moon v-else-if="themeMode === 'dark'" class="h-4 w-4" />
+                <Monitor v-else class="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem @click="setTheme('light')">
+                <Sun class="mr-2 h-4 w-4" />{{ t('themeLight') }}
+              </DropdownMenuItem>
+              <DropdownMenuItem @click="setTheme('dark')">
+                <Moon class="mr-2 h-4 w-4" />{{ t('themeDark') }}
+              </DropdownMenuItem>
+              <DropdownMenuItem @click="setTheme('system')">
+                <Monitor class="mr-2 h-4 w-4" />{{ t('themeSystem') }}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger as-child>
+              <Button variant="outline" size="sm" class="border-white/20 bg-white/10 text-white hover:bg-white/20 hover:text-white" aria-label="Switch language">
                 {{ locale === 'en' ? 'EN' : '中文' }}
               </Button>
             </DropdownMenuTrigger>
@@ -122,7 +145,7 @@ onMounted(() => {
           
           <Sheet>
             <SheetTrigger class="md:hidden" aria-label="Open navigation menu" as-child>
-              <Button variant="outline" size="sm">{{ t('menu') }}</Button>
+              <Button variant="outline" size="sm" class="border-white/20 bg-white/10 text-white hover:bg-white/20 hover:text-white">{{ t('menu') }}</Button>
             </SheetTrigger>
             <SheetContent side="right" class="space-y-4">
               <SheetTitle>{{ t('appTitle') }}</SheetTitle>
@@ -138,8 +161,8 @@ onMounted(() => {
         </div>
       </div>
     </header>
-    <div v-if="!isOnline" class="border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800">
-      You are offline. Some data may be unavailable.
+    <div v-if="!isOnline" class="border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300">
+      {{ t('offlineNotice') }}
     </div>
 
     <main
@@ -153,7 +176,7 @@ onMounted(() => {
       </ErrorBoundary>
     </main>
 
-    <footer class="border-t border-ink-100 bg-white py-6 text-sm text-ink-500">
+    <footer class="border-t border-ink-200 bg-ink-50 py-6 text-sm text-ink-400 dark:border-ink-700 dark:bg-ink-900 dark:text-ink-500">
       <div class="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 px-4 sm:flex-row">
         <div class="flex items-center gap-4">
           <span>&copy; {{ year }} ai-deepresearch-flow</span>
@@ -165,7 +188,7 @@ onMounted(() => {
             href="https://github.com/nerdneilsfield/ai-deepresearch-flow"
             target="_blank"
             rel="noopener noreferrer"
-            class="flex items-center gap-2 transition hover:text-ink-900"
+            class="flex items-center gap-2 transition hover:text-ink-900 dark:hover:text-ink-200"
           >
             <Github class="h-4 w-4" />
             <span>GitHub</span>
