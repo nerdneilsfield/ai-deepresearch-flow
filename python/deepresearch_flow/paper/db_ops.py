@@ -655,19 +655,12 @@ def _build_file_index(
             if path.name.lower().endswith("_origin.pdf"):
                 parent_dir_name = path.parent.name
                 if parent_dir_name:
+                    # Index by parent directory name (both with and without .pdf)
                     parent_key = parent_dir_name.lower()
                     if parent_key != name_key:
                         index.setdefault(parent_key, []).append(resolved)
-                    # Try adding .pdf extension to parent name
-                    parent_pdf_key = f"{parent_key}.pdf"
-                    if parent_pdf_key != parent_key:
-                        index.setdefault(parent_pdf_key, []).append(resolved)
-                    # Debug: print what we indexed
-                    import sys
-                    if "rangenet" in parent_key:
-                        print(f"[DEBUG] Indexed *_origin.pdf: {path}", file=sys.stderr)
-                        print(f"[DEBUG]   parent_key: {parent_key}", file=sys.stderr)
-                        print(f"[DEBUG]   parent_pdf_key: {parent_pdf_key}", file=sys.stderr)
+                        # Also add with .pdf extension
+                        index.setdefault(f"{parent_key}.pdf", []).append(resolved)
 
             title_candidate = _extract_title_from_filename(path.name)
             title_key = _normalize_title_key(title_candidate)
@@ -816,11 +809,12 @@ def _guess_pdf_names(paper: dict[str, Any]) -> list[str]:
         base = name[:-3]
         candidates.append(base + ".pdf")
 
-        # For OCR directories: also try parent directory name variations
-        # e.g., "Milioto_et_al_2019_RangeNet.md" might match directory "Milioto_et_al_2019_RangeNet_++"
-        # Add common suffix variations
+        # Also try common suffix variations (both with and without .pdf)
+        # e.g., "Milioto_et_al_2019_RangeNet.md" might match "Milioto_et_al_2019_RangeNet_++.pdf"
         for suffix in ["_++", "_+", "++", "2"]:
+            # Try both directory name (for *_origin.pdf files) and filename
             candidates.append(base + suffix)
+            candidates.append(base + suffix + ".pdf")
 
     return candidates
 
