@@ -15,6 +15,7 @@ from rich.table import Table
 
 from deepresearch_flow.paper.db_ops import load_and_merge_papers
 from deepresearch_flow.paper.snapshot.identity import build_paper_key_candidates
+from deepresearch_flow.paper.snapshot.image_utils import rewrite_markdown_images, _hash_bytes
 from deepresearch_flow.paper.utils import stable_hash
 
 
@@ -37,8 +38,12 @@ class SnapshotSupplementOptions:
 class SupplementStats:
     """Statistics for supplement operation."""
     papers_checked: int = 0
+    papers_supplemented: int = 0
     templates_added: int = 0
+    summaries_generated: int = 0
     translations_added: int = 0
+    translations_processed: int = 0
+    images_extracted: int = 0
     files_copied: int = 0
 
 
@@ -62,8 +67,10 @@ def supplement_snapshot(opts: SnapshotSupplementOptions) -> None:
         shutil.copy2(opts.snapshot_db, backup_db)
         console.print(f"[yellow]Backup created: {backup_db}[/yellow]")
     elif opts.output_db:
+        if not opts.output_static_dir:
+            raise ValueError("Must specify --output-static-dir when using --output-db")
         output_db = opts.output_db
-        output_static = opts.output_static_dir or opts.static_export_dir
+        output_static = opts.output_static_dir
         # Copy to new location
         _copy_snapshot(opts.snapshot_db, opts.static_export_dir, output_db, output_static)
     else:
@@ -92,8 +99,9 @@ def supplement_snapshot(opts: SnapshotSupplementOptions) -> None:
     # Process each paper
     conn = sqlite3.connect(str(output_db))
     conn.row_factory = sqlite3.Row
-    
+
     try:
+        written_images: set[str] = set()
         for paper in papers:
             stats.papers_checked += 1
             paper_ids = _resolve_existing_paper_ids(conn, paper)
@@ -106,12 +114,17 @@ def supplement_snapshot(opts: SnapshotSupplementOptions) -> None:
                 stats.templates_added += template_count
 
                 # Supplement missing translations
-                translation_count, copied_count = _supplement_translations(
+                translation_count, copied_count, images_count = _supplement_translations(
                     conn, output_static, paper_id, paper,
-                    opts.md_translated_roots or []
+                    opts.md_translated_roots or [],
+                    written_images,
                 )
                 stats.translations_added += translation_count
+                stats.translations_processed += translation_count
                 stats.files_copied += copied_count
+                stats.images_extracted += images_count
+                if template_count > 0 or translation_count > 0:
+                    stats.papers_supplemented += 1
         
         conn.commit()
         _print_supplement_summary(stats, output_db, output_static, opts.in_place)
@@ -257,16 +270,18 @@ def _supplement_translations(
     static_dir: Path,
     paper_id: str,
     paper: dict[str, Any],
-    md_translated_roots: list[Path]
-) -> tuple[int, int]:
-    """Add missing translations for a paper. Returns (count_added, files_copied)."""
+    md_translated_roots: list[Path],
+    written_images: set[str],
+) -> tuple[int, int, int]:
+    """Add missing translations for a paper. Returns (count_added, files_copied, images_extracted)."""
     count = 0
     copied = 0
-    
+    images_count = 0
+
     # Get source hash to find translation files
     source_hash = paper.get("source_hash") or paper.get("source_md_content_hash")
     if not source_hash:
-        return 0, 0
+        return 0, 0, 0
     
     # Scan translated directories for this paper
     for root in md_translated_roots:
@@ -302,29 +317,43 @@ def _supplement_translations(
                 
                 # Check if this file belongs to our paper
                 if any(name in trans_file.name for name in possible_names):
-                    # Compute hash
-                    content = trans_file.read_bytes()
-                    md_hash = hashlib.sha256(content).hexdigest()
-                    
+                    # Process translated markdown: extract images and rewrite paths
+                    try:
+                        trans_content = trans_file.read_text(encoding="utf-8")
+                    except UnicodeDecodeError:
+                        trans_content = trans_file.read_text(encoding="latin-1")
+
+                    images_dir = static_dir / "images"
+                    processed_trans, trans_images = rewrite_markdown_images(
+                        trans_content,
+                        source_path=trans_file,
+                        images_output_dir=images_dir,
+                        written=written_images,
+                    )
+                    images_count += len([img for img in trans_images if img.get("status") == "available"])
+
+                    # Compute hash of processed content
+                    md_hash = _hash_bytes(processed_trans.encode("utf-8"))
+
                     # Add translation reference
                     conn.execute(
                         "INSERT OR REPLACE INTO paper_translation (paper_id, lang, md_content_hash) VALUES (?, ?, ?)",
                         (paper_id, lang, md_hash),
                     )
-                    
-                    # Copy to static dir
+
+                    # Save processed content to static dir
                     dst_dir = static_dir / "md_translate" / lang
                     dst_dir.mkdir(parents=True, exist_ok=True)
                     dst_file = dst_dir / f"{md_hash}.md"
-                    
+
                     if not dst_file.exists():
-                        shutil.copy2(trans_file, dst_file)
+                        dst_file.write_text(processed_trans, encoding="utf-8")
                         copied += 1
-                    
+
                     count += 1
                     break
-    
-    return count, copied
+
+    return count, copied, images_count
 
 
 def _print_supplement_summary(
@@ -334,21 +363,58 @@ def _print_supplement_summary(
     in_place: bool
 ) -> None:
     """Print supplement operation summary."""
+    from rich.panel import Panel
+
+    console = Console()
     action = "Updated" if in_place else "Created"
-    
-    table = Table(
-        title="Snapshot Supplement Summary",
-        header_style="bold cyan",
-        title_style="bold magenta"
-    )
-    table.add_column("Metric", style="cyan")
-    table.add_column("Count", style="green", justify="right")
-    
-    table.add_row("Papers checked", str(stats.papers_checked))
-    table.add_row("Templates added", str(stats.templates_added))
-    table.add_row("Translations added", str(stats.translations_added))
-    table.add_row("Files copied", str(stats.files_copied))
-    
-    Console().print(table)
-    Console().print(f"[green]{action} snapshot DB: {output_db}[/green]")
-    Console().print(f"[green]{action} static dir: {output_static}[/green]")
+
+    console.print()
+    console.print(f"[bold cyan]Snapshot Supplement Summary[/bold cyan]", style="bold")
+    console.print()
+
+    # Papers table
+    papers_table = Table(title="Papers", header_style="bold magenta", box=None)
+    papers_table.add_column("Metric", style="cyan")
+    papers_table.add_column("Count", style="green", justify="right")
+    papers_table.add_row("Total checked", str(stats.papers_checked))
+    papers_table.add_row("Supplemented", str(stats.papers_supplemented))
+    console.print(papers_table)
+    console.print()
+
+    # Content Processing table
+    processing_table = Table(title="Content Processing", header_style="bold magenta", box=None)
+    processing_table.add_column("Type", style="cyan")
+    processing_table.add_column("Count", style="green", justify="right")
+    processing_table.add_column("Details", style="yellow")
+    processing_table.add_row("Translations processed", str(stats.translations_processed), "Images extracted & paths rewritten")
+    processing_table.add_row("Images extracted", str(stats.images_extracted), "From translations")
+    console.print(processing_table)
+    console.print()
+
+    # Metadata table
+    metadata_table = Table(title="Metadata Added", header_style="bold magenta", box=None)
+    metadata_table.add_column("Metric", style="cyan")
+    metadata_table.add_column("Count", style="green", justify="right")
+    metadata_table.add_row("Templates added", str(stats.templates_added))
+    if stats.summaries_generated > 0:
+        metadata_table.add_row("Summaries generated", str(stats.summaries_generated))
+    metadata_table.add_row("Translations added", str(stats.translations_added))
+    console.print(metadata_table)
+    console.print()
+
+    # Files table
+    files_table = Table(title="Files", header_style="bold magenta", box=None)
+    files_table.add_column("Metric", style="cyan")
+    files_table.add_column("Count", style="green", justify="right")
+    files_table.add_row("Total files copied", str(stats.files_copied))
+    console.print(files_table)
+    console.print()
+
+    # Success panel
+    console.print(Panel(
+        f"[bold green]{action} Successfully![/bold green]\n\n"
+        f"Database: [yellow]{output_db}[/yellow]\n"
+        f"Static: [yellow]{output_static}[/yellow]",
+        border_style="green",
+        padding=(1, 2)
+    ))

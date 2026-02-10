@@ -24,6 +24,7 @@ from deepresearch_flow.paper.snapshot.identity import (
     choose_preferred_key,
     paper_id_for_key,
 )
+from deepresearch_flow.paper.snapshot.image_utils import rewrite_markdown_images, _hash_bytes
 from deepresearch_flow.paper.snapshot.schema import init_snapshot_db, recompute_facet_counts, recompute_paper_index
 from deepresearch_flow.paper.snapshot.text import insert_cjk_spaces, markdown_to_plain_text
 from deepresearch_flow.paper.utils import stable_hash
@@ -51,9 +52,15 @@ class UpdateStats:
 
     papers_checked: int = 0
     papers_added: int = 0
+    papers_skipped: int = 0
     templates_added: int = 0
     translations_added: int = 0
     files_copied: int = 0
+    markdown_processed: int = 0
+    translations_processed: int = 0
+    images_extracted: int = 0
+    pdfs_copied: int = 0
+    summaries_generated: int = 0
     doi_bibtex_mismatches: int = 0
     mismatch_samples: list[str] = field(default_factory=list)
 
@@ -339,6 +346,7 @@ def _add_new_paper(
     pdf_path: Path | None,
     translated_paths: dict[str, Path],
     stats: UpdateStats,
+    written_images: set[str],
 ) -> None:
     title = str(paper.get("paper_title") or "").strip()
     year, month = _parse_year_month(paper)
@@ -363,11 +371,23 @@ def _add_new_paper(
 
     source_md_hash = ""
     if md_path and md_path.exists():
-        source_md_hash = _hash_file(md_path)
+        # Process markdown: extract images and rewrite paths
+        md_content = _safe_read_text(md_path)
+        images_dir = static_dir / "images"
+        processed_md, md_images = rewrite_markdown_images(
+            md_content,
+            source_path=md_path,
+            images_output_dir=images_dir,
+            written=written_images,
+        )
+        stats.markdown_processed += 1
+        stats.images_extracted += len([img for img in md_images if img.get("status") == "available"])
+        # Hash the processed content (not original file)
+        source_md_hash = _hash_bytes(processed_md.encode("utf-8"))
         dst_md = static_dir / "md" / f"{source_md_hash}.md"
         dst_md.parent.mkdir(parents=True, exist_ok=True)
         if not dst_md.exists():
-            shutil.copy2(md_path, dst_md)
+            dst_md.write_text(processed_md, encoding="utf-8")
             stats.files_copied += 1
 
     pdf_hash = ""
@@ -378,6 +398,7 @@ def _add_new_paper(
         if not dst_pdf.exists():
             shutil.copy2(pdf_path, dst_pdf)
             stats.files_copied += 1
+            stats.pdfs_copied += 1
 
     template_payloads = _extract_template_payloads(paper)
     preferred_summary_template = _choose_preferred_template(paper, template_payloads)
@@ -453,6 +474,7 @@ def _add_new_paper(
             encoding="utf-8",
         )
     stats.templates_added += len(ordered_template_tags)
+    stats.summaries_generated += len(ordered_template_tags) + 1  # +1 for preferred summary
 
     preferred_payload = template_payloads.get(preferred_summary_template) or paper
     (static_dir / "summary" / f"{paper_id}.json").parent.mkdir(parents=True, exist_ok=True)
@@ -466,7 +488,19 @@ def _add_new_paper(
         lang_norm = str(lang or "").strip().lower()
         if not lang_norm or not path.exists():
             continue
-        trans_hash = _hash_file(path)
+        # Process translated markdown: extract images and rewrite paths
+        trans_content = _safe_read_text(path)
+        images_dir = static_dir / "images"
+        processed_trans, trans_images = rewrite_markdown_images(
+            trans_content,
+            source_path=path,
+            images_output_dir=images_dir,
+            written=written_images,
+        )
+        stats.translations_processed += 1
+        stats.images_extracted += len([img for img in trans_images if img.get("status") == "available"])
+        # Hash the processed content (not original file)
+        trans_hash = _hash_bytes(processed_trans.encode("utf-8"))
         conn.execute(
             "INSERT OR REPLACE INTO paper_translation (paper_id, lang, md_content_hash) VALUES (?, ?, ?)",
             (paper_id, lang_norm, trans_hash),
@@ -474,7 +508,7 @@ def _add_new_paper(
         dst = static_dir / "md_translate" / lang_norm / f"{trans_hash}.md"
         dst.parent.mkdir(parents=True, exist_ok=True)
         if not dst.exists():
-            shutil.copy2(path, dst)
+            dst.write_text(processed_trans, encoding="utf-8")
             stats.files_copied += 1
         translation_hashes[lang_norm] = trans_hash
     stats.translations_added += len(translation_hashes)
@@ -645,8 +679,10 @@ def update_snapshot(opts: SnapshotUpdateOptions) -> None:
         shutil.copy2(opts.snapshot_db, backup_db)
         console.print(f"[yellow]Backup created: {backup_db}[/yellow]")
     elif opts.output_db:
+        if not opts.output_static_dir:
+            raise ValueError("Must specify --output-static-dir when using --output-db")
         output_db = opts.output_db
-        output_static = opts.output_static_dir or opts.static_export_dir
+        output_static = opts.output_static_dir
         _copy_snapshot(opts.snapshot_db, opts.static_export_dir, output_db, output_static)
     else:
         raise ValueError("Must specify either --in-place or --output-db")
@@ -689,6 +725,7 @@ def update_snapshot(opts: SnapshotUpdateOptions) -> None:
     try:
         # Ensure new schema additions exist when updating older snapshots.
         init_snapshot_db(conn)
+        written_images: set[str] = set()
         for paper in papers:
             stats.papers_checked += 1
 
@@ -699,6 +736,7 @@ def update_snapshot(opts: SnapshotUpdateOptions) -> None:
                 "SELECT 1 FROM paper WHERE paper_id = ?", (paper_id,)
             ).fetchone()
             if existing:
+                stats.papers_skipped += 1
                 continue
 
             md_path = paper_index.md_path_by_hash.get(source_hash) if source_hash else None
@@ -718,6 +756,7 @@ def update_snapshot(opts: SnapshotUpdateOptions) -> None:
                 pdf_path=pdf_path,
                 translated_paths=translated_paths,
                 stats=stats,
+                written_images=written_images,
             )
 
         recompute_paper_index(conn)
@@ -736,28 +775,68 @@ def _print_update_summary(
     in_place: bool,
 ) -> None:
     """Print update operation summary."""
+    from rich.panel import Panel
 
+    console = Console()
     action = "Updated" if in_place else "Created"
 
-    table = Table(
-        title="Snapshot Update Summary",
-        header_style="bold cyan",
-        title_style="bold magenta",
-    )
-    table.add_column("Metric", style="cyan")
-    table.add_column("Count", style="green", justify="right")
+    console.print()
+    console.print(f"[bold cyan]Snapshot Update Summary[/bold cyan]", style="bold")
+    console.print()
 
-    table.add_row("Papers checked", str(stats.papers_checked))
-    table.add_row("Papers added", str(stats.papers_added))
-    table.add_row("Templates added", str(stats.templates_added))
-    table.add_row("Translations added", str(stats.translations_added))
-    table.add_row("Files copied", str(stats.files_copied))
-    table.add_row("DOI/BibTeX mismatches", str(stats.doi_bibtex_mismatches))
+    # Papers table
+    papers_table = Table(title="Papers", header_style="bold magenta", box=None)
+    papers_table.add_column("Metric", style="cyan")
+    papers_table.add_column("Count", style="green", justify="right")
+    papers_table.add_row("Total checked", str(stats.papers_checked))
+    papers_table.add_row("Added (new)", str(stats.papers_added))
+    papers_table.add_row("Skipped (existing)", str(stats.papers_skipped))
+    console.print(papers_table)
+    console.print()
 
-    Console().print(table)
+    # Content Processing table
+    processing_table = Table(title="Content Processing", header_style="bold magenta", box=None)
+    processing_table.add_column("Type", style="cyan")
+    processing_table.add_column("Count", style="green", justify="right")
+    processing_table.add_column("Details", style="yellow")
+    processing_table.add_row("Markdown processed", str(stats.markdown_processed), "Images extracted & paths rewritten")
+    processing_table.add_row("Translations processed", str(stats.translations_processed), "Images extracted & paths rewritten")
+    processing_table.add_row("Images extracted", str(stats.images_extracted), "From markdown & translations")
+    processing_table.add_row("PDFs copied", str(stats.pdfs_copied), "")
+    console.print(processing_table)
+    console.print()
+
+    # Metadata table
+    metadata_table = Table(title="Metadata & Summaries", header_style="bold magenta", box=None)
+    metadata_table.add_column("Metric", style="cyan")
+    metadata_table.add_column("Count", style="green", justify="right")
+    metadata_table.add_row("Templates added", str(stats.templates_added))
+    metadata_table.add_row("Summaries generated", str(stats.summaries_generated))
+    metadata_table.add_row("Translations added", str(stats.translations_added))
+    if stats.doi_bibtex_mismatches > 0:
+        metadata_table.add_row("DOI/BibTeX mismatches", str(stats.doi_bibtex_mismatches), style="yellow")
+    console.print(metadata_table)
+    console.print()
+
+    # Files table
+    files_table = Table(title="Files", header_style="bold magenta", box=None)
+    files_table.add_column("Metric", style="cyan")
+    files_table.add_column("Count", style="green", justify="right")
+    files_table.add_row("Total files copied", str(stats.files_copied))
+    console.print(files_table)
+    console.print()
+
     if stats.mismatch_samples:
-        Console().print(
-            f"[yellow]Mismatch sample paper_ids: {', '.join(stats.mismatch_samples)}[/yellow]"
+        console.print(
+            f"[yellow]DOI/BibTeX mismatch samples: {', '.join(stats.mismatch_samples[:5])}[/yellow]"
         )
-    Console().print(f"[green]{action} snapshot DB: {output_db}[/green]")
-    Console().print(f"[green]{action} static dir: {output_static}[/green]")
+        console.print()
+
+    # Success panel
+    console.print(Panel(
+        f"[bold green]{action} Successfully![/bold green]\n\n"
+        f"Database: [yellow]{output_db}[/yellow]\n"
+        f"Static: [yellow]{output_static}[/yellow]",
+        border_style="green",
+        padding=(1, 2)
+    ))
