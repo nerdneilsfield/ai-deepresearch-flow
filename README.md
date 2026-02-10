@@ -359,7 +359,48 @@ uv run deepresearch-flow paper db snapshot update \
 
 #### Upgrade Legacy Snapshot Schema (DOI/BibTeX)
 
-If your existing snapshot was built before DOI/BibTeX support, rebuild once with `--previous-snapshot-db` to keep stable identity continuity and write DOI/BibTeX into the new schema:
+**Recommended: Migrate Schema In-Place (No Data Loss)**
+
+If your existing snapshot was built before DOI/BibTeX support, use the `migrate` command to upgrade the schema without losing any papers:
+
+```bash
+# In-place migration with timestamped backup
+uv run deepresearch-flow paper db snapshot migrate \
+  --snapshot-db ./dist/paper_snapshot.db \
+  --bibtex ./papers.bib \
+  --static-export-dir ./dist/paper-static \
+  --in-place
+
+# Or copy to new location
+uv run deepresearch-flow paper db snapshot migrate \
+  --snapshot-db ./dist/paper_snapshot.db \
+  --bibtex ./papers.bib \
+  --static-export-dir ./dist/paper-static \
+  --output-db ./dist/paper_snapshot_v2.db
+
+# Schema-only migration (no BibTeX enrichment)
+uv run deepresearch-flow paper db snapshot migrate \
+  --snapshot-db ./dist/paper_snapshot.db \
+  --in-place
+```
+
+Features:
+- **No data loss**: Uses `ALTER TABLE` to upgrade schema, preserving all papers
+- **Timestamped backups**: Creates `.bak_YYYYMMDD_HHMMSS` backup files automatically
+- **BibTeX enrichment**: Matches papers with BibTeX and extracts DOI metadata
+- **Static export update**: Updates `paper_index.json` with DOI/BibTeX references
+- **Beautiful output**: Rich tables showing schema changes and match statistics
+
+The migrate command will:
+1. Create a timestamped backup (unless `--no-backup` is used)
+2. Add `doi` column to the `paper` table (if missing)
+3. Create `paper_bibtex` table (if missing)
+4. Match papers with BibTeX entries and populate DOI/BibTeX data
+5. Update static export index with new metadata
+
+**Alternative: Rebuild with Previous Snapshot**
+
+If you need to rebuild from scratch while preserving identity continuity:
 
 ```bash
 uv run deepresearch-flow paper db snapshot build \
@@ -373,6 +414,7 @@ uv run deepresearch-flow paper db snapshot build \
 Notes:
 - `--md-root`, `--md-translated-root`, and `--pdf-root` are optional for this rebuild.
 - If a paper in current inputs already has DOI/BibTeX, current input wins; otherwise data can be inherited from `--previous-snapshot-db`.
+- **Warning**: This approach only includes papers from the input JSON files, so ensure all papers are included to avoid data loss.
 
 #### Supplement Missing Translations
 

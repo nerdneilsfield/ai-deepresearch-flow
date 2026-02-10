@@ -708,6 +708,147 @@ def register_db_commands(db_group: click.Group) -> None:
         )
         supplement_snapshot(opts)
 
+    @snapshot_group.command("migrate")
+    @click.option("--snapshot-db", "snapshot_db", required=True, help="Path to existing snapshot database")
+    @click.option("--bibtex", "bibtex_path", default=None, help="Optional BibTeX file path")
+    @click.option("--static-export-dir", "static_export_dir", default=None, help="Optional static export directory to update")
+    @click.option("--in-place", is_flag=True, help="Modify database in place (creates timestamped backup)")
+    @click.option("--output-db", "output_db", default=None, help="Output database path (if not --in-place)")
+    @click.option("--backup/--no-backup", default=True, help="Create backup when using --in-place (default: yes)")
+    def snapshot_migrate(
+        snapshot_db: str,
+        bibtex_path: str | None,
+        static_export_dir: str | None,
+        in_place: bool,
+        output_db: str | None,
+        backup: bool,
+    ) -> None:
+        """Migrate legacy snapshot database schema and enrich with DOI/BibTeX data."""
+        import sqlite3
+        from rich.console import Console
+        from rich.panel import Panel
+        from rich.table import Table
+        from deepresearch_flow.paper.snapshot.migrate import (
+            create_timestamped_backup,
+            enrich_db_with_bibtex,
+            migrate_schema,
+            update_static_export_index,
+        )
+
+        console = Console()
+
+        if not in_place and not output_db:
+            raise click.ClickException("Must specify either --in-place or --output-db")
+
+        if in_place and output_db:
+            raise click.ClickException("Cannot use both --in-place and --output-db")
+
+        snapshot_path = Path(snapshot_db)
+        if not snapshot_path.exists():
+            raise click.ClickException(f"Snapshot database not found: {snapshot_path}")
+
+        console.print(f"\n[bold cyan]Snapshot Migration[/bold cyan]", style="bold")
+        console.print(f"Source: [yellow]{snapshot_path}[/yellow]")
+
+        # Determine output path
+        if in_place:
+            # Create backup first
+            if backup:
+                backup_path = create_timestamped_backup(snapshot_path)
+                console.print(f"Backup: [green]{backup_path.name}[/green]")
+            else:
+                if not click.confirm(
+                    "Are you sure? This will modify the database without backup.",
+                    default=False,
+                ):
+                    console.print("[red]Aborted.[/red]")
+                    return
+            target_path = snapshot_path
+            console.print(f"Mode: [magenta]In-place migration[/magenta]")
+        else:
+            target_path = Path(output_db)
+            if target_path.exists():
+                if not click.confirm(f"Output database {target_path} exists. Overwrite?", default=False):
+                    console.print("[red]Aborted.[/red]")
+                    return
+            # Copy to output location
+            shutil.copy2(snapshot_path, target_path)
+            console.print(f"Mode: [magenta]Copy to new database[/magenta]")
+            console.print(f"Output: [yellow]{target_path}[/yellow]")
+
+        console.print()
+
+        # Open database and migrate
+        conn = sqlite3.connect(str(target_path))
+        conn.row_factory = sqlite3.Row
+
+        try:
+            # Migrate schema
+            console.print("[bold]1. Schema Migration[/bold]")
+            schema_changed, schema_rows = migrate_schema(conn)
+
+            schema_table = Table(show_header=True, header_style="bold magenta", box=None)
+            schema_table.add_column("Component", style="cyan")
+            schema_table.add_column("Action", style="yellow")
+            schema_table.add_column("Status", justify="center")
+            for component, action, status in schema_rows:
+                schema_table.add_row(component, action, status)
+            console.print(schema_table)
+            console.print()
+
+            # Enrich with BibTeX if provided
+            matched = 0
+            doi_count = 0
+            total = 0
+            if bibtex_path:
+                bibtex_file = Path(bibtex_path)
+                if not bibtex_file.exists():
+                    raise click.ClickException(f"BibTeX file not found: {bibtex_file}")
+
+                console.print(f"[bold]2. BibTeX Enrichment[/bold] from [yellow]{bibtex_file.name}[/yellow]")
+                matched, doi_count, total = enrich_db_with_bibtex(conn, bibtex_file)
+
+                bibtex_table = Table(show_header=True, header_style="bold magenta", box=None)
+                bibtex_table.add_column("Metric", style="cyan")
+                bibtex_table.add_column("Count", justify="right", style="green")
+                bibtex_table.add_column("Percentage", justify="right")
+                bibtex_table.add_row("Total papers", str(total), "")
+                bibtex_table.add_row("BibTeX matched", str(matched), f"{matched/total*100:.1f}%" if total else "0%")
+                bibtex_table.add_row("DOI extracted", str(doi_count), f"{doi_count/total*100:.1f}%" if total else "0%")
+                console.print(bibtex_table)
+                console.print()
+            else:
+                console.print("[yellow]2. BibTeX Enrichment[/yellow]: Skipped (no BibTeX file provided)")
+                console.print()
+
+            # Commit changes
+            conn.commit()
+
+            # Update static export if provided
+            if static_export_dir:
+                static_path = Path(static_export_dir)
+                if static_path.exists():
+                    console.print(f"[bold]3. Static Export Update[/bold]")
+                    updated_count = update_static_export_index(static_path, conn)
+                    if updated_count > 0:
+                        console.print(f"  [green]✓[/green] Updated {updated_count} papers in paper_index.json")
+                    else:
+                        console.print(f"  [yellow]○[/yellow] paper_index.json not found or no updates needed")
+                    console.print()
+
+            console.print(Panel(
+                f"[bold green]Migration Complete![/bold green]\n\n"
+                f"Database: [yellow]{target_path}[/yellow]",
+                border_style="green",
+                padding=(1, 2)
+            ))
+
+        except Exception as e:
+            conn.rollback()
+            raise click.ClickException(f"Migration failed: {e}")
+        finally:
+            conn.close()
+
     @db_group.group("api")
     def api_group() -> None:
         """Read-only JSON API server backed by a snapshot DB."""

@@ -773,7 +773,48 @@ uv run deepresearch-flow paper db snapshot update \
 
 #### 将旧版 Snapshot 升级到 DOI/BibTeX 新格式
 
-如果现有 snapshot 是 DOI/BibTeX 支持上线前构建的，建议使用 `--previous-snapshot-db` 进行一次重建，保持 paper identity 连续并写入 DOI/BibTeX 新字段：
+**推荐：就地迁移升级（零数据丢失）**
+
+如果现有 snapshot 是 DOI/BibTeX 支持上线前构建的，建议使用 `migrate` 命令升级数据库 schema，不会丢失任何论文：
+
+```bash
+# 就地迁移（自动创建带时间戳的备份）
+uv run deepresearch-flow paper db snapshot migrate \
+  --snapshot-db ./dist/paper_snapshot.db \
+  --bibtex ./papers.bib \
+  --static-export-dir ./dist/paper-static \
+  --in-place
+
+# 或者复制到新位置
+uv run deepresearch-flow paper db snapshot migrate \
+  --snapshot-db ./dist/paper_snapshot.db \
+  --bibtex ./papers.bib \
+  --static-export-dir ./dist/paper-static \
+  --output-db ./dist/paper_snapshot_v2.db
+
+# 仅升级 schema（不进行 BibTeX 匹配）
+uv run deepresearch-flow paper db snapshot migrate \
+  --snapshot-db ./dist/paper_snapshot.db \
+  --in-place
+```
+
+功能特性：
+- **零数据丢失**：使用 `ALTER TABLE` 升级 schema，保留所有论文
+- **带时间戳的备份**：自动创建 `.bak_YYYYMMDD_HHMMSS` 格式的备份文件
+- **BibTeX 匹配**：自动匹配论文与 BibTeX 条目并提取 DOI 元数据
+- **静态导出更新**：同步更新 `paper_index.json` 的 DOI/BibTeX 引用
+- **美观输出**：使用 Rich 表格展示 schema 变更和匹配统计信息
+
+迁移过程包括：
+1. 创建带时间戳的备份（除非使用 `--no-backup`）
+2. 在 `paper` 表中添加 `doi` 列（如果缺失）
+3. 创建 `paper_bibtex` 表（如果缺失）
+4. 匹配论文与 BibTeX 条目，填充 DOI/BibTeX 数据
+5. 更新静态导出索引的元数据
+
+**备选方案：使用旧快照重建**
+
+如果需要从零重建，同时保持 paper identity 连续性：
 
 ```bash
 uv run deepresearch-flow paper db snapshot build \
@@ -787,6 +828,7 @@ uv run deepresearch-flow paper db snapshot build \
 说明：
 - 这次重建中的 `--md-root`、`--md-translated-root`、`--pdf-root` 均为可选。
 - 对同一篇论文，当前输入里有 DOI/BibTeX 时优先使用当前输入；否则可从 `--previous-snapshot-db` 继承。
+- **警告**：此方法仅包含输入 JSON 文件中的论文，请确保包含所有论文以避免数据丢失。
 
 #### 补充缺失的翻译
 
