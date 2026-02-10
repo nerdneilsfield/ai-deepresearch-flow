@@ -1,9 +1,21 @@
-name: Docker Images
+name: Docker Images (Optimized)
 
 on:
   push:
     tags: ["v*"]
+    paths:
+      - 'python/**'
+      - 'frontend/**'
+      - 'scripts/docker/**'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - '.github/workflows/docker-images.yml'
   workflow_dispatch:
+
+# Cancel in-progress runs for the same ref
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build_base:
@@ -12,8 +24,19 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      image_tag: ${{ steps.image_tag.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Determine image tag
+        id: image_tag
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -46,6 +69,9 @@ jobs:
           tags: |
             type=raw,value=latest
             type=raw,value=${{ github.ref_name }},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
 
       - name: Build and push (base)
         uses: docker/build-push-action@v5
@@ -56,8 +82,13 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Use registry cache for better performance
+          cache-from: |
+            type=registry,ref=ghcr.io/${{ github.repository_owner }}/deepresearch-flow:cache-base
+            type=gha
+          cache-to: |
+            type=registry,ref=ghcr.io/${{ github.repository_owner }}/deepresearch-flow:cache-base,mode=max
+            type=gha,mode=max
 
   build_frontend:
     name: Build frontend assets
@@ -88,6 +119,7 @@ jobs:
           name: frontend-dist
           path: frontend/dist
           if-no-files-found: error
+          retention-days: 1  # Only keep for this workflow
 
   build_deploy:
     name: Build deploy image
@@ -126,15 +158,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Resolve base image
-        id: base_ref
-        run: |
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER}/deepresearch-flow:${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-          else
-            echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER}/deepresearch-flow:latest" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Extract metadata (deploy)
         id: meta
         uses: docker/metadata-action@v5
@@ -145,6 +168,8 @@ jobs:
           tags: |
             type=raw,value=deploy-latest
             type=raw,value=deploy-${{ github.ref_name }},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=semver,pattern=deploy-{{version}}
+            type=semver,pattern=deploy-{{major}}.{{minor}}
 
       - name: Build and push (deploy)
         uses: docker/build-push-action@v5
@@ -154,8 +179,12 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           build-args: |
-            BASE_IMAGE=${{ steps.base_ref.outputs.image }}
+            BASE_IMAGE=ghcr.io/${{ github.repository_owner }}/deepresearch-flow:${{ needs.build_base.outputs.image_tag }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: |
+            type=registry,ref=ghcr.io/${{ github.repository_owner }}/deepresearch-flow:cache-deploy
+            type=gha
+          cache-to: |
+            type=registry,ref=ghcr.io/${{ github.repository_owner }}/deepresearch-flow:cache-deploy,mode=max
+            type=gha,mode=max
