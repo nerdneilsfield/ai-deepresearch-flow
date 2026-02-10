@@ -491,6 +491,12 @@ def register_db_commands(db_group: click.Group) -> None:
         help="PDF root directories for name alignment (repeatable)",
     )
     @click.option("--template", "template", required=True, help="Summary template tag")
+    @click.option(
+        "--strict-template",
+        "strict_template",
+        is_flag=True,
+        help="Only export papers that have the requested template summary (no fallback)",
+    )
     @click.option("--output-json", "output_json", required=True, help="Output JSON file path")
     @click.option("--log", "log_json", default=None, help="Path to export error log JSON")
     def snapshot_unpack_info(
@@ -498,6 +504,7 @@ def register_db_commands(db_group: click.Group) -> None:
         static_export_dir: str,
         pdf_roots: tuple[str, ...],
         template: str,
+        strict_template: bool,
         output_json: str,
         log_json: str | None,
     ) -> None:
@@ -509,6 +516,7 @@ def register_db_commands(db_group: click.Group) -> None:
             static_export_dir=Path(static_export_dir),
             pdf_roots=[Path(path) for path in pdf_roots],
             template=template,
+            strict_template=strict_template,
             output_json=Path(output_json),
             log_json=Path(log_json) if log_json else None,
         )

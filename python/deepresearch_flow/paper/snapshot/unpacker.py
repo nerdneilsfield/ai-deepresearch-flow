@@ -139,6 +139,7 @@ class SnapshotUnpackMdOptions(SnapshotUnpackBaseOptions):
 class SnapshotUnpackInfoOptions(SnapshotUnpackBaseOptions):
     template: str
     output_json: Path
+    strict_template: bool = False
     log_json: Path | None = None
 
 
@@ -215,7 +216,12 @@ def _open_snapshot_db(path: Path) -> sqlite3.Connection:
     return conn
 
 
-def _print_summary(title: str, counts: UnpackCounts, is_info: bool = False) -> None:
+def _print_summary(
+    title: str,
+    counts: UnpackCounts,
+    is_info: bool = False,
+    info_template_missing_label: str = "Template not found (using fallback)",
+) -> None:
     table = Table(title=title, header_style="bold cyan", title_style="bold magenta")
     table.add_column("Metric", style="cyan", no_wrap=True)
     table.add_column("Value", style="white", overflow="fold")
@@ -239,7 +245,7 @@ def _print_summary(title: str, counts: UnpackCounts, is_info: bool = False) -> N
             )
             fail_table.add_column("Reason", style="cyan", no_wrap=True)
             fail_table.add_column("Count", style="white", overflow="fold")
-            fail_table.add_row("Template not found (using fallback)", str(counts.failed_no_md_hash))
+            fail_table.add_row(info_template_missing_label, str(counts.failed_no_md_hash))
             fail_table.add_row("Summary file missing", str(counts.failed_md_file_missing))
             fail_table.add_row("JSON decode / invalid payload", str(counts.failed_md_write_error))
             Console().print(fail_table)
@@ -473,8 +479,18 @@ def unpack_info(opts: SnapshotUnpackInfoOptions) -> None:
 
                 summary_path = opts.static_export_dir / "summary" / paper_id / f"{opts.template}.json"
                 fallback_path = opts.static_export_dir / "summary" / f"{paper_id}.json"
-                target_path = summary_path if summary_path.exists() else fallback_path
-                used_fallback = target_path == fallback_path
+                used_fallback = False
+                if summary_path.exists():
+                    target_path = summary_path
+                elif opts.strict_template:
+                    counts.failed += 1
+                    counts.failed_no_md_hash += 1  # Using this field for "Template not found"
+                    counts.failed_details.append((paper_id, title, f"Template '{opts.template}' not found (strict mode)"))
+                    pbar.update(1)
+                    continue
+                else:
+                    target_path = fallback_path
+                    used_fallback = True
                 
                 if not target_path.exists():
                     counts.failed += 1
@@ -522,9 +538,22 @@ def unpack_info(opts: SnapshotUnpackInfoOptions) -> None:
     finally:
         conn.close()
 
+    output_payload = {
+        "template_tag": opts.template,
+        "papers": items,
+    }
     opts.output_json.parent.mkdir(parents=True, exist_ok=True)
-    opts.output_json.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
-    _print_summary("snapshot unpack info summary", counts, is_info=True)
+    opts.output_json.write_text(json.dumps(output_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    _print_summary(
+        "snapshot unpack info summary",
+        counts,
+        is_info=True,
+        info_template_missing_label=(
+            "Template not found (strict mode)"
+            if opts.strict_template
+            else "Template not found (using fallback)"
+        ),
+    )
     
     # Export error log if requested
     if opts.log_json and counts.failed_details:
