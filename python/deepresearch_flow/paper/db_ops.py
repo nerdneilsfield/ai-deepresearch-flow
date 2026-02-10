@@ -662,6 +662,12 @@ def _build_file_index(
                     parent_pdf_key = f"{parent_key}.pdf"
                     if parent_pdf_key != parent_key:
                         index.setdefault(parent_pdf_key, []).append(resolved)
+                    # Debug: print what we indexed
+                    import sys
+                    if "rangenet" in parent_key:
+                        print(f"[DEBUG] Indexed *_origin.pdf: {path}", file=sys.stderr)
+                        print(f"[DEBUG]   parent_key: {parent_key}", file=sys.stderr)
+                        print(f"[DEBUG]   parent_pdf_key: {parent_pdf_key}", file=sys.stderr)
 
             title_candidate = _extract_title_from_filename(path.name)
             title_key = _normalize_title_key(title_candidate)
@@ -820,10 +826,27 @@ def _guess_pdf_names(paper: dict[str, Any]) -> list[str]:
 
 
 def _resolve_pdf(paper: dict[str, Any], pdf_index: dict[str, list[Path]]) -> Path | None:
-    for filename in _guess_pdf_names(paper):
+    guesses = _guess_pdf_names(paper)
+    for filename in guesses:
         candidates = pdf_index.get(filename.lower(), [])
         if candidates:
             return candidates[0]
+
+    # Debug: print what we tried
+    source_path = paper.get("source_path", "")
+    if source_path and not any(pdf_index.get(g.lower()) for g in guesses):
+        # Only print if all guesses failed
+        import sys
+        from pathlib import Path as PathLib
+        name = PathLib(str(source_path)).name
+        print(f"[DEBUG] Failed to match PDF for: {name}", file=sys.stderr)
+        print(f"[DEBUG] Tried candidates: {[g.lower() for g in guesses]}", file=sys.stderr)
+        # Show what's in the index that might be close
+        name_prefix = name[:20].lower() if len(name) > 20 else name.lower()
+        close_matches = [k for k in pdf_index.keys() if name_prefix in k or k[:20] in name.lower()][:5]
+        if close_matches:
+            print(f"[DEBUG] Close matches in index: {close_matches}", file=sys.stderr)
+
     match, _, _ = _resolve_by_title_and_meta(paper, pdf_index)
     return match
 
