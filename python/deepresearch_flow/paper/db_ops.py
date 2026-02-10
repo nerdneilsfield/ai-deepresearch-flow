@@ -650,6 +650,19 @@ def _build_file_index(
             resolved = path.resolve()
             name_key = path.name.lower()
             index.setdefault(name_key, []).append(resolved)
+
+            # For *_origin.pdf files (OCR output), also index by parent directory name
+            if path.name.lower().endswith("_origin.pdf"):
+                parent_dir_name = path.parent.name
+                if parent_dir_name:
+                    parent_key = parent_dir_name.lower()
+                    if parent_key != name_key:
+                        index.setdefault(parent_key, []).append(resolved)
+                    # Try adding .pdf extension to parent name
+                    parent_pdf_key = f"{parent_key}.pdf"
+                    if parent_pdf_key != parent_key:
+                        index.setdefault(parent_pdf_key, []).append(resolved)
+
             title_candidate = _extract_title_from_filename(path.name)
             title_key = _normalize_title_key(title_candidate)
             if title_key:
@@ -780,20 +793,30 @@ def _guess_pdf_names(paper: dict[str, Any]) -> list[str]:
     if not source_path:
         return []
     name = Path(str(source_path)).name
+    candidates: list[str] = []
+
     match = re.match(r"(?i)(.+\.pdf)(?:-[0-9a-f\-]{8,})?\.md$", name)
     if match:
-        return [Path(match.group(1)).name]
-    if ".pdf-" in name.lower():
+        candidates.append(Path(match.group(1)).name)
+    elif ".pdf-" in name.lower():
         base = name[: name.lower().rfind(".pdf-") + 4]
-        return [Path(base).name]
-    if name.lower().endswith(".pdf"):
-        return [name]
-    if name.lower().endswith(".pdf.md"):
-        return [name[:-3]]
-    # Fallback: if filename ends with .md, try replacing with .pdf
-    if name.lower().endswith(".md"):
-        return [name[:-3] + ".pdf"]
-    return []
+        candidates.append(Path(base).name)
+    elif name.lower().endswith(".pdf"):
+        candidates.append(name)
+    elif name.lower().endswith(".pdf.md"):
+        candidates.append(name[:-3])
+    elif name.lower().endswith(".md"):
+        # Fallback: try replacing .md with .pdf
+        base = name[:-3]
+        candidates.append(base + ".pdf")
+
+        # For OCR directories: also try parent directory name variations
+        # e.g., "Milioto_et_al_2019_RangeNet.md" might match directory "Milioto_et_al_2019_RangeNet_++"
+        # Add common suffix variations
+        for suffix in ["_++", "_+", "++", "2"]:
+            candidates.append(base + suffix)
+
+    return candidates
 
 
 def _resolve_pdf(paper: dict[str, Any], pdf_index: dict[str, list[Path]]) -> Path | None:
