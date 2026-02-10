@@ -59,7 +59,10 @@ class UpdateStats:
     markdown_processed: int = 0
     translations_processed: int = 0
     images_extracted: int = 0
+    pdfs_found: int = 0
     pdfs_copied: int = 0
+    pdfs_already_exist: int = 0
+    pdfs_missing: int = 0
     summaries_generated: int = 0
     doi_bibtex_mismatches: int = 0
     mismatch_samples: list[str] = field(default_factory=list)
@@ -392,6 +395,7 @@ def _add_new_paper(
 
     pdf_hash = ""
     if pdf_path and pdf_path.exists():
+        stats.pdfs_found += 1
         pdf_hash = _hash_file(pdf_path)
         dst_pdf = static_dir / "pdf" / f"{pdf_hash}.pdf"
         dst_pdf.parent.mkdir(parents=True, exist_ok=True)
@@ -399,6 +403,10 @@ def _add_new_paper(
             shutil.copy2(pdf_path, dst_pdf)
             stats.files_copied += 1
             stats.pdfs_copied += 1
+        else:
+            stats.pdfs_already_exist += 1
+    else:
+        stats.pdfs_missing += 1
 
     template_payloads = _extract_template_payloads(paper)
     preferred_summary_template = _choose_preferred_template(paper, template_payloads)
@@ -743,6 +751,20 @@ def update_snapshot(opts: SnapshotUpdateOptions) -> None:
             pdf_path = paper_index.pdf_path_by_hash.get(source_hash) if source_hash else None
             translated_paths = paper_index.translated_md_by_hash.get(source_hash, {}) if source_hash else {}
 
+            # Debug: Print PDF matching info
+            if not pdf_path:
+                paper_title = str(paper.get("paper_title") or "")
+                source_path = str(paper.get("source_path") or "")
+                console.print(f"[yellow]⚠ Paper without PDF:[/yellow]")
+                console.print(f"  Title: {paper_title}")
+                console.print(f"  source_path: {source_path}")
+                console.print(f"  source_hash: {source_hash}")
+                # Try to manually resolve
+                from deepresearch_flow.paper.db_ops import _normalize_title_key
+                title_key = _normalize_title_key(paper_title)
+                console.print(f"  normalized title: {title_key}")
+                console.print()
+
             _add_new_paper(
                 conn,
                 output_static,
@@ -802,8 +824,20 @@ def _print_update_summary(
     processing_table.add_row("Markdown processed", str(stats.markdown_processed), "Images extracted & paths rewritten")
     processing_table.add_row("Translations processed", str(stats.translations_processed), "Images extracted & paths rewritten")
     processing_table.add_row("Images extracted", str(stats.images_extracted), "From markdown & translations")
-    processing_table.add_row("PDFs copied", str(stats.pdfs_copied), "")
     console.print(processing_table)
+    console.print()
+
+    # PDFs table
+    pdfs_table = Table(title="PDFs", header_style="bold magenta", box=None)
+    pdfs_table.add_column("Status", style="cyan")
+    pdfs_table.add_column("Count", style="green", justify="right")
+    pdfs_table.add_column("Details", style="yellow")
+    pdfs_table.add_row("Found", str(stats.pdfs_found), "PDF files located")
+    pdfs_table.add_row("Copied (new)", str(stats.pdfs_copied), "Newly added to static/pdf/")
+    pdfs_table.add_row("Already exist", str(stats.pdfs_already_exist), "Same content hash, skipped")
+    if stats.pdfs_missing > 0:
+        pdfs_table.add_row("Missing", str(stats.pdfs_missing), "No PDF file found", style="yellow")
+    console.print(pdfs_table)
     console.print()
 
     # Metadata table

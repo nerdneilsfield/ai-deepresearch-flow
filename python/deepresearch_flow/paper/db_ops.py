@@ -790,6 +790,9 @@ def _guess_pdf_names(paper: dict[str, Any]) -> list[str]:
         return [name]
     if name.lower().endswith(".pdf.md"):
         return [name[:-3]]
+    # Fallback: if filename ends with .md, try replacing with .pdf
+    if name.lower().endswith(".md"):
+        return [name[:-3] + ".pdf"]
     return []
 
 
