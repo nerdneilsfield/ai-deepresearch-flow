@@ -114,7 +114,7 @@ def _map_output_files(
     used: set[str] = set()
     mapping: dict[Path, str] = {}
     for path in paths:
-        base = path.stem
+        base = path.name if path.is_dir() else path.stem
         mapping[path] = _unique_output_filename(base, output_dirs, used, ext)
     return mapping
 
