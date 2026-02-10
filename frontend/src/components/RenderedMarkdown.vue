@@ -9,6 +9,7 @@ import { normalizeMarkdown } from '@/lib/markdown-normalize'
 import type { HeadList } from 'md-editor-v3'
 import type { OutlineItem } from '@/lib/outline'
 import { STATIC_BASE } from '@/lib/config'
+import { useTheme } from '@/composables/useTheme'
 
 // Global configuration for md-editor-v3
 config({
@@ -27,6 +28,14 @@ const props = defineProps<{
 const emit = defineEmits<{
   (event: 'outline', outline: OutlineItem[]): void
 }>()
+
+const { themeMode } = useTheme()
+const editorTheme = computed(() => {
+  if (themeMode.value === 'dark') return 'dark'
+  if (themeMode.value === 'light') return 'light'
+  // system: check actual applied theme from document
+  return document.documentElement.classList.contains('dark') ? 'dark' : 'light'
+})
 
 const editorId = `md-preview-${Math.random().toString(36).slice(2, 9)}`
 const effectiveImagesBase = computed(() => props.imagesBaseUrl || STATIC_BASE || '')
@@ -227,6 +236,7 @@ onBeforeUnmount(() => {
       :editorId="editorId"
       :modelValue="processedMarkdown"
       :noMermaid="false"
+      :theme="editorTheme"
       @onGetCatalog="handleCatalog"
       @onHtmlChanged="handleHtmlChanged"
       class="bg-transparent [&_.md-editor]:bg-transparent"
