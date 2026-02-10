@@ -108,9 +108,10 @@ def configure(config: McpSnapshotConfig) -> None:
 
 
 def _allowed_methods_for_transport(transport: Literal["streamable-http", "sse"]) -> set[str]:
-    if transport == "sse":
-        return {"GET", "POST", "OPTIONS"}
-    return {"POST", "OPTIONS"}
+    # Both transports need to support GET for SSE streams and transport detection
+    # - SSE: GET opens the event stream, POST sends JSON-RPC requests
+    # - Streamable HTTP: POST is main channel, GET may be used for SSE or detection
+    return {"GET", "POST", "OPTIONS"}
 
 
 def create_mcp_transport_app(
