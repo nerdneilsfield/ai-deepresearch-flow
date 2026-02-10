@@ -725,8 +725,6 @@ uv run deepresearch-flow paper db snapshot supplement \
   --snapshot-db ./dist/paper_snapshot.db \
   --static-export-dir ./dist/paper-static \
   -i ./deep_read_supplement.json \
-  --md-root ./docs \
-  --md-translated-root ./docs_translated \
   --in-place
 
 # 或输出到新位置
@@ -734,10 +732,13 @@ uv run deepresearch-flow paper db snapshot supplement \
   --snapshot-db ./dist/paper_snapshot.db \
   --static-export-dir ./dist/paper-static \
   -i ./deep_read_supplement.json \
-  --md-root ./docs \
   --output-db ./dist/paper_snapshot_supplemented.db \
   --output-static-dir ./dist/paper-static-supplemented
 ```
+
+说明：
+- `snapshot supplement` 的 `--md-root` 与 `--md-translated-root` 都是可选参数。
+- 仅当你需要从本地目录解析/复制 markdown 文件时才需要传入。
 
 **替代方案 2：添加新论文**
 
@@ -769,6 +770,23 @@ uv run deepresearch-flow paper db snapshot update \
 **区别：**
 - `supplement`：只为**已有**论文补充缺失的模板/翻译（跳过新论文）
 - `update`：只添加**全新**论文（跳过已有论文）
+
+#### 将旧版 Snapshot 升级到 DOI/BibTeX 新格式
+
+如果现有 snapshot 是 DOI/BibTeX 支持上线前构建的，建议使用 `--previous-snapshot-db` 进行一次重建，保持 paper identity 连续并写入 DOI/BibTeX 新字段：
+
+```bash
+uv run deepresearch-flow paper db snapshot build \
+  --input ./paper_infos_complete.json \
+  --bibtex ./papers.bib \
+  --output-db ./dist/paper_snapshot_v2.db \
+  --static-export-dir ./dist/paper-static-v2 \
+  --previous-snapshot-db ./dist/paper_snapshot.db
+```
+
+说明：
+- 这次重建中的 `--md-root`、`--md-translated-root`、`--pdf-root` 均为可选。
+- 对同一篇论文，当前输入里有 DOI/BibTeX 时优先使用当前输入；否则可从 `--previous-snapshot-db` 继承。
 
 #### 补充缺失的翻译
 

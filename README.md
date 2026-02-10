@@ -311,8 +311,6 @@ uv run deepresearch-flow paper db snapshot supplement \
   --snapshot-db ./dist/paper_snapshot.db \
   --static-export-dir ./dist/paper-static \
   -i ./deep_read_supplement.json \
-  --md-root ./docs \
-  --md-translated-root ./docs_translated \
   --in-place
 
 # Or output to new location
@@ -320,10 +318,13 @@ uv run deepresearch-flow paper db snapshot supplement \
   --snapshot-db ./dist/paper_snapshot.db \
   --static-export-dir ./dist/paper-static \
   -i ./deep_read_supplement.json \
-  --md-root ./docs \
   --output-db ./dist/paper_snapshot_supplemented.db \
   --output-static-dir ./dist/paper-static-supplemented
 ```
+
+Notes:
+- `--md-root` and `--md-translated-root` are optional for `snapshot supplement`.
+- Use them only when you want to resolve/copy markdown files from local source directories.
 
 **Alternative 2: Add New Papers**
 
@@ -355,6 +356,23 @@ uv run deepresearch-flow paper db snapshot update \
 **Differences:**
 - `supplement`: Only adds missing templates/translations for **existing** papers (skips new papers)
 - `update`: Only adds **completely new** papers (skips existing papers)
+
+#### Upgrade Legacy Snapshot Schema (DOI/BibTeX)
+
+If your existing snapshot was built before DOI/BibTeX support, rebuild once with `--previous-snapshot-db` to keep stable identity continuity and write DOI/BibTeX into the new schema:
+
+```bash
+uv run deepresearch-flow paper db snapshot build \
+  --input ./paper_infos_complete.json \
+  --bibtex ./papers.bib \
+  --output-db ./dist/paper_snapshot_v2.db \
+  --static-export-dir ./dist/paper-static-v2 \
+  --previous-snapshot-db ./dist/paper_snapshot.db
+```
+
+Notes:
+- `--md-root`, `--md-translated-root`, and `--pdf-root` are optional for this rebuild.
+- If a paper in current inputs already has DOI/BibTeX, current input wins; otherwise data can be inherited from `--previous-snapshot-db`.
 
 #### Supplement Missing Translations
 

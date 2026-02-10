@@ -6,14 +6,16 @@ from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
-import shutil
 import sqlite3
+import shutil
 from typing import Any
 
 from rich.console import Console
 from rich.table import Table
 
-from deepresearch_flow.paper.db_ops import load_and_merge_papers, build_index
+from deepresearch_flow.paper.db_ops import load_and_merge_papers
+from deepresearch_flow.paper.snapshot.identity import build_paper_key_candidates
+from deepresearch_flow.paper.utils import stable_hash
 
 
 @dataclass(frozen=True)
@@ -93,38 +95,107 @@ def supplement_snapshot(opts: SnapshotSupplementOptions) -> None:
     
     try:
         for paper in papers:
-            paper_id = paper.get("paper_id") or paper.get("id")
-            if not paper_id:
-                continue
-            
             stats.papers_checked += 1
-            
-            # Check if paper exists in DB
-            existing = conn.execute(
-                "SELECT 1 FROM paper WHERE paper_id = ?", (paper_id,)
-            ).fetchone()
-            
-            if not existing:
-                # Skip non-existing papers
+            paper_ids = _resolve_existing_paper_ids(conn, paper)
+            if not paper_ids:
                 continue
-            
-            # Supplement missing templates
-            template_count = _supplement_templates(conn, output_static, paper_id, paper)
-            stats.templates_added += template_count
-            
-            # Supplement missing translations
-            translation_count, copied_count = _supplement_translations(
-                conn, output_static, paper_id, paper,
-                opts.md_translated_roots or []
-            )
-            stats.translations_added += translation_count
-            stats.files_copied += copied_count
+
+            for paper_id in paper_ids:
+                # Supplement missing templates
+                template_count = _supplement_templates(conn, output_static, paper_id, paper)
+                stats.templates_added += template_count
+
+                # Supplement missing translations
+                translation_count, copied_count = _supplement_translations(
+                    conn, output_static, paper_id, paper,
+                    opts.md_translated_roots or []
+                )
+                stats.translations_added += translation_count
+                stats.files_copied += copied_count
         
         conn.commit()
         _print_supplement_summary(stats, output_db, output_static, opts.in_place)
         
     finally:
         conn.close()
+
+
+def _resolve_existing_paper_ids(conn: sqlite3.Connection, paper: dict[str, Any]) -> list[str]:
+    """Resolve one or more paper IDs for supplement inputs that may not include paper_id."""
+    def _rows_to_ids(rows: list[sqlite3.Row]) -> list[str]:
+        seen: set[str] = set()
+        out: list[str] = []
+        for row in rows:
+            paper_id = str(row["paper_id"])
+            if paper_id not in seen:
+                seen.add(paper_id)
+                out.append(paper_id)
+        return out
+
+    explicit = paper.get("paper_id") or paper.get("id")
+    if isinstance(explicit, str) and explicit.strip():
+        paper_id = explicit.strip()
+        row = conn.execute("SELECT 1 FROM paper WHERE paper_id = ? LIMIT 1", (paper_id,)).fetchone()
+        if row:
+            return [paper_id]
+
+    source_hash = paper.get("source_hash")
+    if isinstance(source_hash, str) and source_hash.strip():
+        normalized = source_hash.strip()
+        rows = conn.execute(
+            "SELECT paper_id FROM paper WHERE source_hash = ? ORDER BY paper_index",
+            (normalized,),
+        ).fetchall()
+        if rows:
+            return _rows_to_ids(rows)
+        rows = conn.execute(
+            "SELECT paper_id FROM paper WHERE source_md_content_hash = ? ORDER BY paper_index",
+            (normalized,),
+        ).fetchall()
+        if rows:
+            return _rows_to_ids(rows)
+
+    source_path = paper.get("source_path")
+    if isinstance(source_path, str) and source_path.strip():
+        path_hash = stable_hash(source_path.strip())
+        rows = conn.execute(
+            "SELECT paper_id FROM paper WHERE source_hash = ? ORDER BY paper_index",
+            (path_hash,),
+        ).fetchall()
+        if rows:
+            return _rows_to_ids(rows)
+        path_obj = Path(source_path.strip())
+        if path_obj.exists() and path_obj.is_file():
+            try:
+                md_text = path_obj.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                md_text = path_obj.read_text(encoding="latin-1")
+            content_hash = hashlib.sha256(md_text.encode("utf-8", errors="ignore")).hexdigest()
+            rows = conn.execute(
+                "SELECT paper_id FROM paper WHERE source_md_content_hash = ? ORDER BY paper_index",
+                (content_hash,),
+            ).fetchall()
+            if rows:
+                return _rows_to_ids(rows)
+
+    try:
+        candidates = build_paper_key_candidates(paper)
+    except Exception:
+        candidates = []
+    out: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        rows = conn.execute(
+            "SELECT paper_id FROM paper_key_alias WHERE paper_key = ?",
+            (candidate.paper_key,),
+        ).fetchall()
+        for row in rows:
+            paper_id = str(row["paper_id"])
+            if paper_id in seen:
+                continue
+            seen.add(paper_id)
+            out.append(paper_id)
+    return out
 
 
 def _copy_snapshot(src_db: Path, src_static: Path, dst_db: Path, dst_static: Path) -> None:
