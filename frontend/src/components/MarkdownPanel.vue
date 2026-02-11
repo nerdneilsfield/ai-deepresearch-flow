@@ -27,21 +27,29 @@ const error = ref('')
 let loadGeneration = 0
 
 async function load(url: string) {
+  console.log('[MarkdownPanel] Loading URL:', url)
   if (markdownCache.has(url)) {
     markdown.value = markdownCache.get(url) || ''
+    console.log('[MarkdownPanel] ✓ Loaded from cache, length:', markdown.value.length)
     return
   }
   const gen = ++loadGeneration
   loading.value = true
   error.value = ''
+  console.log('[MarkdownPanel] Fetching from server...')
   try {
     const raw = await fetchText(url)
     // Guard against stale responses when URL changed during fetch
-    if (gen !== loadGeneration) return
+    if (gen !== loadGeneration) {
+      console.log('[MarkdownPanel] ✗ Stale response, ignoring')
+      return
+    }
     cacheSet(url, raw)
     markdown.value = raw
+    console.log('[MarkdownPanel] ✓ Success, length:', raw.length)
   } catch (err) {
     if (gen !== loadGeneration) return
+    console.error('[MarkdownPanel] ✗ Error:', err)
     error.value = 'Failed to load markdown.'
   } finally {
     if (gen === loadGeneration) loading.value = false
