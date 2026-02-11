@@ -983,9 +983,11 @@ def create_app(
 
     # Pass MCP lifespan to ensure session manager initializes properly
     # https://gofastmcp.com/deployment/http#mounting-in-starlette
+    # Disable redirect_slashes to allow both /mcp and /mcp/ without redirects
     app = Starlette(
         routes=routes,
         lifespan=mcp_lifespan,
+        redirect_slashes=False,
     )
     if cfg.cors_allowed_origins:
         app.add_middleware(

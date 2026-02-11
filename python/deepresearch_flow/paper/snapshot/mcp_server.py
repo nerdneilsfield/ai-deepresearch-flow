@@ -122,6 +122,7 @@ def create_mcp_transport_app(
     """Create MCP app for a specific transport with transport-aware method guard."""
     configure(config)
     mcp_app = mcp.http_app(path="/", transport=transport, stateless_http=(transport == "streamable-http"))
+    # Disable redirect_slashes to allow both /mcp and /mcp/ without redirects
     wrapped = Starlette(
         routes=[Mount("/", app=mcp_app)],
         middleware=[
@@ -131,6 +132,7 @@ def create_mcp_transport_app(
                 allowed_methods=_allowed_methods_for_transport(transport),
             ),
         ],
+        redirect_slashes=False,
     )
     return wrapped, mcp_app.lifespan
 
