@@ -90,6 +90,15 @@ class McpRequestGuardMiddleware(BaseHTTPMiddleware):
         protocol = request.headers.get("mcp-protocol-version")
         if protocol and protocol not in _SUPPORTED_PROTOCOL_VERSIONS:
             return Response("Bad Request", status_code=400)
+
+        # Normalize path: ensure trailing slash for proper Mount matching
+        # This allows both /path and /path/ to work without redirects
+        scope = request.scope
+        if scope["path"] and not scope["path"].endswith("/"):
+            scope = scope.copy()
+            scope["path"] = scope["path"] + "/"
+            request = Request(scope)
+
         return await call_next(request)
 
     def _is_allowed_origin(self, origin: str) -> bool:
@@ -122,7 +131,6 @@ def create_mcp_transport_app(
     """Create MCP app for a specific transport with transport-aware method guard."""
     configure(config)
     mcp_app = mcp.http_app(path="/", transport=transport, stateless_http=(transport == "streamable-http"))
-    # Disable redirect_slashes to allow both /mcp and /mcp/ without redirects
     wrapped = Starlette(
         routes=[Mount("/", app=mcp_app)],
         middleware=[
@@ -132,7 +140,6 @@ def create_mcp_transport_app(
                 allowed_methods=_allowed_methods_for_transport(transport),
             ),
         ],
-        redirect_slashes=False,
     )
     return wrapped, mcp_app.lifespan
 
