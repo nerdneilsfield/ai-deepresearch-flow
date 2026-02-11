@@ -9,39 +9,16 @@ from typing import Any, Literal
 
 import httpx
 from starlette.applications import Starlette
-from starlette.middleware import Middleware
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
-from starlette.responses import Response
-from starlette.routing import Mount
 
 from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
 
 from deepresearch_flow.paper.snapshot.common import ApiLimits, _column_exists, _open_ro_conn, _table_exists
 from deepresearch_flow.paper.snapshot.text import merge_adjacent_markers, remove_cjk_spaces, rewrite_search_query
 
-_SUPPORTED_PROTOCOL_VERSIONS = {"2025-03-26", "2025-06-18"}
 _DEFAULT_MAX_CHARS = 50_000
 _DEFAULT_TIMEOUT = 10.0
 _PAPER_ID_PATTERN = re.compile(r'^[a-zA-Z0-9_-]+$')
-
-
-class McpToolError(Exception):
-    """MCP tool exception for standardized error handling.
-    
-    FastMCP will catch this exception and convert it to a proper
-    JSON-RPC error response that the client can understand.
-    """
-    
-    def __init__(self, code: str, message: str, **details):
-        self.code = code
-        self.message = message
-        self.details = details
-        super().__init__(message)
-    
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to error dictionary format."""
-        return {"error": self.code, "message": self.message, **self.details}
 
 
 @dataclass(frozen=True)
@@ -75,30 +52,6 @@ class McpSnapshotConfig:
         return self._http_client
 
 
-class McpRequestGuardMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, *, origin_allowlist: list[str], allowed_methods: set[str] | None = None) -> None:
-        super().__init__(app)
-        self._allowlist = [origin.lower() for origin in origin_allowlist]
-        self._allowed_methods = {method.upper() for method in (allowed_methods or {"POST", "OPTIONS"})}
-
-    async def dispatch(self, request: Request, call_next):  # type: ignore[override]
-        if request.method.upper() not in self._allowed_methods:
-            return Response("Method Not Allowed", status_code=405)
-        origin = request.headers.get("origin")
-        if origin and not self._is_allowed_origin(origin):
-            return Response("Forbidden", status_code=403)
-        # Relax protocol version check - allow any version or no version header
-        # protocol = request.headers.get("mcp-protocol-version")
-        # if protocol and protocol not in _SUPPORTED_PROTOCOL_VERSIONS:
-        #     return Response("Bad Request", status_code=400)
-
-        return await call_next(request)
-
-    def _is_allowed_origin(self, origin: str) -> bool:
-        if not self._allowlist or "*" in self._allowlist:
-            return True
-        return origin.lower() in self._allowlist
-
 
 _CONFIG: McpSnapshotConfig | None = None
 mcp = FastMCP("Paper DB MCP")
@@ -108,12 +61,6 @@ def configure(config: McpSnapshotConfig) -> None:
     global _CONFIG
     _CONFIG = config
 
-
-def _allowed_methods_for_transport(transport: Literal["streamable-http", "sse"]) -> set[str]:
-    # Both transports need to support GET for SSE streams and transport detection
-    # - SSE: GET opens the event stream, POST sends JSON-RPC requests
-    # - Streamable HTTP: POST is main channel, GET may be used for SSE or detection
-    return {"GET", "POST", "OPTIONS"}
 
 
 def create_mcp_transport_app(
@@ -163,12 +110,12 @@ def _validate_query(query: str, cfg: McpSnapshotConfig) -> str:
     """Validate search query string.
     
     Raises:
-        McpToolError: If query is invalid or too long.
+        ToolError: If query is invalid or too long.
     """
     if not query or not query.strip():
-        raise McpToolError("invalid_query", "Query cannot be empty")
+        raise ToolError("invalid_query", "Query cannot be empty")
     if len(query) > cfg.limits.max_query_length:
-        raise McpToolError(
+        raise ToolError(
             "query_too_long",
             f"Query exceeds maximum length of {cfg.limits.max_query_length}",
             length=len(query),
@@ -181,19 +128,19 @@ def _validate_paper_id(paper_id: str, cfg: McpSnapshotConfig) -> str:
     """Validate paper ID format.
     
     Raises:
-        McpToolError: If paper_id is invalid.
+        ToolError: If paper_id is invalid.
     """
     if not paper_id:
-        raise McpToolError("invalid_paper_id", "Paper ID cannot be empty")
+        raise ToolError("invalid_paper_id", "Paper ID cannot be empty")
     if len(paper_id) > cfg.max_paper_id_length:
-        raise McpToolError(
+        raise ToolError(
             "paper_id_too_long",
             f"Paper ID exceeds maximum length of {cfg.max_paper_id_length}",
             length=len(paper_id),
             max_length=cfg.max_paper_id_length
         )
     if not _PAPER_ID_PATTERN.match(paper_id):
-        raise McpToolError(
+        raise ToolError(
             "invalid_paper_id_format",
             "Paper ID must contain only alphanumeric characters, hyphens, and underscores",
             paper_id=paper_id
@@ -426,7 +373,7 @@ def get_paper_metadata(paper_id: str) -> dict[str, Any]:
             (paper_id,),
         ).fetchone()
         if not row:
-            raise McpToolError("not_found", "paper not found", paper_id=paper_id)
+            raise ToolError("not_found", "paper not found", paper_id=paper_id)
         template_rows = conn.execute(
             "SELECT template_tag FROM paper_summary WHERE paper_id = ?",
             (paper_id,),
@@ -474,17 +421,17 @@ def get_paper_bibtex(paper_id: str) -> dict[str, Any]:
             (paper_id,),
         ).fetchone()
         if not paper_row:
-            raise McpToolError("paper_not_found", "paper not found", paper_id=paper_id)
+            raise ToolError("paper_not_found", "paper not found", paper_id=paper_id)
 
         if not _table_exists(conn, "paper_bibtex"):
-            raise McpToolError("bibtex_not_found", "bibtex not found", paper_id=paper_id)
+            raise ToolError("bibtex_not_found", "bibtex not found", paper_id=paper_id)
 
         bib_row = conn.execute(
             "SELECT bibtex_raw, bibtex_key, entry_type FROM paper_bibtex WHERE paper_id = ?",
             (paper_id,),
         ).fetchone()
         if not bib_row:
-            raise McpToolError("bibtex_not_found", "bibtex not found", paper_id=paper_id)
+            raise ToolError("bibtex_not_found", "bibtex not found", paper_id=paper_id)
 
         return {
             "paper_id": paper_id,
@@ -511,7 +458,7 @@ def get_paper_summary(paper_id: str, template: str | None = None, max_chars: int
     try:
         payload, available = _load_summary_json(paper_id, template)
     except RuntimeError as exc:
-        raise McpToolError(
+        raise ToolError(
             "asset_fetch_failed",
             "Failed to fetch summary asset",
             paper_id=paper_id,
@@ -520,7 +467,7 @@ def get_paper_summary(paper_id: str, template: str | None = None, max_chars: int
         ) from exc
     
     if payload is None:
-        raise McpToolError(
+        raise ToolError(
             "template_not_available",
             "Template not available",
             paper_id=paper_id,
@@ -544,7 +491,7 @@ def get_paper_source(paper_id: str, max_chars: int | None = None) -> str:
     try:
         content = _load_source_markdown(paper_id)
     except RuntimeError as exc:
-        raise McpToolError(
+        raise ToolError(
             "asset_fetch_failed",
             "Failed to fetch source asset",
             paper_id=paper_id,
@@ -552,7 +499,7 @@ def get_paper_source(paper_id: str, max_chars: int | None = None) -> str:
         ) from exc
     
     if content is None:
-        raise McpToolError(
+        raise ToolError(
             "source_not_available",
             "Source markdown not available",
             paper_id=paper_id
@@ -628,7 +575,7 @@ def list_top_facets(category: str, limit: int = 20) -> list[dict[str, Any]]:
     }
     table = table_map.get((category or "").strip().lower())
     if not table:
-        raise McpToolError(
+        raise ToolError(
             "invalid_category",
             f"Invalid category: {category}. Must be one of: {', '.join(table_map.keys())}",
             category=category
@@ -715,35 +662,55 @@ def filter_papers(
 
 # ==================== MCP Resources ====================
 
-@mcp.resource("paper://{paper_id}/metadata")
+@mcp.resource(
+    "paper://{paper_id}/metadata",
+    description="Get paper metadata including title, authors, year, venue, DOI, and available summary templates",
+    mime_type="application/json"
+)
 def resource_metadata(paper_id: str) -> str:
     """Resource: metadata as JSON string."""
     payload = get_paper_metadata(paper_id)
     return json.dumps(payload, ensure_ascii=False)
 
 
-@mcp.resource("paper://{paper_id}/summary")
+@mcp.resource(
+    "paper://{paper_id}/summary",
+    description="Get paper summary using the preferred template as JSON",
+    mime_type="application/json"
+)
 def resource_summary_default(paper_id: str) -> str:
     """Resource: preferred summary JSON string."""
     payload = get_paper_summary(paper_id)
     return payload  # Already a JSON string
 
 
-@mcp.resource("paper://{paper_id}/summary/{template}")
+@mcp.resource(
+    "paper://{paper_id}/summary/{template}",
+    description="Get paper summary using a specific template as JSON",
+    mime_type="application/json"
+)
 def resource_summary_template(paper_id: str, template: str) -> str:
     """Resource: summary JSON string for a specific template."""
     payload = get_paper_summary(paper_id, template=template)
     return payload  # Already a JSON string
 
 
-@mcp.resource("paper://{paper_id}/source")
+@mcp.resource(
+    "paper://{paper_id}/source",
+    description="Get the source markdown content of the paper",
+    mime_type="text/markdown"
+)
 def resource_source(paper_id: str) -> str:
     """Resource: source markdown text."""
     payload = get_paper_source(paper_id)
     return payload
 
 
-@mcp.resource("paper://{paper_id}/translation/{lang}")
+@mcp.resource(
+    "paper://{paper_id}/translation/{lang}",
+    description="Get the translated markdown content of the paper in the specified language",
+    mime_type="text/markdown"
+)
 def resource_translation(paper_id: str, lang: str) -> str:
     """Resource: translated markdown text."""
     cfg = _get_config()
@@ -752,7 +719,7 @@ def resource_translation(paper_id: str, lang: str) -> str:
     try:
         content = _load_translation_markdown(paper_id, lang.lower())
     except RuntimeError as exc:
-        raise McpToolError(
+        raise ToolError(
             "asset_fetch_failed",
             "Failed to fetch translation asset",
             paper_id=paper_id,
@@ -761,7 +728,7 @@ def resource_translation(paper_id: str, lang: str) -> str:
         ) from exc
     
     if content is None:
-        raise McpToolError(
+        raise ToolError(
             "translation_not_available",
             "Translation not available",
             paper_id=paper_id,
