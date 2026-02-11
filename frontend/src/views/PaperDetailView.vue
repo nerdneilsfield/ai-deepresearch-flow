@@ -157,7 +157,25 @@ async function loadSummary(url: string) {
   summaryLoading.value = true
   try {
     const data = await fetchJson(url) as Record<string, any>
-    summaryMarkdown.value = data.summary || ''
+
+    // Handle different summary formats
+    let summaryContent = data.summary || ''
+
+    // If no 'summary' field, check for deep_read format (module_*)
+    if (!summaryContent) {
+      const moduleKeys = Object.keys(data)
+        .filter(key => key.startsWith('module_'))
+        .sort() // Sort to get proper order: module_a, module_b, module_c1, etc.
+
+      if (moduleKeys.length > 0) {
+        summaryContent = moduleKeys
+          .map(key => data[key])
+          .filter(Boolean)
+          .join('\n\n')
+      }
+    }
+
+    summaryMarkdown.value = summaryContent
     summaryMeta.value = {
       title: data.paper_title || data.title || '',
       authors: Array.isArray(data.paper_authors) ? data.paper_authors : data.authors || [],
