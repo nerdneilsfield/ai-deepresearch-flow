@@ -165,7 +165,22 @@ async function loadSummary(url: string) {
     if (!summaryContent) {
       const moduleKeys = Object.keys(data)
         .filter(key => key.startsWith('module_'))
-        .sort() // Sort to get proper order: module_a, module_b, module_c1, etc.
+        .sort((a, b) => {
+          // Natural sort for module names (module_c2 < module_c10)
+          const matchA = a.match(/^module_([a-z])(\d*)$/)
+          const matchB = b.match(/^module_([a-z])(\d*)$/)
+          if (!matchA || !matchB) return a.localeCompare(b)
+
+          // Compare letter part first
+          if (matchA[1] !== matchB[1]) {
+            return matchA[1].localeCompare(matchB[1])
+          }
+
+          // Then compare numeric part
+          const numA = matchA[2] ? parseInt(matchA[2], 10) : 0
+          const numB = matchB[2] ? parseInt(matchB[2], 10) : 0
+          return numA - numB
+        })
 
       if (moduleKeys.length > 0) {
         summaryContent = moduleKeys
