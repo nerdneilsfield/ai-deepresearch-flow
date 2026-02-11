@@ -91,14 +91,6 @@ class McpRequestGuardMiddleware(BaseHTTPMiddleware):
         if protocol and protocol not in _SUPPORTED_PROTOCOL_VERSIONS:
             return Response("Bad Request", status_code=400)
 
-        # Normalize path: ensure trailing slash for proper Mount matching
-        # This allows both /path and /path/ to work without redirects
-        scope = request.scope
-        if scope["path"] and not scope["path"].endswith("/"):
-            scope = scope.copy()
-            scope["path"] = scope["path"] + "/"
-            request = Request(scope)
-
         return await call_next(request)
 
     def _is_allowed_origin(self, origin: str) -> bool:

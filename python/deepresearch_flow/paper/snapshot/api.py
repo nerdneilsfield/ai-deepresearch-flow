@@ -977,6 +977,7 @@ def create_app(
         Route("/api/v1/facets/{facet:str}/{facet_id:str}/stats", _api_facet_stats, methods=["GET"]),
         Route("/api/v1/facets/{facet:str}/by-value/{value:str}/papers", _api_facet_by_value_papers, methods=["GET"]),
         Route("/api/v1/facets/{facet:str}/by-value/{value:str}/stats", _api_facet_by_value_stats, methods=["GET"]),
+        # Mount at root path - Starlette will handle trailing slash automatically
         Mount("/mcp", app=mcp_apps["streamable-http"]),
         Mount("/mcp-sse", app=mcp_apps["sse"]),
     ]
