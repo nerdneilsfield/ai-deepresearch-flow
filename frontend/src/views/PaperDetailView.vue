@@ -203,6 +203,8 @@ async function loadSummary(url: string) {
     console.log('[loadSummary] Final content length:', summaryContent.length)
 
     summaryMarkdown.value = summaryContent
+    console.log('[loadSummary] Set summaryMarkdown, length:', summaryMarkdown.value.length)
+
     summaryMeta.value = {
       title: data.paper_title || data.title || '',
       authors: Array.isArray(data.paper_authors) ? data.paper_authors : data.authors || [],
@@ -213,10 +215,15 @@ async function loadSummary(url: string) {
       keywords: Array.isArray(data.keywords) ? data.keywords : [],
       abstract: data.abstract || '',
     }
+    console.log('[loadSummary] Set summaryMeta:', summaryMeta.value.title)
+
     if (Array.isArray(data.available_templates) && data.available_templates.length) {
       summaryAvailable.value = data.available_templates.map((item: string) => String(item))
+      console.log('[loadSummary] Available templates:', summaryAvailable.value)
     }
+    console.log('[loadSummary] ✓ Success')
   } catch (err) {
+    console.error('[loadSummary] ✗ Error:', err)
     ui.pushToast('Failed to load summary', 'error')
   } finally {
     summaryLoading.value = false
@@ -242,8 +249,12 @@ function toggleZenMode() {
 }
 
 watch(summaryTemplate, async (value) => {
+  console.log('[watch:summaryTemplate] Changed to:', value)
   if (value && summaryUrls.value?.[value]) {
+    console.log('[watch:summaryTemplate] Loading URL:', summaryUrls.value[value])
     await loadSummary(summaryUrls.value[value])
+  } else {
+    console.warn('[watch:summaryTemplate] No URL found for template:', value)
   }
 })
 
@@ -271,6 +282,8 @@ watch(
   () => detail.value,
   async (data) => {
     if (!data) return
+    console.log('[watch:detail] Paper loaded:', data.paper_id, data.title)
+
     ui.setDetailHeader(
       String(data.title || ''),
       `${data.venue || ''}${data.year ? ` · ${data.year}` : ''}`.trim()
@@ -281,26 +294,32 @@ watch(
     }
     summaryUrls.value = urls
     summaryAvailable.value = Object.keys(summaryUrls.value)
+    console.log('[watch:detail] Summary URLs:', summaryUrls.value)
+
     const templates = Object.keys(summaryUrls.value)
     const targetTemplate = (summaryUrls.value.simple ? 'simple' : '') || data.preferred_summary_template || templates[0] || ''
-    
+    console.log('[watch:detail] Target template:', targetTemplate, 'Preferred:', data.preferred_summary_template)
+
     // Reset content for new paper
     summaryMarkdown.value = ''
     summaryMeta.value = null
-    
+
     // 1. Determine effective template
     let nextTemplate = targetTemplate
     if (route.query.template && summaryUrls.value[String(route.query.template)]) {
       nextTemplate = String(route.query.template)
+      console.log('[watch:detail] Using template from URL query:', nextTemplate)
     }
 
     if (summaryTemplate.value === nextTemplate && nextTemplate) {
       // If template name is same, manual trigger needed (watcher won't fire)
+      console.log('[watch:detail] Template unchanged, manually loading:', nextTemplate)
       const url = summaryUrls.value[nextTemplate]
       if (url) {
         await loadSummary(url)
       }
     }
+    console.log('[watch:detail] Setting summaryTemplate to:', nextTemplate)
     summaryTemplate.value = nextTemplate
 
     // 2. Determine views from URL or defaults
