@@ -87,9 +87,10 @@ class McpRequestGuardMiddleware(BaseHTTPMiddleware):
         origin = request.headers.get("origin")
         if origin and not self._is_allowed_origin(origin):
             return Response("Forbidden", status_code=403)
-        protocol = request.headers.get("mcp-protocol-version")
-        if protocol and protocol not in _SUPPORTED_PROTOCOL_VERSIONS:
-            return Response("Bad Request", status_code=400)
+        # Relax protocol version check - allow any version or no version header
+        # protocol = request.headers.get("mcp-protocol-version")
+        # if protocol and protocol not in _SUPPORTED_PROTOCOL_VERSIONS:
+        #     return Response("Bad Request", status_code=400)
 
         return await call_next(request)
 
@@ -120,20 +121,20 @@ def create_mcp_transport_app(
     *,
     transport: Literal["streamable-http", "sse"] = "streamable-http",
 ) -> tuple[Starlette, Any]:
-    """Create MCP app for a specific transport with transport-aware method guard."""
+    """Create MCP app for a specific transport following FastMCP 3.0 best practices.
+
+    See: https://gofastmcp.com/deployment/running-server
+    """
     configure(config)
-    mcp_app = mcp.http_app(path="/", transport=transport, stateless_http=(transport == "streamable-http"))
-    wrapped = Starlette(
-        routes=[Mount("/", app=mcp_app)],
-        middleware=[
-            Middleware(
-                McpRequestGuardMiddleware,
-                origin_allowlist=config.origin_allowlist,
-                allowed_methods=_allowed_methods_for_transport(transport),
-            ),
-        ],
+    # Use stateless_http=True for optimal scalability with streamable-http transport
+    # Don't wrap in additional middleware - FastMCP handles the protocol
+    mcp_app = mcp.http_app(
+        path="/",
+        transport=transport,
+        stateless_http=(transport == "streamable-http"),
+        json_response=True,
     )
-    return wrapped, mcp_app.lifespan
+    return mcp_app, mcp_app.lifespan
 
 
 def create_mcp_apps(config: McpSnapshotConfig) -> tuple[dict[str, Starlette], Any]:
