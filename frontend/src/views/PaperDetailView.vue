@@ -155,14 +155,17 @@ const panelHeightStyle = computed(() => {
 
 async function loadSummary(url: string) {
   summaryLoading.value = true
+  console.log('[loadSummary] Loading URL:', url)
   try {
     const data = await fetchJson(url) as Record<string, any>
+    console.log('[loadSummary] Data keys:', Object.keys(data))
 
     // Handle different summary formats
     let summaryContent = data.summary || ''
 
     // If no 'summary' field, check for deep_read format (module_*)
     if (!summaryContent) {
+      console.log('[loadSummary] No "summary" field, checking for module_* fields')
       const moduleKeys = Object.keys(data)
         .filter(key => key.startsWith('module_'))
         .sort((a, b) => {
@@ -182,13 +185,22 @@ async function loadSummary(url: string) {
           return numA - numB
         })
 
+      console.log('[loadSummary] Found module keys (sorted):', moduleKeys)
+
       if (moduleKeys.length > 0) {
-        summaryContent = moduleKeys
+        const modules = moduleKeys
           .map(key => data[key])
           .filter(Boolean)
-          .join('\n\n')
+        console.log('[loadSummary] Module count:', modules.length, 'Non-empty:', modules.filter(m => m?.trim()).length)
+        summaryContent = modules.join('\n\n')
+      } else {
+        console.warn('[loadSummary] No module_* fields found either')
       }
+    } else {
+      console.log('[loadSummary] Found "summary" field, length:', summaryContent.length)
     }
+
+    console.log('[loadSummary] Final content length:', summaryContent.length)
 
     summaryMarkdown.value = summaryContent
     summaryMeta.value = {
