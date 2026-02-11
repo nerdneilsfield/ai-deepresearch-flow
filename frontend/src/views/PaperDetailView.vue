@@ -175,8 +175,10 @@ async function loadSummary(url: string) {
           if (!matchA || !matchB) return a.localeCompare(b)
 
           // Compare letter part first
-          if (matchA[1] !== matchB[1]) {
-            return matchA[1].localeCompare(matchB[1])
+          const letterA = matchA[1] || ''
+          const letterB = matchB[1] || ''
+          if (letterA !== letterB) {
+            return letterA.localeCompare(letterB)
           }
 
           // Then compare numeric part

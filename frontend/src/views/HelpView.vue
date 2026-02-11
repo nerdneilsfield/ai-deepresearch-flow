@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Search, ListChecks, Wind, BookOpen, Filter, SplitSquare, Download, FileText, Eye, Lightbulb } from 'lucide-vue-next'
+import { Search, ListChecks, Wind, BookOpen, Filter, Columns2, Download, FileText, Eye, Lightbulb } from 'lucide-vue-next'
 
 const { t } = useI18n()
 </script>
@@ -140,7 +140,7 @@ const { t } = useI18n()
         <Card>
           <CardHeader class="flex flex-row items-center gap-4">
             <div class="bg-cyan-100 p-2 rounded-lg text-cyan-600">
-              <SplitSquare class="h-6 w-6" />
+              <Columns2 class="h-6 w-6" />
             </div>
             <CardTitle class="text-lg">{{ t('helpSplitTitle') }}</CardTitle>
           </CardHeader>
