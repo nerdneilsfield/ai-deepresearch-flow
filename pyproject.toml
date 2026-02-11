@@ -1,6 +1,6 @@
 [project]
 name = "deepresearch-flow"
-version = "0.7.9"
+version = "0.7.10"
 description = "Workflow tools for paper extraction, review, and research automation."
 readme = { file = "README.md", content-type = "text/markdown" }
 license = { file = "LICENSE" }
