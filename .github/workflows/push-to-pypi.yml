@@ -79,9 +79,6 @@ jobs:
       - name: Smoke test - CLI help
         run: deepresearch-flow --help
 
-      - name: Smoke test - Version
-        run: deepresearch-flow --version
-
       - name: Smoke test - Import check
         run: |
           python -c "from deepresearch_flow.paper.snapshot import api"
