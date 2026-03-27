@@ -461,7 +461,8 @@ def recognize() -> None:
     default=None,
     help="Override output directory from config.",
 )
-def ocr(input_path: str, config_path: str, output_dir: str | None) -> None:
+@click.option("--verbose", is_flag=True, default=False, help="Enable debug logging.")
+def ocr(input_path: str, config_path: str, output_dir: str | None, verbose: bool) -> None:
     """Run OCR on PDF/image files using a configured backend."""
     from pathlib import Path
 
@@ -469,17 +470,24 @@ def ocr(input_path: str, config_path: str, output_dir: str | None) -> None:
     from deepresearch_flow.ocr.factory import create_backend
     from deepresearch_flow.ocr.runner import run_ocr
 
+    configure_logging(verbose)
+
     cfg_path = Path(config_path)
     try:
         cfg = load_ocr_config(cfg_path)
     except (FileNotFoundError, ValueError) as exc:
         raise click.ClickException(str(exc)) from exc
 
+    click.echo(f"Backend: {cfg.backend.type} → {cfg.backend.api_url}")
+
     try:
         backend = create_backend(cfg.backend)
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
     resolved_output = Path(output_dir) if output_dir else Path(cfg.general.output_dir)
+
+    click.echo(f"Input: {input_path}")
+    click.echo(f"Output: {resolved_output}")
 
     stats = run_ocr(backend, Path(input_path), resolved_output)
 
