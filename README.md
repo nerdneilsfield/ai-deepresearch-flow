@@ -712,7 +712,42 @@ BibTeX metadata endpoint:
   - `paper_not_found`
   - `bibtex_not_found`
 
-### 3.1) MCP (FastMCP Streamable HTTP + SSE)
+### 3.1) Admin API (Optional)
+
+Enable the admin API to add or delete papers remotely via Bearer token authentication.
+
+```bash
+# Start API server with admin enabled
+PAPER_DB_ADMIN_TOKEN=your-secret-token \
+uv run deepresearch-flow paper db api serve \
+  --snapshot-db /data/paper_snapshot.db \
+  --cors-origin https://frontend.example.com \
+  --host 0.0.0.0 --port 8001
+```
+
+Or pass the token via CLI flag: `--admin-token your-secret-token`
+
+Endpoints (all require `Authorization: Bearer <token>` header):
+
+- `POST /api/v1/admin/papers` — Batch add papers (up to 200 per request)
+  ```bash
+  curl -X POST https://api.example.com/api/v1/admin/papers \
+    -H "Authorization: Bearer your-secret-token" \
+    -H "Content-Type: application/json" \
+    -d '{"papers": [{"paper_title": "...", "paper_authors": [...], ...}]}'
+  ```
+  Response: `{ added, skipped, errors, paper_ids }`
+
+- `DELETE /api/v1/admin/papers/{paper_id}` — Delete a paper and all its relations
+  ```bash
+  curl -X DELETE https://api.example.com/api/v1/admin/papers/{paper_id} \
+    -H "Authorization: Bearer your-secret-token"
+  ```
+  Response: `{ deleted: true, paper_id }`
+
+The paper JSON format is the same as `snapshot update` input. Static files (PDF, markdown, images) are not handled by the API — upload them to your CDN separately.
+
+### 3.2) MCP (FastMCP Streamable HTTP + SSE)
 
 This project exposes MCP servers mounted on the snapshot API:
 

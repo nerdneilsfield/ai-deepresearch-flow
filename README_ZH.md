@@ -655,6 +655,41 @@ uv run deepresearch-flow paper db api serve \
   --host 0.0.0.0 --port 8001
 ```
 
+### 3.1) Admin API（可选）
+
+启用 Admin API 可通过 Bearer Token 认证远程添加或删除论文。
+
+```bash
+# 通过环境变量启用
+PAPER_DB_ADMIN_TOKEN=your-secret-token \
+uv run deepresearch-flow paper db api serve \
+  --snapshot-db /data/paper_snapshot.db \
+  --cors-origin https://frontend.example.com \
+  --host 0.0.0.0 --port 8001
+```
+
+也可通过命令行参数传入：`--admin-token your-secret-token`
+
+端点（均需 `Authorization: Bearer <token>` 请求头）：
+
+- `POST /api/v1/admin/papers` — 批量添加论文（每次最多 200 篇）
+  ```bash
+  curl -X POST https://api.example.com/api/v1/admin/papers \
+    -H "Authorization: Bearer your-secret-token" \
+    -H "Content-Type: application/json" \
+    -d '{"papers": [{"paper_title": "...", "paper_authors": [...], ...}]}'
+  ```
+  响应：`{ added, skipped, errors, paper_ids }`
+
+- `DELETE /api/v1/admin/papers/{paper_id}` — 删除论文及所有关联数据
+  ```bash
+  curl -X DELETE https://api.example.com/api/v1/admin/papers/{paper_id} \
+    -H "Authorization: Bearer your-secret-token"
+  ```
+  响应：`{ deleted: true, paper_id }`
+
+论文 JSON 格式与 `snapshot update` 的输入格式一致。静态文件（PDF、Markdown、图片）不通过 API 处理，请自行上传至 CDN。
+
 ### 4) 前端（开发 / 构建）
 
 ```bash
