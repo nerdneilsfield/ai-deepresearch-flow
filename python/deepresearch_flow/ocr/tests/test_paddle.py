@@ -268,3 +268,73 @@ class TestPaddleOcrBackend:
         # Markdown should still have the local ref, not the original URL.
         assert "http://cdn.example.com" not in page.markdown
         assert "images/page_0000_" in page.markdown
+
+    def test_html_img_tags_normalized(
+        self, backend: PaddleOcrBackend, tmp_path: Path
+    ) -> None:
+        """HTML <img src="..."> tags should also be normalized to local paths."""
+        pdf_file = tmp_path / "test.pdf"
+        pdf_file.write_bytes(b"%PDF-1.4 fake")
+
+        response = {
+            "result": {
+                "layoutParsingResults": [
+                    {
+                        "markdown": {
+                            "text": (
+                                'Text\n\n'
+                                '<div style="text-align: center;">'
+                                '<img src="http://cdn.example.com/chart.jpg" alt="Image" width="35%" />'
+                                '</div>\n\n'
+                                'More text'
+                            ),
+                            "images": {},
+                        },
+                        "outputImages": {},
+                    }
+                ]
+            }
+        }
+
+        transport = _mock_transport(response)
+        result = _run_with_transport(backend, transport, pdf_file)
+
+        page = result.pages[0]
+        # Remote URL must be replaced in the HTML img tag.
+        assert "http://cdn.example.com" not in page.markdown
+        assert 'src="images/page_0000_' in page.markdown
+        # Image was downloaded.
+        assert len(page.images) == 1
+        assert page.missing_images == ()
+
+    def test_html_img_local_path_normalized(
+        self, backend: PaddleOcrBackend, tmp_path: Path
+    ) -> None:
+        """Local relative paths in HTML <img> tags (e.g. imgs/...) should be rewritten."""
+        pdf_file = tmp_path / "test.pdf"
+        pdf_file.write_bytes(b"%PDF-1.4 fake")
+
+        response = {
+            "result": {
+                "layoutParsingResults": [
+                    {
+                        "markdown": {
+                            "text": (
+                                '<div><img src="imgs/img_in_chart_box_397_233_828_536.jpg" '
+                                'alt="Image" width="35%" /></div>'
+                            ),
+                            "images": {},
+                        },
+                        "outputImages": {},
+                    }
+                ]
+            }
+        }
+
+        transport = _mock_transport(response)
+        result = _run_with_transport(backend, transport, pdf_file)
+
+        page = result.pages[0]
+        # The local relative path should be rewritten to our naming convention.
+        assert "imgs/" not in page.markdown
+        assert 'src="images/page_0000_' in page.markdown

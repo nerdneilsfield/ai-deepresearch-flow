@@ -20,6 +20,8 @@ _SUPPORTED_EXTENSIONS = _PDF_EXTENSIONS | _IMAGE_EXTENSIONS
 
 # Matches markdown image references: ![alt](url)
 _IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+# Matches HTML img tags: <img src="url" ... />
+_HTML_IMG_RE = re.compile(r'<img\s[^>]*src="([^"]+)"[^>]*/?\s*>', re.IGNORECASE)
 
 
 def _file_type_for(path: Path) -> int:
@@ -111,25 +113,45 @@ class PaddleOcrBackend:
             url_to_local[url] = local_key
             self._download_image(url, local_key, images, missing)
 
-        # 3) Scan markdown for remote URLs not covered by API mappings.
-        #    This ensures all image references are normalized per the contract.
+        # 3) Scan markdown for image refs not covered by API mappings.
+        #    Covers both ![alt](url) and <img src="url"> patterns.
         for match in _IMAGE_RE.finditer(raw_markdown):
             ref = match.group(2)
-            if ref.startswith(("http://", "https://")) and ref not in url_to_local:
+            if ref not in url_to_local:
                 ext = _image_ext_from_url(ref)
                 local_key = f"images/page_{page_idx:04d}_{counter:02d}_md{ext}"
                 counter += 1
                 url_to_local[ref] = local_key
-                self._download_image(ref, local_key, images, missing)
+                if ref.startswith(("http://", "https://")):
+                    self._download_image(ref, local_key, images, missing)
 
-        # Rewrite markdown: replace all image URLs with local keys.
-        def _replace_ref(match: re.Match[str]) -> str:
+        for match in _HTML_IMG_RE.finditer(raw_markdown):
+            ref = match.group(1)
+            if ref not in url_to_local:
+                ext = _image_ext_from_url(ref)
+                local_key = f"images/page_{page_idx:04d}_{counter:02d}_md{ext}"
+                counter += 1
+                url_to_local[ref] = local_key
+                if ref.startswith(("http://", "https://")):
+                    self._download_image(ref, local_key, images, missing)
+
+        # Rewrite markdown image refs: ![alt](url) → ![alt](local)
+        def _replace_md_ref(match: re.Match[str]) -> str:
             alt = match.group(1)
             ref = match.group(2)
             local = url_to_local.get(ref, ref)
             return f"![{alt}]({local})"
 
-        normalized_markdown = _IMAGE_RE.sub(_replace_ref, raw_markdown)
+        normalized_markdown = _IMAGE_RE.sub(_replace_md_ref, raw_markdown)
+
+        # Rewrite HTML img tags: <img src="url"> → <img src="local">
+        def _replace_html_ref(match: re.Match[str]) -> str:
+            original = match.group(0)
+            ref = match.group(1)
+            local = url_to_local.get(ref, ref)
+            return original.replace(f'src="{ref}"', f'src="{local}"')
+
+        normalized_markdown = _HTML_IMG_RE.sub(_replace_html_ref, normalized_markdown)
 
         return OcrPage(
             page_index=page_idx,
