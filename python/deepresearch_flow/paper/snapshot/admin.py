@@ -65,21 +65,19 @@ class AdminConfig:
 # Auth helper
 # ---------------------------------------------------------------------------
 
-def _check_auth(request: Request) -> str | None:
-    """Return an error message if auth fails, or ``None`` if OK."""
+def _check_auth(request: Request) -> bool:
+    """Return ``True`` if the request is authenticated, ``False`` otherwise."""
     cfg: AdminConfig = request.app.state.admin_cfg
     if not cfg.admin_token:
-        return "admin API is disabled"
+        logger.warning("Admin API request rejected: no token configured")
+        return False
     auth = request.headers.get("authorization", "")
     if not auth.startswith("Bearer "):
-        return "unauthorized"
-    if not hmac.compare_digest(auth[7:], cfg.admin_token):
-        return "unauthorized"
-    return None
+        return False
+    return hmac.compare_digest(auth[7:], cfg.admin_token)
 
 
-def _auth_error(msg: str) -> JSONResponse:
-    return JSONResponse({"error": "unauthorized", "detail": msg}, status_code=401)
+_AUTH_ERROR = JSONResponse({"error": "unauthorized"}, status_code=401)
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +173,7 @@ def _insert_paper_metadata(
     if has_real_templates:
         summary_preview = _summary_preview(preferred_markdown)
     else:
-        summary_preview = incoming_preview or _summary_preview(preferred_markdown)
+        summary_preview = incoming_preview
 
     conn.execute(
         """
@@ -331,9 +329,8 @@ def _delete_paper(conn: sqlite3.Connection, paper_id: str) -> bool:
 # ---------------------------------------------------------------------------
 
 async def _admin_add_papers(request: Request) -> JSONResponse:
-    auth_err = _check_auth(request)
-    if auth_err:
-        return _auth_error(auth_err)
+    if not _check_auth(request):
+        return _AUTH_ERROR
 
     try:
         body = await request.json()
@@ -392,9 +389,8 @@ async def _admin_add_papers(request: Request) -> JSONResponse:
 
 
 async def _admin_delete_paper(request: Request) -> JSONResponse:
-    auth_err = _check_auth(request)
-    if auth_err:
-        return _auth_error(auth_err)
+    if not _check_auth(request):
+        return _AUTH_ERROR
 
     paper_id = request.path_params["paper_id"]
 

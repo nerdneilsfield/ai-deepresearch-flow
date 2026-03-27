@@ -99,7 +99,7 @@ class TestAdminAuth(unittest.TestCase):
             headers={"Authorization": "Bearer anything"},
         )
         assert resp.status_code == 401
-        assert "disabled" in resp.json()["detail"]
+        assert resp.json()["error"] == "unauthorized"
 
 
 class TestAdminAddPapers(unittest.TestCase):
@@ -444,6 +444,37 @@ class TestSummaryPreviewNotPolluted(unittest.TestCase):
                 (paper_id,),
             ).fetchone()
             assert fts["summary"] != "{}"
+        finally:
+            conn.close()
+
+
+    def test_no_templates_no_preview_yields_empty(self) -> None:
+        """When neither templates nor summary_preview is provided,
+        preview and FTS summary must be empty — not a JSON dump of the paper."""
+        paper = {
+            "paper_title": "Bare Paper",
+            "paper_authors": ["Bob"],
+            "source_hash": "bare_hash",
+        }
+        resp = self.client.post("/papers", json={"papers": [paper]}, headers=self.headers)
+        data = resp.json()
+        assert data["added"] == 1
+        paper_id = data["paper_ids"][0]
+
+        conn = sqlite3.connect(str(self.db_path))
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute(
+                "SELECT summary_preview FROM paper WHERE paper_id = ?",
+                (paper_id,),
+            ).fetchone()
+            assert "{" not in row["summary_preview"]
+
+            fts = conn.execute(
+                "SELECT summary FROM paper_fts WHERE paper_id = ?",
+                (paper_id,),
+            ).fetchone()
+            assert "{" not in fts["summary"]
         finally:
             conn.close()
 
