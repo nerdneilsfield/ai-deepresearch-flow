@@ -144,14 +144,24 @@ class PaddleOcrBackend:
 
         normalized_markdown = _IMAGE_RE.sub(_replace_md_ref, raw_markdown)
 
-        # Rewrite HTML img tags: <img src="url"> → <img src="local">
+        # Rewrite HTML img tags: <img src="url" alt="X" ...> → ![X](local)
         def _replace_html_ref(match: re.Match[str]) -> str:
             original = match.group(0)
             ref = match.group(1)
             local = url_to_local.get(ref, ref)
-            return original.replace(f'src="{ref}"', f'src="{local}"')
+            # Extract alt text if present.
+            alt_match = re.search(r'alt="([^"]*)"', original, re.IGNORECASE)
+            alt = alt_match.group(1) if alt_match else ""
+            return f"![{alt}]({local})"
 
+        # Also strip wrapping <div> around standalone HTML img tags.
         normalized_markdown = _HTML_IMG_RE.sub(_replace_html_ref, normalized_markdown)
+        # Clean up empty <div ...>  </div> wrappers left behind.
+        normalized_markdown = re.sub(
+            r'<div[^>]*>\s*(!\[[^\]]*\]\([^)]+\))\s*</div>',
+            r'\1',
+            normalized_markdown,
+        )
 
         return OcrPage(
             page_index=page_idx,

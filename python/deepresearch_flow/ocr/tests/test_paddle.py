@@ -300,9 +300,12 @@ class TestPaddleOcrBackend:
         result = _run_with_transport(backend, transport, pdf_file)
 
         page = result.pages[0]
-        # Remote URL must be replaced in the HTML img tag.
+        # HTML img tag should be converted to markdown syntax.
         assert "http://cdn.example.com" not in page.markdown
-        assert 'src="images/page_0000_' in page.markdown
+        assert "<img" not in page.markdown
+        assert "![Image](images/page_0000_" in page.markdown
+        # Wrapping div should be stripped.
+        assert "<div" not in page.markdown
         # Image was downloaded.
         assert len(page.images) == 1
         assert page.missing_images == ()
@@ -335,6 +338,7 @@ class TestPaddleOcrBackend:
         result = _run_with_transport(backend, transport, pdf_file)
 
         page = result.pages[0]
-        # The local relative path should be rewritten to our naming convention.
+        # The local relative path should be rewritten to markdown syntax.
         assert "imgs/" not in page.markdown
-        assert 'src="images/page_0000_' in page.markdown
+        assert "<img" not in page.markdown
+        assert "![Image](images/page_0000_" in page.markdown
