@@ -747,6 +747,37 @@ Endpoints (all require `Authorization: Bearer <token>` header):
 
 The paper JSON format is the same as `snapshot update` input. Static files (PDF, markdown, images) are not handled by the API — upload them to your CDN separately.
 
+#### Push from Local DB to Remote
+
+Use `api push` to merge a locally-built snapshot DB into a remote deployment:
+
+```toml
+# remote.toml
+[remote]
+api_base_url = "https://api.example.com"
+admin_token = "env:PAPER_DB_ADMIN_TOKEN"
+batch_size = 100
+```
+
+```bash
+# Preview what will be pushed
+uv run deepresearch-flow paper db api push \
+  --snapshot-db ./dist/paper_snapshot.db \
+  --static-export-dir ./dist/paper-static \
+  --config remote.toml \
+  --dry-run
+
+# Push to remote
+uv run deepresearch-flow paper db api push \
+  --snapshot-db ./dist/paper_snapshot.db \
+  --static-export-dir ./dist/paper-static \
+  --config remote.toml
+```
+
+- `--static-export-dir` is optional — when provided, summary JSON payloads are included so the remote side can build FTS indexes and preview text.
+- Duplicate papers (same `paper_id`) are automatically skipped.
+- Static files (PDF, markdown, images) are **not** pushed — sync them to your CDN separately (e.g., `rsync`, `aws s3 sync`).
+
 ### 3.2) MCP (FastMCP Streamable HTTP + SSE)
 
 This project exposes MCP servers mounted on the snapshot API:

@@ -690,6 +690,37 @@ uv run deepresearch-flow paper db api serve \
 
 论文 JSON 格式与 `snapshot update` 的输入格式一致。静态文件（PDF、Markdown、图片）不通过 API 处理，请自行上传至 CDN。
 
+#### 从本地 DB 推送到远程
+
+使用 `api push` 将本地构建的 snapshot DB 合并到远程部署：
+
+```toml
+# remote.toml
+[remote]
+api_base_url = "https://api.example.com"
+admin_token = "env:PAPER_DB_ADMIN_TOKEN"
+batch_size = 100
+```
+
+```bash
+# 预览待推送内容
+uv run deepresearch-flow paper db api push \
+  --snapshot-db ./dist/paper_snapshot.db \
+  --static-export-dir ./dist/paper-static \
+  --config remote.toml \
+  --dry-run
+
+# 正式推送
+uv run deepresearch-flow paper db api push \
+  --snapshot-db ./dist/paper_snapshot.db \
+  --static-export-dir ./dist/paper-static \
+  --config remote.toml
+```
+
+- `--static-export-dir` 可选 — 提供后会将 summary JSON 内容一并推送，使远端可构建 FTS 索引和预览文本。
+- 重复论文（相同 `paper_id`）会自动跳过。
+- 静态文件（PDF、Markdown、图片）**不会**被推送，请单独同步到 CDN（如 `rsync`、`aws s3 sync`）。
+
 ### 4) 前端（开发 / 构建）
 
 ```bash
