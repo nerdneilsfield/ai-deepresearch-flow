@@ -930,6 +930,118 @@ def register_db_commands(db_group: click.Group) -> None:
         click.echo(f"Serving API on http://{host}:{port} (Ctrl+C to stop)")
         uvicorn.run(app, host=host, port=port, log_level="info")
 
+    @api_group.command("push")
+    @click.option("--snapshot-db", "snapshot_db", required=True, help="Path to local paper_snapshot.db")
+    @click.option(
+        "--static-export-dir",
+        "static_export_dir",
+        default=None,
+        help="Path to local static export dir (for reading summary JSONs)",
+    )
+    @click.option(
+        "--config",
+        "config_path",
+        default="remote.toml",
+        show_default=True,
+        help="Path to remote config TOML file",
+    )
+    @click.option("--dry-run", is_flag=True, default=False, help="Extract and show stats without pushing")
+    def api_push(
+        snapshot_db: str,
+        static_export_dir: str | None,
+        config_path: str,
+        dry_run: bool,
+    ) -> None:
+        """Push papers from a local snapshot DB to a remote admin API."""
+        from rich.console import Console
+        from rich.table import Table
+
+        from deepresearch_flow.paper.snapshot.push import (
+            PushStats,
+            extract_papers_from_db,
+            load_remote_config,
+            push_papers,
+        )
+
+        console = Console()
+
+        config_file = Path(config_path)
+        if not config_file.exists():
+            raise click.ClickException(f"Config file not found: {config_file}")
+
+        db_path = Path(snapshot_db)
+        if not db_path.exists():
+            raise click.ClickException(f"Snapshot DB not found: {db_path}")
+
+        static_dir = Path(static_export_dir) if static_export_dir else None
+        if static_dir and not static_dir.exists():
+            raise click.ClickException(f"Static export dir not found: {static_dir}")
+
+        config = load_remote_config(config_file)
+        console.print(f"[cyan]Remote:[/cyan] {config.api_base_url}")
+        console.print(f"[cyan]Batch size:[/cyan] {config.batch_size}")
+
+        console.print("[cyan]Extracting papers from local DB...[/cyan]")
+        papers = extract_papers_from_db(db_path, static_export_dir=static_dir)
+        console.print(f"[green]Found {len(papers)} papers[/green]")
+
+        if not papers:
+            console.print("[yellow]Nothing to push[/yellow]")
+            return
+
+        templates_count = sum(1 for p in papers if p.get("templates"))
+        console.print(f"[cyan]Papers with summary payloads:[/cyan] {templates_count}/{len(papers)}")
+
+        if dry_run:
+            console.print("[yellow]Dry run — not pushing[/yellow]")
+            table = Table(title="Papers to push")
+            table.add_column("paper_id", style="dim")
+            table.add_column("title")
+            table.add_column("templates", justify="right")
+            for p in papers[:20]:
+                t_count = len(p.get("templates", {}))
+                table.add_row(p["paper_id"][:16] + "…", p.get("paper_title", "")[:60], str(t_count))
+            if len(papers) > 20:
+                table.add_row("…", f"and {len(papers) - 20} more", "")
+            console.print(table)
+            return
+
+        console.print("[cyan]Pushing to remote...[/cyan]")
+
+        def on_batch(batch_idx: int, batch_size: int, data: dict) -> None:
+            added = data.get("added", 0)
+            skipped = data.get("skipped", 0)
+            errors = len(data.get("errors", []))
+            console.print(
+                f"  Batch {batch_idx + 1}: "
+                f"[green]+{added}[/green] added, "
+                f"[yellow]{skipped}[/yellow] skipped"
+                + (f", [red]{errors}[/red] errors" if errors else "")
+            )
+
+        try:
+            stats = push_papers(papers, config, on_batch=on_batch)
+        except Exception as exc:
+            raise click.ClickException(f"Push failed: {exc}")
+
+        console.print()
+        result_table = Table(title="Push Results")
+        result_table.add_column("Metric")
+        result_table.add_column("Value", justify="right")
+        result_table.add_row("Total papers", str(stats.total))
+        result_table.add_row("Added", f"[green]{stats.added}[/green]")
+        result_table.add_row("Skipped (duplicates)", f"[yellow]{stats.skipped}[/yellow]")
+        result_table.add_row("Errors", f"[red]{len(stats.errors)}[/red]" if stats.errors else "0")
+        result_table.add_row("Batches sent", str(stats.batches_sent))
+        console.print(result_table)
+
+        if stats.errors:
+            console.print("[red]Errors:[/red]")
+            for err in stats.errors[:10]:
+                console.print(f"  index={err.get('index')}: {err.get('error')}")
+            if len(stats.errors) > 10:
+                console.print(f"  ... and {len(stats.errors) - 10} more")
+
     @db_group.command("append-bibtex")
     @click.option("-i", "--input", "input_path", required=True, help="Input JSON file path")
     @click.option("-b", "--bibtex", "bibtex_path", required=True, help="Input BibTeX file path")
