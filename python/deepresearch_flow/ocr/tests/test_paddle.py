@@ -101,6 +101,13 @@ def _mock_transport_with_image_failure(ocr_response: dict) -> httpx.MockTranspor
     return httpx.MockTransport(handler)
 
 
+def _run_with_transport(backend: PaddleOcrBackend, transport: httpx.MockTransport, file_path: Path):
+    """Run backend.ocr() with a mocked httpx transport."""
+    mock_client = httpx.Client(transport=transport)
+    with patch("deepresearch_flow.ocr.backends.paddle.httpx.Client", return_value=mock_client):
+        return backend.ocr(file_path)
+
+
 # --- Tests --------------------------------------------------------------------
 
 
@@ -112,8 +119,7 @@ class TestPaddleOcrBackend:
         pdf_file.write_bytes(b"%PDF-1.4 fake")
 
         transport = _mock_transport(single_page_response)
-        with patch.object(backend, "_client", httpx.Client(transport=transport)):
-            result = backend.ocr(pdf_file)
+        result = _run_with_transport(backend, transport, pdf_file)
 
         assert len(result.pages) == 1
         page = result.pages[0]
@@ -135,8 +141,7 @@ class TestPaddleOcrBackend:
         pdf_file.write_bytes(b"%PDF-1.4 fake")
 
         transport = _mock_transport(multi_page_response)
-        with patch.object(backend, "_client", httpx.Client(transport=transport)):
-            result = backend.ocr(pdf_file)
+        result = _run_with_transport(backend, transport, pdf_file)
 
         assert len(result.pages) == 2
         assert result.pages[0].page_index == 0
@@ -161,8 +166,7 @@ class TestPaddleOcrBackend:
             return httpx.Response(200, content=b"img")
 
         transport = httpx.MockTransport(handler)
-        with patch.object(backend, "_client", httpx.Client(transport=transport)):
-            backend.ocr(img_file)
+        _run_with_transport(backend, transport, img_file)
 
         body = json.loads(captured_request[0].content)
         assert body["fileType"] == 1
@@ -175,9 +179,8 @@ class TestPaddleOcrBackend:
             return httpx.Response(500, text="Internal Server Error")
 
         transport = httpx.MockTransport(handler)
-        with patch.object(backend, "_client", httpx.Client(transport=transport)):
-            with pytest.raises(httpx.HTTPStatusError):
-                backend.ocr(pdf_file)
+        with pytest.raises(httpx.HTTPStatusError):
+            _run_with_transport(backend, transport, pdf_file)
 
     def test_image_download_failure_records_missing(
         self, backend: PaddleOcrBackend, single_page_response: dict, tmp_path: Path
@@ -186,8 +189,7 @@ class TestPaddleOcrBackend:
         pdf_file.write_bytes(b"%PDF-1.4 fake")
 
         transport = _mock_transport_with_image_failure(single_page_response)
-        with patch.object(backend, "_client", httpx.Client(transport=transport)):
-            result = backend.ocr(pdf_file)
+        result = _run_with_transport(backend, transport, pdf_file)
 
         page = result.pages[0]
         # Images dict should be empty (all downloads failed).
@@ -203,3 +205,66 @@ class TestPaddleOcrBackend:
 
         with pytest.raises(ValueError, match="Unsupported file extension"):
             backend.ocr(txt_file)
+
+    def test_unmapped_url_in_markdown_gets_normalized(
+        self, backend: PaddleOcrBackend, tmp_path: Path
+    ) -> None:
+        """Regression: URLs in markdown not listed in images mapping must still be normalized."""
+        pdf_file = tmp_path / "test.pdf"
+        pdf_file.write_bytes(b"%PDF-1.4 fake")
+
+        response = {
+            "result": {
+                "layoutParsingResults": [
+                    {
+                        "markdown": {
+                            "text": "Text\n\n![extra](http://cdn.example.com/unmapped.png)\n\nMore text",
+                            "images": {},  # Empty — URL not in mapping.
+                        },
+                        "outputImages": {},
+                    }
+                ]
+            }
+        }
+
+        transport = _mock_transport(response)
+        result = _run_with_transport(backend, transport, pdf_file)
+
+        page = result.pages[0]
+        # The remote URL must be replaced with a local path.
+        assert "http://cdn.example.com" not in page.markdown
+        assert "images/page_0000_" in page.markdown
+        # Image was downloaded.
+        assert len(page.images) == 1
+        assert page.missing_images == ()
+
+    def test_unmapped_url_download_failure(
+        self, backend: PaddleOcrBackend, tmp_path: Path
+    ) -> None:
+        """Unmapped URL that fails to download should be in missing_images."""
+        pdf_file = tmp_path / "test.pdf"
+        pdf_file.write_bytes(b"%PDF-1.4 fake")
+
+        response = {
+            "result": {
+                "layoutParsingResults": [
+                    {
+                        "markdown": {
+                            "text": "![x](http://cdn.example.com/gone.png)",
+                            "images": {},
+                        },
+                        "outputImages": {},
+                    }
+                ]
+            }
+        }
+
+        transport = _mock_transport_with_image_failure(response)
+        result = _run_with_transport(backend, transport, pdf_file)
+
+        page = result.pages[0]
+        assert len(page.images) == 0
+        assert len(page.missing_images) == 1
+        # Markdown should still have the local ref, not the original URL.
+        assert "http://cdn.example.com" not in page.markdown
+        assert "images/page_0000_" in page.markdown

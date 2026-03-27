@@ -49,7 +49,6 @@ class PaddleOcrBackend:
         self._api_url = config.api_url
         self._token = config.token
         self._options = dict(config.options)
-        self._client = httpx.Client(timeout=120.0)
 
     def ocr(self, file_path: Path) -> OcrResult:
         """Run OCR on a file and return structured results."""
@@ -68,16 +67,18 @@ class PaddleOcrBackend:
             "Content-Type": "application/json",
         }
 
-        resp = self._client.post(self._api_url, json=payload, headers=headers)
-        resp.raise_for_status()
+        with httpx.Client(timeout=120.0) as client:
+            self._client = client
+            resp = client.post(self._api_url, json=payload, headers=headers)
+            resp.raise_for_status()
 
-        data = resp.json()
-        layout_results = data["result"]["layoutParsingResults"]
+            data = resp.json()
+            layout_results = data["result"]["layoutParsingResults"]
 
-        pages: list[OcrPage] = []
-        for page_idx, layout in enumerate(layout_results):
-            page = self._process_page(page_idx, layout)
-            pages.append(page)
+            pages: list[OcrPage] = []
+            for page_idx, layout in enumerate(layout_results):
+                page = self._process_page(page_idx, layout)
+                pages.append(page)
 
         return OcrResult(pages=pages)
 
@@ -88,14 +89,13 @@ class PaddleOcrBackend:
         raw_images: dict[str, str] = md_section.get("images", {})
         output_images: dict[str, str] = layout.get("outputImages", {})
 
-        # Build mapping: original_ref -> (local_key, url)
-        # Counter tracks images within this page.
+        # Build mapping: original URL -> local_key for ALL image URLs.
         counter = 0
         url_to_local: dict[str, str] = {}
         images: dict[str, bytes] = {}
         missing: list[str] = []
 
-        # Process markdown images.
+        # 1) Process images from API mapping.
         for _name, url in raw_images.items():
             ext = _image_ext_from_url(url)
             local_key = f"images/page_{page_idx:04d}_{counter:02d}_md{ext}"
@@ -103,13 +103,24 @@ class PaddleOcrBackend:
             url_to_local[url] = local_key
             self._download_image(url, local_key, images, missing)
 
-        # Process output images (layout visualizations etc.).
+        # 2) Process output images (layout visualizations etc.).
         for kind, url in output_images.items():
             ext = _image_ext_from_url(url)
             local_key = f"images/page_{page_idx:04d}_{counter:02d}_{kind}{ext}"
             counter += 1
             url_to_local[url] = local_key
             self._download_image(url, local_key, images, missing)
+
+        # 3) Scan markdown for remote URLs not covered by API mappings.
+        #    This ensures all image references are normalized per the contract.
+        for match in _IMAGE_RE.finditer(raw_markdown):
+            ref = match.group(2)
+            if ref.startswith(("http://", "https://")) and ref not in url_to_local:
+                ext = _image_ext_from_url(ref)
+                local_key = f"images/page_{page_idx:04d}_{counter:02d}_md{ext}"
+                counter += 1
+                url_to_local[ref] = local_key
+                self._download_image(ref, local_key, images, missing)
 
         # Rewrite markdown: replace all image URLs with local keys.
         def _replace_ref(match: re.Match[str]) -> str:

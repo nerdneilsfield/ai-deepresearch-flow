@@ -475,7 +475,10 @@ def ocr(input_path: str, config_path: str, output_dir: str | None) -> None:
     except (FileNotFoundError, ValueError) as exc:
         raise click.ClickException(str(exc)) from exc
 
-    backend = create_backend(cfg.backend)
+    try:
+        backend = create_backend(cfg.backend)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
     resolved_output = Path(output_dir) if output_dir else Path(cfg.general.output_dir)
 
     stats = run_ocr(backend, Path(input_path), resolved_output)
