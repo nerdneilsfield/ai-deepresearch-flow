@@ -34,6 +34,15 @@ def _open_ro_conn(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
+def _open_rw_conn(db_path: Path) -> sqlite3.Connection:
+    """Open a read-write SQLite connection with Row factory and WAL mode."""
+    conn = sqlite3.connect(str(db_path), check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys=ON;")
+    conn.execute("PRAGMA journal_mode=WAL;")
+    return conn
+
+
 def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
     row = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",

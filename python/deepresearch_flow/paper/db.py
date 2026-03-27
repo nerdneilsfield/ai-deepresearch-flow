@@ -873,6 +873,13 @@ def register_db_commands(db_group: click.Group) -> None:
     @click.option("--max-pagination-offset", "max_pagination_offset", type=int, default=10000, show_default=True)
     @click.option("--host", default="127.0.0.1", show_default=True, help="Bind host")
     @click.option("--port", default=8001, type=int, show_default=True, help="Bind port")
+    @click.option(
+        "--admin-token",
+        "admin_token",
+        default=None,
+        envvar="PAPER_DB_ADMIN_TOKEN",
+        help="Bearer token for /api/v1/admin endpoints (or set PAPER_DB_ADMIN_TOKEN)",
+    )
     def api_serve(
         snapshot_db: str,
         static_base_url: str | None,
@@ -882,6 +889,7 @@ def register_db_commands(db_group: click.Group) -> None:
         max_pagination_offset: int,
         host: str,
         port: int,
+        admin_token: str | None,
     ) -> None:
         """Serve the snapshot-backed JSON API."""
         import os
@@ -917,6 +925,7 @@ def register_db_commands(db_group: click.Group) -> None:
             static_base_url=static_base_url_value,
             cors_allowed_origins=cors_allowed,
             limits=limits,
+            admin_token=admin_token,
         )
         click.echo(f"Serving API on http://{host}:{port} (Ctrl+C to stop)")
         uvicorn.run(app, host=host, port=port, log_level="info")
