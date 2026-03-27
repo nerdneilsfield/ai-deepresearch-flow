@@ -247,6 +247,20 @@ def recompute_facet_counts(conn: sqlite3.Connection) -> None:
     )
 
 
+def recompute_facet_edges(conn: sqlite3.Connection) -> None:
+    """Rebuild facet_edge co-occurrence counts from paper_facet."""
+    conn.execute("DELETE FROM facet_edge;")
+    conn.execute(
+        """
+        INSERT INTO facet_edge(node_id_a, node_id_b, paper_count)
+        SELECT a.node_id, b.node_id, COUNT(*) AS paper_count
+        FROM paper_facet a
+        JOIN paper_facet b ON a.paper_id = b.paper_id AND a.node_id < b.node_id
+        GROUP BY a.node_id, b.node_id
+        """
+    )
+
+
 def recompute_paper_index(conn: sqlite3.Connection) -> None:
     conn.execute(
         """

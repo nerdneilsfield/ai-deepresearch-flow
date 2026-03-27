@@ -6,6 +6,7 @@ Authentication is via Bearer token in the ``Authorization`` header.
 
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import sqlite3
@@ -31,6 +32,7 @@ from deepresearch_flow.paper.snapshot.identity import (
 from deepresearch_flow.paper.snapshot.schema import (
     init_snapshot_db,
     recompute_facet_counts,
+    recompute_facet_edges,
     recompute_paper_index,
 )
 from deepresearch_flow.paper.snapshot.text import insert_cjk_spaces, markdown_to_plain_text
@@ -67,12 +69,12 @@ def _check_auth(request: Request) -> str | None:
     """Return an error message if auth fails, or ``None`` if OK."""
     cfg: AdminConfig = request.app.state.admin_cfg
     if not cfg.admin_token:
-        return "admin API is disabled (no token configured)"
+        return "admin API is disabled"
     auth = request.headers.get("authorization", "")
     if not auth.startswith("Bearer "):
-        return "missing Bearer token"
-    if auth[7:] != cfg.admin_token:
-        return "invalid token"
+        return "unauthorized"
+    if not hmac.compare_digest(auth[7:], cfg.admin_token):
+        return "unauthorized"
     return None
 
 
@@ -160,9 +162,20 @@ def _insert_paper_metadata(
     pdf_content_hash = str(paper.get("pdf_content_hash") or "").strip()
     source_md_content_hash = str(paper.get("source_md_content_hash") or "").strip()
 
+    has_real_templates = isinstance(paper.get("templates"), dict) and any(
+        isinstance(v, dict) and v for v in paper["templates"].values()
+    )
     template_payloads = _extract_template_payloads(paper)
     preferred_summary_template = _choose_preferred_template(paper, template_payloads)
     preferred_markdown = _extract_template_markdown(template_payloads.get(preferred_summary_template, {}))
+
+    # Prefer the preview carried from source DB when no real template content
+    # exists (avoids polluting preview/FTS with raw JSON dumps of the paper dict)
+    incoming_preview = str(paper.get("summary_preview") or "").strip()
+    if has_real_templates:
+        summary_preview = _summary_preview(preferred_markdown)
+    else:
+        summary_preview = incoming_preview or _summary_preview(preferred_markdown)
 
     conn.execute(
         """
@@ -176,7 +189,7 @@ def _insert_paper_metadata(
         (
             paper_id, paper_key, paper_key_type, doi, title, year, month,
             publication_date, venue, preferred_summary_template,
-            _summary_preview(preferred_markdown),
+            summary_preview,
             source_hash, output_language, provider, model, prompt_template,
             extracted_at, pdf_content_hash, source_md_content_hash,
         ),
@@ -274,10 +287,14 @@ def _insert_paper_metadata(
             edge_rows,
         )
 
-    # FTS indices
-    summary_text = markdown_to_plain_text(
-        " ".join(_extract_template_markdown(template_payloads[tag]) for tag in ordered_template_tags)
-    )
+    # FTS indices — use real template content when available, otherwise fall back
+    # to summary_preview to avoid indexing JSON dumps of the paper dict
+    if has_real_templates:
+        summary_text = markdown_to_plain_text(
+            " ".join(_extract_template_markdown(template_payloads[tag]) for tag in ordered_template_tags)
+        )
+    else:
+        summary_text = summary_preview
     metadata_text = " ".join(
         part for part in [title, " ".join(authors), venue, " ".join(keywords), " ".join(institutions), year, doi or ""]
         if part
@@ -360,7 +377,7 @@ async def _admin_add_papers(request: Request) -> JSONResponse:
         conn.rollback()
         logger.exception("Admin add papers failed")
         return JSONResponse(
-            {"error": "internal_error", "detail": str(exc)},
+            {"error": "internal_error", "detail": "batch insert failed"},
             status_code=500,
         )
     finally:
@@ -388,12 +405,13 @@ async def _admin_delete_paper(request: Request) -> JSONResponse:
         if deleted:
             recompute_paper_index(conn)
             recompute_facet_counts(conn)
+            recompute_facet_edges(conn)
         conn.commit()
     except Exception as exc:
         conn.rollback()
         logger.exception("Admin delete paper failed: %s", paper_id)
         return JSONResponse(
-            {"error": "internal_error", "detail": str(exc)},
+            {"error": "internal_error", "detail": "delete operation failed"},
             status_code=500,
         )
     finally:

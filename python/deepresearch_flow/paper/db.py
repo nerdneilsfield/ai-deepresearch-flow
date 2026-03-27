@@ -1041,6 +1041,9 @@ def register_db_commands(db_group: click.Group) -> None:
                 console.print(f"  index={err.get('index')}: {err.get('error')}")
             if len(stats.errors) > 10:
                 console.print(f"  ... and {len(stats.errors) - 10} more")
+            raise click.ClickException(
+                f"{len(stats.errors)} paper(s) failed to insert"
+            )
 
     @db_group.command("append-bibtex")
     @click.option("-i", "--input", "input_path", required=True, help="Input JSON file path")

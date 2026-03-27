@@ -63,6 +63,10 @@ def load_remote_config(config_path: Path) -> RemoteConfig:
         )
 
     batch_size = int(remote.get("batch_size", DEFAULT_BATCH_SIZE))
+    if batch_size < 1 or batch_size > 200:
+        raise ValueError(
+            f"remote.batch_size must be between 1 and 200, got {batch_size}"
+        )
     return RemoteConfig(
         api_base_url=api_base_url,
         admin_token=admin_token,
@@ -181,6 +185,7 @@ def extract_papers_from_db(
                 "extracted_at": row["extracted_at"] or "",
                 "pdf_content_hash": row["pdf_content_hash"] or "",
                 "source_md_content_hash": row["source_md_content_hash"] or "",
+                "summary_preview": row["summary_preview"] or "",
             }
 
             if row["doi"]:
@@ -196,10 +201,6 @@ def extract_papers_from_db(
 
             if templates:
                 paper["templates"] = templates
-            elif template_tags:
-                # No JSON files available, but record the tags so the remote
-                # side at least knows which templates exist.
-                paper["templates"] = {tag: {} for tag in template_tags}
 
             papers.append(paper)
 
