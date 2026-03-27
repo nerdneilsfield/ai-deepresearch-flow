@@ -1,0 +1,15 @@
+# OCR Configuration
+# Copy to ocr.toml and fill in your values.
+
+[general]
+output_dir = "ocr_output"       # Default output directory
+
+[backend]
+type = "paddle"                 # Backend type: "paddle"
+api_url = "https://paddleocr.aistudio-app.com/layout-parsing"
+token = "env:PADDLE_OCR_TOKEN"  # Supports env: prefix for secret resolution
+
+[backend.options]               # Backend-specific options (optional)
+useDocOrientationClassify = false
+useDocUnwarping = false
+useChartRecognition = false

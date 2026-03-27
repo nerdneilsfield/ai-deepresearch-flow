@@ -446,6 +446,49 @@ def recognize() -> None:
     """OCR recognition and Markdown post-processing commands."""
 
 
+@recognize.command()
+@click.argument("input_path", type=click.Path(exists=True))
+@click.option(
+    "--config",
+    "config_path",
+    type=click.Path(),
+    default="ocr.toml",
+    help="Path to ocr.toml config file. Default: ocr.toml in current directory.",
+)
+@click.option(
+    "--output-dir",
+    type=click.Path(),
+    default=None,
+    help="Override output directory from config.",
+)
+def ocr(input_path: str, config_path: str, output_dir: str | None) -> None:
+    """Run OCR on PDF/image files using a configured backend."""
+    from pathlib import Path
+
+    from deepresearch_flow.ocr.config import load_ocr_config
+    from deepresearch_flow.ocr.factory import create_backend
+    from deepresearch_flow.ocr.runner import run_ocr
+
+    cfg_path = Path(config_path)
+    try:
+        cfg = load_ocr_config(cfg_path)
+    except (FileNotFoundError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    backend = create_backend(cfg.backend)
+    resolved_output = Path(output_dir) if output_dir else Path(cfg.general.output_dir)
+
+    stats = run_ocr(backend, Path(input_path), resolved_output)
+
+    click.echo(
+        f"Done: {stats['processed']} processed, "
+        f"{stats['failed']} failed, "
+        f"{stats['skipped']} skipped."
+    )
+    if stats["failed"] > 0:
+        raise click.ClickException(f"{stats['failed']} file(s) failed to process.")
+
+
 @recognize.group()
 def md() -> None:
     """Markdown image utilities."""
