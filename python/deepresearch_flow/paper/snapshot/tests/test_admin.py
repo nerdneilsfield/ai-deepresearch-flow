@@ -341,5 +341,112 @@ class TestAdminMountedInMainApp(unittest.TestCase):
         assert resp.status_code == 404
 
 
+class TestDeleteFacetEdgeRecompute(unittest.TestCase):
+    """Regression: facet_edge counts must be rebuilt after delete."""
+
+    def setUp(self) -> None:
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.db_path = _make_db(Path(self.tmpdir.name))
+        app = create_admin_app(snapshot_db=self.db_path, admin_token=ADMIN_TOKEN)
+        self.client = TestClient(app, raise_server_exceptions=False)
+        self.headers = {"Authorization": f"Bearer {ADMIN_TOKEN}"}
+
+    def tearDown(self) -> None:
+        self.tmpdir.cleanup()
+
+    def test_facet_edge_rebuilt_after_delete(self) -> None:
+        # Add two papers sharing "deep-learning" tag
+        p1 = _sample_paper(
+            paper_title="Paper One",
+            source_hash="h1",
+            ai_generated_tags=["deep-learning"],
+            keywords=["transformer"],
+        )
+        p2 = _sample_paper(
+            paper_title="Paper Two",
+            source_hash="h2",
+            ai_generated_tags=["deep-learning"],
+            keywords=["diffusion"],
+        )
+        resp = self.client.post("/papers", json={"papers": [p1, p2]}, headers=self.headers)
+        ids = resp.json()["paper_ids"]
+        assert len(ids) == 2
+
+        conn = sqlite3.connect(str(self.db_path))
+        conn.row_factory = sqlite3.Row
+        try:
+            edges_before = conn.execute("SELECT COUNT(*) AS c FROM facet_edge").fetchone()["c"]
+            assert edges_before > 0
+        finally:
+            conn.close()
+
+        # Delete one paper
+        self.client.delete(f"/papers/{ids[0]}", headers=self.headers)
+
+        conn = sqlite3.connect(str(self.db_path))
+        conn.row_factory = sqlite3.Row
+        try:
+            # facet_edge should have been rebuilt — no stale counts
+            for row in conn.execute("SELECT * FROM facet_edge").fetchall():
+                # Recount from paper_facet to verify
+                actual = conn.execute(
+                    """
+                    SELECT COUNT(*) AS c FROM paper_facet a
+                    JOIN paper_facet b ON a.paper_id = b.paper_id AND a.node_id = ? AND b.node_id = ?
+                    """,
+                    (row["node_id_a"], row["node_id_b"]),
+                ).fetchone()["c"]
+                assert row["paper_count"] == actual, (
+                    f"facet_edge({row['node_id_a']},{row['node_id_b']}): "
+                    f"stored={row['paper_count']} actual={actual}"
+                )
+        finally:
+            conn.close()
+
+
+class TestSummaryPreviewNotPolluted(unittest.TestCase):
+    """Regression: summary_preview and FTS must not be '{}' when no templates."""
+
+    def setUp(self) -> None:
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.db_path = _make_db(Path(self.tmpdir.name))
+        app = create_admin_app(snapshot_db=self.db_path, admin_token=ADMIN_TOKEN)
+        self.client = TestClient(app, raise_server_exceptions=False)
+        self.headers = {"Authorization": f"Bearer {ADMIN_TOKEN}"}
+
+    def tearDown(self) -> None:
+        self.tmpdir.cleanup()
+
+    def test_preview_uses_fallback_when_no_templates(self) -> None:
+        paper = {
+            "paper_title": "A Paper Without Templates",
+            "paper_authors": ["Alice"],
+            "source_hash": "no_tpl_hash",
+            "summary_preview": "This is the real preview from source DB",
+        }
+        resp = self.client.post("/papers", json={"papers": [paper]}, headers=self.headers)
+        data = resp.json()
+        assert data["added"] == 1
+        paper_id = data["paper_ids"][0]
+
+        conn = sqlite3.connect(str(self.db_path))
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute(
+                "SELECT summary_preview FROM paper WHERE paper_id = ?",
+                (paper_id,),
+            ).fetchone()
+            assert row["summary_preview"] != "{}"
+            assert row["summary_preview"] == "This is the real preview from source DB"
+
+            fts = conn.execute(
+                "SELECT summary FROM paper_fts WHERE paper_id = ?",
+                (paper_id,),
+            ).fetchone()
+            assert fts["summary"] != "{}"
+        finally:
+            conn.close()
+
+
 if __name__ == "__main__":
     unittest.main()

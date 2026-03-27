@@ -166,11 +166,16 @@ class TestExtractPapersFromDb(TestCase):
         alpha = next(p for p in papers if p["paper_id"] == "paper-alpha")
         assert alpha["templates"]["simple"]["summary"] == "A summary."
 
-    def test_templates_fallback_without_static_dir(self) -> None:
+    def test_no_templates_without_static_dir(self) -> None:
         papers = extract_papers_from_db(self.db_path)
         alpha = next(p for p in papers if p["paper_id"] == "paper-alpha")
-        # Should have empty dict placeholders for known tags
-        assert "simple" in alpha["templates"]
+        # Without static dir, templates should not be included (avoids FTS pollution)
+        assert "templates" not in alpha
+
+    def test_summary_preview_carried(self) -> None:
+        papers = extract_papers_from_db(self.db_path)
+        alpha = next(p for p in papers if p["paper_id"] == "paper-alpha")
+        assert alpha["summary_preview"] == "Preview of Alpha Paper on Transformers"
 
 
 class TestLoadRemoteConfig(TestCase):
@@ -213,6 +218,20 @@ class TestLoadRemoteConfig(TestCase):
             f.flush()
             cfg = load_remote_config(Path(f.name))
         assert cfg.batch_size == 50
+
+    def test_batch_size_zero_raises(self) -> None:
+        with tempfile.NamedTemporaryFile(suffix=".toml", mode="w", delete=False) as f:
+            f.write('[remote]\napi_base_url = "https://x.com"\nadmin_token = "t"\nbatch_size = 0\n')
+            f.flush()
+            with self.assertRaises(ValueError):
+                load_remote_config(Path(f.name))
+
+    def test_batch_size_over_limit_raises(self) -> None:
+        with tempfile.NamedTemporaryFile(suffix=".toml", mode="w", delete=False) as f:
+            f.write('[remote]\napi_base_url = "https://x.com"\nadmin_token = "t"\nbatch_size = 300\n')
+            f.flush()
+            with self.assertRaises(ValueError):
+                load_remote_config(Path(f.name))
 
 
 class TestPushPapers(TestCase):
