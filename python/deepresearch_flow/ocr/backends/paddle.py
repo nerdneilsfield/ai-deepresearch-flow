@@ -98,11 +98,17 @@ class PaddleOcrBackend:
         missing: list[str] = []
 
         # 1) Process images from API mapping.
-        for _name, url in raw_images.items():
+        #    Map both the remote URL and the local name/key variants so that
+        #    references like <img src="imgs/foo.jpg"> also resolve.
+        for name, url in raw_images.items():
             ext = _image_ext_from_url(url)
             local_key = f"images/page_{page_idx:04d}_{counter:02d}_md{ext}"
             counter += 1
             url_to_local[url] = local_key
+            url_to_local[name] = local_key
+            # Also map with common path prefixes the API may use.
+            if "/" not in name:
+                url_to_local[f"imgs/{name}"] = local_key
             self._download_image(url, local_key, images, missing)
 
         # 2) Process output images (layout visualizations etc.).

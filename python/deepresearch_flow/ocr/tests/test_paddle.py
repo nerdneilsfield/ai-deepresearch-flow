@@ -342,3 +342,38 @@ class TestPaddleOcrBackend:
         assert "imgs/" not in page.markdown
         assert "<img" not in page.markdown
         assert "![Image](images/page_0000_" in page.markdown
+
+    def test_html_img_reuses_mapped_image(
+        self, backend: PaddleOcrBackend, tmp_path: Path
+    ) -> None:
+        """HTML <img src="imgs/foo.jpg"> should reuse the same local key as markdown.images["foo.jpg"]."""
+        pdf_file = tmp_path / "test.pdf"
+        pdf_file.write_bytes(b"%PDF-1.4 fake")
+
+        response = {
+            "result": {
+                "layoutParsingResults": [
+                    {
+                        "markdown": {
+                            "text": (
+                                '![md_ref](http://cdn.example.com/fig.jpg)\n\n'
+                                '<div><img src="imgs/fig.jpg" alt="Table" /></div>'
+                            ),
+                            "images": {
+                                "fig.jpg": "http://cdn.example.com/fig.jpg",
+                            },
+                        },
+                        "outputImages": {},
+                    }
+                ]
+            }
+        }
+
+        transport = _mock_transport(response)
+        result = _run_with_transport(backend, transport, pdf_file)
+
+        page = result.pages[0]
+        # Only 1 image should be downloaded (not 2 — the HTML img reuses the same).
+        assert len(page.images) == 1
+        # Both references should point to the same local key.
+        assert page.markdown.count("images/page_0000_00_md.jpg") == 2
