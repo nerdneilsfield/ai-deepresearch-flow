@@ -148,6 +148,23 @@ uv run deepresearch-flow translator translate \
   --fix-level moderate
 ```
 
+#### Step 2.5: Run OCR on PDFs/Images (Optional)
+
+If your source documents are PDFs or scanned images, run OCR first to produce markdown:
+
+```bash
+# 1) Copy and edit the OCR config
+cp ocr.example.toml ocr.toml
+# Set your PaddleOCR token: export PADDLE_OCR_TOKEN=xxx
+
+# 2) Run OCR on a directory of PDFs
+uv run deepresearch-flow recognize ocr ./pdfs --config ocr.toml --output-dir ./ocr_output
+```
+
+Output follows the mineru layout (`full.md` + `images/` per document), compatible with the repair steps below.
+
+See [`ocr.example.toml`](ocr.example.toml) for backend configuration. Currently supports PaddleOCR; more backends planned.
+
 #### Step 3: Repair OCR Outputs (Recommended)
 
 Recommended sequence to stabilize markdown before serving:

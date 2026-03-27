@@ -143,6 +143,23 @@ uv run deepresearch-flow translator translate \
   --fix-level moderate
 ```
 
+#### 步骤 2.5：对 PDF/图片执行 OCR（可选）
+
+如果源文档是 PDF 或扫描图片，先跑 OCR 生成 markdown：
+
+```bash
+# 1) 复制并编辑 OCR 配置
+cp ocr.example.toml ocr.toml
+# 设置 PaddleOCR token: export PADDLE_OCR_TOKEN=xxx
+
+# 2) 对目录下的 PDF 执行 OCR
+uv run deepresearch-flow recognize ocr ./pdfs --config ocr.toml --output-dir ./ocr_output
+```
+
+输出兼容 mineru 布局（每个文档一个 `full.md` + `images/` 目录），可直接进入下面的修复流程。
+
+配置详见 [`ocr.example.toml`](ocr.example.toml)。目前支持 PaddleOCR 后端，更多后端待扩展。
+
 #### 步骤 3：修复 OCR 产物（推荐）
 
 推荐顺序：先修复 OCR，再修公式和流程图，最后再修一遍统一格式。
