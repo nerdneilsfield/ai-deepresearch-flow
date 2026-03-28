@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TypedDict
@@ -105,12 +106,35 @@ def _has_existing_output(base: Path, stem: str) -> bool:
     return (candidate / "full.md").is_file()
 
 
+def _ocr_with_retry(
+    backend: OcrBackend, file_path: Path, max_retries: int,
+) -> "OcrResult":
+    """Call backend.ocr with exponential backoff retries."""
+    from deepresearch_flow.ocr.base import OcrResult  # noqa: F811
+
+    last_exc: Exception | None = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            return backend.ocr(file_path)
+        except Exception as exc:
+            last_exc = exc
+            if attempt < max_retries:
+                wait = min(2 ** attempt, 30)
+                logger.warning(
+                    "OCR attempt %d/%d failed for %s, retrying in %ds: %s",
+                    attempt, max_retries, file_path.name, wait, exc,
+                )
+                time.sleep(wait)
+    raise last_exc  # type: ignore[misc]
+
+
 def run_ocr(
     backend: OcrBackend,
     input_path: Path,
     output_dir: Path,
     *,
     overwrite: bool = False,
+    max_retries: int = 1,
 ) -> tuple[OcrStats, list[OcrFileResult]]:
     """Run OCR on input file(s) and write results to output_dir."""
     files = discover_files(input_path)
@@ -126,9 +150,9 @@ def run_ocr(
 
         logger.info("Processing: %s", file_path.name)
         try:
-            result = backend.ocr(file_path)
+            result = _ocr_with_retry(backend, file_path, max_retries)
         except Exception as exc:
-            logger.exception("Failed to OCR %s", file_path.name)
+            logger.error("Failed to OCR %s after %d attempt(s): %s", file_path.name, max_retries, exc)
             stats["failed"] += 1
             results.append(OcrFileResult(
                 name=file_path.name, status="failed", error=str(exc),

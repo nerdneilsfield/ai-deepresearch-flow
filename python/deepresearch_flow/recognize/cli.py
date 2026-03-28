@@ -462,8 +462,9 @@ def recognize() -> None:
     help="Override output directory from config.",
 )
 @click.option("--overwrite", is_flag=True, default=False, help="Overwrite existing output instead of skipping.")
+@click.option("--max-retries", type=int, default=3, show_default=True, help="Max retry attempts per file on failure.")
 @click.option("--verbose", is_flag=True, default=False, help="Enable debug logging.")
-def ocr(input_path: str, config_path: str, output_dir: str | None, overwrite: bool, verbose: bool) -> None:
+def ocr(input_path: str, config_path: str, output_dir: str | None, overwrite: bool, max_retries: int, verbose: bool) -> None:
     """Run OCR on PDF/image files using a configured backend."""
     from pathlib import Path
 
@@ -494,7 +495,7 @@ def ocr(input_path: str, config_path: str, output_dir: str | None, overwrite: bo
     console.print(f"Input:  {input_path}")
     console.print(f"Output: {resolved_output}")
 
-    stats, results = run_ocr(backend, Path(input_path), resolved_output, overwrite=overwrite)
+    stats, results = run_ocr(backend, Path(input_path), resolved_output, overwrite=overwrite, max_retries=max_retries)
 
     # Build rich table.
     status_style = {"processed": "green", "skipped": "dim", "failed": "bold red"}
