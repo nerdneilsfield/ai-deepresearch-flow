@@ -194,3 +194,37 @@ class TestRunOcr:
             run_ocr(backend, pdf, output_dir)
 
         assert "missing" in caplog.text.lower()
+
+    def test_skip_existing_by_default(self, tmp_path: Path) -> None:
+        pdf = tmp_path / "doc.pdf"
+        pdf.write_bytes(b"%PDF")
+        output_dir = tmp_path / "output"
+
+        # First run: creates output.
+        backend = FakeBackend([OcrPage(page_index=0, markdown="v1", images={})])
+        run_ocr(backend, pdf, output_dir)
+        assert (output_dir / "doc" / "full.md").read_text() == "v1"
+
+        # Second run: skipped because output exists.
+        backend2 = FakeBackend([OcrPage(page_index=0, markdown="v2", images={})])
+        stats = run_ocr(backend2, pdf, output_dir)
+        assert stats["skipped"] == 1
+        assert stats["processed"] == 0
+        # Content unchanged.
+        assert (output_dir / "doc" / "full.md").read_text() == "v1"
+
+    def test_overwrite_replaces_existing(self, tmp_path: Path) -> None:
+        pdf = tmp_path / "doc.pdf"
+        pdf.write_bytes(b"%PDF")
+        output_dir = tmp_path / "output"
+
+        # First run.
+        backend = FakeBackend([OcrPage(page_index=0, markdown="v1", images={})])
+        run_ocr(backend, pdf, output_dir)
+
+        # Second run with overwrite=True.
+        backend2 = FakeBackend([OcrPage(page_index=0, markdown="v2", images={})])
+        stats = run_ocr(backend2, pdf, output_dir, overwrite=True)
+        assert stats["processed"] == 1
+        assert stats["skipped"] == 0
+        assert (output_dir / "doc" / "full.md").read_text() == "v2"

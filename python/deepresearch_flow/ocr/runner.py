@@ -96,16 +96,29 @@ def _write_output(
         logger.warning("Missing image in output %s: %s", output_dir.name, path)
 
 
+def _has_existing_output(base: Path, stem: str) -> bool:
+    """Check if output already exists for this file stem."""
+    candidate = base / stem
+    return (candidate / "full.md").is_file()
+
+
 def run_ocr(
     backend: OcrBackend,
     input_path: Path,
     output_dir: Path,
+    *,
+    overwrite: bool = False,
 ) -> OcrStats:
     """Run OCR on input file(s) and write results to output_dir."""
     files = discover_files(input_path)
     stats: OcrStats = {"processed": 0, "failed": 0, "skipped": 0}
 
     for file_path in files:
+        if not overwrite and _has_existing_output(output_dir, file_path.stem):
+            logger.info("Skipping (already exists): %s", file_path.name)
+            stats["skipped"] += 1
+            continue
+
         logger.info("Processing: %s", file_path.name)
         try:
             result = backend.ocr(file_path)
@@ -118,6 +131,11 @@ def run_ocr(
             logger.warning("Empty OCR result for %s, skipping", file_path.name)
             stats["skipped"] += 1
             continue
+
+        doc_dir = output_dir / file_path.stem
+        if overwrite and doc_dir.exists():
+            import shutil
+            shutil.rmtree(doc_dir)
 
         doc_dir = _resolve_output_dir(output_dir, file_path.stem)
         markdown, images, missing = _merge_pages(result.pages)

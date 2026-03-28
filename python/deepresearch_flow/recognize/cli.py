@@ -461,8 +461,9 @@ def recognize() -> None:
     default=None,
     help="Override output directory from config.",
 )
+@click.option("--overwrite", is_flag=True, default=False, help="Overwrite existing output instead of skipping.")
 @click.option("--verbose", is_flag=True, default=False, help="Enable debug logging.")
-def ocr(input_path: str, config_path: str, output_dir: str | None, verbose: bool) -> None:
+def ocr(input_path: str, config_path: str, output_dir: str | None, overwrite: bool, verbose: bool) -> None:
     """Run OCR on PDF/image files using a configured backend."""
     from pathlib import Path
 
@@ -489,7 +490,7 @@ def ocr(input_path: str, config_path: str, output_dir: str | None, verbose: bool
     click.echo(f"Input: {input_path}")
     click.echo(f"Output: {resolved_output}")
 
-    stats = run_ocr(backend, Path(input_path), resolved_output)
+    stats = run_ocr(backend, Path(input_path), resolved_output, overwrite=overwrite)
 
     click.echo(
         f"Done: {stats['processed']} processed, "
