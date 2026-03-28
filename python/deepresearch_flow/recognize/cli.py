@@ -467,11 +467,15 @@ def ocr(input_path: str, config_path: str, output_dir: str | None, overwrite: bo
     """Run OCR on PDF/image files using a configured backend."""
     from pathlib import Path
 
+    from rich.console import Console
+    from rich.table import Table
+
     from deepresearch_flow.ocr.config import load_ocr_config
     from deepresearch_flow.ocr.factory import create_backend
     from deepresearch_flow.ocr.runner import run_ocr
 
     configure_logging(verbose)
+    console = Console()
 
     cfg_path = Path(config_path)
     try:
@@ -479,7 +483,7 @@ def ocr(input_path: str, config_path: str, output_dir: str | None, overwrite: bo
     except (FileNotFoundError, ValueError) as exc:
         raise click.ClickException(str(exc)) from exc
 
-    click.echo(f"Backend: {cfg.backend.type} → {cfg.backend.api_url}")
+    console.print(f"Backend: [bold]{cfg.backend.type}[/] → {cfg.backend.api_url}")
 
     try:
         backend = create_backend(cfg.backend)
@@ -487,16 +491,39 @@ def ocr(input_path: str, config_path: str, output_dir: str | None, overwrite: bo
         raise click.ClickException(str(exc)) from exc
     resolved_output = Path(output_dir) if output_dir else Path(cfg.general.output_dir)
 
-    click.echo(f"Input: {input_path}")
-    click.echo(f"Output: {resolved_output}")
+    console.print(f"Input:  {input_path}")
+    console.print(f"Output: {resolved_output}")
 
-    stats = run_ocr(backend, Path(input_path), resolved_output, overwrite=overwrite)
+    stats, results = run_ocr(backend, Path(input_path), resolved_output, overwrite=overwrite)
 
-    click.echo(
-        f"Done: {stats['processed']} processed, "
+    # Build rich table.
+    status_style = {"processed": "green", "skipped": "dim", "failed": "bold red"}
+    table = Table(title="OCR Results", show_lines=False)
+    table.add_column("#", style="dim", width=4)
+    table.add_column("File", max_width=60, no_wrap=True)
+    table.add_column("Status", width=10)
+    table.add_column("Pages", justify="right", width=6)
+    table.add_column("Images", justify="right", width=7)
+    table.add_column("Error", style="red", max_width=40)
+
+    for i, r in enumerate(results, 1):
+        style = status_style.get(r.status, "")
+        table.add_row(
+            str(i),
+            r.name,
+            f"[{style}]{r.status}[/]",
+            str(r.pages) if r.pages else "",
+            str(r.images) if r.images else "",
+            r.error[:40] if r.error else "",
+        )
+
+    console.print(table)
+    console.print(
+        f"\n[bold]Total:[/] {stats['processed']} processed, "
         f"{stats['failed']} failed, "
         f"{stats['skipped']} skipped."
     )
+
     if stats["failed"] > 0:
         raise click.ClickException(f"{stats['failed']} file(s) failed to process.")
 

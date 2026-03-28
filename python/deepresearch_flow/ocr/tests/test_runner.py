@@ -137,7 +137,7 @@ class TestRunOcr:
         ]
         backend = FakeBackend(pages)
 
-        stats = run_ocr(backend, pdf, output_dir)
+        stats, _ = run_ocr(backend, pdf, output_dir)
 
         assert stats["processed"] == 1
         assert stats["failed"] == 0
@@ -158,7 +158,7 @@ class TestRunOcr:
         output_dir = tmp_path / "output"
 
         backend = FakeBackend([OcrPage(page_index=0, markdown="text", images={})])
-        stats = run_ocr(backend, input_dir, output_dir)
+        stats, _ = run_ocr(backend, input_dir, output_dir)
 
         assert stats["processed"] == 2
         assert (output_dir / "a" / "full.md").exists()
@@ -170,7 +170,7 @@ class TestRunOcr:
         output_dir = tmp_path / "output"
 
         backend = FakeBackend([])  # No pages.
-        stats = run_ocr(backend, pdf, output_dir)
+        stats, _ = run_ocr(backend, pdf, output_dir)
 
         assert stats["processed"] == 0
         assert stats["skipped"] == 1
@@ -207,7 +207,7 @@ class TestRunOcr:
 
         # Second run: skipped because output exists.
         backend2 = FakeBackend([OcrPage(page_index=0, markdown="v2", images={})])
-        stats = run_ocr(backend2, pdf, output_dir)
+        stats, _ = run_ocr(backend2, pdf, output_dir)
         assert stats["skipped"] == 1
         assert stats["processed"] == 0
         # Content unchanged.
@@ -224,7 +224,7 @@ class TestRunOcr:
 
         # Second run with overwrite=True.
         backend2 = FakeBackend([OcrPage(page_index=0, markdown="v2", images={})])
-        stats = run_ocr(backend2, pdf, output_dir, overwrite=True)
+        stats, _ = run_ocr(backend2, pdf, output_dir, overwrite=True)
         assert stats["processed"] == 1
         assert stats["skipped"] == 0
         assert (output_dir / "doc" / "full.md").read_text() == "v2"

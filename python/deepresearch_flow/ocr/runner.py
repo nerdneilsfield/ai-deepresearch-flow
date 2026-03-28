@@ -111,28 +111,34 @@ def run_ocr(
     output_dir: Path,
     *,
     overwrite: bool = False,
-) -> OcrStats:
+) -> tuple[OcrStats, list[OcrFileResult]]:
     """Run OCR on input file(s) and write results to output_dir."""
     files = discover_files(input_path)
     stats: OcrStats = {"processed": 0, "failed": 0, "skipped": 0}
+    results: list[OcrFileResult] = []
 
     for file_path in files:
         if not overwrite and _has_existing_output(output_dir, file_path.stem):
             logger.info("Skipping (already exists): %s", file_path.name)
             stats["skipped"] += 1
+            results.append(OcrFileResult(name=file_path.name, status="skipped"))
             continue
 
         logger.info("Processing: %s", file_path.name)
         try:
             result = backend.ocr(file_path)
-        except Exception:
+        except Exception as exc:
             logger.exception("Failed to OCR %s", file_path.name)
             stats["failed"] += 1
+            results.append(OcrFileResult(
+                name=file_path.name, status="failed", error=str(exc),
+            ))
             continue
 
         if not result.pages:
             logger.warning("Empty OCR result for %s, skipping", file_path.name)
             stats["skipped"] += 1
+            results.append(OcrFileResult(name=file_path.name, status="skipped"))
             continue
 
         doc_dir = output_dir / file_path.stem
@@ -145,9 +151,13 @@ def run_ocr(
         _write_output(doc_dir, markdown, images, missing)
 
         stats["processed"] += 1
+        results.append(OcrFileResult(
+            name=file_path.name, status="processed",
+            pages=len(result.pages), images=len(images),
+        ))
         logger.info("Written: %s/full.md (%d pages)", doc_dir.name, len(result.pages))
 
-    return stats
+    return stats, results
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +165,17 @@ def run_ocr(
 # ---------------------------------------------------------------------------
 
 _IMAGE_REF_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+
+
+@dataclass
+class OcrFileResult:
+    """Result for a single file OCR processing."""
+
+    name: str
+    status: str  # "processed" | "skipped" | "failed"
+    pages: int = 0
+    images: int = 0
+    error: str = ""
 
 
 @dataclass

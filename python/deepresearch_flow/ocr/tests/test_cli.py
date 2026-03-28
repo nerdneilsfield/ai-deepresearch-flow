@@ -47,7 +47,7 @@ class TestOcrCommand:
             general=GeneralConfig(output_dir=str(tmp_path / "output")),
             backend=BackendConfig(type="paddle", api_url="https://x", token="t"),
         )
-        mock_run.return_value = {"processed": 1, "failed": 0, "skipped": 0}
+        mock_run.return_value = ({"processed": 1, "failed": 0, "skipped": 0}, [])
 
         runner = CliRunner()
         result = runner.invoke(
@@ -78,7 +78,7 @@ class TestOcrCommand:
             general=GeneralConfig(output_dir="default_out"),
             backend=BackendConfig(type="paddle", api_url="https://x", token="t"),
         )
-        mock_run.return_value = {"processed": 1, "failed": 0, "skipped": 0}
+        mock_run.return_value = ({"processed": 1, "failed": 0, "skipped": 0}, [])
 
         custom_out = str(tmp_path / "custom_output")
         runner = CliRunner()
