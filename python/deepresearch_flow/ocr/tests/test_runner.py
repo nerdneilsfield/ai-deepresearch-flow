@@ -251,7 +251,7 @@ class TestMigrateToHashNames:
             "# Title\n\n![fig](images/page_0000_00_md.png)\n"
         )
 
-        stats = migrate_to_hash_names(tmp_path)
+        stats, _ = migrate_to_hash_names(tmp_path)
 
         assert stats["migrated"] == 1
         # Old file gone, new hash file exists.
@@ -277,7 +277,7 @@ class TestMigrateToHashNames:
         (img_dir / f"{digest}.png").write_bytes(img_data)
         (doc_dir / "full.md").write_text(f"![](images/{digest}.png)\n")
 
-        stats = migrate_to_hash_names(tmp_path)
+        stats, _ = migrate_to_hash_names(tmp_path)
         assert stats["skipped"] == 1
         assert stats["migrated"] == 0
 
@@ -292,7 +292,7 @@ class TestMigrateToHashNames:
         (img_dir / "page_0000_00_md.png").write_bytes(b"data")
         (doc_dir / "full.md").write_text("![](images/page_0000_00_md.png)\n")
 
-        stats = migrate_to_hash_names(tmp_path, dry_run=True)
+        stats, _ = migrate_to_hash_names(tmp_path, dry_run=True)
         assert stats["migrated"] == 1
         # But files are unchanged.
         assert (img_dir / "page_0000_00_md.png").exists()

@@ -513,18 +513,45 @@ def ocr_migrate(ocr_output_dir: str, dry_run: bool, verbose: bool) -> None:
     """
     from pathlib import Path
 
+    from rich.console import Console
+    from rich.table import Table
+
     from deepresearch_flow.ocr.runner import migrate_to_hash_names
 
     configure_logging(verbose)
+    console = Console()
 
-    stats = migrate_to_hash_names(Path(ocr_output_dir), dry_run=dry_run)
+    if dry_run:
+        console.print("[bold yellow]Dry-run mode — no files will be changed.[/]")
 
-    prefix = "[dry-run] " if dry_run else ""
-    click.echo(
-        f"{prefix}Done: {stats['migrated']} migrated, "
+    stats, results = migrate_to_hash_names(Path(ocr_output_dir), dry_run=dry_run)
+
+    # Build rich table.
+    status_style = {"migrated": "green", "skipped": "dim", "failed": "bold red"}
+    table = Table(title="OCR Migration Results", show_lines=False)
+    table.add_column("#", style="dim", width=4)
+    table.add_column("Document", max_width=60, no_wrap=True)
+    table.add_column("Status", width=10)
+    table.add_column("Images", justify="right", width=8)
+    table.add_column("Error", style="red", max_width=40)
+
+    for i, r in enumerate(results, 1):
+        style = status_style.get(r.status, "")
+        table.add_row(
+            str(i),
+            r.name,
+            f"[{style}]{r.status}[/]",
+            str(r.images_renamed) if r.images_renamed else "",
+            r.error[:40] if r.error else "",
+        )
+
+    console.print(table)
+    console.print(
+        f"\n[bold]Total:[/] {stats['migrated']} migrated, "
         f"{stats['skipped']} skipped, "
         f"{stats['failed']} failed."
     )
+
     if stats["failed"] > 0:
         raise click.ClickException(f"{stats['failed']} directory(s) failed to migrate.")
 

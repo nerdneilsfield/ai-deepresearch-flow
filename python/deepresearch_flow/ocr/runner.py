@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TypedDict
 
@@ -156,16 +157,29 @@ def run_ocr(
 _IMAGE_REF_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 
 
-def migrate_to_hash_names(ocr_output_dir: Path, *, dry_run: bool = False) -> dict[str, int]:
+@dataclass
+class MigrateResult:
+    """Result for a single document directory migration."""
+
+    name: str
+    status: str  # "migrated" | "skipped" | "failed"
+    images_renamed: int = 0
+    error: str = ""
+
+
+def migrate_to_hash_names(
+    ocr_output_dir: Path, *, dry_run: bool = False
+) -> tuple[dict[str, int], list[MigrateResult]]:
     """Migrate existing OCR output from sequential names to content-hash names.
 
     Scans all subdirectories of *ocr_output_dir* for full.md + images/.
     For each image file, computes sha256 hash of content and renames to
     ``images/{hash12}.{ext}``. Updates references in full.md accordingly.
 
-    Returns stats dict with counts of migrated/skipped/failed directories.
+    Returns (stats dict, list of per-directory results).
     """
     stats = {"migrated": 0, "skipped": 0, "failed": 0}
+    results: list[MigrateResult] = []
 
     if not ocr_output_dir.is_dir():
         raise FileNotFoundError(f"Directory not found: {ocr_output_dir}")
@@ -193,12 +207,14 @@ def migrate_to_hash_names(ocr_output_dir: Path, *, dry_run: bool = False) -> dic
         if not rename_map:
             logger.info("Already migrated: %s", doc_dir.name)
             stats["skipped"] += 1
+            results.append(MigrateResult(name=doc_dir.name, status="skipped"))
             continue
 
         if dry_run:
-            for old, new in rename_map.items():
-                logger.info("[dry-run] %s: %s -> %s", doc_dir.name, old, new)
             stats["migrated"] += 1
+            results.append(MigrateResult(
+                name=doc_dir.name, status="migrated", images_renamed=len(rename_map),
+            ))
             continue
 
         try:
@@ -221,10 +237,16 @@ def migrate_to_hash_names(ocr_output_dir: Path, *, dry_run: bool = False) -> dic
                 tmp_path.rename(new_path)
 
             stats["migrated"] += 1
+            results.append(MigrateResult(
+                name=doc_dir.name, status="migrated", images_renamed=len(rename_map),
+            ))
             logger.info("Migrated: %s (%d images renamed)", doc_dir.name, len(rename_map))
 
-        except Exception:
+        except Exception as exc:
             logger.exception("Failed to migrate %s", doc_dir.name)
             stats["failed"] += 1
+            results.append(MigrateResult(
+                name=doc_dir.name, status="failed", error=str(exc),
+            ))
 
-    return stats
+    return stats, results
