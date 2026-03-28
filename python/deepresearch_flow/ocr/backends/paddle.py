@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import logging
 import re
 from pathlib import Path
@@ -91,8 +92,7 @@ class PaddleOcrBackend:
         raw_images: dict[str, str] = md_section.get("images", {})
         output_images: dict[str, str] = layout.get("outputImages", {})
 
-        # Build mapping: original URL -> local_key for ALL image URLs.
-        counter = 0
+        # Build mapping: original ref -> content-hash local_key.
         url_to_local: dict[str, str] = {}
         images: dict[str, bytes] = {}
         missing: list[str] = []
@@ -102,22 +102,19 @@ class PaddleOcrBackend:
         #    references like <img src="imgs/foo.jpg"> also resolve.
         for name, url in raw_images.items():
             ext = _image_ext_from_url(url)
-            local_key = f"images/page_{page_idx:04d}_{counter:02d}_md{ext}"
-            counter += 1
-            url_to_local[url] = local_key
-            url_to_local[name] = local_key
-            # Also map with common path prefixes the API may use.
-            if "/" not in name:
-                url_to_local[f"imgs/{name}"] = local_key
-            self._download_image(url, local_key, images, missing)
+            local_key = self._download_image(url, ext, images, missing)
+            if local_key:
+                url_to_local[url] = local_key
+                url_to_local[name] = local_key
+                if "/" not in name:
+                    url_to_local[f"imgs/{name}"] = local_key
 
         # 2) Process output images (layout visualizations etc.).
         for kind, url in output_images.items():
             ext = _image_ext_from_url(url)
-            local_key = f"images/page_{page_idx:04d}_{counter:02d}_{kind}{ext}"
-            counter += 1
-            url_to_local[url] = local_key
-            self._download_image(url, local_key, images, missing)
+            local_key = self._download_image(url, ext, images, missing)
+            if local_key:
+                url_to_local[url] = local_key
 
         # 3) Scan markdown for image refs not covered by API mappings.
         #    Covers both ![alt](url) and <img src="url"> patterns.
@@ -125,21 +122,19 @@ class PaddleOcrBackend:
             ref = match.group(2)
             if ref not in url_to_local:
                 ext = _image_ext_from_url(ref)
-                local_key = f"images/page_{page_idx:04d}_{counter:02d}_md{ext}"
-                counter += 1
-                url_to_local[ref] = local_key
                 if ref.startswith(("http://", "https://")):
-                    self._download_image(ref, local_key, images, missing)
+                    local_key = self._download_image(ref, ext, images, missing)
+                    if local_key:
+                        url_to_local[ref] = local_key
 
         for match in _HTML_IMG_RE.finditer(raw_markdown):
             ref = match.group(1)
             if ref not in url_to_local:
                 ext = _image_ext_from_url(ref)
-                local_key = f"images/page_{page_idx:04d}_{counter:02d}_md{ext}"
-                counter += 1
-                url_to_local[ref] = local_key
                 if ref.startswith(("http://", "https://")):
-                    self._download_image(ref, local_key, images, missing)
+                    local_key = self._download_image(ref, ext, images, missing)
+                    if local_key:
+                        url_to_local[ref] = local_key
 
         # Rewrite markdown image refs: ![alt](url) → ![alt](local)
         def _replace_md_ref(match: re.Match[str]) -> str:
@@ -179,15 +174,23 @@ class PaddleOcrBackend:
     def _download_image(
         self,
         url: str,
-        local_key: str,
+        ext: str,
         images: dict[str, bytes],
         missing: list[str],
-    ) -> None:
-        """Download an image URL. On success, add to images; on failure, add to missing."""
+    ) -> str | None:
+        """Download an image URL. Returns the content-hash local key, or None on failure."""
         try:
             resp = self._client.get(url)
             resp.raise_for_status()
-            images[local_key] = resp.content
+            content = resp.content
+            digest = hashlib.sha256(content).hexdigest()[:12]
+            local_key = f"images/{digest}{ext}"
+            images[local_key] = content
+            return local_key
         except (httpx.HTTPStatusError, httpx.RequestError) as exc:
             logger.warning("Failed to download image %s: %s", url, exc)
+            # Use URL hash as placeholder for missing ref.
+            digest = hashlib.sha256(url.encode()).hexdigest()[:12]
+            local_key = f"images/{digest}{ext}"
             missing.append(local_key)
+            return local_key

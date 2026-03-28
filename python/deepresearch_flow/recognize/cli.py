@@ -501,6 +501,34 @@ def ocr(input_path: str, config_path: str, output_dir: str | None, overwrite: bo
         raise click.ClickException(f"{stats['failed']} file(s) failed to process.")
 
 
+@recognize.command("ocr-migrate")
+@click.argument("ocr_output_dir", type=click.Path(exists=True))
+@click.option("--dry-run", is_flag=True, default=False, help="Show what would be renamed without changing anything.")
+@click.option("--verbose", is_flag=True, default=False, help="Enable debug logging.")
+def ocr_migrate(ocr_output_dir: str, dry_run: bool, verbose: bool) -> None:
+    """Migrate old OCR output images to content-hash filenames.
+
+    Renames images from page_XXXX_XX_*.ext to {sha256_12}.ext and
+    updates full.md references. No API calls needed.
+    """
+    from pathlib import Path
+
+    from deepresearch_flow.ocr.runner import migrate_to_hash_names
+
+    configure_logging(verbose)
+
+    stats = migrate_to_hash_names(Path(ocr_output_dir), dry_run=dry_run)
+
+    prefix = "[dry-run] " if dry_run else ""
+    click.echo(
+        f"{prefix}Done: {stats['migrated']} migrated, "
+        f"{stats['skipped']} skipped, "
+        f"{stats['failed']} failed."
+    )
+    if stats["failed"] > 0:
+        raise click.ClickException(f"{stats['failed']} directory(s) failed to migrate.")
+
+
 @recognize.group()
 def md() -> None:
     """Markdown image utilities."""

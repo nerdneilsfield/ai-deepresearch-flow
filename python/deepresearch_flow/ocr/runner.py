@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import re
 from pathlib import Path
 from typing import TypedDict
 
@@ -143,5 +145,86 @@ def run_ocr(
 
         stats["processed"] += 1
         logger.info("Written: %s/full.md (%d pages)", doc_dir.name, len(result.pages))
+
+    return stats
+
+
+# ---------------------------------------------------------------------------
+# Migration: rename old page_XXXX_XX_*.ext images to content-hash names
+# ---------------------------------------------------------------------------
+
+_IMAGE_REF_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+
+
+def migrate_to_hash_names(ocr_output_dir: Path, *, dry_run: bool = False) -> dict[str, int]:
+    """Migrate existing OCR output from sequential names to content-hash names.
+
+    Scans all subdirectories of *ocr_output_dir* for full.md + images/.
+    For each image file, computes sha256 hash of content and renames to
+    ``images/{hash12}.{ext}``. Updates references in full.md accordingly.
+
+    Returns stats dict with counts of migrated/skipped/failed directories.
+    """
+    stats = {"migrated": 0, "skipped": 0, "failed": 0}
+
+    if not ocr_output_dir.is_dir():
+        raise FileNotFoundError(f"Directory not found: {ocr_output_dir}")
+
+    for doc_dir in sorted(ocr_output_dir.iterdir()):
+        full_md = doc_dir / "full.md"
+        images_dir = doc_dir / "images"
+        if not full_md.is_file():
+            continue
+
+        # Build rename map for all image files.
+        rename_map: dict[str, str] = {}  # old_relative -> new_relative
+        if images_dir.is_dir():
+            for img_file in sorted(images_dir.iterdir()):
+                if not img_file.is_file():
+                    continue
+                content = img_file.read_bytes()
+                digest = hashlib.sha256(content).hexdigest()[:12]
+                new_name = f"{digest}{img_file.suffix.lower()}"
+                old_rel = f"images/{img_file.name}"
+                new_rel = f"images/{new_name}"
+                if old_rel != new_rel:
+                    rename_map[old_rel] = new_rel
+
+        if not rename_map:
+            logger.info("Already migrated: %s", doc_dir.name)
+            stats["skipped"] += 1
+            continue
+
+        if dry_run:
+            for old, new in rename_map.items():
+                logger.info("[dry-run] %s: %s -> %s", doc_dir.name, old, new)
+            stats["migrated"] += 1
+            continue
+
+        try:
+            # 1) Update full.md references.
+            md_text = full_md.read_text(encoding="utf-8")
+            for old_rel, new_rel in rename_map.items():
+                md_text = md_text.replace(old_rel, new_rel)
+            full_md.write_text(md_text, encoding="utf-8")
+
+            # 2) Rename image files (use temp names to avoid collisions).
+            temp_map: dict[Path, Path] = {}
+            for old_rel, new_rel in rename_map.items():
+                old_path = doc_dir / old_rel
+                tmp_path = old_path.with_suffix(old_path.suffix + ".tmp_migrate")
+                if old_path.exists():
+                    old_path.rename(tmp_path)
+                    temp_map[tmp_path] = doc_dir / new_rel
+
+            for tmp_path, new_path in temp_map.items():
+                tmp_path.rename(new_path)
+
+            stats["migrated"] += 1
+            logger.info("Migrated: %s (%d images renamed)", doc_dir.name, len(rename_map))
+
+        except Exception:
+            logger.exception("Failed to migrate %s", doc_dir.name)
+            stats["failed"] += 1
 
     return stats

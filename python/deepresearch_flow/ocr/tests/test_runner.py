@@ -228,3 +228,72 @@ class TestRunOcr:
         assert stats["processed"] == 1
         assert stats["skipped"] == 0
         assert (output_dir / "doc" / "full.md").read_text() == "v2"
+
+
+class TestMigrateToHashNames:
+    def test_renames_images_and_updates_md(self, tmp_path: Path) -> None:
+        import hashlib
+
+        from deepresearch_flow.ocr.runner import migrate_to_hash_names
+
+        doc_dir = tmp_path / "paper"
+        doc_dir.mkdir()
+        img_dir = doc_dir / "images"
+        img_dir.mkdir()
+
+        # Create old-style image.
+        img_data = b"\x89PNG fake image content"
+        (img_dir / "page_0000_00_md.png").write_bytes(img_data)
+        expected_hash = hashlib.sha256(img_data).hexdigest()[:12]
+
+        # Create full.md referencing old name.
+        (doc_dir / "full.md").write_text(
+            "# Title\n\n![fig](images/page_0000_00_md.png)\n"
+        )
+
+        stats = migrate_to_hash_names(tmp_path)
+
+        assert stats["migrated"] == 1
+        # Old file gone, new hash file exists.
+        assert not (img_dir / "page_0000_00_md.png").exists()
+        assert (img_dir / f"{expected_hash}.png").exists()
+        # Markdown updated.
+        md = (doc_dir / "full.md").read_text()
+        assert f"images/{expected_hash}.png" in md
+        assert "page_0000_00_md" not in md
+
+    def test_skips_already_migrated(self, tmp_path: Path) -> None:
+        import hashlib
+
+        from deepresearch_flow.ocr.runner import migrate_to_hash_names
+
+        doc_dir = tmp_path / "paper"
+        doc_dir.mkdir()
+        img_dir = doc_dir / "images"
+        img_dir.mkdir()
+
+        img_data = b"already hashed"
+        digest = hashlib.sha256(img_data).hexdigest()[:12]
+        (img_dir / f"{digest}.png").write_bytes(img_data)
+        (doc_dir / "full.md").write_text(f"![](images/{digest}.png)\n")
+
+        stats = migrate_to_hash_names(tmp_path)
+        assert stats["skipped"] == 1
+        assert stats["migrated"] == 0
+
+    def test_dry_run_no_changes(self, tmp_path: Path) -> None:
+        from deepresearch_flow.ocr.runner import migrate_to_hash_names
+
+        doc_dir = tmp_path / "paper"
+        doc_dir.mkdir()
+        img_dir = doc_dir / "images"
+        img_dir.mkdir()
+
+        (img_dir / "page_0000_00_md.png").write_bytes(b"data")
+        (doc_dir / "full.md").write_text("![](images/page_0000_00_md.png)\n")
+
+        stats = migrate_to_hash_names(tmp_path, dry_run=True)
+        assert stats["migrated"] == 1
+        # But files are unchanged.
+        assert (img_dir / "page_0000_00_md.png").exists()
+        assert "page_0000_00_md" in (doc_dir / "full.md").read_text()
