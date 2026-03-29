@@ -8,6 +8,8 @@ import tempfile
 from pathlib import Path
 from unittest import TestCase, mock
 
+import pytest
+
 from starlette.testclient import TestClient
 
 from deepresearch_flow.paper.snapshot.admin import create_admin_app
@@ -18,6 +20,7 @@ from deepresearch_flow.paper.snapshot.push import (
     push_papers,
 )
 from deepresearch_flow.paper.snapshot.schema import init_snapshot_db, recompute_facet_counts
+from deepresearch_flow.storage.config import StorageConfig
 
 ADMIN_TOKEN = "test-push-token"
 
@@ -372,3 +375,95 @@ class TestPushPapers(TestCase):
         assert stats.batches_sent == 2
         assert batch_calls == [1, 1]
         assert stats.added == 2
+
+
+class TestStorageConfigLoading:
+    def test_storage_config_parsed(self, tmp_path: Path) -> None:
+        f = tmp_path / "remote.toml"
+        f.write_text(
+            '[remote]\n'
+            'api_base_url = "https://api.example.com"\n'
+            'admin_token = "my-token"\n\n'
+            '[remote.storage]\n'
+            'type = "webdav"\n'
+            'url = "https://cdn.example.com/static"\n'
+            'username = "deploy"\n'
+            'password = "secret"\n'
+        )
+        cfg = load_remote_config(f)
+        assert cfg.storage is not None
+        assert cfg.storage.type == "webdav"
+        assert cfg.storage.url == "https://cdn.example.com/static"
+        assert cfg.storage.username == "deploy"
+        assert cfg.storage.password == "secret"
+
+    def test_storage_config_optional(self, tmp_path: Path) -> None:
+        f = tmp_path / "remote.toml"
+        f.write_text(
+            '[remote]\n'
+            'api_base_url = "https://api.example.com"\n'
+            'admin_token = "my-token"\n'
+        )
+        cfg = load_remote_config(f)
+        assert cfg.storage is None
+
+    def test_storage_env_password(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("TEST_STORAGE_PW", "env-resolved")
+        f = tmp_path / "remote.toml"
+        f.write_text(
+            '[remote]\n'
+            'api_base_url = "https://api.example.com"\n'
+            'admin_token = "my-token"\n\n'
+            '[remote.storage]\n'
+            'type = "webdav"\n'
+            'url = "https://cdn.example.com/static"\n'
+            'username = "deploy"\n'
+            'password = "env:TEST_STORAGE_PW"\n'
+        )
+        cfg = load_remote_config(f)
+        assert cfg.storage is not None
+        assert cfg.storage.password == "env-resolved"
+
+    def test_storage_missing_type_raises(self, tmp_path: Path) -> None:
+        f = tmp_path / "remote.toml"
+        f.write_text(
+            '[remote]\n'
+            'api_base_url = "https://api.example.com"\n'
+            'admin_token = "my-token"\n\n'
+            '[remote.storage]\n'
+            'url = "https://cdn.example.com/static"\n'
+            'username = "deploy"\n'
+            'password = "secret"\n'
+        )
+        with pytest.raises(ValueError, match="type"):
+            load_remote_config(f)
+
+    def test_storage_missing_password_raises(self, tmp_path: Path) -> None:
+        f = tmp_path / "remote.toml"
+        f.write_text(
+            '[remote]\n'
+            'api_base_url = "https://api.example.com"\n'
+            'admin_token = "my-token"\n\n'
+            '[remote.storage]\n'
+            'type = "webdav"\n'
+            'url = "https://cdn.example.com/static"\n'
+            'username = "deploy"\n'
+        )
+        with pytest.raises(ValueError, match="password"):
+            load_remote_config(f)
+
+    def test_storage_env_missing_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("NONEXISTENT_PW", raising=False)
+        f = tmp_path / "remote.toml"
+        f.write_text(
+            '[remote]\n'
+            'api_base_url = "https://api.example.com"\n'
+            'admin_token = "my-token"\n\n'
+            '[remote.storage]\n'
+            'type = "webdav"\n'
+            'url = "https://cdn.example.com/static"\n'
+            'username = "deploy"\n'
+            'password = "env:NONEXISTENT_PW"\n'
+        )
+        with pytest.raises(ValueError, match="NONEXISTENT_PW"):
+            load_remote_config(f)

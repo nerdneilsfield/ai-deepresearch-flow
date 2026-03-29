@@ -936,7 +936,7 @@ def register_db_commands(db_group: click.Group) -> None:
         "--static-export-dir",
         "static_export_dir",
         default=None,
-        help="Path to local static export dir (for reading summary JSONs)",
+        help="Path to local static export dir (for summary JSONs + remote storage push)",
     )
     @click.option(
         "--config",
@@ -946,11 +946,19 @@ def register_db_commands(db_group: click.Group) -> None:
         help="Path to remote config TOML file",
     )
     @click.option("--dry-run", is_flag=True, default=False, help="Extract and show stats without pushing")
+    @click.option(
+        "--retry-failed",
+        "retry_failed_path",
+        default=None,
+        type=click.Path(exists=True),
+        help="Path to push-static-errors.json to retry only failed static files",
+    )
     def api_push(
         snapshot_db: str,
         static_export_dir: str | None,
         config_path: str,
         dry_run: bool,
+        retry_failed_path: str | None,
     ) -> None:
         """Push papers from a local snapshot DB to a remote admin API."""
         from rich.console import Console
@@ -977,73 +985,142 @@ def register_db_commands(db_group: click.Group) -> None:
         if static_dir and not static_dir.exists():
             raise click.ClickException(f"Static export dir not found: {static_dir}")
 
+        if retry_failed_path and not static_export_dir:
+            raise click.ClickException("--retry-failed requires --static-export-dir")
+
         config = load_remote_config(config_file)
+
+        if retry_failed_path and not config.storage:
+            raise click.ClickException("--retry-failed requires [remote.storage] in config")
+
         console.print(f"[cyan]Remote:[/cyan] {config.api_base_url}")
         console.print(f"[cyan]Batch size:[/cyan] {config.batch_size}")
 
-        console.print("[cyan]Extracting papers from local DB...[/cyan]")
-        papers = extract_papers_from_db(db_path, static_export_dir=static_dir)
-        console.print(f"[green]Found {len(papers)} papers[/green]")
+        if not retry_failed_path:
+            console.print("[cyan]Extracting papers from local DB...[/cyan]")
+            papers = extract_papers_from_db(db_path, static_export_dir=static_dir)
+            console.print(f"[green]Found {len(papers)} papers[/green]")
 
-        if not papers:
-            console.print("[yellow]Nothing to push[/yellow]")
-            return
+            if not papers:
+                console.print("[yellow]Nothing to push[/yellow]")
+                return
 
-        templates_count = sum(1 for p in papers if p.get("templates"))
-        console.print(f"[cyan]Papers with summary payloads:[/cyan] {templates_count}/{len(papers)}")
+            templates_count = sum(1 for p in papers if p.get("templates"))
+            console.print(f"[cyan]Papers with summary payloads:[/cyan] {templates_count}/{len(papers)}")
 
-        if dry_run:
-            console.print("[yellow]Dry run — not pushing[/yellow]")
-            table = Table(title="Papers to push")
-            table.add_column("paper_id", style="dim")
-            table.add_column("title")
-            table.add_column("templates", justify="right")
-            for p in papers[:20]:
-                t_count = len(p.get("templates", {}))
-                table.add_row(p["paper_id"][:16] + "…", p.get("paper_title", "")[:60], str(t_count))
-            if len(papers) > 20:
-                table.add_row("…", f"and {len(papers) - 20} more", "")
-            console.print(table)
-            return
+            if dry_run:
+                console.print("[yellow]Dry run — not pushing[/yellow]")
+                table = Table(title="Papers to push")
+                table.add_column("paper_id", style="dim")
+                table.add_column("title")
+                table.add_column("templates", justify="right")
+                for p in papers[:20]:
+                    t_count = len(p.get("templates", {}))
+                    table.add_row(p["paper_id"][:16] + "…", p.get("paper_title", "")[:60], str(t_count))
+                if len(papers) > 20:
+                    table.add_row("…", f"and {len(papers) - 20} more", "")
+                console.print(table)
+                return
 
-        console.print("[cyan]Pushing to remote...[/cyan]")
+            console.print("[cyan]Pushing to remote...[/cyan]")
 
-        def on_batch(batch_idx: int, batch_size: int, data: dict) -> None:
-            added = data.get("added", 0)
-            skipped = data.get("skipped", 0)
-            errors = len(data.get("errors", []))
-            console.print(
-                f"  Batch {batch_idx + 1}: "
-                f"[green]+{added}[/green] added, "
-                f"[yellow]{skipped}[/yellow] skipped"
-                + (f", [red]{errors}[/red] errors" if errors else "")
+            def on_batch(batch_idx: int, batch_size: int, data: dict) -> None:
+                added = data.get("added", 0)
+                skipped = data.get("skipped", 0)
+                errors = len(data.get("errors", []))
+                console.print(
+                    f"  Batch {batch_idx + 1}: "
+                    f"[green]+{added}[/green] added, "
+                    f"[yellow]{skipped}[/yellow] skipped"
+                    + (f", [red]{errors}[/red] errors" if errors else "")
+                )
+
+            try:
+                stats = push_papers(papers, config, on_batch=on_batch)
+            except Exception as exc:
+                raise click.ClickException(f"Push failed: {exc}")
+
+            console.print()
+            result_table = Table(title="Push Results")
+            result_table.add_column("Metric")
+            result_table.add_column("Value", justify="right")
+            result_table.add_row("Total papers", str(stats.total))
+            result_table.add_row("Added", f"[green]{stats.added}[/green]")
+            result_table.add_row("Skipped (duplicates)", f"[yellow]{stats.skipped}[/yellow]")
+            result_table.add_row("Errors", f"[red]{len(stats.errors)}[/red]" if stats.errors else "0")
+            result_table.add_row("Batches sent", str(stats.batches_sent))
+            console.print(result_table)
+
+            if stats.errors:
+                console.print("[red]Errors:[/red]")
+                for err in stats.errors[:10]:
+                    console.print(f"  index={err.get('index')}: {err.get('error')}")
+                if len(stats.errors) > 10:
+                    console.print(f"  ... and {len(stats.errors) - 10} more")
+                raise click.ClickException(
+                    f"{len(stats.errors)} paper(s) failed to insert"
+                )
+
+        # --- Static file push via remote storage ---
+        if static_dir and config.storage:
+            from deepresearch_flow.paper.snapshot.push_static import (
+                load_retry_files,
+                push_static_files,
+                write_error_report,
             )
+            from deepresearch_flow.storage.base import StorageAuthError
+            from deepresearch_flow.storage.factory import create_storage
 
-        try:
-            stats = push_papers(papers, config, on_batch=on_batch)
-        except Exception as exc:
-            raise click.ClickException(f"Push failed: {exc}")
+            if retry_failed_path:
+                only_files = load_retry_files(Path(retry_failed_path))
+                console.print(f"[cyan]Retrying {len(only_files)} failed static files...[/cyan]")
+            else:
+                only_files = None
+                console.print("[cyan]Pushing static files...[/cyan]")
 
-        console.print()
-        result_table = Table(title="Push Results")
-        result_table.add_column("Metric")
-        result_table.add_column("Value", justify="right")
-        result_table.add_row("Total papers", str(stats.total))
-        result_table.add_row("Added", f"[green]{stats.added}[/green]")
-        result_table.add_row("Skipped (duplicates)", f"[yellow]{stats.skipped}[/yellow]")
-        result_table.add_row("Errors", f"[red]{len(stats.errors)}[/red]" if stats.errors else "0")
-        result_table.add_row("Batches sent", str(stats.batches_sent))
-        console.print(result_table)
+            console.print(f"[cyan]Storage:[/cyan] {config.storage.type} → {config.storage.url}")
 
-        if stats.errors:
-            console.print("[red]Errors:[/red]")
-            for err in stats.errors[:10]:
-                console.print(f"  index={err.get('index')}: {err.get('error')}")
-            if len(stats.errors) > 10:
-                console.print(f"  ... and {len(stats.errors) - 10} more")
-            raise click.ClickException(
-                f"{len(stats.errors)} paper(s) failed to insert"
+            try:
+                with create_storage(config.storage) as storage:
+                    static_stats = push_static_files(
+                        static_dir, storage, only_files=only_files,
+                    )
+            except StorageAuthError as exc:
+                raise click.ClickException(str(exc)) from exc
+
+            static_table = Table(title="Static Files Push")
+            static_table.add_column("Directory")
+            static_table.add_column("Uploaded", justify="right")
+            static_table.add_column("Skipped", justify="right")
+            static_table.add_column("Failed", justify="right")
+
+            for dirname in sorted(static_stats.per_directory):
+                d = static_stats.per_directory[dirname]
+                static_table.add_row(
+                    dirname,
+                    f"[green]{d['uploaded']}[/green]",
+                    f"[dim]{d['skipped']}[/dim]",
+                    f"[red]{d['failed']}[/red]" if d["failed"] else "0",
+                )
+            static_table.add_section()
+            static_table.add_row(
+                "[bold]Total[/bold]",
+                f"[bold green]{static_stats.uploaded}[/bold green]",
+                f"[bold dim]{static_stats.skipped}[/bold dim]",
+                f"[bold red]{static_stats.failed}[/bold red]" if static_stats.failed else "[bold]0[/bold]",
             )
+            console.print(static_table)
+
+            if static_stats.failed_files:
+                error_path = Path("push-static-errors.json")
+                write_error_report(static_stats.failed_files, error_path)
+                console.print(f"\n[red]Failed files:[/red]")
+                for entry in static_stats.failed_files[:10]:
+                    console.print(f"  {entry['path']}: {entry['error']}")
+                if len(static_stats.failed_files) > 10:
+                    console.print(f"  ... and {len(static_stats.failed_files) - 10} more")
+                console.print(f"\nFull error list saved to [bold]{error_path}[/bold]")
+                console.print("Retry with: --retry-failed push-static-errors.json")
 
     @db_group.command("append-bibtex")
     @click.option("-i", "--input", "input_path", required=True, help="Input JSON file path")

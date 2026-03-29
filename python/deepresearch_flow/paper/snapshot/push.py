@@ -12,6 +12,7 @@ from typing import Any
 import httpx
 
 from deepresearch_flow.paper.snapshot.common import _open_ro_conn
+from deepresearch_flow.storage.config import StorageConfig
 
 DEFAULT_BATCH_SIZE = 100
 DEFAULT_TIMEOUT = 60.0
@@ -22,6 +23,7 @@ class RemoteConfig:
     api_base_url: str
     admin_token: str
     batch_size: int = DEFAULT_BATCH_SIZE
+    storage: StorageConfig | None = None
 
 
 @dataclass
@@ -32,6 +34,20 @@ class PushStats:
     errors: list[dict[str, Any]] = field(default_factory=list)
     paper_ids: list[str] = field(default_factory=list)
     batches_sent: int = 0
+
+
+def _resolve_env(value: str, field_name: str, config_path: Path) -> str:
+    """Resolve env: prefix for a config value."""
+    if not value.startswith("env:"):
+        return value
+    env_name = value.split(":", 1)[1]
+    resolved = os.environ.get(env_name, "")
+    if not resolved:
+        raise ValueError(
+            f"Environment variable '{env_name}' is not set "
+            f"(referenced as 'env:{env_name}' for {field_name} in {config_path})"
+        )
+    return resolved
 
 
 def load_remote_config(config_path: Path) -> RemoteConfig:
@@ -67,10 +83,29 @@ def load_remote_config(config_path: Path) -> RemoteConfig:
         raise ValueError(
             f"remote.batch_size must be between 1 and 200, got {batch_size}"
         )
+    storage_raw = remote.get("storage")
+    storage: StorageConfig | None = None
+    if storage_raw:
+        s_type = str(storage_raw.get("type") or "")
+        if not s_type:
+            raise ValueError(f"remote.storage.type is required in {config_path}")
+        s_url = str(storage_raw.get("url") or "").rstrip("/")
+        if not s_url:
+            raise ValueError(f"remote.storage.url is required in {config_path}")
+        s_user = str(storage_raw.get("username") or "")
+        if not s_user:
+            raise ValueError(f"remote.storage.username is required in {config_path}")
+        s_pass = str(storage_raw.get("password") or "")
+        if not s_pass:
+            raise ValueError(f"remote.storage.password is required in {config_path}")
+        s_pass = _resolve_env(s_pass, "remote.storage.password", config_path)
+        storage = StorageConfig(type=s_type, url=s_url, username=s_user, password=s_pass)
+
     return RemoteConfig(
         api_base_url=api_base_url,
         admin_token=admin_token,
         batch_size=batch_size,
+        storage=storage,
     )
 
 
