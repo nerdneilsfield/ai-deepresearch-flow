@@ -1121,6 +1121,9 @@ def register_db_commands(db_group: click.Group) -> None:
                     console.print(f"  ... and {len(static_stats.failed_files) - 10} more")
                 console.print(f"\nFull error list saved to [bold]{error_path}[/bold]")
                 console.print("Retry with: --retry-failed push-static-errors.json")
+                raise click.ClickException(
+                    f"{len(static_stats.failed_files)} static file(s) failed to upload"
+                )
 
     @db_group.command("append-bibtex")
     @click.option("-i", "--input", "input_path", required=True, help="Input JSON file path")
