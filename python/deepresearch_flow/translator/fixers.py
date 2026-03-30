@@ -431,9 +431,120 @@ def merge_paragraphs(text: str) -> str:
     return "".join(block.content for block in merged)
 
 
+# ---------------------------------------------------------------------------
+# PaddleOCR-compatible cleanup rules (idempotent, safe for all OCR backends)
+# ---------------------------------------------------------------------------
+
+_RE_NESTED_MAILTO = re.compile(r"<mailto:(?:<mailto:)+([^<>]+?)>+")
+
+_RE_FENCED_BLOCK = re.compile(r"^(`{3,}|~{3,}).*?^\1\s*$", re.MULTILINE | re.DOTALL)
+_RE_DISPLAY_MATH = re.compile(r"\$\$[\s\S]+?\$\$")
+_RE_HTML_CODE = re.compile(r"<code>.*?</code>", re.DOTALL)
+
+
+def _build_protected_ranges(text: str) -> list[tuple[int, int]]:
+    """Return sorted list of (start, end) ranges that must not be modified."""
+    ranges: list[tuple[int, int]] = []
+    for pattern in (_RE_FENCED_BLOCK, _RE_DISPLAY_MATH, _RE_HTML_CODE):
+        for m in pattern.finditer(text):
+            ranges.append((m.start(), m.end()))
+    ranges.sort()
+    return ranges
+
+
+def _in_protected(pos: int, ranges: list[tuple[int, int]]) -> bool:
+    for start, end in ranges:
+        if start > pos:
+            return False
+        if start <= pos < end:
+            return True
+    return False
+
+
+def fix_nested_mailto(text: str) -> str:
+    """Collapse nested ``<mailto:<mailto:...>>`` to a single ``<mailto:addr>``."""
+    return _RE_NESTED_MAILTO.sub(r"<mailto:\1>", text)
+
+
+_RE_INLINE_MATH = re.compile(r"(?<!\$)\$(?!\$)(.*?)\$(?!\$)")
+
+# Content that has NO LaTeX syntax at all (no \, ^, _, {, })
+_RE_NO_LATEX = re.compile(r"^[^\\^_{}]*$")
+# Content that is only footnote references, commas, spaces
+_RE_ONLY_REFS = re.compile(r"^[\s,]*(\[\^?\d+\][\s,]*)+$")
+# Content that is only punctuation and/or plain words
+_RE_ONLY_PUNCT_WORDS = re.compile(r"^[\s.,;:!?a-zA-Z]*$")
+
+
+def fix_non_math_in_delimiters(text: str) -> str:
+    """Strip ``$ ... $`` around content that is not actually math."""
+    protected = _build_protected_ranges(text)
+
+    def _replace(m: re.Match) -> str:
+        if _in_protected(m.start(), protected):
+            return m.group(0)
+        inner = m.group(1).strip()
+        if not inner:
+            return ""
+        if _RE_ONLY_REFS.match(inner):
+            return inner
+        if _RE_NO_LATEX.match(inner) and _RE_ONLY_PUNCT_WORDS.match(inner):
+            return inner
+        return m.group(0)
+
+    return _RE_INLINE_MATH.sub(_replace, text)
+
+
+def fix_math_delimiter_spaces(text: str) -> str:
+    """Trim extra spaces inside inline ``$ ... $`` delimiters."""
+    protected = _build_protected_ranges(text)
+
+    def _replace(m: re.Match) -> str:
+        if _in_protected(m.start(), protected):
+            return m.group(0)
+        inner = m.group(1)
+        stripped = inner.strip()
+        if not stripped:
+            return m.group(0)
+        if stripped == inner:
+            return m.group(0)
+        return f"${stripped}$"
+
+    return _RE_INLINE_MATH.sub(_replace, text)
+
+
+_RE_TD_INLINE_MATH = re.compile(r"(<td[^>]*>)(.*?)(</td>)", re.DOTALL)
+
+
+def fix_html_table_math_spaces(text: str) -> str:
+    """Fix math delimiter spaces inside HTML ``<td>`` cells and normalize surrounding whitespace."""
+
+    def _fix_cell(m: re.Match) -> str:
+        open_tag = m.group(1)
+        content = m.group(2)
+        close_tag = m.group(3)
+        # Trim inline math spaces within the cell
+        content = _RE_INLINE_MATH.sub(
+            lambda im: f"${im.group(1).strip()}$" if im.group(1).strip() else im.group(0),
+            content,
+        )
+        # Normalize double+ spaces around $ to single space
+        content = re.sub(r"\s{2,}(\$)", r" \1", content)
+        content = re.sub(r"(\$)\s{2,}", r"\1 ", content)
+        return f"{open_tag}{content}{close_tag}"
+
+    return _RE_TD_INLINE_MATH.sub(_fix_cell, text)
+
+
 def fix_markdown(text: str, level: str) -> str:
     if level == "off":
         return text
+
+    # PaddleOCR-compatible cleanup (idempotent, safe for all OCR backends)
+    text = fix_nested_mailto(text)
+    text = fix_non_math_in_delimiters(text)
+    text = fix_math_delimiter_spaces(text)
+    text = fix_html_table_math_spaces(text)
 
     ref_processor = ReferenceProcessor()
     link_processor = LinkProcessor()
