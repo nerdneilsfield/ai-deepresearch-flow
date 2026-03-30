@@ -723,6 +723,43 @@ def load_errors(path: Path) -> list[dict[str, Any]]:
         return []
 
 
+def _serialize_error(err: ExtractionError) -> dict[str, Any]:
+    return {
+        "source_path": str(err.path.resolve()),
+        "provider": err.provider,
+        "model": err.model,
+        "error_type": err.error_type,
+        "error_message": err.error_message,
+        "stage_name": err.stage_name,
+    }
+
+
+def merge_retry_error_entries(
+    *,
+    baseline_entries: list[dict[str, Any]],
+    new_errors: list[ExtractionError],
+    attempted_full_paths: set[str],
+    attempted_stage_map: dict[str, set[str]],
+) -> list[dict[str, Any]]:
+    merged_entries: list[dict[str, Any]] = []
+
+    for entry in baseline_entries:
+        source_path = entry.get("source_path")
+        if not source_path:
+            merged_entries.append(entry)
+            continue
+        resolved_source_path = str(Path(source_path).resolve())
+        if resolved_source_path in attempted_full_paths:
+            continue
+        attempted_stages = attempted_stage_map.get(resolved_source_path)
+        if attempted_stages and entry.get("stage_name") in attempted_stages:
+            continue
+        merged_entries.append(entry)
+
+    merged_entries.extend(_serialize_error(err) for err in new_errors)
+    return merged_entries
+
+
 def load_retry_list(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         raise click.ClickException(f"Retry list JSON not found: {path}")
@@ -954,7 +991,9 @@ async def extract_documents(
             )
 
     retry_list_entries = load_retry_list(retry_list_path) if retry_list_path else []
-    error_entries = load_errors(errors_path) if retry_failed or retry_failed_stages else []
+    retry_mode_requested = retry_failed or retry_failed_stages or bool(retry_list_entries)
+    baseline_error_entries = load_errors(errors_path) if retry_mode_requested else []
+    error_entries = baseline_error_entries if retry_failed or retry_failed_stages else []
     retry_stage_map: dict[str, set[str]] = {}
     retry_full_paths: set[str] = set()
 
@@ -993,7 +1032,7 @@ async def extract_documents(
                     continue
             retry_full_paths.add(resolved)
 
-    retry_mode = retry_failed or retry_failed_stages or bool(retry_list_entries)
+    retry_mode = retry_mode_requested
     retry_stages_mode = retry_failed_stages or bool(retry_stage_map)
 
     if retry_mode:
@@ -1121,6 +1160,8 @@ async def extract_documents(
 
     errors: list[ExtractionError] = []
     results: dict[str, dict[str, Any]] = {}
+    attempted_full_paths: set[str] = set()
+    attempted_stage_map: dict[str, set[str]] = {}
     stage_output_dir = Path("paper_stage_outputs")
     if multi_stage:
         stage_output_dir.mkdir(parents=True, exist_ok=True)
@@ -1310,6 +1351,12 @@ async def extract_documents(
             payload = build_output_payload()
         await asyncio.to_thread(write_json, output_path, payload)
 
+    def mark_attempted_full(source_path: str) -> None:
+        attempted_full_paths.add(source_path)
+
+    def mark_attempted_stage(source_path: str, stage_name: str) -> None:
+        attempted_stage_map.setdefault(source_path, set()).add(stage_name)
+
     def build_merged(ctx: DocContext) -> dict[str, Any]:
         merged: dict[str, Any] = {}
         for stage_def in stage_definitions:
@@ -1370,6 +1417,8 @@ async def extract_documents(
                 if shutdown_event.is_set():
                     return
                 await await_key_pool_ready()
+                if retry_mode:
+                    mark_attempted_full(source_path)
                 async with semaphore:
                     data = await call_with_retries(
                         provider,
@@ -1633,6 +1682,10 @@ async def extract_documents(
                         stage_fields=task.stage_fields,
                         previous_outputs=previous_outputs,
                     )
+                    if is_retry_full:
+                        mark_attempted_full(ctx.source_path)
+                    elif retry_stages_mode:
+                        mark_attempted_stage(ctx.source_path, current_stage)
                     async with semaphore:
                         data = await call_with_retries(
                             provider,
@@ -2074,6 +2127,10 @@ async def extract_documents(
                     stage_fields=task.stage_fields,
                     previous_outputs=previous_outputs,
                 )
+                if is_retry_full:
+                    mark_attempted_full(ctx.source_path)
+                elif retry_stages_mode:
+                    mark_attempted_stage(ctx.source_path, current_stage)
                 async with semaphore:
                     data = await call_with_retries(
                         provider,
@@ -2187,17 +2244,15 @@ async def extract_documents(
     output_payload = {"template_tag": template_tag, "papers": final_results}
     write_json(output_path, output_payload)
 
-    error_payload = [
-        {
-            "source_path": str(err.path.resolve()),
-            "provider": err.provider,
-            "model": err.model,
-            "error_type": err.error_type,
-            "error_message": err.error_message,
-            "stage_name": err.stage_name,
-        }
-        for err in errors
-    ]
+    if retry_mode:
+        error_payload = merge_retry_error_entries(
+            baseline_entries=baseline_error_entries,
+            new_errors=errors,
+            attempted_full_paths=attempted_full_paths,
+            attempted_stage_map=attempted_stage_map,
+        )
+    else:
+        error_payload = [_serialize_error(err) for err in errors]
     write_json(errors_path, error_payload)
 
     if shutdown_event.is_set():
