@@ -367,6 +367,12 @@ class DocContext:
     stage_meta: dict[str, dict[str, Any]]
 
 
+@dataclass(frozen=True)
+class PlannedStage:
+    name: str
+    fields: list[str]
+
+
 def _count_prompt_chars(messages: list[dict[str, str]]) -> int:
     return sum(len(message.get("content") or "") for message in messages)
 
@@ -758,6 +764,88 @@ def merge_retry_error_entries(
 
     merged_entries.extend(_serialize_error(err) for err in new_errors)
     return merged_entries
+
+
+def build_document_validation_error(
+    *,
+    path: str | Path,
+    provider: str,
+    model: str,
+    message: str,
+) -> ExtractionError:
+    return ExtractionError(
+        path=Path(path),
+        provider=provider,
+        model=model,
+        error_type="validation_error",
+        error_message=message,
+        stage_name=None,
+    )
+
+
+def compute_stage_needs_run(
+    *,
+    stage_name: str,
+    stage_record: dict[str, Any] | None,
+    stage_meta_entry: dict[str, Any],
+    force: bool,
+    force_stage_set: set[str],
+    is_retry_full: bool,
+    retry_stages: set[str] | None,
+    prompt_hash: str,
+    stage_validator: Draft7Validator,
+) -> bool:
+    needs_run = force or stage_name in force_stage_set
+    if stage_record is None:
+        needs_run = True
+    if is_retry_full:
+        needs_run = True
+    if retry_stages is not None and stage_name in retry_stages:
+        needs_run = True
+    if stage_meta_entry.get("prompt_hash") != prompt_hash:
+        needs_run = True
+    if stage_record is not None and not needs_run:
+        errors_in_stage = sorted(stage_validator.iter_errors(stage_record), key=lambda e: e.path)
+        if errors_in_stage:
+            needs_run = True
+    return needs_run
+
+
+def plan_sequential_stage_tasks(
+    *,
+    stage_definitions: list[StageDefinition],
+    metadata_fields: list[str],
+    stages: dict[str, dict[str, Any]],
+    stage_meta: dict[str, dict[str, Any]],
+    prompt_hash_map: dict[str, str],
+    stage_validator_map: dict[str, Draft7Validator],
+    force: bool,
+    force_stage_set: set[str],
+    retry_stages_mode: bool,
+    is_retry_full: bool,
+    retry_stages: set[str] | None,
+) -> list[PlannedStage]:
+    planned: list[PlannedStage] = []
+    for stage_def in stage_definitions:
+        stage_name = stage_def.name
+        stage_record = stages.get(stage_name)
+        needs_run = compute_stage_needs_run(
+            stage_name=stage_name,
+            stage_record=stage_record,
+            stage_meta_entry=stage_meta.get(stage_name, {}),
+            force=force,
+            force_stage_set=force_stage_set,
+            is_retry_full=is_retry_full,
+            retry_stages=retry_stages if retry_stages_mode else None,
+            prompt_hash=prompt_hash_map[stage_name],
+            stage_validator=stage_validator_map[stage_name],
+        )
+        if not needs_run:
+            continue
+        planned.append(
+            PlannedStage(name=stage_name, fields=metadata_fields + stage_def.fields)
+        )
+    return planned
 
 
 def load_retry_list(path: Path) -> list[dict[str, Any]]:
@@ -1513,10 +1601,29 @@ async def extract_documents(
             "publication_venue",
         ]
         force_stage_set = set(force_stages or [])
+        stage_schema_map: dict[str, dict[str, Any]] = {}
+        stage_validator_map: dict[str, Draft7Validator] = {}
+        prompt_hash_map: dict[str, str] = {}
+        for stage_def in stage_definitions:
+            stage_name = stage_def.name
+            required_fields = metadata_fields + stage_def.fields
+            stage_schema = build_stage_schema(schema, required_fields)
+            stage_schema_map[stage_name] = stage_schema
+            stage_validator_map[stage_name] = validate_schema(stage_schema)
+            prompt_hash_map[stage_name] = _compute_prompt_hash(
+                prompt_template=prompt_template,
+                output_language=output_language,
+                stage_name=stage_name,
+                stage_fields=required_fields,
+                custom_prompt=custom_prompt,
+                prompt_system_path=prompt_system_path,
+                prompt_user_path=prompt_user_path,
+            )
         doc_contexts: dict[Path, DocContext] = {}
         doc_states: dict[Path, DocState] = {}
         task_queue: asyncio.Queue[DocTask] = asyncio.Queue()
         drain_lock = asyncio.Lock()
+        queued_stage_total = 0
 
         for path in markdown_files:
             if shutdown_event.is_set():
@@ -1557,17 +1664,57 @@ async def extract_documents(
                 stages=stages,
                 stage_meta=stage_meta,
             )
-            doc_states[path] = DocState(total_stages=len(stage_definitions))
-            for idx, stage_def in enumerate(stage_definitions):
-                required_fields = metadata_fields + stage_def.fields
+            is_retry_full = source_path in retry_full_paths
+            retry_stages = (
+                retry_stage_map.get(source_path)
+                if retry_stages_mode and not is_retry_full
+                else None
+            )
+            planned_stages = plan_sequential_stage_tasks(
+                stage_definitions=stage_definitions,
+                metadata_fields=metadata_fields,
+                stages=stages,
+                stage_meta=stage_meta,
+                prompt_hash_map=prompt_hash_map,
+                stage_validator_map=stage_validator_map,
+                force=force,
+                force_stage_set=force_stage_set,
+                retry_stages_mode=retry_stages_mode,
+                is_retry_full=is_retry_full,
+                retry_stages=retry_stages,
+            )
+            if not planned_stages:
+                await update_results(doc_contexts[path])
+                merged = build_merged(doc_contexts[path])
+                errors_in_doc = sorted(validator.iter_errors(merged), key=lambda e: e.path)
+                if errors_in_doc:
+                    errors.append(
+                        build_document_validation_error(
+                            path=path,
+                            provider=provider.name,
+                            model=model,
+                            message=f"Schema validation failed: {errors_in_doc[0].message}",
+                        )
+                    )
+                if doc_bar:
+                    doc_bar.update(1)
+                continue
+
+            doc_states[path] = DocState(total_stages=len(planned_stages))
+            queued_stage_total += len(planned_stages)
+            for idx, planned_stage in enumerate(planned_stages):
                 task_queue.put_nowait(
                     DocTask(
                         path=path,
                         stage_index=idx,
-                        stage_name=stage_def.name,
-                        stage_fields=required_fields,
+                        stage_name=planned_stage.name,
+                        stage_fields=planned_stage.fields,
                     )
                 )
+
+        if stage_bar:
+            stage_bar.total = queued_stage_total
+            stage_bar.refresh()
 
         async def run_task(task: DocTask) -> None:
             ctx = doc_contexts[task.path]
@@ -1606,61 +1753,21 @@ async def extract_documents(
                     stage_bar.update(1)
                 return
             stage_record = ctx.stages.get(current_stage)
-            if (
-                retry_stages_mode
-                and not is_retry_full
-                and retry_stages is not None
-                and current_stage not in retry_stages
-                and stage_record is not None
-            ):
-                if stage_bar:
-                    stage_bar.update(1)
-                await update_results(ctx)
-                final_validation_error: str | None = None
-                if not state.failed and task.stage_index == state.total_stages - 1:
-                    merged = build_merged(ctx)
-                    errors_in_doc = sorted(validator.iter_errors(merged), key=lambda e: e.path)
-                    if errors_in_doc:
-                        final_validation_error = errors_in_doc[0].message
-
-                async with state.lock:
-                    if final_validation_error:
-                        errors.append(
-                            ExtractionError(
-                                path=task.path,
-                                provider=provider.name,
-                                model=model,
-                                error_type="validation_error",
-                                error_message=f"Schema validation failed: {final_validation_error}",
-                                stage_name=current_stage,
-                            )
-                        )
-                        state.failed = True
-                    if not state.failed:
-                        state.next_index += 1
-                    if state.next_index >= state.total_stages or state.failed:
-                        if doc_bar and state.total_stages:
-                            doc_bar.update(1)
-                    state.event.set()
-                    state.event = asyncio.Event()
-                return
             prompt_hash = prompt_hash_map[current_stage]
             stage_schema = stage_schema_map[current_stage]
             stage_validator = stage_validator_map[current_stage]
             stage_meta = ctx.stage_meta.get(current_stage, {})
-            needs_run = force or current_stage in force_stage_set
-            if stage_record is None:
-                needs_run = True
-            if is_retry_full:
-                needs_run = True
-            if retry_stages is not None and current_stage in retry_stages:
-                needs_run = True
-            if stage_meta.get("prompt_hash") != prompt_hash:
-                needs_run = True
-            if stage_record is not None and not needs_run:
-                errors_in_stage = sorted(stage_validator.iter_errors(stage_record), key=lambda e: e.path)
-                if errors_in_stage:
-                    needs_run = True
+            needs_run = compute_stage_needs_run(
+                stage_name=current_stage,
+                stage_record=stage_record,
+                stage_meta_entry=stage_meta,
+                force=force,
+                force_stage_set=force_stage_set,
+                is_retry_full=is_retry_full,
+                retry_stages=retry_stages if retry_stages_mode else None,
+                prompt_hash=prompt_hash,
+                stage_validator=stage_validator,
+            )
 
             if not needs_run:
                 if stage_bar:
@@ -1760,13 +1867,11 @@ async def extract_documents(
             async with state.lock:
                 if final_validation_error:
                     errors.append(
-                        ExtractionError(
+                        build_document_validation_error(
                             path=task.path,
                             provider=provider.name,
                             model=model,
-                            error_type="validation_error",
-                            error_message=f"Schema validation failed: {final_validation_error}",
-                            stage_name=current_stage,
+                            message=f"Schema validation failed: {final_validation_error}",
                         )
                     )
                     state.failed = True
@@ -1913,35 +2018,18 @@ async def extract_documents(
             for stage_def in stage_definitions:
                 stage_name = stage_def.name
                 stage_record = stages.get(stage_name)
-                if (
-                    retry_stages_mode
-                    and not is_retry_full
-                    and retry_stages is not None
-                    and stage_name not in retry_stages
-                    and stage_record is not None
-                ):
-                    state.completed.add(stage_name)
-                    state.remaining -= 1
-                    reused_count += 1
-                    continue
-
                 stage_meta_entry = stage_meta.get(stage_name, {})
-                needs_run = force or stage_name in force_stage_set
-                if stage_record is None:
-                    needs_run = True
-                if is_retry_full:
-                    needs_run = True
-                if retry_stages is not None and stage_name in retry_stages:
-                    needs_run = True
-                if stage_meta_entry.get("prompt_hash") != prompt_hash_map[stage_name]:
-                    needs_run = True
-                if stage_record is not None and not needs_run:
-                    errors_in_stage = sorted(
-                        stage_validator_map[stage_name].iter_errors(stage_record),
-                        key=lambda e: e.path,
-                    )
-                    if errors_in_stage:
-                        needs_run = True
+                needs_run = compute_stage_needs_run(
+                    stage_name=stage_name,
+                    stage_record=stage_record,
+                    stage_meta_entry=stage_meta_entry,
+                    force=force,
+                    force_stage_set=force_stage_set,
+                    is_retry_full=is_retry_full,
+                    retry_stages=retry_stages if retry_stages_mode else None,
+                    prompt_hash=prompt_hash_map[stage_name],
+                    stage_validator=stage_validator_map[stage_name],
+                )
 
                 if not needs_run:
                     state.completed.add(stage_name)
@@ -1962,13 +2050,11 @@ async def extract_documents(
                 errors_in_doc = sorted(validator.iter_errors(merged), key=lambda e: e.path)
                 if errors_in_doc:
                     errors.append(
-                        ExtractionError(
+                        build_document_validation_error(
                             path=path,
                             provider=provider.name,
                             model=model,
-                            error_type="validation_error",
-                            error_message=f"Schema validation failed: {errors_in_doc[0].message}",
-                            stage_name=stage_definitions[-1].name if stage_definitions else None,
+                            message=f"Schema validation failed: {errors_in_doc[0].message}",
                         )
                     )
                     state.failed = True
@@ -2028,13 +2114,11 @@ async def extract_documents(
                     errors_in_doc = sorted(validator.iter_errors(merged), key=lambda e: e.path)
                     if errors_in_doc:
                         errors.append(
-                            ExtractionError(
+                            build_document_validation_error(
                                 path=ctx.path,
                                 provider=provider.name,
                                 model=model,
-                                error_type="validation_error",
-                                error_message=f"Schema validation failed: {errors_in_doc[0].message}",
-                                stage_name=stage_name,
+                                message=f"Schema validation failed: {errors_in_doc[0].message}",
                             )
                         )
                         async with state.lock:
@@ -2062,17 +2146,6 @@ async def extract_documents(
                 else None
             )
             stage_record = ctx.stages.get(current_stage)
-            if (
-                retry_stages_mode
-                and not is_retry_full
-                and retry_stages is not None
-                and current_stage not in retry_stages
-                and stage_record is not None
-            ):
-                await update_results(ctx)
-                await finalize_stage(ctx, current_stage, failed=False)
-                return
-
             prompt_hash = _compute_prompt_hash(
                 prompt_template=prompt_template,
                 output_language=output_language,
@@ -2085,21 +2158,17 @@ async def extract_documents(
             stage_schema = build_stage_schema(schema, task.stage_fields)
             stage_validator = validate_schema(stage_schema)
             stage_meta = ctx.stage_meta.get(current_stage, {})
-            needs_run = force or current_stage in force_stage_set
-            if stage_record is None:
-                needs_run = True
-            if is_retry_full:
-                needs_run = True
-            if retry_stages is not None and current_stage in retry_stages:
-                needs_run = True
-            if stage_meta.get("prompt_hash") != prompt_hash:
-                needs_run = True
-            if stage_record is not None and not needs_run:
-                errors_in_stage = sorted(
-                    stage_validator.iter_errors(stage_record), key=lambda e: e.path
-                )
-                if errors_in_stage:
-                    needs_run = True
+            needs_run = compute_stage_needs_run(
+                stage_name=current_stage,
+                stage_record=stage_record,
+                stage_meta_entry=stage_meta,
+                force=force,
+                force_stage_set=force_stage_set,
+                is_retry_full=is_retry_full,
+                retry_stages=retry_stages if retry_stages_mode else None,
+                prompt_hash=prompt_hash,
+                stage_validator=stage_validator,
+            )
 
             if not needs_run:
                 await update_results(ctx)
