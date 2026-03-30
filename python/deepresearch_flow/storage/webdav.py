@@ -40,6 +40,14 @@ class WebDavStorage:
                 f"WebDAV authentication failed (username: {self._username})"
             )
 
+    def _is_already_exists_response(self, resp: httpx.Response) -> bool:
+        if resp.status_code == 405:
+            return True
+        if resp.status_code != 500:
+            return False
+        body = resp.text.lower()
+        return "file exists" in body or "already exists" in body
+
     def exists(self, remote_path: str) -> bool:
         """HEAD -> 200=True, 404=False, 401=StorageAuthError, else raise."""
         url = f"{self._base_url}/{remote_path}"
@@ -53,11 +61,11 @@ class WebDavStorage:
         return False  # unreachable
 
     def mkdir(self, remote_path: str) -> None:
-        """MKCOL -> 201/405=OK, 401=StorageAuthError, else raise."""
+        """MKCOL -> 201/405=OK, compat-handle some 500 "file exists" responses."""
         url = f"{self._base_url}/{remote_path}/"
         resp = self._client.request("MKCOL", url)
         self._check_auth(resp)
-        if resp.status_code in (201, 405):
+        if resp.status_code == 201 or self._is_already_exists_response(resp):
             return
         resp.raise_for_status()
 

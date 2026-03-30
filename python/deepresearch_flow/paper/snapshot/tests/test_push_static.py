@@ -166,6 +166,17 @@ class TestPushStaticFiles:
         assert "summary" in storage.mkdirs
         assert "summary/paper1" in storage.mkdirs
 
+    def test_shared_parent_directory_mkdir_only_once(self, tmp_path: Path) -> None:
+        root = tmp_path / "static_export"
+        (root / "images").mkdir(parents=True)
+        (root / "images" / "a.png").write_bytes(b"a")
+        (root / "images" / "b.png").write_bytes(b"b")
+        storage = FakeStorage()
+
+        push_static_files(root, storage)
+
+        assert storage.mkdirs.count("images") == 1
+
 
 class TestErrorReport:
     def test_write_and_load(self, tmp_path: Path) -> None:

@@ -739,6 +739,20 @@ uv run deepresearch-flow paper db api push \
   --static-export-dir ./dist/paper-static \
   --config remote.toml
 
+# 只推送 admin API 元数据
+uv run deepresearch-flow paper db api push \
+  --snapshot-db ./dist/paper_snapshot.db \
+  --static-export-dir ./dist/paper-static \
+  --config remote.toml \
+  --only-api
+
+# 只推送静态存储文件
+uv run deepresearch-flow paper db api push \
+  --snapshot-db ./dist/paper_snapshot.db \
+  --static-export-dir ./dist/paper-static \
+  --config remote.toml \
+  --only-storage
+
 # 仅重试上次静态文件推送失败的条目
 uv run deepresearch-flow paper db api push \
   --snapshot-db ./dist/paper_snapshot.db \
@@ -753,6 +767,11 @@ uv run deepresearch-flow paper db api push \
 - 当前支持的静态存储后端是 `webdav`。
 - 静态文件推送时会逐文件打印状态日志：`uploaded`、`skipped`、`failed`。
 - 如果部分静态文件推送失败，会生成 `push-static-errors.json`，可用 `--retry-failed` 只重试失败项。
+- `--only-api` 只推送 admin API 元数据，跳过静态存储推送。
+- `--only-storage` 只推送静态存储文件，跳过 admin API 元数据步骤。
+- `--only-api` 与 `--only-storage` 互斥，不能同时使用。
+- `--dry-run` 不能与 `--only-storage` 一起使用。
+- `--retry-failed` 只作用于静态存储，不能与 `--only-api` 一起使用。
 
 ### 4) 前端（开发 / 构建）
 

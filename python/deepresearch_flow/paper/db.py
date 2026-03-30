@@ -953,12 +953,16 @@ def register_db_commands(db_group: click.Group) -> None:
         type=click.Path(exists=True),
         help="Path to push-static-errors.json to retry only failed static files",
     )
+    @click.option("--only-storage", is_flag=True, default=False, help="Push only static storage; skip admin API")
+    @click.option("--only-api", is_flag=True, default=False, help="Push only admin API; skip static storage")
     def api_push(
         snapshot_db: str,
         static_export_dir: str | None,
         config_path: str,
         dry_run: bool,
         retry_failed_path: str | None,
+        only_storage: bool,
+        only_api: bool,
     ) -> None:
         """Push papers from a local snapshot DB to a remote admin API."""
         from rich.console import Console
@@ -985,18 +989,31 @@ def register_db_commands(db_group: click.Group) -> None:
         if static_dir and not static_dir.exists():
             raise click.ClickException(f"Static export dir not found: {static_dir}")
 
+        if only_api and only_storage:
+            raise click.ClickException("--only-api and --only-storage are mutually exclusive")
+        if only_storage and dry_run:
+            raise click.ClickException("--dry-run cannot be used with --only-storage")
+        if only_api and retry_failed_path:
+            raise click.ClickException("--retry-failed cannot be used with --only-api")
         if retry_failed_path and not static_export_dir:
             raise click.ClickException("--retry-failed requires --static-export-dir")
+        if only_storage and not static_dir:
+            raise click.ClickException("--only-storage requires --static-export-dir")
 
         config = load_remote_config(config_file)
 
         if retry_failed_path and not config.storage:
             raise click.ClickException("--retry-failed requires [remote.storage] in config")
+        if only_storage and not config.storage:
+            raise click.ClickException("--only-storage requires [remote.storage] in config")
 
         console.print(f"[cyan]Remote:[/cyan] {config.api_base_url}")
         console.print(f"[cyan]Batch size:[/cyan] {config.batch_size}")
 
-        if not retry_failed_path:
+        should_push_api = not only_storage and not retry_failed_path
+        should_push_storage = not only_api and static_dir and config.storage
+
+        if should_push_api:
             console.print("[cyan]Extracting papers from local DB...[/cyan]")
             papers = extract_papers_from_db(db_path, static_export_dir=static_dir)
             console.print(f"[green]Found {len(papers)} papers[/green]")
@@ -1062,7 +1079,7 @@ def register_db_commands(db_group: click.Group) -> None:
                 )
 
         # --- Static file push via remote storage ---
-        if static_dir and config.storage:
+        if should_push_storage:
             from deepresearch_flow.paper.snapshot.push_static import (
                 load_retry_files,
                 push_static_files,

@@ -796,6 +796,20 @@ uv run deepresearch-flow paper db api push \
   --static-export-dir ./dist/paper-static \
   --config remote.toml
 
+# Push only the admin API metadata
+uv run deepresearch-flow paper db api push \
+  --snapshot-db ./dist/paper_snapshot.db \
+  --static-export-dir ./dist/paper-static \
+  --config remote.toml \
+  --only-api
+
+# Push only static storage assets
+uv run deepresearch-flow paper db api push \
+  --snapshot-db ./dist/paper_snapshot.db \
+  --static-export-dir ./dist/paper-static \
+  --config remote.toml \
+  --only-storage
+
 # Retry only failed static files from the last push
 uv run deepresearch-flow paper db api push \
   --snapshot-db ./dist/paper_snapshot.db \
@@ -810,6 +824,11 @@ uv run deepresearch-flow paper db api push \
 - The currently supported storage backend is `webdav`.
 - Static file push prints per-file status logs: `uploaded`, `skipped`, and `failed`.
 - If some static uploads fail, a `push-static-errors.json` report is written and can be retried with `--retry-failed`.
+- `--only-api` pushes only the admin API metadata and skips static storage.
+- `--only-storage` pushes only static storage and skips the admin API metadata step.
+- `--only-api` and `--only-storage` are mutually exclusive.
+- `--dry-run` cannot be combined with `--only-storage`.
+- `--retry-failed` applies only to static storage and cannot be combined with `--only-api`.
 
 ### 3.2) MCP (FastMCP Streamable HTTP + SSE)
 

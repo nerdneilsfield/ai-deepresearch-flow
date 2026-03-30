@@ -37,13 +37,17 @@ def _top_dir(rel_path: str) -> str:
     return f"{parts[0]}/" if len(parts) > 1 else "(root)"
 
 
-def _ensure_parents(storage: RemoteStorage, rel_path: str) -> None:
+def _ensure_parents(storage: RemoteStorage, rel_path: str, ensured_dirs: set[str] | None = None) -> None:
     """Call storage.mkdir() for each parent directory component."""
     parts = rel_path.split("/")[:-1]
     current = ""
     for part in parts:
         current = f"{current}/{part}" if current else part
+        if ensured_dirs is not None and current in ensured_dirs:
+            continue
         storage.mkdir(current)
+        if ensured_dirs is not None:
+            ensured_dirs.add(current)
 
 
 def _record(stats: PushStaticStats, rel_path: str, kind: str, error: str = "") -> None:
@@ -76,6 +80,7 @@ def push_static_files(
     Other exceptions are caught per-file and recorded as failures.
     """
     stats = PushStaticStats()
+    ensured_dirs: set[str] = set()
 
     all_files = only_files if only_files is not None else _discover_files(static_export_dir)
     if not all_files:
@@ -91,7 +96,7 @@ def push_static_files(
 
         # Ensure parent directories.
         try:
-            _ensure_parents(storage, rel_path)
+            _ensure_parents(storage, rel_path, ensured_dirs)
         except StorageAuthError:
             raise
         except Exception as exc:

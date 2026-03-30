@@ -69,6 +69,14 @@ class TestMkdir:
         with pytest.raises(httpx.HTTPStatusError):
             storage.mkdir("pdf")
 
+    def test_file_exists_500_is_treated_as_success(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(500, text="mkdir /srv/images: file exists")
+
+        transport = httpx.MockTransport(handler)
+        storage = WebDavStorage("https://cdn.example.com/static", "user", "pass", _transport=transport)
+        storage.mkdir("images")
+
 
 class TestUpload:
     def test_success_201(self) -> None:
