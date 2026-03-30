@@ -234,6 +234,7 @@ _SIMILARITY_MAX_STEPS = 10
 
 def _normalize_title_key(title: str) -> str:
     value = unicodedata.normalize("NFKD", title)
+    value = value.replace("×", "x")
     value = re.sub(r"\$([^$]+)\$", r" \1 ", value)
     value = re.sub(r"\\[a-zA-Z]+\\*?\s*\{([^{}]*)\}", r" \1 ", value)
     value = re.sub(r"\\[a-zA-Z]+\\*?", " ", value)
@@ -343,6 +344,48 @@ def _extract_title_from_filename(name: str) -> str:
     if match:
         return match.group(1).strip()
     return base.strip()
+
+
+def _looks_like_author_prefix(value: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+    if not normalized:
+        return False
+    if any(char.isdigit() for char in normalized):
+        return False
+    tokens = normalized.split()
+    return 1 <= len(tokens) <= 4
+
+
+def _extract_title_candidates_from_filename(name: str) -> list[str]:
+    candidates: list[str] = []
+    primary = _extract_title_from_filename(name)
+    if primary:
+        candidates.append(primary)
+
+    base = name
+    lower = base.lower()
+    if lower.endswith(".md"):
+        base = base[:-3]
+        lower = base.lower()
+    if ".pdf-" in lower:
+        base = _strip_pdf_hash_suffix(base)
+        lower = base.lower()
+    if lower.endswith(".pdf"):
+        base = base[:-4]
+    base = base.replace("_", " ").strip()
+
+    if " - " in base:
+        prefix, remainder = base.split(" - ", 1)
+        if remainder and _looks_like_author_prefix(prefix):
+            candidates.append(remainder.strip())
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        if candidate and candidate not in seen:
+            deduped.append(candidate)
+            seen.add(candidate)
+    return deduped
 
 
 def _clean_pdf_metadata_title(value: str | None, path: Path) -> str | None:
@@ -505,12 +548,21 @@ def _adaptive_similarity_match(title_key: str, candidates: list[Path]) -> tuple[
         return None, 0.0
     scored: list[tuple[Path, float]] = []
     for path in candidates:
-        candidate_title = _normalize_title_key(_extract_title_from_filename(path.name))
-        if not candidate_title:
-            continue
-        if _title_overlap_match(title_key, candidate_title):
+        best_score = 0.0
+        matched_overlap = False
+        for candidate in _extract_title_candidates_from_filename(path.name):
+            candidate_title = _normalize_title_key(candidate)
+            if not candidate_title:
+                continue
+            if _title_overlap_match(title_key, candidate_title):
+                matched_overlap = True
+                best_score = 1.0
+                break
+            best_score = max(best_score, _title_similarity(title_key, candidate_title))
+        if matched_overlap:
             return path, 1.0
-        scored.append((path, _title_similarity(title_key, candidate_title)))
+        if best_score > 0:
+            scored.append((path, best_score))
     if not scored:
         return None, 0.0
 
@@ -551,18 +603,36 @@ def _adaptive_similarity_match(title_key: str, candidates: list[Path]) -> tuple[
     return None, 0.0
 
 
+def _paper_title_keys(paper: dict[str, Any]) -> list[str]:
+    candidates: list[str] = []
+
+    paper_title = str(paper.get("paper_title") or "")
+    if paper_title:
+        candidates.append(paper_title)
+
+    source_path = paper.get("source_path")
+    if source_path:
+        candidates.extend(_extract_title_candidates_from_filename(Path(str(source_path)).name))
+
+    keys: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = _normalize_title_key(candidate)
+        if key and key not in seen:
+            keys.append(key)
+            seen.add(key)
+    return keys
+
+
 def _resolve_by_title_and_meta(
     paper: dict[str, Any],
     file_index: dict[str, list[Path]],
 ) -> tuple[Path | None, str | None, float]:
-    title = str(paper.get("paper_title") or "")
-    title_key = _normalize_title_key(title)
-    if not title_key:
-        title_key = ""
-    candidates = file_index.get(title_key, [])
-    if candidates:
-        return candidates[0], "title", 1.0
-    if title_key:
+    title_keys = _paper_title_keys(paper)
+    for title_key in title_keys:
+        candidates = file_index.get(title_key, [])
+        if candidates:
+            return candidates[0], "title", 1.0
         compact_key = _compact_title_key(title_key)
         compact_candidates = file_index.get(f"compact:{compact_key}", [])
         if compact_candidates:
@@ -577,20 +647,22 @@ def _resolve_by_title_and_meta(
             if stripped_candidates:
                 return stripped_candidates[0], "title_compact", 1.0
     prefix_candidates: list[Path] = []
-    prefix_key = _title_prefix_key(title_key)
-    if prefix_key:
-        prefix_candidates = file_index.get(prefix_key, [])
-    if not prefix_candidates:
+    for title_key in title_keys:
+        prefix_key = _title_prefix_key(title_key)
+        if prefix_key:
+            prefix_candidates.extend(file_index.get(prefix_key, []))
         stripped_key = _strip_leading_numeric_tokens(title_key)
         if stripped_key and stripped_key != title_key:
             prefix_key = _title_prefix_key(stripped_key)
             if prefix_key:
-                prefix_candidates = file_index.get(prefix_key, [])
+                prefix_candidates.extend(file_index.get(prefix_key, []))
     if prefix_candidates:
-        match, score = _adaptive_similarity_match(title_key, prefix_candidates)
-        if match is not None:
-            match_type = "title_prefix" if score >= 1.0 else "title_fuzzy"
-            return match, match_type, score
+        deduped_candidates = list(dict.fromkeys(prefix_candidates))
+        for title_key in title_keys:
+            match, score = _adaptive_similarity_match(title_key, deduped_candidates)
+            if match is not None:
+                match_type = "title_prefix" if score >= 1.0 else "title_fuzzy"
+                return match, match_type, score
     year = str(paper.get("_year") or "").strip()
     if not year.isdigit():
         return None, None, 0.0
@@ -608,13 +680,14 @@ def _resolve_by_title_and_meta(
         candidates = file_index.get(f"year:{year}", [])
     if not candidates:
         return None, None, 0.0
-    if len(candidates) == 1 and not title_key:
+    if len(candidates) == 1 and not title_keys:
         return candidates[0], match_type, 1.0
-    match, score = _adaptive_similarity_match(title_key, candidates)
-    if match is not None:
-        if score < _AUTHOR_YEAR_MIN_SIMILARITY:
-            return None, None, 0.0
-        return match, "title_fuzzy", score
+    for title_key in title_keys:
+        match, score = _adaptive_similarity_match(title_key, candidates)
+        if match is not None:
+            if score < _AUTHOR_YEAR_MIN_SIMILARITY:
+                return None, None, 0.0
+            return match, "title_fuzzy", score
     return None, None, 0.0
 
 
@@ -662,9 +735,10 @@ def _build_file_index(
                         # Also add with .pdf extension
                         index.setdefault(f"{parent_key}.pdf", []).append(resolved)
 
-            title_candidate = _extract_title_from_filename(path.name)
-            title_key = _normalize_title_key(title_candidate)
-            if title_key:
+            for title_candidate in _extract_title_candidates_from_filename(path.name):
+                title_key = _normalize_title_key(title_candidate)
+                if not title_key:
+                    continue
                 if title_key != name_key:
                     index.setdefault(title_key, []).append(resolved)
                 compact_key = _compact_title_key(title_key)
@@ -710,9 +784,10 @@ def _build_file_index_from_paths(paths: list[Path], *, suffixes: set[str]) -> di
         resolved = path.resolve()
         name_key = path.name.lower()
         index.setdefault(name_key, []).append(resolved)
-        title_candidate = _extract_title_from_filename(path.name)
-        title_key = _normalize_title_key(title_candidate)
-        if title_key:
+        for title_candidate in _extract_title_candidates_from_filename(path.name):
+            title_key = _normalize_title_key(title_candidate)
+            if not title_key:
+                continue
             if title_key != name_key:
                 index.setdefault(title_key, []).append(resolved)
             compact_key = _compact_title_key(title_key)
@@ -825,24 +900,23 @@ def _resolve_pdf(paper: dict[str, Any], pdf_index: dict[str, list[Path]]) -> Pat
         candidates = pdf_index.get(filename.lower(), [])
         if candidates:
             return candidates[0]
+    match, _, _ = _resolve_by_title_and_meta(paper, pdf_index)
+    if match is not None:
+        return match
 
-    # Debug: print what we tried
     source_path = paper.get("source_path", "")
     if source_path and not any(pdf_index.get(g.lower()) for g in guesses):
-        # Only print if all guesses failed
         import sys
         from pathlib import Path as PathLib
+
         name = PathLib(str(source_path)).name
         print(f"[DEBUG] Failed to match PDF for: {name}", file=sys.stderr)
         print(f"[DEBUG] Tried candidates: {[g.lower() for g in guesses]}", file=sys.stderr)
-        # Show what's in the index that might be close
         name_prefix = name[:20].lower() if len(name) > 20 else name.lower()
         close_matches = [k for k in pdf_index.keys() if name_prefix in k or k[:20] in name.lower()][:5]
         if close_matches:
             print(f"[DEBUG] Close matches in index: {close_matches}", file=sys.stderr)
-
-    match, _, _ = _resolve_by_title_and_meta(paper, pdf_index)
-    return match
+    return None
 
 
 def build_index(
