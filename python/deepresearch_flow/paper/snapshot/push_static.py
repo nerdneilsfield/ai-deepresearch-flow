@@ -6,6 +6,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 from deepresearch_flow.storage.base import RemoteStorage, StorageAuthError
 
@@ -67,6 +68,7 @@ def push_static_files(
     storage: RemoteStorage,
     *,
     only_files: list[str] | None = None,
+    on_file_result: Callable[[str, str, str], None] | None = None,
 ) -> PushStaticStats:
     """Push static files to a remote storage backend.
 
@@ -83,6 +85,8 @@ def push_static_files(
         # Check existence — StorageAuthError propagates immediately.
         if storage.exists(rel_path):
             _record(stats, rel_path, "skipped")
+            if on_file_result:
+                on_file_result(rel_path, "skipped", "")
             continue
 
         # Ensure parent directories.
@@ -92,6 +96,8 @@ def push_static_files(
             raise
         except Exception as exc:
             _record(stats, rel_path, "failed", str(exc))
+            if on_file_result:
+                on_file_result(rel_path, "failed", str(exc))
             continue
 
         # Upload file bytes.
@@ -100,10 +106,14 @@ def push_static_files(
             data = file_path.read_bytes()
             storage.upload(rel_path, data)
             _record(stats, rel_path, "uploaded")
+            if on_file_result:
+                on_file_result(rel_path, "uploaded", "")
         except StorageAuthError:
             raise
         except Exception as exc:
             _record(stats, rel_path, "failed", str(exc))
+            if on_file_result:
+                on_file_result(rel_path, "failed", str(exc))
 
     return stats
 

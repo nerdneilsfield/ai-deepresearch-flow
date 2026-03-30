@@ -191,7 +191,7 @@ class TestLoadRemoteConfig(TestCase):
             cfg = load_remote_config(Path(f.name))
         assert cfg.api_base_url == "https://api.example.com"
         assert cfg.admin_token == "my-token"
-        assert cfg.batch_size == 100
+        assert cfg.batch_size == 10
 
     def test_load_env_token(self) -> None:
         with tempfile.NamedTemporaryFile(suffix=".toml", mode="w", delete=False) as f:

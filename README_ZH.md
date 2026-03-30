@@ -705,7 +705,7 @@ uv run deepresearch-flow paper db api serve \
   ```
   响应：`{ deleted: true, paper_id }`
 
-论文 JSON 格式与 `snapshot update` 的输入格式一致。静态文件（PDF、Markdown、图片）不通过 API 处理，请自行上传至 CDN。
+论文 JSON 格式与 `snapshot update` 的输入格式一致。元数据通过 admin API 写入；如果配置了 `remote.storage`，静态文件（PDF、Markdown、图片）会在 `api push` 后续阶段单独推送。
 
 #### 从本地 DB 推送到远程
 
@@ -716,7 +716,13 @@ uv run deepresearch-flow paper db api serve \
 [remote]
 api_base_url = "https://api.example.com"
 admin_token = "env:PAPER_DB_ADMIN_TOKEN"
-batch_size = 100
+batch_size = 10
+
+[remote.storage]
+type = "webdav"
+url = "https://cdn.example.com/paper-static"
+username = "deploy"
+password = "env:PAPER_DB_WEBDAV_PASSWORD"
 ```
 
 ```bash
@@ -732,11 +738,21 @@ uv run deepresearch-flow paper db api push \
   --snapshot-db ./dist/paper_snapshot.db \
   --static-export-dir ./dist/paper-static \
   --config remote.toml
+
+# 仅重试上次静态文件推送失败的条目
+uv run deepresearch-flow paper db api push \
+  --snapshot-db ./dist/paper_snapshot.db \
+  --static-export-dir ./dist/paper-static \
+  --config remote.toml \
+  --retry-failed push-static-errors.json
 ```
 
 - `--static-export-dir` 可选 — 提供后会将 summary JSON 内容一并推送，使远端可构建 FTS 索引和预览文本。
 - 重复论文（相同 `paper_id`）会自动跳过。
-- 静态文件（PDF、Markdown、图片）**不会**被推送，请单独同步到 CDN（如 `rsync`、`aws s3 sync`）。
+- 配置 `[remote.storage]` 后，元数据 API 推送完成后会继续推送静态文件。
+- 当前支持的静态存储后端是 `webdav`。
+- 静态文件推送时会逐文件打印状态日志：`uploaded`、`skipped`、`failed`。
+- 如果部分静态文件推送失败，会生成 `push-static-errors.json`，可用 `--retry-failed` 只重试失败项。
 
 ### 4) 前端（开发 / 构建）
 

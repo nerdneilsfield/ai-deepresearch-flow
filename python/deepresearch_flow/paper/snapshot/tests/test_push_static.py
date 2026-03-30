@@ -74,6 +74,24 @@ def _setup_static_dir(tmp_path: Path) -> Path:
 
 
 class TestPushStaticFiles:
+    def test_emits_callback_for_each_processed_file(self, tmp_path: Path) -> None:
+        root = _setup_static_dir(tmp_path)
+        storage = FakeStorage(existing={"pdf/abc123.pdf"})
+        events: list[tuple[str, str, str]] = []
+
+        stats = push_static_files(
+            root,
+            storage,
+            on_file_result=lambda rel_path, kind, error="": events.append((rel_path, kind, error)),
+        )
+
+        assert stats.uploaded == 3
+        assert stats.skipped == 1
+        assert stats.failed == 0
+        assert len(events) == 4
+        assert ("pdf/abc123.pdf", "skipped", "") in events
+        assert any(kind == "uploaded" for _, kind, _ in events)
+
     def test_upload_new_files(self, tmp_path: Path) -> None:
         root = _setup_static_dir(tmp_path)
         storage = FakeStorage()

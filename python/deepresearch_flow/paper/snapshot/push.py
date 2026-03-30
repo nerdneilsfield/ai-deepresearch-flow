@@ -14,7 +14,7 @@ import httpx
 from deepresearch_flow.paper.snapshot.common import _open_ro_conn
 from deepresearch_flow.storage.config import StorageConfig
 
-DEFAULT_BATCH_SIZE = 100
+DEFAULT_BATCH_SIZE = 10
 DEFAULT_TIMEOUT = 60.0
 
 

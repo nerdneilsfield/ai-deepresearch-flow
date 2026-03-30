@@ -1080,10 +1080,21 @@ def register_db_commands(db_group: click.Group) -> None:
 
             console.print(f"[cyan]Storage:[/cyan] {config.storage.type} → {config.storage.url}")
 
+            def on_static_file_result(rel_path: str, kind: str, error: str = "") -> None:
+                if kind == "uploaded":
+                    console.print(f"  [green]↑ uploaded[/green] {rel_path}")
+                elif kind == "skipped":
+                    console.print(f"  [dim]· skipped[/dim] {rel_path}")
+                elif kind == "failed":
+                    console.print(f"  [red]× failed[/red] {rel_path}: {error}")
+
             try:
                 with create_storage(config.storage) as storage:
                     static_stats = push_static_files(
-                        static_dir, storage, only_files=only_files,
+                        static_dir,
+                        storage,
+                        only_files=only_files,
+                        on_file_result=on_static_file_result,
                     )
             except StorageAuthError as exc:
                 raise click.ClickException(str(exc)) from exc

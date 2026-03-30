@@ -762,7 +762,7 @@ Endpoints (all require `Authorization: Bearer <token>` header):
   ```
   Response: `{ deleted: true, paper_id }`
 
-The paper JSON format is the same as `snapshot update` input. Static files (PDF, markdown, images) are not handled by the API — upload them to your CDN separately.
+The paper JSON format is the same as `snapshot update` input. The admin API handles metadata insertion; static files can be pushed separately through `api push` when `remote.storage` is configured.
 
 #### Push from Local DB to Remote
 
@@ -773,7 +773,13 @@ Use `api push` to merge a locally-built snapshot DB into a remote deployment:
 [remote]
 api_base_url = "https://api.example.com"
 admin_token = "env:PAPER_DB_ADMIN_TOKEN"
-batch_size = 100
+batch_size = 10
+
+[remote.storage]
+type = "webdav"
+url = "https://cdn.example.com/paper-static"
+username = "deploy"
+password = "env:PAPER_DB_WEBDAV_PASSWORD"
 ```
 
 ```bash
@@ -789,11 +795,21 @@ uv run deepresearch-flow paper db api push \
   --snapshot-db ./dist/paper_snapshot.db \
   --static-export-dir ./dist/paper-static \
   --config remote.toml
+
+# Retry only failed static files from the last push
+uv run deepresearch-flow paper db api push \
+  --snapshot-db ./dist/paper_snapshot.db \
+  --static-export-dir ./dist/paper-static \
+  --config remote.toml \
+  --retry-failed push-static-errors.json
 ```
 
 - `--static-export-dir` is optional — when provided, summary JSON payloads are included so the remote side can build FTS indexes and preview text.
 - Duplicate papers (same `paper_id`) are automatically skipped.
-- Static files (PDF, markdown, images) are **not** pushed — sync them to your CDN separately (e.g., `rsync`, `aws s3 sync`).
+- When `[remote.storage]` is configured, static files under the export dir are pushed after the metadata API sync.
+- The currently supported storage backend is `webdav`.
+- Static file push prints per-file status logs: `uploaded`, `skipped`, and `failed`.
+- If some static uploads fail, a `push-static-errors.json` report is written and can be retried with `--retry-failed`.
 
 ### 3.2) MCP (FastMCP Streamable HTTP + SSE)
 
