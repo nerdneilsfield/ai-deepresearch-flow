@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import sqlite3
 import tempfile
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 import unittest
 
@@ -87,6 +89,48 @@ def _insert_previous_paper(
 
 
 class TestBuilderMetadataInheritance(unittest.TestCase):
+    def test_builder_prints_rich_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_db = root / "output.db"
+            static_dir = root / "static"
+            input_path = root / "papers.json"
+
+            payload = {
+                "template_tag": "simple",
+                "papers": [
+                    {
+                        "paper_title": "Builder Summary Paper",
+                        "paper_authors": ["Alice Example"],
+                        "publication_date": "2024",
+                        "publication_venue": "ACL",
+                        "summary": "summary body",
+                    }
+                ],
+            }
+            input_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                build_snapshot(
+                    SnapshotBuildOptions(
+                        input_paths=[input_path],
+                        bibtex_path=None,
+                        md_roots=[],
+                        md_translated_roots=[],
+                        pdf_roots=[],
+                        output_db=output_db,
+                        static_export_dir=static_dir,
+                        previous_snapshot_db=None,
+                    )
+                )
+
+            output = buffer.getvalue()
+            self.assertIn("Snapshot Build Summary", output)
+            self.assertIn("Input files", output)
+            self.assertIn("Paper records", output)
+            self.assertIn("Summary exports", output)
+
     def test_rebuild_inherits_and_overrides_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

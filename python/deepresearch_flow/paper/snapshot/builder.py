@@ -74,6 +74,21 @@ class PreviousPaperMetadata:
     entry_type: str | None
 
 
+@dataclass
+class BuildStats:
+    input_files: int = 0
+    paper_records: int = 0
+    unique_papers: int = 0
+    source_markdown_found: int = 0
+    translated_markdown_found: int = 0
+    pdfs_found: int = 0
+    pdfs_missing: int = 0
+    summary_exports: int = 0
+    manifest_exports: int = 0
+    images_extracted: int = 0
+    doi_bibtex_mismatches: int = 0
+
+
 def _hash_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -572,6 +587,65 @@ def _write_json(path: Path, data: Any) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _print_build_summary(
+    stats: BuildStats,
+    *,
+    output_db: Path,
+    static_export_dir: Path,
+) -> None:
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.table import Table
+
+    console = Console()
+
+    console.print()
+    console.print("[bold cyan]Snapshot Build Summary[/bold cyan]", style="bold")
+    console.print()
+
+    papers_table = Table(title="Papers", header_style="bold magenta", box=None)
+    papers_table.add_column("Metric", style="cyan")
+    papers_table.add_column("Count", style="green", justify="right")
+    papers_table.add_row("Input files", str(stats.input_files))
+    papers_table.add_row("Paper records", str(stats.paper_records))
+    papers_table.add_row("Unique papers", str(stats.unique_papers))
+    console.print(papers_table)
+    console.print()
+
+    content_table = Table(title="Content Discovery", header_style="bold magenta", box=None)
+    content_table.add_column("Type", style="cyan")
+    content_table.add_column("Count", style="green", justify="right")
+    content_table.add_column("Details", style="yellow")
+    content_table.add_row("Source markdown", str(stats.source_markdown_found), "Resolved source documents")
+    content_table.add_row("Translated markdown", str(stats.translated_markdown_found), "Resolved translated variants")
+    content_table.add_row("PDFs matched", str(stats.pdfs_found), "Resolved PDF assets")
+    if stats.pdfs_missing > 0:
+        content_table.add_row("PDFs missing", str(stats.pdfs_missing), "No PDF asset resolved", style="yellow")
+    console.print(content_table)
+    console.print()
+
+    export_table = Table(title="Exports", header_style="bold magenta", box=None)
+    export_table.add_column("Metric", style="cyan")
+    export_table.add_column("Count", style="green", justify="right")
+    export_table.add_row("Summary exports", str(stats.summary_exports))
+    export_table.add_row("Manifest exports", str(stats.manifest_exports))
+    export_table.add_row("Images extracted", str(stats.images_extracted))
+    if stats.doi_bibtex_mismatches > 0:
+        export_table.add_row("DOI/BibTeX mismatches", str(stats.doi_bibtex_mismatches), style="yellow")
+    console.print(export_table)
+    console.print()
+
+    console.print(
+        Panel(
+            f"[bold green]Build Completed[/bold green]\n\n"
+            f"Database: [yellow]{output_db}[/yellow]\n"
+            f"Static: [yellow]{static_export_dir}[/yellow]",
+            border_style="green",
+            padding=(1, 2),
+        )
+    )
+
+
 def build_snapshot(opts: SnapshotBuildOptions) -> None:
     if opts.output_db.exists():
         opts.output_db.unlink()
@@ -593,6 +667,13 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
     previous_aliases = _load_previous_aliases(opts.previous_snapshot_db) if opts.previous_snapshot_db else {}
     previous_metadata = _load_previous_metadata(opts.previous_snapshot_db) if opts.previous_snapshot_db else {}
     snapshot_build_id = uuid.uuid4().hex
+    stats = BuildStats(
+        input_files=len(opts.input_paths),
+        paper_records=len(index.papers),
+        source_markdown_found=len(index.md_path_by_hash),
+        translated_markdown_found=sum(len(paths) for paths in index.translated_md_by_hash.values()),
+        pdfs_found=len(index.pdf_path_by_hash),
+    )
 
     opts.output_db.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(opts.output_db))
@@ -644,6 +725,8 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
             return node_id
 
         with conn:
+            unique_paper_ids: set[str] = set()
+            missing_pdf_hashes: set[str] = set()
             for idx, paper in enumerate(index.papers):
                 candidates = build_paper_key_candidates(paper)
                 paper_id, preferred, conflicts = _pick_paper_id(
@@ -700,6 +783,7 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
                     pub_date = year if year.isdigit() else ""
                 venue = _normalize_display_venue(str(paper.get("_venue") or "").strip()) or "unknown"
                 source_hash = str(paper.get("source_hash") or stable_hash(str(paper.get("source_path") or idx)))
+                unique_paper_ids.add(paper_id)
 
                 authors = paper.get("_authors") or paper.get("paper_authors") or []
                 if not isinstance(authors, list):
@@ -750,6 +834,8 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
                     pdf_target = static_root / "pdf" / f"{pdf_hash}.pdf"
                     if not pdf_target.exists():
                         pdf_target.write_bytes(pdf_path.read_bytes())
+                else:
+                    missing_pdf_hashes.add(source_hash)
 
                 template_summaries = _extract_template_summaries(paper)
                 preferred_summary_template = _choose_preferred_summary_template(paper, template_summaries)
@@ -783,6 +869,7 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
                         "available_templates": sorted(template_summaries.keys(), key=lambda item: item.lower()),
                     },
                 )
+                stats.summary_exports += 1
 
                 # Per-template summary exports.
                 summary_dir = static_root / "summary" / paper_id
@@ -795,6 +882,7 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
                             "summary": summary_markdown,
                         },
                     )
+                    stats.summary_exports += 1
 
                 folder_name, folder_name_short = _folder_names(first_author, year, title, paper_id)
                 pdf_filename = _sanitize_component(f"{first_author}_{year}_{title}") or f"{paper_id}"
@@ -861,6 +949,7 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
                             deduped[key] = item
                     manifest_payload["images"] = list(deduped.values())
                 _write_json(static_root / "manifest" / f"{paper_id}.json", manifest_payload)
+                stats.manifest_exports += 1
 
                 conn.execute(
                     """
@@ -1075,5 +1164,15 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
                     doi_bibtex_mismatch_count,
                     sample,
                 )
+            stats.unique_papers = len(unique_paper_ids)
+            stats.pdfs_missing = len(missing_pdf_hashes)
+            stats.images_extracted = len(written_images)
+            stats.doi_bibtex_mismatches = doi_bibtex_mismatch_count
     finally:
         conn.close()
+
+    _print_build_summary(
+        stats,
+        output_db=opts.output_db,
+        static_export_dir=opts.static_export_dir,
+    )
