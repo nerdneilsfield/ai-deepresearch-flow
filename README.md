@@ -831,6 +831,7 @@ uv run deepresearch-flow paper db api push \
 - `--only-api` and `--only-storage` are mutually exclusive.
 - `--dry-run` cannot be combined with `--only-storage`.
 - `--retry-failed` applies only to static storage and cannot be combined with `--only-api`.
+- If updated `summary` / `manifest` JSON behaves differently in one browser only, try a hard refresh or clear that browser's site cache first; stale browser cache can make static JSON appear inconsistent after a push.
 
 ### 3.2) MCP (FastMCP Streamable HTTP + SSE)
 

@@ -774,6 +774,7 @@ uv run deepresearch-flow paper db api push \
 - `--only-api` 与 `--only-storage` 互斥，不能同时使用。
 - `--dry-run` 不能与 `--only-storage` 一起使用。
 - `--retry-failed` 只作用于静态存储，不能与 `--only-api` 一起使用。
+- 如果更新后的 `summary` / `manifest` JSON 只在某一个浏览器里表现异常，先尝试强制刷新或清理该浏览器的站点缓存；静态 JSON 在 push 之后可能会被陈旧浏览器缓存影响。
 
 ### 4) 前端（开发 / 构建）
 
