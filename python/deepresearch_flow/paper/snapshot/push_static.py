@@ -31,6 +31,11 @@ def _discover_files(root: Path) -> list[str]:
     )
 
 
+def discover_static_files(static_export_dir: Path, *, only_files: list[str] | None = None) -> list[str]:
+    """Return the relative files that would be processed for a static push."""
+    return only_files if only_files is not None else _discover_files(static_export_dir)
+
+
 def _top_dir(rel_path: str) -> str:
     """Extract the top-level directory (e.g. 'pdf/abc.pdf' -> 'pdf/')."""
     parts = rel_path.split("/", 1)
@@ -82,7 +87,7 @@ def push_static_files(
     stats = PushStaticStats()
     ensured_dirs: set[str] = set()
 
-    all_files = only_files if only_files is not None else _discover_files(static_export_dir)
+    all_files = discover_static_files(static_export_dir, only_files=only_files)
     if not all_files:
         return stats
 

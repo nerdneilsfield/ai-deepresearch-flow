@@ -120,6 +120,78 @@ class TestApiPushCli:
         mock_push.assert_not_called()
         mock_push_static.assert_called_once()
 
+    def test_only_storage_shows_tqdm_progress(self, tmp_path: Path) -> None:
+        config_path = tmp_path / "remote.toml"
+        snapshot_db = tmp_path / "paper_snapshot.db"
+        static_dir = tmp_path / "static"
+        _write_config(config_path)
+        snapshot_db.write_text("")
+        static_dir.mkdir()
+
+        config = RemoteConfig(
+            api_base_url="https://api.example.com",
+            admin_token="token",
+            batch_size=10,
+            storage=StorageConfig(
+                type="webdav",
+                url="https://cdn.example.com/static",
+                username="deploy",
+                password="secret",
+            ),
+        )
+        fake_storage = MagicMock()
+        fake_storage.__enter__.return_value = fake_storage
+        fake_storage.__exit__.return_value = False
+        progress = MagicMock()
+
+        def _fake_push_static(*args, **kwargs):
+            callback = kwargs["on_file_result"]
+            callback("images/a.png", "uploaded", "")
+            callback("images/b.png", "skipped", "")
+            callback("images/c.png", "failed", "boom")
+            return PushStaticStats(uploaded=1, skipped=1, failed=1)
+
+        with (
+            patch("deepresearch_flow.paper.snapshot.push.load_remote_config", return_value=config),
+            patch("deepresearch_flow.paper.snapshot.push.extract_papers_from_db") as mock_extract,
+            patch("deepresearch_flow.paper.snapshot.push.push_papers") as mock_push,
+            patch("deepresearch_flow.storage.factory.create_storage", return_value=fake_storage),
+            patch(
+                "deepresearch_flow.paper.snapshot.push_static.discover_static_files",
+                return_value=["images/a.png", "images/b.png", "images/c.png"],
+            ),
+            patch(
+                "deepresearch_flow.paper.snapshot.push_static.push_static_files",
+                side_effect=_fake_push_static,
+            ) as mock_push_static,
+            patch("deepresearch_flow.paper.db.tqdm", return_value=progress) as mock_tqdm,
+        ):
+            runner = CliRunner()
+            result = runner.invoke(
+                paper,
+                [
+                    "db",
+                    "api",
+                    "push",
+                    "--snapshot-db",
+                    str(snapshot_db),
+                    "--static-export-dir",
+                    str(static_dir),
+                    "--config",
+                    str(config_path),
+                    "--only-storage",
+                ],
+            )
+
+        assert result.exit_code == 0
+        mock_extract.assert_not_called()
+        mock_push.assert_not_called()
+        mock_push_static.assert_called_once()
+        mock_tqdm.assert_called_once()
+        assert mock_tqdm.call_args.kwargs["total"] == 3
+        assert progress.update.call_count == 3
+        assert progress.set_postfix.call_count == 3
+
     def test_only_api_and_only_storage_are_mutually_exclusive(self, tmp_path: Path) -> None:
         config_path = tmp_path / "remote.toml"
         snapshot_db = tmp_path / "paper_snapshot.db"

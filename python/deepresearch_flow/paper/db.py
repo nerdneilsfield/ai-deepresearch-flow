@@ -1081,6 +1081,7 @@ def register_db_commands(db_group: click.Group) -> None:
         # --- Static file push via remote storage ---
         if should_push_storage:
             from deepresearch_flow.paper.snapshot.push_static import (
+                discover_static_files,
                 load_retry_files,
                 push_static_files,
                 write_error_report,
@@ -1096,12 +1097,19 @@ def register_db_commands(db_group: click.Group) -> None:
                 console.print("[cyan]Pushing static files...[/cyan]")
 
             console.print(f"[cyan]Storage:[/cyan] {config.storage.type} → {config.storage.url}")
+            static_files = discover_static_files(static_dir, only_files=only_files)
+            progress = tqdm(total=len(static_files), desc="Static push", unit="file") if static_files else None
+            progress_counts = {"uploaded": 0, "skipped": 0, "failed": 0}
 
             def on_static_file_result(rel_path: str, kind: str, error: str = "") -> None:
+                progress_counts[kind] += 1
+                if progress is not None:
+                    progress.update(1)
+                    progress.set_postfix(progress_counts, refresh=False)
                 if kind == "uploaded":
-                    console.print(f"  [green]↑ uploaded[/green] {rel_path}")
+                    return
                 elif kind == "skipped":
-                    console.print(f"  [dim]· skipped[/dim] {rel_path}")
+                    return
                 elif kind == "failed":
                     console.print(f"  [red]× failed[/red] {rel_path}: {error}")
 
@@ -1115,6 +1123,9 @@ def register_db_commands(db_group: click.Group) -> None:
                     )
             except StorageAuthError as exc:
                 raise click.ClickException(str(exc)) from exc
+            finally:
+                if progress is not None:
+                    progress.close()
 
             static_table = Table(title="Static Files Push")
             static_table.add_column("Directory")

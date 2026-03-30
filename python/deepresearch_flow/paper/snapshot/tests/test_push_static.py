@@ -10,6 +10,7 @@ import pytest
 from deepresearch_flow.storage.base import StorageAuthError
 from deepresearch_flow.paper.snapshot.push_static import (
     PushStaticStats,
+    discover_static_files,
     load_retry_files,
     push_static_files,
     write_error_report,
@@ -74,6 +75,22 @@ def _setup_static_dir(tmp_path: Path) -> Path:
 
 
 class TestPushStaticFiles:
+    def test_discover_static_files_returns_sorted_relative_paths(self, tmp_path: Path) -> None:
+        root = _setup_static_dir(tmp_path)
+
+        files = discover_static_files(root)
+
+        assert files == sorted(files)
+        assert "pdf/abc123.pdf" in files
+        assert "summary/paper1/default.json" in files
+
+    def test_discover_static_files_respects_only_files(self, tmp_path: Path) -> None:
+        root = _setup_static_dir(tmp_path)
+
+        files = discover_static_files(root, only_files=["pdf/abc123.pdf"])
+
+        assert files == ["pdf/abc123.pdf"]
+
     def test_emits_callback_for_each_processed_file(self, tmp_path: Path) -> None:
         root = _setup_static_dir(tmp_path)
         storage = FakeStorage(existing={"pdf/abc123.pdf"})
