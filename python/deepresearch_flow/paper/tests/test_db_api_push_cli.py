@@ -192,6 +192,64 @@ class TestApiPushCli:
         assert progress.update.call_count == 3
         assert progress.set_postfix.call_count == 3
 
+    def test_storage_concurrency_is_forwarded(self, tmp_path: Path) -> None:
+        config_path = tmp_path / "remote.toml"
+        snapshot_db = tmp_path / "paper_snapshot.db"
+        static_dir = tmp_path / "static"
+        _write_config(config_path)
+        snapshot_db.write_text("")
+        static_dir.mkdir()
+
+        config = RemoteConfig(
+            api_base_url="https://api.example.com",
+            admin_token="token",
+            batch_size=10,
+            storage=StorageConfig(
+                type="webdav",
+                url="https://cdn.example.com/static",
+                username="deploy",
+                password="secret",
+            ),
+        )
+        fake_storage = MagicMock()
+        fake_storage.__enter__.return_value = fake_storage
+        fake_storage.__exit__.return_value = False
+
+        with (
+            patch("deepresearch_flow.paper.snapshot.push.load_remote_config", return_value=config),
+            patch("deepresearch_flow.storage.factory.create_storage", return_value=fake_storage),
+            patch(
+                "deepresearch_flow.paper.snapshot.push_static.discover_static_files",
+                return_value=["images/a.png"],
+            ),
+            patch(
+                "deepresearch_flow.paper.snapshot.push_static.push_static_files",
+                return_value=PushStaticStats(uploaded=1),
+            ) as mock_push_static,
+            patch("deepresearch_flow.paper.db.tqdm"),
+        ):
+            runner = CliRunner()
+            result = runner.invoke(
+                paper,
+                [
+                    "db",
+                    "api",
+                    "push",
+                    "--snapshot-db",
+                    str(snapshot_db),
+                    "--static-export-dir",
+                    str(static_dir),
+                    "--config",
+                    str(config_path),
+                    "--only-storage",
+                    "--storage-concurrency",
+                    "6",
+                ],
+            )
+
+        assert result.exit_code == 0
+        assert mock_push_static.call_args.kwargs["concurrency"] == 6
+
     def test_only_api_and_only_storage_are_mutually_exclusive(self, tmp_path: Path) -> None:
         config_path = tmp_path / "remote.toml"
         snapshot_db = tmp_path / "paper_snapshot.db"

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
+from threading import Lock
 from typing import Callable
 
 from deepresearch_flow.storage.base import RemoteStorage, StorageAuthError
@@ -78,6 +80,7 @@ def push_static_files(
     *,
     only_files: list[str] | None = None,
     on_file_result: Callable[[str, str, str], None] | None = None,
+    concurrency: int = 1,
 ) -> PushStaticStats:
     """Push static files to a remote storage backend.
 
@@ -86,44 +89,63 @@ def push_static_files(
     """
     stats = PushStaticStats()
     ensured_dirs: set[str] = set()
+    ensured_dirs_lock = Lock()
+    stats_lock = Lock()
 
     all_files = discover_static_files(static_export_dir, only_files=only_files)
     if not all_files:
         return stats
+    if concurrency < 1:
+        raise ValueError("concurrency must be at least 1")
 
-    for rel_path in all_files:
+    def process_file(rel_path: str) -> None:
         # Check existence — StorageAuthError propagates immediately.
         if storage.exists(rel_path):
-            _record(stats, rel_path, "skipped")
+            with stats_lock:
+                _record(stats, rel_path, "skipped")
             if on_file_result:
                 on_file_result(rel_path, "skipped", "")
-            continue
+            return
 
         # Ensure parent directories.
         try:
-            _ensure_parents(storage, rel_path, ensured_dirs)
+            with ensured_dirs_lock:
+                _ensure_parents(storage, rel_path, ensured_dirs)
         except StorageAuthError:
             raise
         except Exception as exc:
-            _record(stats, rel_path, "failed", str(exc))
+            with stats_lock:
+                _record(stats, rel_path, "failed", str(exc))
             if on_file_result:
                 on_file_result(rel_path, "failed", str(exc))
-            continue
+            return
 
         # Upload file bytes.
         file_path = static_export_dir / rel_path
         try:
             data = file_path.read_bytes()
             storage.upload(rel_path, data)
-            _record(stats, rel_path, "uploaded")
+            with stats_lock:
+                _record(stats, rel_path, "uploaded")
             if on_file_result:
                 on_file_result(rel_path, "uploaded", "")
         except StorageAuthError:
             raise
         except Exception as exc:
-            _record(stats, rel_path, "failed", str(exc))
+            with stats_lock:
+                _record(stats, rel_path, "failed", str(exc))
             if on_file_result:
                 on_file_result(rel_path, "failed", str(exc))
+
+    if concurrency == 1:
+        for rel_path in all_files:
+            process_file(rel_path)
+        return stats
+
+    with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="storage-push") as executor:
+        futures = [executor.submit(process_file, rel_path) for rel_path in all_files]
+        for future in futures:
+            future.result()
 
     return stats
 

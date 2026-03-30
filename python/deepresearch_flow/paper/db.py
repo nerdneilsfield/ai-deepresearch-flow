@@ -955,6 +955,14 @@ def register_db_commands(db_group: click.Group) -> None:
     )
     @click.option("--only-storage", is_flag=True, default=False, help="Push only static storage; skip admin API")
     @click.option("--only-api", is_flag=True, default=False, help="Push only admin API; skip static storage")
+    @click.option(
+        "--storage-concurrency",
+        "storage_concurrency",
+        type=int,
+        default=4,
+        show_default=True,
+        help="Concurrent workers for static storage push",
+    )
     def api_push(
         snapshot_db: str,
         static_export_dir: str | None,
@@ -963,6 +971,7 @@ def register_db_commands(db_group: click.Group) -> None:
         retry_failed_path: str | None,
         only_storage: bool,
         only_api: bool,
+        storage_concurrency: int,
     ) -> None:
         """Push papers from a local snapshot DB to a remote admin API."""
         from rich.console import Console
@@ -993,6 +1002,8 @@ def register_db_commands(db_group: click.Group) -> None:
             raise click.ClickException("--only-api and --only-storage are mutually exclusive")
         if only_storage and dry_run:
             raise click.ClickException("--dry-run cannot be used with --only-storage")
+        if storage_concurrency < 1:
+            raise click.ClickException("--storage-concurrency must be at least 1")
         if only_api and retry_failed_path:
             raise click.ClickException("--retry-failed cannot be used with --only-api")
         if retry_failed_path and not static_export_dir:
@@ -1097,6 +1108,7 @@ def register_db_commands(db_group: click.Group) -> None:
                 console.print("[cyan]Pushing static files...[/cyan]")
 
             console.print(f"[cyan]Storage:[/cyan] {config.storage.type} → {config.storage.url}")
+            console.print(f"[cyan]Storage concurrency:[/cyan] {storage_concurrency}")
             static_files = discover_static_files(static_dir, only_files=only_files)
             progress = tqdm(total=len(static_files), desc="Static push", unit="file") if static_files else None
             progress_counts = {"uploaded": 0, "skipped": 0, "failed": 0}
@@ -1120,6 +1132,7 @@ def register_db_commands(db_group: click.Group) -> None:
                         storage,
                         only_files=only_files,
                         on_file_result=on_static_file_result,
+                        concurrency=storage_concurrency,
                     )
             except StorageAuthError as exc:
                 raise click.ClickException(str(exc)) from exc

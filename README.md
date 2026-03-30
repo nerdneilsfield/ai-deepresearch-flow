@@ -808,7 +808,8 @@ uv run deepresearch-flow paper db api push \
   --snapshot-db ./dist/paper_snapshot.db \
   --static-export-dir ./dist/paper-static \
   --config remote.toml \
-  --only-storage
+  --only-storage \
+  --storage-concurrency 8
 
 # Retry only failed static files from the last push
 uv run deepresearch-flow paper db api push \
@@ -826,6 +827,7 @@ uv run deepresearch-flow paper db api push \
 - If some static uploads fail, a `push-static-errors.json` report is written and can be retried with `--retry-failed`.
 - `--only-api` pushes only the admin API metadata and skips static storage.
 - `--only-storage` pushes only static storage and skips the admin API metadata step.
+- `--storage-concurrency` controls the number of concurrent workers used for static storage push.
 - `--only-api` and `--only-storage` are mutually exclusive.
 - `--dry-run` cannot be combined with `--only-storage`.
 - `--retry-failed` applies only to static storage and cannot be combined with `--only-api`.

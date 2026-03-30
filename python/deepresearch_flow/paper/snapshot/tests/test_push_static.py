@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import threading
+import time
 
 import pytest
 
@@ -193,6 +195,28 @@ class TestPushStaticFiles:
         push_static_files(root, storage)
 
         assert storage.mkdirs.count("images") == 1
+
+    def test_concurrency_processes_all_files(self, tmp_path: Path) -> None:
+        root = _setup_static_dir(tmp_path)
+        thread_names: set[str] = set()
+
+        class SlowStorage(FakeStorage):
+            def exists(self, remote_path: str) -> bool:
+                thread_names.add(threading.current_thread().name)
+                time.sleep(0.01)
+                return super().exists(remote_path)
+
+            def upload(self, remote_path: str, data: bytes) -> None:
+                thread_names.add(threading.current_thread().name)
+                time.sleep(0.01)
+                return super().upload(remote_path, data)
+
+        storage = SlowStorage()
+        stats = push_static_files(root, storage, concurrency=4)
+
+        assert stats.uploaded == 4
+        assert len(storage.uploaded) == 4
+        assert len(thread_names) >= 2
 
 
 class TestErrorReport:
