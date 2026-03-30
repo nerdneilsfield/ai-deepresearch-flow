@@ -982,7 +982,7 @@ uv run deepresearch-flow translator translate \
 - 图示提示：`deep_read` 允许输出带 `[Inferred]` 标注的推断图示；如需修复 Mermaid，可对渲染后的 Markdown 使用 `recognize fix-mermaid`。
 - 阶段聚焦：多阶段运行时强调当前模块，其他模块只给摘要，降低上下文干扰。
 - 范围过滤：使用 `--start-idx/--end-idx` 切片输入；范围先于 `--retry-failed`/`--retry-failed-stages` 生效（`--end-idx -1` 表示最后一项）。
-- 失败阶段重试：使用 `--retry-failed-stages` 仅重跑失败 stage（多阶段模板）；缺失 stage 会被强制补跑。重试会保留原有结果，仅更新重跑条目。
+- 失败阶段重试：使用 `--retry-failed-stages` 仅重跑失败 stage（多阶段模板）；缺失 stage 会被强制补跑。串行重试只会把仍需执行的 stage 放入计划，且最终 `paper_infos.json` 会与最终 `errors.json` 保持一致（仍有未解决错误的文档不会继续保留在输出中）。
 
 ```bash
 uv run deepresearch-flow paper extract \
