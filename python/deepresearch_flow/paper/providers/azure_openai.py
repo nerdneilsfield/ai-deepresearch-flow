@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 
 from deepresearch_flow.paper.providers.base import ProviderError
+from deepresearch_flow.paper.providers.openai_compatible import _ensure_additional_properties_false
 
 
 def _extract_error_message(response: httpx.Response) -> str:
@@ -64,7 +65,8 @@ async def chat(
             "type": "json_schema",
             "json_schema": {
                 "name": "paper_extract",
-                "schema": schema,
+                "schema": _ensure_additional_properties_false(schema),
+                "strict": True,
             },
         }
     elif structured_mode == "json_object":

@@ -8,6 +8,27 @@ import httpx
 from deepresearch_flow.paper.providers.base import ProviderError
 
 
+def _ensure_additional_properties_false(schema: dict[str, Any]) -> dict[str, Any]:
+    """Recursively add additionalProperties: false to all object schemas.
+
+    OpenAI's Structured Outputs requires every object to declare
+    ``additionalProperties: false`` and does not accept ``$schema``.
+    """
+    schema = dict(schema)
+    schema.pop("$schema", None)
+    if schema.get("type") == "object":
+        schema["additionalProperties"] = False
+        props = schema.get("properties")
+        if isinstance(props, dict):
+            schema["properties"] = {
+                k: _ensure_additional_properties_false(v) if isinstance(v, dict) else v
+                for k, v in props.items()
+            }
+    if "items" in schema and isinstance(schema["items"], dict):
+        schema["items"] = _ensure_additional_properties_false(schema["items"])
+    return schema
+
+
 def _extract_error_message(response: httpx.Response) -> str:
     parts: list[str] = []
     try:
@@ -64,7 +85,8 @@ async def chat(
             "type": "json_schema",
             "json_schema": {
                 "name": "paper_extract",
-                "schema": schema,
+                "schema": _ensure_additional_properties_false(schema),
+                "strict": True,
             },
         }
     elif structured_mode == "json_object":
