@@ -766,6 +766,24 @@ def merge_retry_error_entries(
     return merged_entries
 
 
+def filter_results_with_errors(
+    entries: list[dict[str, Any]],
+    error_entries: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    errored_paths = {
+        str(Path(source_path).resolve())
+        for entry in error_entries
+        if (source_path := entry.get("source_path"))
+    }
+    if not errored_paths:
+        return entries
+    return [
+        entry
+        for entry in entries
+        if str(Path(entry.get("source_path", "")).resolve()) not in errored_paths
+    ]
+
+
 def build_document_validation_error(
     *,
     path: str | Path,
@@ -2295,23 +2313,20 @@ async def extract_documents(
         if stage_bar:
             stage_bar.close()
 
-    final_results: list[dict[str, Any]] = []
+    raw_final_results: list[dict[str, Any]] = []
     seen = set()
     for entry in existing:
         path = entry.get("source_path") if isinstance(entry, dict) else None
         if path and path in results:
-            final_results.append(results[path])
+            raw_final_results.append(results[path])
             seen.add(path)
         elif path:
-            final_results.append(entry)
+            raw_final_results.append(entry)
             seen.add(path)
 
     for path, entry in results.items():
         if path not in seen:
-            final_results.append(entry)
-
-    output_payload = {"template_tag": template_tag, "papers": final_results}
-    write_json(output_path, output_payload)
+            raw_final_results.append(entry)
 
     if retry_mode:
         error_payload = merge_retry_error_entries(
@@ -2322,6 +2337,10 @@ async def extract_documents(
         )
     else:
         error_payload = [_serialize_error(err) for err in errors]
+
+    final_results = filter_results_with_errors(raw_final_results, error_payload)
+    output_payload = {"template_tag": template_tag, "papers": final_results}
+    write_json(output_path, output_payload)
     write_json(errors_path, error_payload)
 
     if shutdown_event.is_set():
@@ -2370,14 +2389,12 @@ async def extract_documents(
     table.add_column("Metric", style="cyan", no_wrap=True)
     table.add_column("Value", style="white", overflow="fold")
     table.add_row("Documents", f"{doc_count} total")
-    table.add_row("Successful", str(doc_count - len(errors)))
-    failed_stage_count = sum(1 for err in errors if err.stage_name)
+    table.add_row("Successful", str(len(final_results)))
+    failed_stage_count = sum(1 for err in error_payload if err.get("stage_name"))
     retried_stage_count = 0
     if retry_stages_mode:
-        retried_stage_count = sum(
-            len(retry_stage_map.get(str(path.resolve()), set())) for path in markdown_files
-        )
-    table.add_row("Errors", str(len(errors)))
+        retried_stage_count = sum(len(stage_names) for stage_names in attempted_stage_map.values())
+    table.add_row("Errors", str(len(error_payload)))
     table.add_row("Failed stages", str(failed_stage_count))
     table.add_row("Retried stages", str(retried_stage_count))
     table.add_row("Output JSON", str(output_path))
