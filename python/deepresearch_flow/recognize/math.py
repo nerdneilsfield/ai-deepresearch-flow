@@ -489,9 +489,28 @@ def build_repair_messages(issues: list[FormulaIssue]) -> list[dict[str, str]]:
     ]
 
 
-def iter_batches(items: list[FormulaIssue], batch_size: int) -> Iterable[list[FormulaIssue]]:
-    for idx in range(0, len(items), batch_size):
-        yield items[idx : idx + batch_size]
+def _estimate_issue_chars(issue: FormulaIssue) -> int:
+    """Estimate the character count an issue contributes to the prompt."""
+    return len(issue.span.content) + len(issue.span.context or "") + sum(len(e) for e in issue.errors) + 80
+
+
+def iter_batches(
+    items: list[FormulaIssue],
+    batch_size: int,
+    max_batch_chars: int = 200_000,
+) -> Iterable[list[FormulaIssue]]:
+    batch: list[FormulaIssue] = []
+    batch_chars = 0
+    for item in items:
+        item_chars = _estimate_issue_chars(item)
+        if batch and (len(batch) >= batch_size or batch_chars + item_chars > max_batch_chars):
+            yield batch
+            batch = []
+            batch_chars = 0
+        batch.append(item)
+        batch_chars += item_chars
+    if batch:
+        yield batch
 
 
 def locate_json_field_start(
@@ -540,10 +559,12 @@ async def repair_batch(
     timeout: float,
     max_retries: int,
     client: httpx.AsyncClient,
+    structured_override: list[str] | None = None,
 ) -> tuple[dict[str, str], str | None]:
     messages = build_repair_messages(issues)
     schema = repair_schema()
     last_error: str | None = None
+    use_structured = structured_override[0] if structured_override else provider.structured_mode
     for attempt in range(max_retries + 1):
         try:
             response = await call_provider(
@@ -553,7 +574,7 @@ async def repair_batch(
                 schema,
                 api_key,
                 timeout,
-                provider.structured_mode,
+                use_structured,
                 client,
                 max_tokens=provider.max_tokens,
             )
@@ -566,6 +587,19 @@ async def repair_batch(
                 continue
             return {}, last_error
         except ProviderError as exc:
+            if exc.structured_error and use_structured != "none":
+                logger.warning(
+                    "Structured response failed; retrying without structured output "
+                    "(provider=%s, model=%s, status_code=%s): %s",
+                    provider.name,
+                    model_name,
+                    exc.status_code if exc.status_code is not None else "unknown",
+                    str(exc),
+                )
+                use_structured = "none"
+                if structured_override is not None:
+                    structured_override[0] = "none"
+                continue
             last_error = str(exc)
             if exc.retryable and attempt < max_retries:
                 await asyncio.sleep(backoff_delay(1.0, attempt + 1, 20.0))
@@ -599,6 +633,7 @@ async def fix_math_text(
     spans: list[FormulaSpan] | None = None,
     allowed_keys: set[tuple[int, str | None, int | None]] | None = None,
     progress_cb: Callable[[], None] | None = None,
+    max_batch_chars: int = 200_000,
 ) -> tuple[str, list[dict[str, Any]]]:
     replacements: list[tuple[int, int, str]] = []
     issues: list[FormulaIssue] = []
@@ -652,12 +687,18 @@ async def fix_math_text(
     error_records: list[dict[str, Any]] = []
     if issues and repair_enabled:
         # Convert to list for parallel processing
-        batches = list(iter_batches(issues, batch_size))
-        
+        batches = list(iter_batches(issues, batch_size, max_batch_chars))
+
+        # Shared mutable container so all batches see structured mode fallback
+        structured_override: list[str] = [provider.structured_mode]
+
         # Parallel batch repair
         batch_results = await asyncio.gather(
             *[
-                repair_batch(batch, provider, model_name, api_key, timeout, max_retries, client)
+                repair_batch(
+                    batch, provider, model_name, api_key, timeout, max_retries, client,
+                    structured_override=structured_override,
+                )
                 for batch in batches
             ],
             return_exceptions=True,

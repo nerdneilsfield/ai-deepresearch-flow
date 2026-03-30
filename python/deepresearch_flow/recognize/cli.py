@@ -1079,6 +1079,8 @@ def recognize_fix(
 @click.option("--json", "json_mode", is_flag=True, help="Process JSON inputs instead of markdown")
 @click.option("-m", "--model", "model_ref", required=True, help="provider/model")
 @click.option("--batch-size", "batch_size", default=10, show_default=True, type=int)
+@click.option("--max-batch-chars", "max_batch_chars", default=200_000, show_default=True, type=int,
+              help="Max total characters per batch (prevents oversized prompts)")
 @click.option("--context-chars", "context_chars", default=80, show_default=True, type=int)
 @click.option("--max-retries", "max_retries", default=3, show_default=True, type=int)
 @click.option("--workers", type=int, default=4, show_default=True, help="Concurrent workers")
@@ -1102,6 +1104,7 @@ def recognize_fix_math(
     json_mode: bool,
     model_ref: str,
     batch_size: int,
+    max_batch_chars: int,
     context_chars: int,
     max_retries: int,
     workers: int,
@@ -1285,6 +1288,7 @@ def recognize_fix_math(
                                 spans=spans,
                                 allowed_keys=retry_keys,
                                 progress_cb=lambda: formula_progress.update(1),
+                                max_batch_chars=max_batch_chars,
                             )
                             if not only_show_error and updated != value:
                                 item[field] = updated
@@ -1325,6 +1329,7 @@ def recognize_fix_math(
                         spans=spans,
                         allowed_keys=retry_keys,
                         progress_cb=lambda: formula_progress.update(1),
+                        max_batch_chars=max_batch_chars,
                     )
                     if not only_show_error:
                         output_path = output_map[path]
@@ -1391,6 +1396,8 @@ def recognize_fix_math(
 @click.option("--json", "json_mode", is_flag=True, help="Process JSON inputs instead of markdown")
 @click.option("-m", "--model", "model_ref", required=True, help="provider/model")
 @click.option("--batch-size", "batch_size", default=10, show_default=True, type=int)
+@click.option("--max-batch-chars", "max_batch_chars", default=200_000, show_default=True, type=int,
+              help="Max total characters per batch (prevents oversized prompts)")
 @click.option("--context-chars", "context_chars", default=80, show_default=True, type=int)
 @click.option("--max-retries", "max_retries", default=3, show_default=True, type=int)
 @click.option("--workers", type=int, default=4, show_default=True, help="Concurrent workers")
@@ -1414,6 +1421,7 @@ def recognize_fix_mermaid(
     json_mode: bool,
     model_ref: str,
     batch_size: int,
+    max_batch_chars: int,
     context_chars: int,
     max_retries: int,
     workers: int,
@@ -1721,6 +1729,7 @@ def recognize_fix_mermaid(
                 client,
                 stats_total,
                 progress_cb=lambda: diagram_progress.update(1) if not only_show_error else None,
+                max_batch_chars=max_batch_chars,
             )
             
             error_records.extend(errors)
