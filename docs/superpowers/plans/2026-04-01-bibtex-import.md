@@ -1151,7 +1151,7 @@ def test_mixed_valid_and_malformed_in_same_batch(self) -> None:
     self.assertGreaterEqual(data["stats"]["unmatched"], 1)
 ```
 
-- [ ] **Step 3: Add frontend staging logic unit test**
+- [ ] **Step 3: Document and manually verify frontend staging logic**
 
 The frontend Replace-degradation logic lives in `handleBibFileLoad` in SelectedView.vue.
 Since this is a critical data-safety invariant, add a focused comment block at the top
