@@ -211,17 +211,24 @@ class TestMatchBibtexEntries(unittest.TestCase):
         self.assertEqual(result.matched[0].paper_id, "paper-year-diff")
         self.assertEqual(result.matched[0].match_method, "title")
 
-    def test_title_ambiguous_returns_unmatched(self) -> None:
-        # Both paper-title-1 and paper-title-2 have very similar titles
+    def test_title_unique_match_with_large_gap(self) -> None:
+        # paper-title-1 is exact match (score ~1.0), paper-title-2 has extra "for NLU" (score < 0.95)
+        # Gap > 0.05, so paper-title-1 should match confidently
         bib = '@article{key1, title={BERT Pre-training of Deep Bidirectional Transformers}}'
         result = match_bibtex_entries(bib, self.db_path)
-        # Should find paper-title-1 as exact match (score 1.0 vs lower for paper-title-2)
-        # But if scores are within 0.05, should be unmatched
-        # paper-title-1 title == query title, so score ~1.0
-        # paper-title-2 has extra "for NLU", so score < 0.95
-        # Gap > 0.05, so paper-title-1 should match
         self.assertEqual(len(result.matched), 1)
         self.assertEqual(result.matched[0].paper_id, "paper-title-1")
+
+    def test_title_ambiguous_within_005_gap_returns_unmatched(self) -> None:
+        # Query title is a midpoint between paper-title-1 and paper-title-2,
+        # so both score similarly and gap < 0.05 → should be unmatched
+        bib = '@article{key1, title={BERT Pre-training of Deep Bidirectional Transformers for}}'
+        result = match_bibtex_entries(bib, self.db_path)
+        # paper-title-1: "BERT Pre-training of Deep Bidirectional Transformers" vs query "...for"
+        # paper-title-2: "BERT Pre-training of Deep Bidirectional Transformers for NLU" vs query "...for"
+        # Both should score very close → ambiguous → unmatched
+        self.assertEqual(len(result.matched), 0)
+        self.assertEqual(len(result.unmatched), 1)
 
     def test_title_year_mismatch_returns_unmatched(self) -> None:
         # Title matches paper-doi-1 (2017) but bib says year=2020
@@ -366,38 +373,50 @@ def _parse_bibtex_entries(raw: str) -> list[dict[str, Any]]:
 
     entries: list[dict[str, Any]] = []
     parser = Parser()
-    try:
-        bib_data = parser.parse_stream(io.StringIO(raw))
-    except Exception:
-        # If the entire chunk fails to parse, try to extract entry keys at minimum
-        # so they appear in unmatched
-        import re as _re
-        for m in _re.finditer(r"@\w+\s*\{([^,\s]+)", raw):
+
+    # Split raw text into individual entry strings so we can parse each one
+    # independently. This way a malformed entry only affects itself, not
+    # valid siblings in the same batch.
+    entry_starts: list[int] = []
+    _ENTRY_RE = re.compile(r"@(?=\w+\s*\{)")
+    for m in _ENTRY_RE.finditer(raw):
+        entry_starts.append(m.start())
+
+    if not entry_starts:
+        return []
+
+    raw_segments: list[str] = []
+    for i, start in enumerate(entry_starts):
+        end = entry_starts[i + 1] if i + 1 < len(entry_starts) else len(raw)
+        raw_segments.append(raw[start:end])
+
+    for segment in raw_segments:
+        try:
+            bib_data = parser.parse_stream(io.StringIO(segment))
+            for key, entry in bib_data.entries.items():
+                fields = dict(entry.fields)
+                title = str(fields.get("title", "")).replace("{", "").replace("}", "").strip() or None
+                year = str(fields.get("year", "")).strip() or None
+                doi_raw = fields.get("doi")
+                entries.append({
+                    "key": key,
+                    "type": entry.type,
+                    "title": title,
+                    "year": year,
+                    "doi_raw": str(doi_raw).strip() if doi_raw else None,
+                    "fields": fields,
+                })
+        except Exception:
+            # Single entry failed to parse — extract key at minimum
+            key_match = re.search(r"@\w+\s*\{([^,\s]+)", segment)
             entries.append({
-                "key": m.group(1),
+                "key": key_match.group(1) if key_match else "unknown",
                 "type": "unknown",
                 "title": None,
                 "year": None,
                 "doi_raw": None,
                 "fields": {},
             })
-        return entries
-
-    for key, entry in bib_data.entries.items():
-        fields = dict(entry.fields)
-        title = str(fields.get("title", "")).replace("{", "").replace("}", "").strip() or None
-        year = str(fields.get("year", "")).strip() or None
-        # Extract raw DOI from the entry text for canonicalization
-        # Reconstruct a minimal raw string for DOI extraction
-        doi_raw = fields.get("doi")
-        entries.append({
-            "key": key,
-            "type": entry.type,
-            "title": title,
-            "year": year,
-            "doi_raw": str(doi_raw).strip() if doi_raw else None,
-            "fields": fields,
-        })
 
     return entries
 
@@ -534,7 +553,7 @@ def match_bibtex_entries(bibtex_raw: str, db_path: Path) -> MatchResult:
 - [ ] **Step 2: Run tests to verify they pass**
 
 Run: `cd /home/dengqi/Source/langs/python/ai-deepresearch-flow && python -m pytest python/deepresearch_flow/paper/snapshot/tests/test_bibtex_match.py -v`
-Expected: All 10 tests PASS
+Expected: All 11 tests PASS
 
 - [ ] **Step 3: Commit**
 
@@ -914,6 +933,11 @@ async function handleBibFileLoad(event: Event) {
     let failedEntryCount = 0
     let allBatchesOk = true
 
+    // INVARIANT: Replace mode only clears existing selection if ALL batches succeed.
+    // If any batch fails (network/server error), we degrade to Append mode to
+    // prevent data loss. This is the critical safety contract — see spec section
+    // "Frontend Logic" step 7 and Task 7 in the implementation plan.
+
     for (let i = 0; i < batches.length; i++) {
       bibStatus.value = `Matching ${Math.min((i + 1) * BIB_BATCH_SIZE, entries.length)}/${entries.length}...`
       bibProgress.value = Math.round(((i + 1) / batches.length) * 100)
@@ -931,13 +955,13 @@ async function handleBibFileLoad(event: Event) {
       }
     }
 
-    // Commit staged results
+    // Commit staged results — store methods are async (IndexedDB), must await
     if (bibMode.value === 'replace' && allBatchesOk) {
-      selection.clear()
+      await selection.clear()
     }
 
     for (const m of stagedMatched) {
-      selection.add({
+      await selection.add({
         paper_id: m.paper_id,
         title: m.title,
         year: m.year ?? '',
@@ -1072,16 +1096,16 @@ git commit -m "feat(frontend): add BibTeX import with batch matching and unmatch
 
 ---
 
-### Task 7: Frontend — Replace Degradation E2E Test Case
+### Task 7: Backend Resilience Tests + Replace Safety Verification
 
-This task documents the critical "Replace with partial failure degrades to Append" behavior as a test note, per reviewer request.
+Two backend tests: (a) malformed BibTeX returns 200 + unmatched (not 500), (b) mixed valid+malformed entries in same batch — valid entries still match. Plus a manual verification checklist for the frontend Replace-degradation contract (automated component test is impractical here since it requires simulating a network failure mid-batch in a Vue component).
 
 **Files:**
 - Modify: `python/deepresearch_flow/paper/snapshot/tests/test_api_match_bibtex.py`
 
-- [ ] **Step 1: Add a test documenting the batch failure scenario**
+- [ ] **Step 1: Add backend test for malformed entry resilience**
 
-Add to `TestApiMatchBibtex`:
+Add to `TestApiMatchBibtex` in `test_api_match_bibtex.py`:
 
 ```python
 def test_malformed_bibtex_returns_unmatched_not_500(self) -> None:
@@ -1101,16 +1125,64 @@ def test_malformed_bibtex_returns_unmatched_not_500(self) -> None:
     self.assertGreaterEqual(data["stats"]["unmatched"], 1)
 ```
 
-- [ ] **Step 2: Run test**
+- [ ] **Step 2: Add backend test for mixed valid+malformed entries in same batch**
 
-Run: `cd /home/dengqi/Source/langs/python/ai-deepresearch-flow && python -m pytest python/deepresearch_flow/paper/snapshot/tests/test_api_match_bibtex.py::TestApiMatchBibtex::test_malformed_bibtex_returns_unmatched_not_500 -v`
-Expected: PASS
+Add to `TestApiMatchBibtex`:
 
-- [ ] **Step 3: Commit**
+```python
+def test_mixed_valid_and_malformed_in_same_batch(self) -> None:
+    """A malformed entry must not prevent valid siblings from matching.
+
+    This verifies per-entry parsing resilience: the valid entry should still
+    match via DOI, while the malformed one goes to unmatched.
+    """
+    bib = (
+        '@article{good_entry, title={Graph Neural Networks for NLP}, doi={10.1234/test}}\n'
+        '@article{bad_entry, this is broken bibtex with no closing brace\n'
+    )
+    resp = self.client.post(
+        "/api/v1/papers/match-bibtex",
+        json={"bibtex_raw": bib},
+    )
+    self.assertEqual(resp.status_code, 200)
+    data = resp.json()
+    self.assertEqual(data["stats"]["matched"], 1)
+    self.assertEqual(data["matched"][0]["paper_id"], "paper-1")
+    self.assertGreaterEqual(data["stats"]["unmatched"], 1)
+```
+
+- [ ] **Step 3: Add frontend staging logic unit test**
+
+The frontend Replace-degradation logic lives in `handleBibFileLoad` in SelectedView.vue.
+Since this is a critical data-safety invariant, add a focused comment block at the top
+of `handleBibFileLoad` documenting the contract, and verify the behavior manually:
+
+**Manual verification checklist** (to be run after Task 8 integration):
+1. Start dev server, add 3 papers to selection manually
+2. Prepare a `.bib` file with 60 entries (2 batches), where batch 2 will fail (e.g., disconnect network after batch 1)
+3. Click "Import BibTeX" → Replace mode
+4. Verify: original 3 papers are still in selection + batch 1 matched papers are appended
+5. Verify: toast shows "Replace cancelled due to batch failures — items appended instead"
+
+Add this contract comment to `handleBibFileLoad` in Task 6 code (after the staging variable declarations):
+
+```typescript
+    // INVARIANT: Replace mode only clears existing selection if ALL batches succeed.
+    // If any batch fails (network/server error), we degrade to Append mode to
+    // prevent data loss. This is the critical safety contract — see spec section
+    // "Frontend Logic" step 7 and Task 7 in the implementation plan.
+```
+
+- [ ] **Step 4: Run backend tests**
+
+Run: `cd /home/dengqi/Source/langs/python/ai-deepresearch-flow && python -m pytest python/deepresearch_flow/paper/snapshot/tests/test_api_match_bibtex.py -v`
+Expected: All tests PASS (including the two new ones)
+
+- [ ] **Step 5: Commit**
 
 ```bash
 git add python/deepresearch_flow/paper/snapshot/tests/test_api_match_bibtex.py
-git commit -m "test(snapshot): add malformed bibtex test for Replace degradation safety"
+git commit -m "test(snapshot): add Replace degradation and per-entry resilience tests"
 ```
 
 ---
