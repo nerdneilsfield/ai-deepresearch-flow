@@ -480,6 +480,51 @@ async def _api_paper_bibtex(request: Request) -> Response:
         conn.close()
 
 
+async def _api_match_bibtex(request: Request) -> Response:
+    cfg: SnapshotApiConfig = request.app.state.cfg
+    try:
+        body = await request.json()
+    except Exception:
+        return _json_error(400, error="invalid_json", detail="request body must be valid JSON")
+
+    bibtex_raw = body.get("bibtex_raw")
+    if bibtex_raw is None:
+        return _json_error(400, error="missing_field", detail="bibtex_raw is required")
+    if not isinstance(bibtex_raw, str):
+        return _json_error(400, error="invalid_field", detail="bibtex_raw must be a string")
+
+    from deepresearch_flow.paper.snapshot.bibtex_match import match_bibtex_entries
+    result = match_bibtex_entries(bibtex_raw, cfg.snapshot_db)
+
+    return JSONResponse({
+        "matched": [
+            {
+                "bibtex_key": m.bibtex_key,
+                "paper_id": m.paper_id,
+                "match_method": m.match_method,
+                "title": m.title,
+                "year": m.year,
+                "venue": m.venue,
+                "authors": m.authors,
+            }
+            for m in result.matched
+        ],
+        "unmatched": [
+            {
+                "bibtex_key": u.bibtex_key,
+                "title": u.title,
+                "search_query": u.search_query,
+            }
+            for u in result.unmatched
+        ],
+        "stats": {
+            "total": len(result.matched) + len(result.unmatched),
+            "matched": len(result.matched),
+            "unmatched": len(result.unmatched),
+        },
+    })
+
+
 async def _api_facet_list(request: Request) -> Response:
     cfg: SnapshotApiConfig = request.app.state.cfg
     facet = str(request.path_params["facet"])
@@ -971,6 +1016,7 @@ def create_app(
         Route("/api/v1/config", _api_config, methods=["GET"]),
         Route("/api/v1/search", _api_search, methods=["GET"]),
         Route("/api/v1/stats", _api_stats, methods=["GET"]),
+        Route("/api/v1/papers/match-bibtex", _api_match_bibtex, methods=["POST"]),
         Route("/api/v1/papers/{paper_id:str}", _api_paper_detail, methods=["GET"]),
         Route("/api/v1/papers/{paper_id:str}/bibtex", _api_paper_bibtex, methods=["GET"]),
         Route("/api/v1/facets/{facet:str}", _api_facet_list, methods=["GET"]),
