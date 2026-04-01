@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import sqlite3
 import tempfile
 from pathlib import Path
@@ -87,10 +86,7 @@ class TestApiMatchBibtex(unittest.TestCase):
         self.assertEqual(data["unmatched"][0]["search_query"], "Nonexistent Paper")
 
     def test_missing_bibtex_raw_returns_400(self) -> None:
-        resp = self.client.post(
-            "/api/v1/papers/match-bibtex",
-            json={},
-        )
+        resp = self.client.post("/api/v1/papers/match-bibtex", json={})
         self.assertEqual(resp.status_code, 400)
 
     def test_empty_bibtex_returns_empty(self) -> None:
@@ -111,3 +107,42 @@ class TestApiMatchBibtex(unittest.TestCase):
         self.assertEqual(m["year"], "2023")
         self.assertEqual(m["venue"], "ACL")
         self.assertIsInstance(m["authors"], list)
+
+    def test_non_object_body_returns_400(self) -> None:
+        resp = self.client.post("/api/v1/papers/match-bibtex", json=[])
+        self.assertEqual(resp.status_code, 400)
+        resp2 = self.client.post("/api/v1/papers/match-bibtex", json="x")
+        self.assertEqual(resp2.status_code, 400)
+
+    def test_over_50_entries_returns_400(self) -> None:
+        entries = "\n".join(f"@article{{key{i}, title={{Paper {i}}}}}" for i in range(51))
+        resp = self.client.post("/api/v1/papers/match-bibtex", json={"bibtex_raw": entries})
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("too_many_entries", resp.json()["error"])
+
+    def test_malformed_bibtex_returns_unmatched_not_500(self) -> None:
+        """Malformed entries should appear as unmatched, not crash the endpoint."""
+        resp = self.client.post(
+            "/api/v1/papers/match-bibtex",
+            json={"bibtex_raw": "@article{broken, this is not valid bibtex"},
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["stats"]["matched"], 0)
+        self.assertGreaterEqual(data["stats"]["unmatched"], 1)
+
+    def test_mixed_valid_and_malformed_in_same_batch(self) -> None:
+        """A malformed entry must not prevent valid siblings from matching."""
+        bib = (
+            '@article{good_entry, title={Graph Neural Networks for NLP}, doi={10.1234/test}}\n'
+            '@article{bad_entry, this is broken bibtex with no closing brace\n'
+        )
+        resp = self.client.post(
+            "/api/v1/papers/match-bibtex",
+            json={"bibtex_raw": bib},
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["stats"]["matched"], 1)
+        self.assertEqual(data["matched"][0]["paper_id"], "paper-1")
+        self.assertGreaterEqual(data["stats"]["unmatched"], 1)

@@ -487,13 +487,22 @@ async def _api_match_bibtex(request: Request) -> Response:
     except Exception:
         return _json_error(400, error="invalid_json", detail="request body must be valid JSON")
 
+    if not isinstance(body, dict):
+        return _json_error(400, error="invalid_json", detail="request body must be a JSON object")
+
     bibtex_raw = body.get("bibtex_raw")
     if bibtex_raw is None:
         return _json_error(400, error="missing_field", detail="bibtex_raw is required")
     if not isinstance(bibtex_raw, str):
         return _json_error(400, error="invalid_field", detail="bibtex_raw must be a string")
 
-    from deepresearch_flow.paper.snapshot.bibtex_match import match_bibtex_entries
+    from deepresearch_flow.paper.snapshot.bibtex_match import match_bibtex_entries, _parse_bibtex_entries
+
+    # Enforce batch size limit (spec: up to 50 entries per request)
+    entries = _parse_bibtex_entries(bibtex_raw)
+    if len(entries) > 50:
+        return _json_error(400, error="too_many_entries", detail=f"batch limit is 50 entries, got {len(entries)}")
+
     result = match_bibtex_entries(bibtex_raw, cfg.snapshot_db)
 
     return JSONResponse({
