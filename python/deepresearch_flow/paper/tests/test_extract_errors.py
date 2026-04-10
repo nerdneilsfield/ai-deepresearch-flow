@@ -4,9 +4,23 @@ import asyncio
 from dataclasses import replace
 from pathlib import Path
 
-from deepresearch_flow.paper.config import DEFAULT_EXTRACT, DEFAULT_RENDER, PaperConfig, ProviderConfig
+import httpx
+import pytest
+
+from deepresearch_flow.paper.config import (
+    DEFAULT_EXTRACT,
+    DEFAULT_RENDER,
+    BaseConfig,
+    KeyConfig,
+    MainModelConfig,
+    ModelCapability,
+    PaperConfig,
+    ProviderConfig,
+)
 from deepresearch_flow.paper.extract import (
     ExtractionError,
+    _select_doc_runtime,
+    call_with_retries,
     extract_documents,
     filter_results_with_errors,
     merge_retry_error_entries,
@@ -174,6 +188,132 @@ def test_filter_results_with_errors_drops_documents_with_unresolved_errors() -> 
     assert filtered == [{"source_path": "/tmp/paper-a.md", "paper_title": "A"}]
 
 
+def test_call_with_retries_falls_back_to_plain_json_when_model_lacks_structured_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = ProviderConfig(
+        name="test-provider",
+        type="ollama",
+        base=[
+            BaseConfig(
+                url="http://localhost:11434",
+                weight=1,
+                key=[KeyConfig(value="test-key", weight=1)],
+            )
+        ],
+        models=[
+            ModelCapability(
+                model_name="dummy-model",
+                is_stream=False,
+                is_support_json_schema=False,
+                is_support_json_object=False,
+            )
+        ],
+        api_version=None,
+        deployment=None,
+        project_id=None,
+        location=None,
+        credentials_path=None,
+        anthropic_version=None,
+        max_tokens=None,
+        extra_headers={},
+        system_prompt=None,
+        user_prompt=None,
+    )
+    schema = {
+        "type": "object",
+        "required": ["paper_title", "paper_authors"],
+        "properties": {
+            "paper_title": {"type": "string"},
+            "paper_authors": {"type": "array", "items": {"type": "string"}},
+        },
+    }
+    validator = validate_schema(schema)
+
+    async def fake_call_provider(*args, **kwargs):
+        assert args[6] == "none"
+        return '{"paper_title":"Test","paper_authors":["Alice"]}'
+
+    monkeypatch.setattr("deepresearch_flow.paper.extract.call_provider", fake_call_provider)
+
+    async def _run() -> dict[str, object]:
+        async with httpx.AsyncClient() as client:
+            return await call_with_retries(
+                provider,
+                "dummy-model",
+                [{"role": "user", "content": "test"}],
+                schema,
+                None,
+                timeout=1.0,
+                structured_mode="none",
+                max_retries=1,
+                backoff_base_seconds=1.0,
+                backoff_max_seconds=1.0,
+                client=client,
+                validator=validator,
+            )
+
+    result = asyncio.run(_run())
+    assert result == {"paper_title": "Test", "paper_authors": ["Alice"]}
+
+
+def test_select_doc_runtime_uses_selected_model_capability_for_structured_mode() -> None:
+    provider = ProviderConfig(
+        name="test-provider",
+        type="openai_compatible",
+        base=[
+            BaseConfig(
+                url="https://api.example.com/v1",
+                weight=1,
+                key=[KeyConfig(value="key-a", weight=1)],
+            )
+        ],
+        models=[
+            ModelCapability(
+                model_name="schema-model",
+                is_stream=True,
+                is_support_json_schema=True,
+                is_support_json_object=True,
+            ),
+            ModelCapability(
+                model_name="plain-model",
+                is_stream=True,
+                is_support_json_schema=False,
+                is_support_json_object=False,
+            ),
+        ],
+        api_version=None,
+        deployment=None,
+        project_id=None,
+        location=None,
+        credentials_path=None,
+        anthropic_version=None,
+        max_tokens=None,
+        extra_headers={},
+        system_prompt=None,
+        user_prompt=None,
+    )
+    config = PaperConfig(
+        extract=replace(DEFAULT_EXTRACT, output=Path("out.json"), errors=Path("err.json")),
+        render=DEFAULT_RENDER,
+        providers=[provider],
+        main_model=[MainModelConfig(model="test-provider/plain-model", weight=1)],
+    )
+
+    routed_provider, model_name, structured_mode, _ = _select_doc_runtime(
+        config=config,
+        provider=provider,
+        model_name="plain-model",
+        model_selector=None,
+        cooldown_seconds=1.0,
+        verbose=False,
+    )
+
+    assert model_name == "plain-model"
+    assert structured_mode == "none"
+    assert routed_provider.models[0].model_name == "plain-model"
+
+
 def test_extract_documents_retry_failure_drops_stale_output_entry(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -223,8 +363,21 @@ def test_extract_documents_retry_failure_drops_stale_output_entry(
     provider = ProviderConfig(
         name="test-provider",
         type="ollama",
-        base_url="http://localhost:11434",
-        api_keys=[],
+        base=[
+            BaseConfig(
+                url="http://localhost:11434",
+                weight=1,
+                key=[KeyConfig(value="test-key", weight=1)],
+            )
+        ],
+        models=[
+            ModelCapability(
+                model_name="dummy-model",
+                is_stream=False,
+                is_support_json_schema=False,
+                is_support_json_object=False,
+            )
+        ],
         api_version=None,
         deployment=None,
         project_id=None,
@@ -232,11 +385,9 @@ def test_extract_documents_retry_failure_drops_stale_output_entry(
         credentials_path=None,
         anthropic_version=None,
         max_tokens=None,
-        structured_mode="none",
         extra_headers={},
         system_prompt=None,
         user_prompt=None,
-        model_list=["dummy-model"],
     )
     config = PaperConfig(
         extract=replace(
@@ -248,6 +399,7 @@ def test_extract_documents_retry_failure_drops_stale_output_entry(
         ),
         render=DEFAULT_RENDER,
         providers=[provider],
+        main_model=[MainModelConfig(model="test-provider/dummy-model", weight=1)],
     )
     schema = {
         "type": "object",
