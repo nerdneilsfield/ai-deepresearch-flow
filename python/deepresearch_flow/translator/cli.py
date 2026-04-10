@@ -447,6 +447,7 @@ def translate(
         if fallback_provider_2 and fallback_provider_2.type == "claude"
         else None
     )
+    failed_files: list[Path] = []
 
     async def process_one(
         path: Path,
@@ -554,7 +555,14 @@ def translate(
         try:
             async with httpx.AsyncClient() as client:
                 for path in to_process:
-                    await process_one(path, client, progress)
+                    try:
+                        await process_one(path, client, progress)
+                    except Exception as exc:
+                        failed_files.append(path)
+                        logger.error("Failed %s: %s", path, exc)
+                        click.echo(f"Failed {path}", err=True)
+                        click.echo(str(exc), err=True)
+                        await progress.advance_docs(1)
         finally:
             await progress.close()
 
@@ -571,6 +579,7 @@ def translate(
     table.add_row("Documents", str(len(markdown_files)))
     table.add_row("Skipped", str(skipped))
     table.add_row("Processed", str(len(to_process)))
+    table.add_row("Failed files", str(len(failed_files)))
     if count_limit is not None:
         table.add_row("Limit", str(count_limit))
     table.add_row("Duration", _format_duration(duration))

@@ -742,24 +742,30 @@ class MarkdownTranslator:
 
             async def run_one(idx: int, group_text: str) -> tuple[int, str]:
                 api_key = None if route_pool_value is not None else await rotator.next_key()
-                response = await self._translate_group(
-                    group_text,
-                    provider_value,
-                    model_value,
-                    client,
-                    api_key,
-                    timeout,
-                    semaphore,
-                    throttle,
-                    max_tokens_value,
-                    retry_limit_value,
-                    request_log,
-                    stage,
-                    idx,
-                    dump_callback,
-                    route_pool=route_pool_value,
-                )
-                return idx, response
+                try:
+                    response = await self._translate_group(
+                        group_text,
+                        provider_value,
+                        model_value,
+                        client,
+                        api_key,
+                        timeout,
+                        semaphore,
+                        throttle,
+                        max_tokens_value,
+                        retry_limit_value,
+                        request_log,
+                        stage,
+                        idx,
+                        dump_callback,
+                        route_pool=route_pool_value,
+                    )
+                    return idx, response
+                except ProviderError:
+                    # Keep the group empty so failed nodes are detected and can
+                    # be retried by the fallback model chain instead of aborting
+                    # the entire document.
+                    return idx, ""
 
             if group_concurrency <= 1:
                 for idx, group_text in enumerate(groups):
