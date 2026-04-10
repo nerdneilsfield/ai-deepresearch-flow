@@ -85,16 +85,38 @@ Set up your LLM providers. We support OpenAI, Claude, Gemini, Ollama, and more.
 
 ```bash
 cp config.example.toml config.toml
-# Edit config.toml to add your API keys (e.g., env:OPENAI_API_KEY)
+# Edit config.toml to add your weighted providers, keys, and models
 ```
 
-Multiple keys per provider are supported. Keys rotate per request and enter a short cooldown on retryable errors.
-You can also provide quota metadata per key:
+Breaking change: the old `api_keys`, `model_list`, and `structured_mode` fields are no longer accepted.
+The new config uses:
+
+- top-level `main_model` for weighted model routing
+- `providers[].base[]` for weighted URL routing
+- `providers[].base[].key[]` for weighted key routing
+- `providers[].models[]` for model capability declarations
+
+Missing `env:VAR_NAME` references now fail explicitly during config load.
+
+Per-key quota metadata still lives on the key object:
 
 ```toml
-api_keys = [
-  "env:OPENAI_API_KEY",
-  { key = "env:OPENAI_API_KEY_2", quota_duration = 18000, reset_time = "2026-01-23 18:04:25 +0800 CST", quota_error_tokens = ["exceed", "quota"] }
+main_model = [
+  { model = "openai/gpt-4o-mini", weight = 4 },
+  { model = "claude/claude-sonnet-4-5-20250929", weight = 1 }
+]
+
+[[providers]]
+name = "openai"
+type = "openai_compatible"
+base = [
+  { url = "https://api.openai.com/v1", weight = 1, key = [
+    { value = "env:OPENAI_API_KEY", weight = 4 },
+    { value = "env:OPENAI_API_KEY_2", weight = 1, quota_duration = 18000, reset_time = "2026-01-23 18:04:25 +0800 CST", quota_error_tokens = ["exceed", "quota"] }
+  ] }
+]
+models = [
+  { model_name = "gpt-4o-mini", is_stream = true, is_support_json_schema = true, is_support_json_object = true }
 ]
 ```
 
@@ -1274,8 +1296,43 @@ docker run --rm -p 8899:8899 \
 The config.toml is your control center. It supports:
 
 - Multiple Providers: mix and match OpenAI, DeepSeek (DashScope), Gemini, Claude, and Ollama.
-- Model Routing: explicit routing to specific models (`--model provider/model_name`).
+- Weighted model routing via `main_model`, weighted URL routing via `providers[].base[]`, and weighted key routing via `providers[].base[].key[]`.
+- Model Routing: `--model` accepts a single `provider/model`, an inline JSON model pool, or an `@file` JSON model pool.
 - Environment Variables: keep secrets safe using `env:VAR_NAME` syntax.
+
+Examples:
+
+```bash
+# Fixed model
+uv run deepresearch-flow paper extract --input ./docs --model openai/gpt-4o-mini
+
+# Inline weighted main_model override
+uv run deepresearch-flow paper extract \
+  --input ./docs \
+  --model '[{"model":"openai/gpt-4o-mini","weight":4},{"model":"claude/claude-sonnet-4-5-20250929","weight":1}]'
+
+# File-based weighted main_model override
+uv run deepresearch-flow paper extract \
+  --input ./docs \
+  --model @main_model.json
+```
+
+Mode probing:
+
+```bash
+# Report only
+uv run deepresearch-flow utils test-mode \
+  --config ./config.toml \
+  --model openai/gpt-4o-mini
+
+# Write probe results back to config
+uv run deepresearch-flow utils test-mode \
+  --config ./config.toml \
+  --model openai/gpt-4o-mini \
+  --write-back
+```
+
+`utils test-mode` currently probes only one weighted `base + key` path per requested model, so the result reflects the selected route at probe time rather than every route under the provider.
 
 See `config.example.toml` for a full reference.
 

@@ -84,16 +84,38 @@ pip install deepresearch-flow
 
 ```bash
 cp config.example.toml config.toml
-# 编辑 config.toml 添加 API Key（例如 env:OPENAI_API_KEY）
+# 编辑 config.toml，配置加权 provider、key 和 model
 ```
 
-同一 provider 支持多个 key；每次请求轮换，遇到可重试错误会进入短暂冷却。
-也可以为单个 key 提供配额信息：
+Breaking change：旧的 `api_keys`、`model_list`、`structured_mode` 字段已经不再支持。
+新配置结构改为：
+
+- 顶层 `main_model`：模型层加权路由
+- `providers[].base[]`：URL 层加权路由
+- `providers[].base[].key[]`：Key 层加权路由
+- `providers[].models[]`：模型能力声明
+
+缺失的 `env:VAR_NAME` 现在会在加载配置时直接报错。
+
+单个 key 的配额信息仍然挂在 key 对象上：
 
 ```toml
-api_keys = [
-  "env:OPENAI_API_KEY",
-  { key = "env:OPENAI_API_KEY_2", quota_duration = 18000, reset_time = "2026-01-23 18:04:25 +0800 CST", quota_error_tokens = ["exceed", "quota"] }
+main_model = [
+  { model = "openai/gpt-4o-mini", weight = 4 },
+  { model = "claude/claude-sonnet-4-5-20250929", weight = 1 }
+]
+
+[[providers]]
+name = "openai"
+type = "openai_compatible"
+base = [
+  { url = "https://api.openai.com/v1", weight = 1, key = [
+    { value = "env:OPENAI_API_KEY", weight = 4 },
+    { value = "env:OPENAI_API_KEY_2", weight = 1, quota_duration = 18000, reset_time = "2026-01-23 18:04:25 +0800 CST", quota_error_tokens = ["exceed", "quota"] }
+  ] }
+]
+models = [
+  { model_name = "gpt-4o-mini", is_stream = true, is_support_json_schema = true, is_support_json_object = true }
 ]
 ```
 
@@ -1245,8 +1267,43 @@ docker run --rm -p 8899:8899 \
 config.toml 支持：
 
 - 多 Provider：OpenAI、DashScope、Gemini、Claude、Ollama 等。
-- 模型路由：通过 `--model provider/model_name` 精确指定。
+- 通过 `main_model`、`providers[].base[]`、`providers[].base[].key[]` 实现三级加权负载均衡。
+- `--model` 同时支持单个 `provider/model`、内联 JSON 模型池、以及 `@file` JSON 模型池。
 - 环境变量：使用 `env:VAR_NAME` 安全注入密钥。
+
+示例：
+
+```bash
+# 固定单模型
+uv run deepresearch-flow paper extract --input ./docs --model openai/gpt-4o-mini
+
+# 内联 JSON 覆盖 main_model
+uv run deepresearch-flow paper extract \
+  --input ./docs \
+  --model '[{"model":"openai/gpt-4o-mini","weight":4},{"model":"claude/claude-sonnet-4-5-20250929","weight":1}]'
+
+# 从文件加载 main_model
+uv run deepresearch-flow paper extract \
+  --input ./docs \
+  --model @main_model.json
+```
+
+mode 探测：
+
+```bash
+# 只探测，不回写
+uv run deepresearch-flow utils test-mode \
+  --config ./config.toml \
+  --model openai/gpt-4o-mini
+
+# 探测并写回配置
+uv run deepresearch-flow utils test-mode \
+  --config ./config.toml \
+  --model openai/gpt-4o-mini \
+  --write-back
+```
+
+`utils test-mode` 目前只会按权重选中一条 `base + key` 路径进行探测，所以结果代表这次选中的路由，而不是 provider 下所有路由的穷举结论。
 
 详见 `config.example.toml`。
 
