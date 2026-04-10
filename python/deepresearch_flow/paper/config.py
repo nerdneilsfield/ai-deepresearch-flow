@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 import os
@@ -32,19 +32,49 @@ class RenderConfig:
 
 
 @dataclass(frozen=True)
-class ApiKeyConfig:
-    key: str
-    quota_duration: int | None
-    reset_time: str | None
-    quota_error_tokens: list[str]
+class KeyConfig:
+    value: str
+    weight: int
+    quota_duration: int | None = None
+    reset_time: str | None = None
+    quota_error_tokens: list[str] = field(default_factory=list)
+
+    @property
+    def key(self) -> str:
+        """Compatibility alias for older call sites."""
+        return self.value
+
+
+ApiKeyConfig = KeyConfig
+
+
+@dataclass(frozen=True)
+class BaseConfig:
+    url: str
+    weight: int
+    key: list[KeyConfig]
+
+
+@dataclass(frozen=True)
+class ModelCapability:
+    model_name: str
+    is_stream: bool
+    is_support_json_schema: bool
+    is_support_json_object: bool
+
+
+@dataclass(frozen=True)
+class MainModelConfig:
+    model: str
+    weight: int
 
 
 @dataclass(frozen=True)
 class ProviderConfig:
     name: str
     type: str
-    base_url: str
-    api_keys: list[ApiKeyConfig]
+    base: list[BaseConfig]
+    models: list[ModelCapability]
     api_version: str | None
     deployment: str | None
     project_id: str | None
@@ -52,11 +82,24 @@ class ProviderConfig:
     credentials_path: str | None
     anthropic_version: str | None
     max_tokens: int | None
-    structured_mode: str
     extra_headers: dict[str, str]
     system_prompt: str | None
     user_prompt: str | None
-    model_list: list[str]
+
+    @property
+    def base_url(self) -> str:
+        """Compatibility alias for older call sites."""
+        return self.base[0].url
+
+    @property
+    def api_keys(self) -> list[KeyConfig]:
+        """Compatibility alias for older call sites."""
+        return [key for base in self.base for key in base.key]
+
+    @property
+    def model_list(self) -> list[str]:
+        """Compatibility alias for older call sites."""
+        return [model.model_name for model in self.models]
 
 
 @dataclass(frozen=True)
@@ -64,6 +107,7 @@ class PaperConfig:
     extract: ExtractConfig
     render: RenderConfig
     providers: list[ProviderConfig]
+    main_model: list[MainModelConfig]
 
 
 DEFAULT_EXTRACT = ExtractConfig(
@@ -84,13 +128,14 @@ DEFAULT_EXTRACT = ExtractConfig(
 
 DEFAULT_RENDER = RenderConfig(template_path=None)
 
-
-def _as_list(value: Any) -> list[str]:
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return [str(item) for item in value]
-    return [str(value)]
+_LEGACY_PROVIDER_FIELDS = {
+    "api_key",
+    "api_keys",
+    "base_url",
+    "endpoint",
+    "model_list",
+    "structured_mode",
+}
 
 
 def _as_bool(value: Any, default: bool) -> bool:
@@ -117,58 +162,143 @@ def _as_str(value: Any, default: str | None = None) -> str | None:
     return str(value)
 
 
-def _parse_api_keys(value: Any) -> list[ApiKeyConfig]:
-    if value is None:
-        return []
-    entries = value if isinstance(value, list) else [value]
-    parsed: list[ApiKeyConfig] = []
-    for entry in entries:
-        if isinstance(entry, dict):
-            key = _as_str(entry.get("key"))
-            if not key:
-                raise ValueError("api_keys object entries must include key")
-            quota_duration = entry.get("quota_duration")
-            quota_duration_value = int(quota_duration) if quota_duration is not None else None
-            if quota_duration_value is not None and quota_duration_value <= 0:
-                raise ValueError("quota_duration must be positive seconds")
-            reset_time = _as_str(entry.get("reset_time"), None)
-            tokens = entry.get("quota_error_tokens")
-            if tokens is None:
-                quota_error_tokens = []
-            elif isinstance(tokens, list):
-                quota_error_tokens = [str(token) for token in tokens]
-            else:
-                quota_error_tokens = [str(tokens)]
-            parsed.append(
-                ApiKeyConfig(
-                    key=key,
-                    quota_duration=quota_duration_value,
-                    reset_time=reset_time,
-                    quota_error_tokens=quota_error_tokens,
-                )
+def resolve_key_value(raw_value: str) -> str:
+    if raw_value.startswith("env:"):
+        env_name = raw_value.split(":", 1)[1]
+        resolved = os.environ.get(env_name)
+        if not resolved:
+            raise ValueError(f"Environment variable not set: {env_name}")
+        return resolved
+    return raw_value
+
+
+def _validate_weight(value: Any, field_name: str) -> int:
+    try:
+        weight = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be a positive integer") from exc
+    if weight <= 0:
+        raise ValueError(f"{field_name} must be a positive integer")
+    return weight
+
+
+def _reject_legacy_provider_fields(provider: dict[str, Any], provider_name: str) -> None:
+    for field_name in _LEGACY_PROVIDER_FIELDS:
+        if field_name in provider:
+            raise ValueError(
+                f"Provider '{provider_name}' uses legacy provider field '{field_name}'; "
+                "use the weighted base/models structure instead"
             )
-        else:
-            key = _as_str(entry)
-            if not key:
-                continue
-            parsed.append(
-                ApiKeyConfig(
-                    key=key,
-                    quota_duration=None,
-                    reset_time=None,
-                    quota_error_tokens=[],
-                )
+
+
+def _parse_key_config(value: Any, field_name: str) -> KeyConfig:
+    if not isinstance(value, dict):
+        raise ValueError(f"{field_name} entries must be objects")
+    raw_value = _as_str(value.get("value"))
+    if not raw_value:
+        raise ValueError(f"{field_name} entries must include value")
+    resolve_key_value(raw_value)
+
+    quota_duration = value.get("quota_duration")
+    quota_duration_value = int(quota_duration) if quota_duration is not None else None
+    if quota_duration_value is not None and quota_duration_value <= 0:
+        raise ValueError(f"{field_name}.quota_duration must be positive seconds")
+
+    tokens = value.get("quota_error_tokens")
+    if tokens is None:
+        quota_error_tokens: list[str] = []
+    elif isinstance(tokens, list):
+        quota_error_tokens = [str(token) for token in tokens]
+    else:
+        quota_error_tokens = [str(tokens)]
+
+    return KeyConfig(
+        value=raw_value,
+        weight=_validate_weight(value.get("weight"), f"{field_name}.weight"),
+        quota_duration=quota_duration_value,
+        reset_time=_as_str(value.get("reset_time"), None),
+        quota_error_tokens=quota_error_tokens,
+    )
+
+
+def _parse_base_configs(value: Any, provider_name: str) -> list[BaseConfig]:
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"Provider '{provider_name}' must include non-empty base")
+
+    parsed: list[BaseConfig] = []
+    for idx, item in enumerate(value):
+        field_name = f"providers[{provider_name}].base[{idx}]"
+        if not isinstance(item, dict):
+            raise ValueError(f"{field_name} must be an object")
+        url = _as_str(item.get("url"))
+        if not url:
+            raise ValueError(f"{field_name} must include url")
+        keys_raw = item.get("key")
+        if not isinstance(keys_raw, list) or not keys_raw:
+            raise ValueError(f"{field_name} must include non-empty key")
+        parsed.append(
+            BaseConfig(
+                url=url,
+                weight=_validate_weight(item.get("weight"), f"{field_name}.weight"),
+                key=[_parse_key_config(entry, f"{field_name}.key[{key_idx}]") for key_idx, entry in enumerate(keys_raw)],
             )
+        )
     return parsed
 
 
-def _ensure_http_scheme(base_url: str, *, default_scheme: str = "http://") -> str:
-    normalized = base_url.strip()
-    if normalized.startswith(("http://", "https://")):
-        scheme, rest = normalized.split("://", 1)
-        rest = rest.lstrip("/")
-        return f"{scheme}://{rest}" if rest else f"{scheme}://"
-    return f"{default_scheme}{normalized.lstrip('/')}"
+def _parse_model_capabilities(value: Any, provider_name: str) -> list[ModelCapability]:
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"Provider '{provider_name}' must include non-empty models")
+
+    parsed: list[ModelCapability] = []
+    for idx, item in enumerate(value):
+        field_name = f"providers[{provider_name}].models[{idx}]"
+        if not isinstance(item, dict):
+            raise ValueError(f"{field_name} must be an object")
+        model_name = _as_str(item.get("model_name"))
+        if not model_name:
+            raise ValueError(f"{field_name} must include model_name")
+        parsed.append(
+            ModelCapability(
+                model_name=model_name,
+                is_stream=_as_bool(item.get("is_stream"), False),
+                is_support_json_schema=_as_bool(item.get("is_support_json_schema"), False),
+                is_support_json_object=_as_bool(item.get("is_support_json_object"), False),
+            )
+        )
+    return parsed
+
+
+def _parse_main_model(value: Any) -> list[MainModelConfig]:
+    if not isinstance(value, list) or not value:
+        raise ValueError("Config must include non-empty main_model")
+
+    parsed: list[MainModelConfig] = []
+    for idx, item in enumerate(value):
+        field_name = f"main_model[{idx}]"
+        if not isinstance(item, dict):
+            raise ValueError(f"{field_name} must be an object")
+        model = _as_str(item.get("model"))
+        if not model:
+            raise ValueError(f"{field_name} must include model")
+        parsed.append(
+            MainModelConfig(
+                model=model,
+                weight=_validate_weight(item.get("weight"), f"{field_name}.weight"),
+            )
+        )
+    return parsed
+
+
+def _model_declared(providers: list[ProviderConfig], model_ref: str) -> bool:
+    if "/" not in model_ref:
+        return False
+    provider_name, model_name = model_ref.split("/", 1)
+    for provider in providers:
+        if provider.name != provider_name:
+            continue
+        return any(model.model_name == model_name for model in provider.models)
+    return False
 
 
 def load_config(path: str) -> PaperConfig:
@@ -210,123 +340,82 @@ def load_config(path: str) -> PaperConfig:
     render = RenderConfig(template_path=_as_str(render_data.get("template_path"), DEFAULT_RENDER.template_path))
 
     providers_data = data.get("providers", [])
+    if not isinstance(providers_data, list) or not providers_data:
+        raise ValueError("Config must include at least one [[providers]] entry")
+
     providers: list[ProviderConfig] = []
     for provider in providers_data:
+        if not isinstance(provider, dict):
+            raise ValueError("Each provider must be an object")
         name = _as_str(provider.get("name"))
         provider_type = _as_str(provider.get("type"))
         if not name or not provider_type:
             raise ValueError("Each provider must include name and type")
 
-        base_url = _as_str(provider.get("base_url"))
-        endpoint = _as_str(provider.get("endpoint"))
-        if not base_url:
-            if provider_type == "ollama":
-                base_url = "http://localhost:11434"
-            elif provider_type == "openai_compatible":
-                base_url = "https://api.openai.com/v1"
-            elif provider_type == "azure_openai" and endpoint:
-                base_url = endpoint
-            elif provider_type in {"dashscope", "gemini_ai_studio", "gemini_vertex", "claude"}:
-                base_url = ""
-            else:
-                raise ValueError(f"Provider '{name}' requires base_url")
-        elif provider_type == "azure_openai" and endpoint:
-            base_url = endpoint
-        if provider_type == "ollama" and base_url:
-            base_url = _ensure_http_scheme(base_url)
-
-        api_keys = _parse_api_keys(provider.get("api_keys"))
-        if not api_keys:
-            api_key_single = provider.get("api_key")
-            api_keys = _parse_api_keys(api_key_single)
-
-        structured_mode = _as_str(provider.get("structured_mode"), None)
-        if structured_mode is None:
-            if provider_type == "ollama":
-                structured_mode = "json_object"
-            elif provider_type in {"dashscope", "gemini_ai_studio", "gemini_vertex", "claude"}:
-                structured_mode = "none"
-            else:
-                structured_mode = "json_schema"
+        _reject_legacy_provider_fields(provider, name)
 
         extra_headers: dict[str, str] = {}
         headers = provider.get("extra_headers")
         if isinstance(headers, dict):
             extra_headers = {str(k): str(v) for k, v in headers.items()}
 
-        model_list = _as_list(provider.get("model_list"))
-        if not model_list:
-            raise ValueError(f"Provider '{name}' must include model_list")
-
-        api_version = _as_str(provider.get("api_version"), None)
-        deployment = _as_str(provider.get("deployment"), None)
-        project_id = _as_str(provider.get("project_id"), None)
-        location = _as_str(provider.get("location"), None)
-        credentials_path = _as_str(provider.get("credentials_path"), None)
-        anthropic_version = _as_str(provider.get("anthropic_version"), None)
         max_tokens = provider.get("max_tokens")
         max_tokens_value = int(max_tokens) if max_tokens is not None else None
 
-        if provider_type == "azure_openai":
-            if not base_url:
-                raise ValueError(f"Provider '{name}' requires endpoint")
-            if not api_version:
-                raise ValueError(f"Provider '{name}' requires api_version")
-            if not deployment:
-                raise ValueError(f"Provider '{name}' requires deployment")
-        if provider_type == "gemini_ai_studio" and not api_keys:
-            raise ValueError(f"Provider '{name}' requires api_keys")
-        if provider_type == "gemini_vertex":
-            if not project_id:
-                raise ValueError(f"Provider '{name}' requires project_id")
-            if not location:
-                raise ValueError(f"Provider '{name}' requires location")
-        if provider_type == "claude":
-            if not api_keys:
-                raise ValueError(f"Provider '{name}' requires api_keys")
-            if not anthropic_version:
-                raise ValueError(f"Provider '{name}' requires anthropic_version")
-
-        providers.append(
-            ProviderConfig(
-                name=name,
-                type=provider_type,
-                base_url=base_url,
-                api_keys=api_keys,
-                api_version=api_version,
-                deployment=deployment,
-                project_id=project_id,
-                location=location,
-                credentials_path=credentials_path,
-                anthropic_version=anthropic_version,
-                max_tokens=max_tokens_value,
-                structured_mode=structured_mode,
-                extra_headers=extra_headers,
-                system_prompt=_as_str(provider.get("system_prompt"), None),
-                user_prompt=_as_str(provider.get("user_prompt"), None),
-                model_list=model_list,
-            )
+        parsed_provider = ProviderConfig(
+            name=name,
+            type=provider_type,
+            base=_parse_base_configs(provider.get("base"), name),
+            models=_parse_model_capabilities(provider.get("models"), name),
+            api_version=_as_str(provider.get("api_version"), None),
+            deployment=_as_str(provider.get("deployment"), None),
+            project_id=_as_str(provider.get("project_id"), None),
+            location=_as_str(provider.get("location"), None),
+            credentials_path=_as_str(provider.get("credentials_path"), None),
+            anthropic_version=_as_str(provider.get("anthropic_version"), None),
+            max_tokens=max_tokens_value,
+            extra_headers=extra_headers,
+            system_prompt=_as_str(provider.get("system_prompt"), None),
+            user_prompt=_as_str(provider.get("user_prompt"), None),
         )
 
-    if not providers:
-        raise ValueError("Config must include at least one [[providers]] entry")
+        if parsed_provider.type == "azure_openai":
+            if not parsed_provider.api_version:
+                raise ValueError(f"Provider '{name}' requires api_version")
+            if not parsed_provider.deployment:
+                raise ValueError(f"Provider '{name}' requires deployment")
+        if parsed_provider.type == "gemini_vertex":
+            if not parsed_provider.project_id:
+                raise ValueError(f"Provider '{name}' requires project_id")
+            if not parsed_provider.location:
+                raise ValueError(f"Provider '{name}' requires location")
+        if parsed_provider.type == "claude" and not parsed_provider.anthropic_version:
+            raise ValueError(f"Provider '{name}' requires anthropic_version")
 
-    return PaperConfig(extract=extract, render=render, providers=providers)
+        providers.append(parsed_provider)
+
+    main_model = _parse_main_model(data.get("main_model"))
+    for item in main_model:
+        if not _model_declared(providers, item.model):
+            raise ValueError(
+                f"main_model reference '{item.model}' does not resolve to a declared providers[].models[] entry"
+            )
+
+    return PaperConfig(
+        extract=extract,
+        render=render,
+        providers=providers,
+        main_model=main_model,
+    )
 
 
-def resolve_api_key_configs(entries: list[ApiKeyConfig]) -> list[ApiKeyConfig]:
-    resolved: list[ApiKeyConfig] = []
+def resolve_api_key_configs(entries: list[KeyConfig]) -> list[KeyConfig]:
+    resolved: list[KeyConfig] = []
     for entry in entries:
-        key = entry.key
-        if key.startswith("env:"):
-            env_name = key.split(":", 1)[1]
-            value = os.environ.get(env_name)
-            if not value:
-                continue
-            key = value
         resolved.append(
-            ApiKeyConfig(
-                key=key,
+            KeyConfig(
+                value=resolve_key_value(entry.value),
+                weight=entry.weight,
                 quota_duration=entry.quota_duration,
                 reset_time=entry.reset_time,
                 quota_error_tokens=entry.quota_error_tokens,
@@ -335,5 +424,5 @@ def resolve_api_key_configs(entries: list[ApiKeyConfig]) -> list[ApiKeyConfig]:
     return resolved
 
 
-def resolve_api_keys(entries: list[ApiKeyConfig]) -> list[str]:
-    return [entry.key for entry in resolve_api_key_configs(entries)]
+def resolve_api_keys(entries: list[KeyConfig]) -> list[str]:
+    return [entry.value for entry in resolve_api_key_configs(entries)]

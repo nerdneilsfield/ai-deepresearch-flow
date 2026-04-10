@@ -7,12 +7,11 @@ import hashlib
 import json
 import math
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 import importlib.resources as resources
-import contextlib
 import logging
 import re
 import signal
@@ -55,6 +54,7 @@ from deepresearch_flow.paper.utils import (
     unique_split_name,
 )
 from deepresearch_flow.paper.providers.base import ProviderError
+from deepresearch_flow.paper.routing import ParsedModelSelector, select_runtime_route
 
 
 @dataclass
@@ -365,6 +365,10 @@ class DocContext:
     stage_state: dict[str, Any] | None
     stages: dict[str, dict[str, Any]]
     stage_meta: dict[str, dict[str, Any]]
+    provider: ProviderConfig
+    model_name: str
+    structured_mode: str
+    rotator: KeyRotator | None
 
 
 @dataclass(frozen=True)
@@ -576,6 +580,58 @@ def parse_model_ref(model_ref: str, providers: list[ProviderConfig]) -> tuple[Pr
                 )
             return provider, model_name
     raise click.ClickException(f"Unknown provider: {provider_name}")
+
+
+def _single_model_selector(provider: ProviderConfig, model_name: str) -> ParsedModelSelector:
+    return ParsedModelSelector(
+        kind="single",
+        fixed_model=f"{provider.name}/{model_name}",
+        pool=[],
+    )
+
+
+def _structured_mode_for_model(provider: ProviderConfig) -> str:
+    if not provider.models:
+        return "none"
+    model = provider.models[0]
+    if model.is_support_json_schema:
+        return "json_schema"
+    if model.is_support_json_object:
+        return "json_object"
+    return "none"
+
+
+def _select_doc_runtime(
+    *,
+    config: PaperConfig,
+    provider: ProviderConfig | None,
+    model_name: str | None,
+    model_selector: ParsedModelSelector | None,
+    cooldown_seconds: float,
+    verbose: bool,
+) -> tuple[ProviderConfig, str, str, KeyRotator | None]:
+    selector = model_selector
+    if selector is None:
+        if provider is None or model_name is None:
+            raise ValueError("provider/model_name required when model_selector is not provided")
+        selector = _single_model_selector(provider, model_name)
+
+    route = select_runtime_route(config, selector)
+    routed_provider = replace(
+        route.provider,
+        base=[route.base],
+        models=[route.model],
+    )
+    structured_mode = _structured_mode_for_model(routed_provider)
+    resolved_keys = resolve_api_key_configs(routed_provider.api_keys)
+    rotator = None
+    if resolved_keys:
+        rotator = KeyRotator(
+            resolved_keys,
+            cooldown_seconds=cooldown_seconds,
+            verbose=verbose,
+        )
+    return routed_provider, route.model.model_name, structured_mode, rotator
 
 
 def build_messages(
@@ -1039,8 +1095,8 @@ async def call_with_retries(
 async def extract_documents(
     inputs: Iterable[str],
     glob_pattern: str | None,
-    provider: ProviderConfig,
-    model: str,
+    provider: ProviderConfig | None,
+    model: str | None,
     schema: dict[str, Any],
     validator: Draft7Validator,
     config: PaperConfig,
@@ -1072,6 +1128,7 @@ async def extract_documents(
     sleep_every: int | None,
     sleep_time: float | None,
     verbose: bool,
+    model_selector: ParsedModelSelector | None = None,
 ) -> None:
     start_time = time.monotonic()
     markdown_files = discover_markdown(inputs, glob_pattern, recursive=True)
@@ -1255,12 +1312,6 @@ async def extract_documents(
     }
 
     cooldown_seconds = max(1.0, float(config.extract.backoff_base_seconds))
-    resolved_keys = resolve_api_key_configs(provider.api_keys)
-    rotator = KeyRotator(
-        resolved_keys,
-        cooldown_seconds=cooldown_seconds,
-        verbose=verbose,
-    )
     max_concurrency = max_concurrency_override or config.extract.max_concurrency
     semaphore = asyncio.Semaphore(max_concurrency)
 
@@ -1299,10 +1350,7 @@ async def extract_documents(
     results_lock = asyncio.Lock()
     logger.info("Request timeout set to %.1fs", timeout_seconds)
 
-    pause_threshold_seconds = max(0.0, float(config.extract.pause_threshold_seconds))
-    pause_watchdog_seconds = max(60.0, pause_threshold_seconds * 6.0)
     pause_gate: asyncio.Event | None = None
-    pause_task: asyncio.Task[None] | None = None
 
     shutdown_event = asyncio.Event()
     shutdown_reason: str | None = None
@@ -1329,82 +1377,10 @@ async def extract_documents(
                 ),
             )
 
-    if resolved_keys:
-        pause_gate = asyncio.Event()
-        pause_gate.set()
-
-        async def pause_watcher() -> None:
-            paused = False
-            try:
-                while True:
-                    wait_for, reason, wait_until_epoch = await rotator.key_pool_wait()
-                    if wait_for is None or wait_for <= 0:
-                        if paused:
-                            paused = False
-                            pause_gate.set()
-                            logger.info("Queue resumed; key pool available")
-                        await asyncio.sleep(0.5)
-                        continue
-                    if wait_for <= pause_threshold_seconds:
-                        if paused:
-                            paused = False
-                            pause_gate.set()
-                            logger.info(
-                                "Queue resumed; key pool wait %.2fs below threshold %.2fs",
-                                wait_for,
-                                pause_threshold_seconds,
-                            )
-                        await asyncio.sleep(min(wait_for, pause_threshold_seconds))
-                        continue
-                    if not paused:
-                        paused = True
-                        pause_gate.clear()
-                        reset_dt = (
-                            datetime.fromtimestamp(wait_until_epoch).astimezone().isoformat()
-                            if wait_until_epoch
-                            else "unknown"
-                        )
-                        logger.warning(
-                            "Queue paused (keys unavailable: %s); waiting %.2fs until %s",
-                            reason or "unknown",
-                            wait_for,
-                            reset_dt,
-                        )
-                    await asyncio.sleep(min(wait_for, max(pause_threshold_seconds, 1.0)))
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("Queue pause watcher failed; releasing pause gate")
-                pause_gate.set()
-
-        pause_task = asyncio.create_task(pause_watcher())
-
     async def await_key_pool_ready() -> None:
         if shutdown_event.is_set():
             return
-        if not pause_gate or pause_gate.is_set():
-            return
-        try:
-            pause_wait = asyncio.create_task(pause_gate.wait())
-            shutdown_wait = asyncio.create_task(shutdown_event.wait())
-            try:
-                await asyncio.wait_for(
-                    asyncio.wait(
-                        [pause_wait, shutdown_wait],
-                        return_when=asyncio.FIRST_COMPLETED,
-                    ),
-                    timeout=pause_watchdog_seconds,
-                )
-            finally:
-                for task in (pause_wait, shutdown_wait):
-                    task.cancel()
-        except asyncio.TimeoutError:
-            logger.warning(
-                "Queue pause watchdog timeout; rechecking key pool availability"
-            )
-            wait_for, _, _ = await rotator.key_pool_wait()
-            if wait_for is None or wait_for <= 0:
-                pause_gate.set()
+        return
 
     async def drain_queue(queue: asyncio.Queue[Any], drain_lock: asyncio.Lock) -> int:
         drained = 0
@@ -1475,8 +1451,8 @@ async def extract_documents(
             merged,
             source_path=ctx.source_path,
             source_hash=ctx.source_hash,
-            provider=provider.name,
-            model=model,
+            provider=ctx.provider.name,
+            model=ctx.model_name,
             truncation=ctx.truncation,
             prompt_template=prompt_template,
             output_language=output_language,
@@ -1510,10 +1486,18 @@ async def extract_documents(
                 truncated_content, truncation = truncate_content(
                     content, config.extract.truncate_max_chars, config.extract.truncate_strategy
                 )
+                doc_provider, doc_model, doc_structured_mode, doc_rotator = _select_doc_runtime(
+                    config=config,
+                    provider=provider,
+                    model_name=model,
+                    model_selector=model_selector,
+                    cooldown_seconds=cooldown_seconds,
+                    verbose=verbose,
+                )
                 messages = build_messages(
                     truncated_content,
                     schema,
-                    provider,
+                    doc_provider,
                     prompt_template if not custom_prompt else "custom",
                     output_language,
                     custom_prompt=custom_prompt,
@@ -1527,19 +1511,19 @@ async def extract_documents(
                     mark_attempted_full(source_path)
                 async with semaphore:
                     data = await call_with_retries(
-                        provider,
-                        model,
+                        doc_provider,
+                        doc_model,
                         messages,
                         schema,
                         None,
                         timeout=timeout_seconds,
-                        structured_mode=provider.structured_mode,
+                        structured_mode=doc_structured_mode,
                         max_retries=config.extract.max_retries,
                         backoff_base_seconds=config.extract.backoff_base_seconds,
                         backoff_max_seconds=config.extract.backoff_max_seconds,
                         client=client,
                         validator=validator,
-                        key_rotator=rotator,
+                        key_rotator=doc_rotator,
                         throttle=throttle,
                         stats=stats,
                     )
@@ -1548,8 +1532,8 @@ async def extract_documents(
                     data,
                     source_path=source_path,
                     source_hash=source_hash,
-                    provider=provider.name,
-                    model=model,
+                    provider=doc_provider.name,
+                    model=doc_model,
                     truncation=truncation,
                     prompt_template=prompt_template if not custom_prompt else "custom",
                     output_language=output_language,
@@ -1565,8 +1549,8 @@ async def extract_documents(
                 errors.append(
                     ExtractionError(
                         path=path,
-                        provider=provider.name,
-                        model=model,
+                        provider=(doc_provider.name if 'doc_provider' in locals() else provider.name if provider else "<unknown>"),
+                        model=(doc_model if 'doc_model' in locals() else model or "<unknown>"),
                         error_type=exc.error_type,
                         error_message=str(exc),
                         stage_name=current_stage if multi_stage else None,
@@ -1577,8 +1561,8 @@ async def extract_documents(
                 errors.append(
                     ExtractionError(
                         path=path,
-                        provider=provider.name,
-                        model=model,
+                        provider=(doc_provider.name if 'doc_provider' in locals() else provider.name if provider else "<unknown>"),
+                        model=(doc_model if 'doc_model' in locals() else model or "<unknown>"),
                         error_type="unexpected_error",
                         error_message=str(exc),
                         stage_name=current_stage if multi_stage else None,
@@ -1670,6 +1654,14 @@ async def extract_documents(
                 }
             stages: dict[str, dict[str, Any]] = stage_state.get("stages", {})
             stage_meta: dict[str, dict[str, Any]] = stage_state.get("stage_meta", {})
+            doc_provider, doc_model, doc_structured_mode, doc_rotator = _select_doc_runtime(
+                config=config,
+                provider=provider,
+                model_name=model,
+                model_selector=model_selector,
+                cooldown_seconds=cooldown_seconds,
+                verbose=verbose,
+            )
             doc_contexts[path] = DocContext(
                 path=path,
                 source_path=source_path,
@@ -1681,6 +1673,10 @@ async def extract_documents(
                 stage_state=stage_state,
                 stages=stages,
                 stage_meta=stage_meta,
+                provider=doc_provider,
+                model_name=doc_model,
+                structured_mode=doc_structured_mode,
+                rotator=doc_rotator,
             )
             is_retry_full = source_path in retry_full_paths
             retry_stages = (
@@ -1709,8 +1705,8 @@ async def extract_documents(
                     errors.append(
                         build_document_validation_error(
                             path=path,
-                            provider=provider.name,
-                            model=model,
+                            provider=doc_provider.name,
+                            model=doc_model,
                             message=f"Schema validation failed: {errors_in_doc[0].message}",
                         )
                     )
@@ -1797,7 +1793,7 @@ async def extract_documents(
                     messages = build_messages(
                         ctx.truncated_content,
                         stage_schema,
-                        provider,
+                        ctx.provider,
                         prompt_template,
                         output_language,
                         custom_prompt=False,
@@ -1813,19 +1809,19 @@ async def extract_documents(
                         mark_attempted_stage(ctx.source_path, current_stage)
                     async with semaphore:
                         data = await call_with_retries(
-                            provider,
-                            model,
+                            ctx.provider,
+                            ctx.model_name,
                             messages,
                             stage_schema,
                             None,
                             timeout=timeout_seconds,
-                            structured_mode=provider.structured_mode,
+                            structured_mode=ctx.structured_mode,
                             max_retries=config.extract.max_retries,
                             backoff_base_seconds=config.extract.backoff_base_seconds,
                             backoff_max_seconds=config.extract.backoff_max_seconds,
                             client=client,
                             validator=stage_validator,
-                            key_rotator=rotator,
+                            key_rotator=ctx.rotator,
                             throttle=throttle,
                             stats=stats,
                         )
@@ -1847,8 +1843,8 @@ async def extract_documents(
                     errors.append(
                         ExtractionError(
                             path=task.path,
-                            provider=provider.name,
-                            model=model,
+                            provider=ctx.provider.name,
+                            model=ctx.model_name,
                             error_type=exc.error_type,
                             error_message=str(exc),
                             stage_name=current_stage,
@@ -1863,8 +1859,8 @@ async def extract_documents(
                     errors.append(
                         ExtractionError(
                             path=task.path,
-                            provider=provider.name,
-                            model=model,
+                            provider=ctx.provider.name,
+                            model=ctx.model_name,
                             error_type="unexpected_error",
                             error_message=str(exc),
                             stage_name=current_stage,
@@ -1887,8 +1883,8 @@ async def extract_documents(
                     errors.append(
                         build_document_validation_error(
                             path=task.path,
-                            provider=provider.name,
-                            model=model,
+                            provider=ctx.provider.name,
+                            model=ctx.model_name,
                             message=f"Schema validation failed: {final_validation_error}",
                         )
                     )
@@ -2009,6 +2005,14 @@ async def extract_documents(
                 }
             stages: dict[str, dict[str, Any]] = stage_state.get("stages", {})
             stage_meta: dict[str, dict[str, Any]] = stage_state.get("stage_meta", {})
+            doc_provider, doc_model, doc_structured_mode, doc_rotator = _select_doc_runtime(
+                config=config,
+                provider=provider,
+                model_name=model,
+                model_selector=model_selector,
+                cooldown_seconds=cooldown_seconds,
+                verbose=verbose,
+            )
             doc_contexts[path] = DocContext(
                 path=path,
                 source_path=source_path,
@@ -2020,6 +2024,10 @@ async def extract_documents(
                 stage_state=stage_state,
                 stages=stages,
                 stage_meta=stage_meta,
+                provider=doc_provider,
+                model_name=doc_model,
+                structured_mode=doc_structured_mode,
+                rotator=doc_rotator,
             )
             doc_states[path] = DocDagState(
                 total_stages=len(stage_definitions),
@@ -2070,8 +2078,8 @@ async def extract_documents(
                     errors.append(
                         build_document_validation_error(
                             path=path,
-                            provider=provider.name,
-                            model=model,
+                            provider=doc_contexts[path].provider.name,
+                            model=doc_contexts[path].model_name,
                             message=f"Schema validation failed: {errors_in_doc[0].message}",
                         )
                     )
@@ -2134,8 +2142,8 @@ async def extract_documents(
                         errors.append(
                             build_document_validation_error(
                                 path=ctx.path,
-                                provider=provider.name,
-                                model=model,
+                                provider=ctx.provider.name,
+                                model=ctx.model_name,
                                 message=f"Schema validation failed: {errors_in_doc[0].message}",
                             )
                         )
@@ -2204,7 +2212,7 @@ async def extract_documents(
                 messages = build_messages(
                     ctx.truncated_content,
                     stage_schema,
-                    provider,
+                    ctx.provider,
                     prompt_template,
                     output_language,
                     custom_prompt=False,
@@ -2220,19 +2228,19 @@ async def extract_documents(
                     mark_attempted_stage(ctx.source_path, current_stage)
                 async with semaphore:
                     data = await call_with_retries(
-                        provider,
-                        model,
+                        ctx.provider,
+                        ctx.model_name,
                         messages,
                         stage_schema,
                         None,
                         timeout=timeout_seconds,
-                        structured_mode=provider.structured_mode,
+                        structured_mode=ctx.structured_mode,
                         max_retries=config.extract.max_retries,
                         backoff_base_seconds=config.extract.backoff_base_seconds,
                         backoff_max_seconds=config.extract.backoff_max_seconds,
                         client=client,
                         validator=stage_validator,
-                        key_rotator=rotator,
+                        key_rotator=ctx.rotator,
                         throttle=throttle,
                         stats=stats,
                     )
@@ -2254,8 +2262,8 @@ async def extract_documents(
                 errors.append(
                     ExtractionError(
                         path=task.path,
-                        provider=provider.name,
-                        model=model,
+                        provider=ctx.provider.name,
+                        model=ctx.model_name,
                         error_type=exc.error_type,
                         error_message=str(exc),
                         stage_name=current_stage,
@@ -2267,8 +2275,8 @@ async def extract_documents(
                 errors.append(
                     ExtractionError(
                         path=task.path,
-                        provider=provider.name,
-                        model=model,
+                        provider=ctx.provider.name,
+                        model=ctx.model_name,
                         error_type="unexpected_error",
                         error_message=str(exc),
                         stage_name=current_stage,
@@ -2304,10 +2312,6 @@ async def extract_documents(
             else:
                 await run_single_stage(client)
     finally:
-        if pause_task:
-            pause_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await pause_task
         if doc_bar:
             doc_bar.close()
         if stage_bar:

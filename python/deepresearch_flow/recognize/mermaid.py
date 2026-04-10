@@ -22,6 +22,17 @@ from deepresearch_flow.paper.utils import parse_json, short_hash
 logger = logging.getLogger(__name__)
 
 
+def _structured_mode_for_provider(provider) -> str:
+    models = getattr(provider, "models", None) or []
+    if models:
+        model = models[0]
+        if getattr(model, "is_support_json_schema", False):
+            return "json_schema"
+        if getattr(model, "is_support_json_object", False):
+            return "json_object"
+    return "none"
+
+
 @dataclass(frozen=True)
 class MermaidSpan:
     start: int
@@ -552,7 +563,7 @@ async def repair_batch(
     messages = build_repair_messages(issues)
     schema = repair_schema()
     last_error: str | None = None
-    use_structured = structured_override[0] if structured_override else provider.structured_mode
+    use_structured = structured_override[0] if structured_override else _structured_mode_for_provider(provider)
     for attempt in range(max_retries + 1):
         try:
             response = await call_provider(
@@ -674,7 +685,7 @@ async def fix_mermaid_text(
         batches = list(iter_batches(issues, batch_size, max_batch_chars))
 
         # Shared mutable container so all batches see structured mode fallback
-        structured_override: list[str] = [provider.structured_mode]
+        structured_override: list[str] = [_structured_mode_for_provider(provider)]
 
         # Parallel batch repair
         batch_results = await asyncio.gather(
@@ -936,7 +947,7 @@ async def repair_all_diagrams_global(
     batches = list(iter_batches(issues, batch_size, max_batch_chars))
 
     # Shared mutable container so all batches see structured mode fallback
-    structured_override: list[str] = [provider.structured_mode]
+    structured_override: list[str] = [_structured_mode_for_provider(provider)]
 
     semaphore = asyncio.Semaphore(max_concurrent_batches)
 

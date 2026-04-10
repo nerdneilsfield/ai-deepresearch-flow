@@ -8,7 +8,8 @@ from pathlib import Path
 import click
 
 from deepresearch_flow.paper.config import load_config, resolve_api_keys
-from deepresearch_flow.paper.extract import extract_documents, parse_model_ref, configure_logging
+from deepresearch_flow.paper.extract import extract_documents, configure_logging
+from deepresearch_flow.paper.routing import ParsedModelSelector, parse_model_selector, resolve_model_capability
 from deepresearch_flow.paper.db import register_db_commands
 from deepresearch_flow.paper.schema import load_schema, validate_schema, SchemaError
 from deepresearch_flow.paper.template_registry import list_template_names, load_schema_for_template
@@ -67,7 +68,14 @@ def paper() -> None:
     show_default=True,
     help="Output language hint for prompts",
 )
-@click.option("-m", "--model", "model_ref", required=True, help="provider/model")
+@click.option(
+    "-m",
+    "--model",
+    "model_ref",
+    required=False,
+    default=None,
+    help="provider/model, inline JSON model pool, or @file JSON model pool",
+)
 @click.option("-o", "--output", "output_path", default=None, help="Aggregated JSON output path")
 @click.option("-e", "--errors", "errors_path", default=None, help="Error JSON output path")
 @click.option("--split", is_flag=True, help="Write per-document JSON outputs")
@@ -148,7 +156,7 @@ def extract(
     prompt_system: str | None,
     prompt_user: str | None,
     template_dir: str | None,
-    model_ref: str,
+    model_ref: str | None,
     output_path: str | None,
     errors_path: str | None,
     split: bool,
@@ -202,10 +210,28 @@ def extract(
         raise click.ClickException("At least one --input or --input-list is required")
     
     config = load_config(config_path)
-    provider, model_name = parse_model_ref(model_ref, config.providers)
+    if model_ref is None:
+        model_selector = ParsedModelSelector(
+            kind="pool",
+            fixed_model=None,
+            pool=config.main_model,
+        )
+    else:
+        try:
+            model_selector = parse_model_selector(model_ref, config)
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
 
-    if provider.structured_mode not in {"json_schema", "json_object", "none"}:
-        raise click.ClickException("structured_mode must be json_schema, json_object, or none")
+    provider = None
+    model_name = None
+    if model_selector is not None and model_selector.kind == "single" and model_selector.fixed_model:
+        provider_name, selected_model_name = model_selector.fixed_model.split("/", 1)
+        provider, _model_capability = resolve_model_capability(
+            provider_name,
+            selected_model_name,
+            config.providers,
+        )
+        model_name = selected_model_name
 
     if config.extract.truncate_strategy not in {"head", "head_tail"}:
         raise click.ClickException("truncate_strategy must be head or head_tail")
@@ -237,7 +263,7 @@ def extract(
             "--retry-list-json cannot be combined with --retry-failed or --retry-failed-stages"
         )
 
-    if provider.type in {
+    if provider is not None and provider.type in {
         "openai_compatible",
         "dashscope",
         "gemini_ai_studio",
@@ -371,6 +397,7 @@ def extract(
             sleep_every=sleep_every,
             sleep_time=sleep_time,
             verbose=verbose,
+            model_selector=model_selector,
         )
     )
 

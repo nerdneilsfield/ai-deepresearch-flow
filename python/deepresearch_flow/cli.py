@@ -5,6 +5,7 @@ import click
 from deepresearch_flow.paper.cli import paper
 from deepresearch_flow.recognize.cli import recognize
 from deepresearch_flow.translator.cli import translator
+from deepresearch_flow.utils.cli import utils
 
 
 @click.group()
@@ -15,6 +16,7 @@ def cli() -> None:
 cli.add_command(paper)
 cli.add_command(recognize)
 cli.add_command(translator)
+cli.add_command(utils)
 
 
 def main() -> None:

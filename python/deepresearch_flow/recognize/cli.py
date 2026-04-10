@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 import json
 import logging
 import time
@@ -17,7 +18,11 @@ from rich.table import Table
 from tqdm import tqdm
 
 from deepresearch_flow.paper.config import load_config, resolve_api_keys
-from deepresearch_flow.paper.extract import parse_model_ref
+from deepresearch_flow.paper.routing import (
+    parse_model_selector,
+    resolve_model_capability,
+    select_runtime_route,
+)
 from deepresearch_flow.paper.template_registry import get_stage_definitions
 from deepresearch_flow.paper.utils import discover_markdown
 from deepresearch_flow.recognize.markdown import (
@@ -1153,7 +1158,22 @@ def recognize_fix_math(
             logger.info("Detected JSON inputs; enabling --json mode")
 
     config = load_config(config_path)
-    provider, model_name = parse_model_ref(model_ref, config.providers)
+    try:
+        selector = parse_model_selector(model_ref, config)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    if selector.kind == "single" and selector.fixed_model:
+        provider_name, selected_model_name = selector.fixed_model.split("/", 1)
+        provider, _capability = resolve_model_capability(
+            provider_name,
+            selected_model_name,
+            config.providers,
+        )
+        model_name = selected_model_name
+    else:
+        route = select_runtime_route(config, selector)
+        provider = replace(route.provider, base=[route.base], models=[route.model])
+        model_name = route.model.model_name
     api_keys = resolve_api_keys(provider.api_keys)
     if provider.type in {
         "openai_compatible",
@@ -1470,7 +1490,22 @@ def recognize_fix_mermaid(
             logger.info("Detected JSON inputs; enabling --json mode")
 
     config = load_config(config_path)
-    provider, model_name = parse_model_ref(model_ref, config.providers)
+    try:
+        selector = parse_model_selector(model_ref, config)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    if selector.kind == "single" and selector.fixed_model:
+        provider_name, selected_model_name = selector.fixed_model.split("/", 1)
+        provider, _capability = resolve_model_capability(
+            provider_name,
+            selected_model_name,
+            config.providers,
+        )
+        model_name = selected_model_name
+    else:
+        route = select_runtime_route(config, selector)
+        provider = replace(route.provider, base=[route.base], models=[route.model])
+        model_name = route.model.model_name
     api_keys = resolve_api_keys(provider.api_keys)
     if provider.type in {
         "openai_compatible",
