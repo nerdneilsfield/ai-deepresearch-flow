@@ -27,6 +27,7 @@
   },
   "dependencies": {
     "@mermaid-js/mermaid-cli": "^11.12.0",
-    "katex": "^0.16.27"
+    "katex": "^0.16.27",
+    "mmdc": "^0.0.1"
   }
 }
