@@ -18,10 +18,10 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from deepresearch_flow.paper.config import load_config, resolve_api_keys
-from deepresearch_flow.paper.extract import parse_model_ref
+from deepresearch_flow.paper.config import load_config
 from deepresearch_flow.paper.llm import backoff_delay, call_provider
 from deepresearch_flow.paper.providers.base import ProviderError
+from deepresearch_flow.paper.routing import RoutePool, parse_model_selector, resolve_model_capability
 from deepresearch_flow.paper.schema import SchemaError, load_schema
 from deepresearch_flow.paper.template_registry import (
     get_stage_definitions,
@@ -289,6 +289,7 @@ async def generate_tags_for_paper(
     max_retries: int,
     backoff_base: float,
     backoff_max: float,
+    route_pool: RoutePool | None = None,
 ) -> list[str]:
     system_prompt = (
         "You are a scientific paper tagging assistant. "
@@ -310,12 +311,20 @@ async def generate_tags_for_paper(
     while attempt < max_retries:
         attempt += 1
         try:
+            current_provider = provider
+            current_model = model
+            current_api_key = api_key
+            if route_pool is not None:
+                route = await route_pool.get()
+                current_provider = route.provider
+                current_model = route.model.model_name
+                current_api_key = route.key.value
             response_text = await call_provider(
-                provider,
-                model,
+                current_provider,
+                current_model,
                 messages,
                 schema={},
-                api_key=api_key,
+                api_key=current_api_key,
                 timeout=60.0,
                 structured_mode="none",
                 client=client,
@@ -325,6 +334,12 @@ async def generate_tags_for_paper(
                 return [str(tag) for tag in tags][:5]
             raise ProviderError("Tag response is not a list", error_type="validation_error")
         except ProviderError as exc:
+            if route_pool is not None:
+                quota_hit = await route_pool.mark_quota_exceeded(route, str(exc), exc.status_code)
+                if quota_hit:
+                    continue
+                if exc.retryable:
+                    await route_pool.mark_error(route)
             if attempt < max_retries:
                 await asyncio.sleep(backoff_delay(backoff_base, attempt, backoff_max))
                 continue
@@ -1595,38 +1610,31 @@ def register_db_commands(db_group: click.Group) -> None:
     def generate_tags(input_path: str, output_path: str, config_path: str, model_ref: str, workers: int) -> None:
         async def _run() -> None:
             config = load_config(config_path)
-            provider, model_name = parse_model_ref(model_ref, config.providers)
-            keys = resolve_api_keys(provider.api_keys)
-            if provider.type in {
-                "openai_compatible",
-                "dashscope",
-                "gemini_ai_studio",
-                "azure_openai",
-                "claude",
-            } and not keys:
-                raise click.ClickException(f"{provider.type} providers require api_keys")
+            selector = parse_model_selector(model_ref, config)
+            route_pool = RoutePool.from_selector(
+                config,
+                selector,
+                cooldown_seconds=max(1.0, float(config.extract.backoff_base_seconds)),
+            )
+            provider_name, model_name = model_ref.split("/", 1)
+            provider, _ = resolve_model_capability(provider_name, model_name, config.providers)
 
             papers = load_json(Path(input_path))
             semaphore = asyncio.Semaphore(workers)
-            key_idx = 0
 
             async with httpx.AsyncClient() as client:
                 async def process_one(paper: dict[str, Any]) -> None:
-                    nonlocal key_idx
                     async with semaphore:
-                        api_key = None
-                        if keys:
-                            api_key = keys[key_idx % len(keys)]
-                            key_idx += 1
                         tags = await generate_tags_for_paper(
                             client,
                             provider,
                             model_name,
-                            api_key,
+                            None,
                             paper,
                             max_retries=config.extract.max_retries,
                             backoff_base=config.extract.backoff_base_seconds,
                             backoff_max=config.extract.backoff_max_seconds,
+                            route_pool=route_pool,
                         )
                         paper["ai_generated_tags"] = tags
 

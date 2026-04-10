@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from random import Random
 
 import pytest
@@ -197,3 +198,184 @@ def test_weighted_key_selection_uses_base_scope() -> None:
     assert route.provider.name == "anthropic"
     assert route.base.url == "https://c.example.com/v1"
     assert route.key.value in {"anthropic-key-0-a", "anthropic-key-0-b"}
+
+
+def test_route_pool_expands_all_model_base_key_candidates() -> None:
+    from deepresearch_flow.paper.routing import RoutePool, parse_model_selector
+
+    config = _build_config()
+    selector = parse_model_selector("openai/gpt-4.1", config)
+
+    pool = RoutePool.from_selector(config, selector, cooldown_seconds=0.01, rng=Random(1))
+
+    expanded = sorted(
+        (
+            candidate.route.base.url,
+            candidate.route.key.value,
+            candidate.weight,
+        )
+        for candidate in pool._candidates
+    )
+    assert expanded == [
+        ("https://a.example.com/v1", "openai-key-0-a", 1),
+        ("https://a.example.com/v1", "openai-key-0-b", 2),
+        ("https://b.example.com/v1", "openai-key-1-a", 4),
+        ("https://b.example.com/v1", "openai-key-1-b", 6),
+    ]
+
+
+def test_route_pool_get_matches_weighted_selection_when_available() -> None:
+    from deepresearch_flow.paper.routing import RoutePool, choose_weighted, parse_model_selector
+
+    config = _build_config()
+    selector = parse_model_selector("openai/gpt-4.1", config)
+
+    pool = RoutePool.from_selector(config, selector, cooldown_seconds=0.01, rng=Random(7))
+    expected = choose_weighted(
+        [candidate.route for candidate in pool._candidates],
+        [candidate.weight for candidate in pool._candidates],
+        rng=Random(7),
+    )
+
+    route = asyncio.run(pool.get())
+
+    assert route.route_id == expected.route_id
+
+
+def test_route_pool_skips_route_in_cooldown() -> None:
+    from deepresearch_flow.paper.routing import RoutePool, parse_model_selector
+
+    config = _build_config()
+    selector = parse_model_selector("openai/gpt-4.1", config)
+    pool = RoutePool.from_selector(config, selector, cooldown_seconds=60.0, rng=Random(1))
+    blocked = pool._candidates[0].route
+
+    async def _run() -> str:
+        await pool.mark_error(blocked)
+        route = await pool.get()
+        return route.route_id
+
+    chosen = asyncio.run(_run())
+
+    assert chosen != blocked.route_id
+
+
+def test_route_pool_marks_quota_and_skips_exhausted_route() -> None:
+    from deepresearch_flow.paper.routing import RoutePool, parse_model_selector
+
+    provider = ProviderConfig(
+        name="openai",
+        type="openai_compatible",
+        base=[
+            BaseConfig(
+                url="https://a.example.com/v1",
+                weight=1,
+                key=[
+                    KeyConfig(
+                        value="key-a",
+                        weight=1,
+                        quota_duration=3600,
+                        reset_time="2000-01-01 00:00:00 +00:00",
+                        quota_error_tokens=["rate limit"],
+                    ),
+                    KeyConfig(value="key-b", weight=1),
+                ],
+            )
+        ],
+        models=[
+            ModelCapability(
+                model_name="gpt-4.1",
+                is_stream=True,
+                is_support_json_schema=True,
+                is_support_json_object=True,
+            )
+        ],
+        api_version=None,
+        deployment=None,
+        project_id=None,
+        location=None,
+        credentials_path=None,
+        anthropic_version=None,
+        max_tokens=None,
+        extra_headers={},
+        system_prompt=None,
+        user_prompt=None,
+    )
+    config = PaperConfig(
+        extract=DEFAULT_EXTRACT,
+        render=DEFAULT_RENDER,
+        providers=[provider],
+        main_model=[MainModelConfig(model="openai/gpt-4.1", weight=1)],
+    )
+    selector = parse_model_selector("openai/gpt-4.1", config)
+    pool = RoutePool.from_selector(config, selector, cooldown_seconds=0.01, rng=Random(1))
+    quota_route = next(candidate.route for candidate in pool._candidates if candidate.route.key.value == "key-a")
+
+    async def _run() -> tuple[bool, str]:
+        flagged = await pool.mark_quota_exceeded(
+            quota_route,
+            "upstream says RATE LIMIT exceeded",
+            429,
+        )
+        route = await pool.get()
+        return flagged, route.key.value
+
+    flagged, chosen_key = asyncio.run(_run())
+
+    assert flagged is True
+    assert chosen_key == "key-b"
+
+
+def test_route_pool_waits_until_route_recovers() -> None:
+    from deepresearch_flow.paper.routing import RoutePool, parse_model_selector
+    import time
+
+    provider = ProviderConfig(
+        name="openai",
+        type="openai_compatible",
+        base=[
+            BaseConfig(
+                url="https://a.example.com/v1",
+                weight=1,
+                key=[KeyConfig(value="key-a", weight=1)],
+            )
+        ],
+        models=[
+            ModelCapability(
+                model_name="gpt-4.1",
+                is_stream=True,
+                is_support_json_schema=True,
+                is_support_json_object=True,
+            )
+        ],
+        api_version=None,
+        deployment=None,
+        project_id=None,
+        location=None,
+        credentials_path=None,
+        anthropic_version=None,
+        max_tokens=None,
+        extra_headers={},
+        system_prompt=None,
+        user_prompt=None,
+    )
+    config = PaperConfig(
+        extract=DEFAULT_EXTRACT,
+        render=DEFAULT_RENDER,
+        providers=[provider],
+        main_model=[MainModelConfig(model="openai/gpt-4.1", weight=1)],
+    )
+    selector = parse_model_selector("openai/gpt-4.1", config)
+    pool = RoutePool.from_selector(config, selector, cooldown_seconds=0.05, rng=Random(1))
+    only_route = pool._candidates[0].route
+
+    async def _run() -> tuple[str, float]:
+        await pool.mark_error(only_route)
+        start = time.monotonic()
+        route = await pool.get()
+        return route.route_id, time.monotonic() - start
+
+    route_id, elapsed = asyncio.run(_run())
+
+    assert route_id == only_route.route_id
+    assert elapsed >= 0.04

@@ -17,10 +17,10 @@ from rich.console import Console
 from rich.table import Table
 from tqdm import tqdm
 
-from deepresearch_flow.paper.config import load_config, resolve_api_keys
+from deepresearch_flow.paper.config import load_config
 from deepresearch_flow.paper.routing import (
     parse_model_selector,
-    resolve_model_capability,
+    RoutePool,
     select_runtime_route,
 )
 from deepresearch_flow.paper.template_registry import get_stage_definitions
@@ -1162,28 +1162,10 @@ def recognize_fix_math(
         selector = parse_model_selector(model_ref, config)
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
-    if selector.kind == "single" and selector.fixed_model:
-        provider_name, selected_model_name = selector.fixed_model.split("/", 1)
-        provider, _capability = resolve_model_capability(
-            provider_name,
-            selected_model_name,
-            config.providers,
-        )
-        model_name = selected_model_name
-    else:
-        route = select_runtime_route(config, selector)
-        provider = replace(route.provider, base=[route.base], models=[route.model])
-        model_name = route.model.model_name
-    api_keys = resolve_api_keys(provider.api_keys)
-    if provider.type in {
-        "openai_compatible",
-        "dashscope",
-        "gemini_ai_studio",
-        "azure_openai",
-        "claude",
-    } and not api_keys:
-        raise click.ClickException(f"{provider.type} providers require api_keys")
-    api_key = api_keys[0] if api_keys else None
+    route = select_runtime_route(config, selector)
+    provider = replace(route.provider, base=[route.base], models=[route.model])
+    model_name = route.model.model_name
+    route_pool = RoutePool.from_selector(config, selector, cooldown_seconds=1.0, verbose=verbose)
 
     if json_mode:
         paths = discover_json(inputs, recursive=recursive)
@@ -1295,9 +1277,7 @@ def recognize_fix_math(
                                 line_start,
                                 field_path,
                                 item_index,
-                                provider,
-                                model_name,
-                                api_key,
+                                route_pool,
                                 timeout,
                                 max_retries,
                                 batch_size,
@@ -1336,9 +1316,7 @@ def recognize_fix_math(
                         1,
                         None,
                         None,
-                        provider,
-                        model_name,
-                        api_key,
+                        route_pool,
                         timeout,
                         max_retries,
                         batch_size,
@@ -1494,28 +1472,10 @@ def recognize_fix_mermaid(
         selector = parse_model_selector(model_ref, config)
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
-    if selector.kind == "single" and selector.fixed_model:
-        provider_name, selected_model_name = selector.fixed_model.split("/", 1)
-        provider, _capability = resolve_model_capability(
-            provider_name,
-            selected_model_name,
-            config.providers,
-        )
-        model_name = selected_model_name
-    else:
-        route = select_runtime_route(config, selector)
-        provider = replace(route.provider, base=[route.base], models=[route.model])
-        model_name = route.model.model_name
-    api_keys = resolve_api_keys(provider.api_keys)
-    if provider.type in {
-        "openai_compatible",
-        "dashscope",
-        "gemini_ai_studio",
-        "azure_openai",
-        "claude",
-    } and not api_keys:
-        raise click.ClickException(f"{provider.type} providers require api_keys")
-    api_key = api_keys[0] if api_keys else None
+    route = select_runtime_route(config, selector)
+    provider = replace(route.provider, base=[route.base], models=[route.model])
+    model_name = route.model.model_name
+    route_pool = RoutePool.from_selector(config, selector, cooldown_seconds=1.0, verbose=verbose)
 
     if json_mode:
         paths = discover_json(inputs, recursive=recursive)
@@ -1756,9 +1716,7 @@ def recognize_fix_mermaid(
                 all_tasks,
                 batch_size,
                 workers,  # Use workers for global batch concurrency
-                provider,
-                model_name,
-                api_key,
+                route_pool,
                 timeout,
                 max_retries,
                 client,

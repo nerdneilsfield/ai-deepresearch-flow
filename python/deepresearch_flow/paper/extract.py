@@ -7,7 +7,7 @@ import hashlib
 import json
 import math
 from collections import deque
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -28,8 +28,6 @@ from deepresearch_flow.paper.config import (
     ApiKeyConfig,
     PaperConfig,
     ProviderConfig,
-    resolve_api_key_configs,
-    resolve_api_keys,
 )
 from deepresearch_flow.paper.llm import backoff_delay, call_provider
 from deepresearch_flow.paper.prompts import DEFAULT_SYSTEM_PROMPT, DEFAULT_USER_PROMPT
@@ -54,7 +52,7 @@ from deepresearch_flow.paper.utils import (
     unique_split_name,
 )
 from deepresearch_flow.paper.providers.base import ProviderError
-from deepresearch_flow.paper.routing import ParsedModelSelector, select_runtime_route
+from deepresearch_flow.paper.routing import ParsedModelSelector, RoutePool, resolve_model_capability
 
 
 @dataclass
@@ -568,70 +566,12 @@ class ExtractionStats:
         total_tokens = prompt_tokens + completion_tokens
         self.doc_bar.set_postfix_str(f"tok p/c/t {prompt_tokens}/{completion_tokens}/{total_tokens}")
 
-def parse_model_ref(model_ref: str, providers: list[ProviderConfig]) -> tuple[ProviderConfig, str]:
-    if "/" not in model_ref:
-        raise click.ClickException("--model must be in provider/model format")
-    provider_name, model_name = model_ref.split("/", 1)
-    for provider in providers:
-        if provider.name == provider_name:
-            if provider.model_list and model_name not in provider.model_list:
-                raise click.ClickException(
-                    f"Model '{model_name}' is not in provider '{provider_name}' model_list"
-                )
-            return provider, model_name
-    raise click.ClickException(f"Unknown provider: {provider_name}")
-
-
 def _single_model_selector(provider: ProviderConfig, model_name: str) -> ParsedModelSelector:
     return ParsedModelSelector(
         kind="single",
         fixed_model=f"{provider.name}/{model_name}",
         pool=[],
     )
-
-
-def _structured_mode_for_model(provider: ProviderConfig) -> str:
-    if not provider.models:
-        return "none"
-    model = provider.models[0]
-    if model.is_support_json_schema:
-        return "json_schema"
-    if model.is_support_json_object:
-        return "json_object"
-    return "none"
-
-
-def _select_doc_runtime(
-    *,
-    config: PaperConfig,
-    provider: ProviderConfig | None,
-    model_name: str | None,
-    model_selector: ParsedModelSelector | None,
-    cooldown_seconds: float,
-    verbose: bool,
-) -> tuple[ProviderConfig, str, str, KeyRotator | None]:
-    selector = model_selector
-    if selector is None:
-        if provider is None or model_name is None:
-            raise ValueError("provider/model_name required when model_selector is not provided")
-        selector = _single_model_selector(provider, model_name)
-
-    route = select_runtime_route(config, selector)
-    routed_provider = replace(
-        route.provider,
-        base=[route.base],
-        models=[route.model],
-    )
-    structured_mode = _structured_mode_for_model(routed_provider)
-    resolved_keys = resolve_api_key_configs(routed_provider.api_keys)
-    rotator = None
-    if resolved_keys:
-        rotator = KeyRotator(
-            resolved_keys,
-            cooldown_seconds=cooldown_seconds,
-            verbose=verbose,
-        )
-    return routed_provider, route.model.model_name, structured_mode, rotator
 
 
 def build_messages(
@@ -1011,57 +951,76 @@ async def call_with_retries(
     client: httpx.AsyncClient,
     validator: Draft7Validator,
     key_rotator: KeyRotator | None = None,
+    route_pool: RoutePool | None = None,
     throttle: RequestThrottle | None = None,
     stats: ExtractionStats | None = None,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], ProviderConfig, str, str]:
     attempt = 0
     use_structured = structured_mode
     prompt_chars = _count_prompt_chars(messages)
+    current_provider = provider
+    current_model = model
+    current_api_key = api_key
+    current_structured = structured_mode
     while attempt < max_retries:
         attempt += 1
-        if key_rotator:
-            api_key = await key_rotator.next_key()
+        if route_pool is not None:
+            route = await route_pool.get()
+            current_provider = route.provider
+            current_model = route.model.model_name
+            current_api_key = route.key.value
+            current_structured = route.structured_mode
+        else:
+            if key_rotator:
+                current_api_key = await key_rotator.next_key()
+            else:
+                current_api_key = api_key
+            current_provider = provider
+            current_model = model
+            current_structured = use_structured
         if throttle:
             await throttle.tick()
         if stats:
             await stats.add_prompt_chars(prompt_chars)
         try:
             response_text = await call_provider(
-                provider,
-                model,
+                current_provider,
+                current_model,
                 messages,
                 schema,
-                api_key,
+                current_api_key,
                 timeout,
-                use_structured,
+                current_structured,
                 client,
             )
             if stats:
                 await stats.add_output_chars(len(response_text))
         except ProviderError as exc:
             quota_hit = False
-            if api_key and key_rotator:
-                quota_hit = await key_rotator.mark_quota_exceeded(
-                    api_key,
-                    str(exc),
-                    exc.status_code,
-                )
-            if exc.structured_error and use_structured != "none":
+            if route_pool is not None:
+                quota_hit = await route_pool.mark_quota_exceeded(route, str(exc), exc.status_code)
+            elif current_api_key and key_rotator:
+                quota_hit = await key_rotator.mark_quota_exceeded(current_api_key, str(exc), exc.status_code)
+            if exc.structured_error and current_structured != "none":
                 logger.warning(
                     "Structured response failed; retrying without structured output "
                     "(provider=%s, model=%s, status_code=%s): %s",
-                    provider.name,
-                    model,
+                    current_provider.name,
+                    current_model,
                     exc.status_code if exc.status_code is not None else "unknown",
                     _summarize_error_message(str(exc)),
                 )
                 use_structured = "none"
+                if route_pool is not None:
+                    current_structured = "none"
                 continue
             if quota_hit:
                 attempt -= 1
                 continue
-            if api_key and key_rotator and not quota_hit and should_retry_error(exc):
-                await key_rotator.mark_error(api_key)
+            if route_pool is not None and not quota_hit and should_retry_error(exc):
+                await route_pool.mark_error(route)
+            elif current_api_key and key_rotator and not quota_hit and should_retry_error(exc):
+                await key_rotator.mark_error(current_api_key)
             if should_retry_error(exc) and attempt < max_retries:
                 await asyncio.sleep(backoff_delay(backoff_base_seconds, attempt, backoff_max_seconds))
                 continue
@@ -1087,7 +1046,7 @@ async def call_with_retries(
                 error_type="validation_error",
             )
 
-        return data
+        return data, current_provider, current_model, current_structured
 
     raise ProviderError("Max retries exceeded", retryable=False)
 
@@ -1131,6 +1090,12 @@ async def extract_documents(
     model_selector: ParsedModelSelector | None = None,
 ) -> None:
     start_time = time.monotonic()
+    runtime_selector = model_selector
+    if runtime_selector is None:
+        if provider is None or model is None:
+            raise ValueError("provider/model_name required when model_selector is not provided")
+        resolve_model_capability(provider.name, model, config.providers)
+        runtime_selector = _single_model_selector(provider, model)
     markdown_files = discover_markdown(inputs, glob_pattern, recursive=True)
     template_tag = prompt_template if not custom_prompt else "custom"
 
@@ -1312,6 +1277,12 @@ async def extract_documents(
     }
 
     cooldown_seconds = max(1.0, float(config.extract.backoff_base_seconds))
+    route_pool = RoutePool.from_selector(
+        config,
+        runtime_selector,
+        cooldown_seconds=cooldown_seconds,
+        verbose=verbose,
+    )
     max_concurrency = max_concurrency_override or config.extract.max_concurrency
     semaphore = asyncio.Semaphore(max_concurrency)
 
@@ -1486,14 +1457,10 @@ async def extract_documents(
                 truncated_content, truncation = truncate_content(
                     content, config.extract.truncate_max_chars, config.extract.truncate_strategy
                 )
-                doc_provider, doc_model, doc_structured_mode, doc_rotator = _select_doc_runtime(
-                    config=config,
-                    provider=provider,
-                    model_name=model,
-                    model_selector=model_selector,
-                    cooldown_seconds=cooldown_seconds,
-                    verbose=verbose,
-                )
+                seed_route = await route_pool.get()
+                doc_provider = seed_route.provider
+                doc_model = seed_route.model.model_name
+                doc_structured_mode = seed_route.structured_mode
                 messages = build_messages(
                     truncated_content,
                     schema,
@@ -1510,7 +1477,7 @@ async def extract_documents(
                 if retry_mode:
                     mark_attempted_full(source_path)
                 async with semaphore:
-                    data = await call_with_retries(
+                    data, used_provider, used_model, used_structured = await call_with_retries(
                         doc_provider,
                         doc_model,
                         messages,
@@ -1523,10 +1490,14 @@ async def extract_documents(
                         backoff_max_seconds=config.extract.backoff_max_seconds,
                         client=client,
                         validator=validator,
-                        key_rotator=doc_rotator,
+                        key_rotator=None,
+                        route_pool=route_pool,
                         throttle=throttle,
                         stats=stats,
                     )
+                doc_provider = used_provider
+                doc_model = used_model
+                doc_structured_mode = used_structured
 
                 data = append_metadata(
                     data,
@@ -1654,14 +1625,10 @@ async def extract_documents(
                 }
             stages: dict[str, dict[str, Any]] = stage_state.get("stages", {})
             stage_meta: dict[str, dict[str, Any]] = stage_state.get("stage_meta", {})
-            doc_provider, doc_model, doc_structured_mode, doc_rotator = _select_doc_runtime(
-                config=config,
-                provider=provider,
-                model_name=model,
-                model_selector=model_selector,
-                cooldown_seconds=cooldown_seconds,
-                verbose=verbose,
-            )
+            seed_route = await route_pool.get()
+            doc_provider = seed_route.provider
+            doc_model = seed_route.model.model_name
+            doc_structured_mode = seed_route.structured_mode
             doc_contexts[path] = DocContext(
                 path=path,
                 source_path=source_path,
@@ -1676,7 +1643,7 @@ async def extract_documents(
                 provider=doc_provider,
                 model_name=doc_model,
                 structured_mode=doc_structured_mode,
-                rotator=doc_rotator,
+                rotator=None,
             )
             is_retry_full = source_path in retry_full_paths
             retry_stages = (
@@ -1808,7 +1775,7 @@ async def extract_documents(
                     elif retry_stages_mode:
                         mark_attempted_stage(ctx.source_path, current_stage)
                     async with semaphore:
-                        data = await call_with_retries(
+                        data, used_provider, used_model, used_structured = await call_with_retries(
                             ctx.provider,
                             ctx.model_name,
                             messages,
@@ -1822,9 +1789,13 @@ async def extract_documents(
                             client=client,
                             validator=stage_validator,
                             key_rotator=ctx.rotator,
+                            route_pool=route_pool,
                             throttle=throttle,
                             stats=stats,
                         )
+                    ctx.provider = used_provider
+                    ctx.model_name = used_model
+                    ctx.structured_mode = used_structured
                     ctx.stages[current_stage] = data
                     ctx.stage_meta[current_stage] = {"prompt_hash": prompt_hash}
                     ctx.stage_state["stages"] = ctx.stages
@@ -2005,14 +1976,10 @@ async def extract_documents(
                 }
             stages: dict[str, dict[str, Any]] = stage_state.get("stages", {})
             stage_meta: dict[str, dict[str, Any]] = stage_state.get("stage_meta", {})
-            doc_provider, doc_model, doc_structured_mode, doc_rotator = _select_doc_runtime(
-                config=config,
-                provider=provider,
-                model_name=model,
-                model_selector=model_selector,
-                cooldown_seconds=cooldown_seconds,
-                verbose=verbose,
-            )
+            seed_route = await route_pool.get()
+            doc_provider = seed_route.provider
+            doc_model = seed_route.model.model_name
+            doc_structured_mode = seed_route.structured_mode
             doc_contexts[path] = DocContext(
                 path=path,
                 source_path=source_path,
@@ -2027,7 +1994,7 @@ async def extract_documents(
                 provider=doc_provider,
                 model_name=doc_model,
                 structured_mode=doc_structured_mode,
-                rotator=doc_rotator,
+                rotator=None,
             )
             doc_states[path] = DocDagState(
                 total_stages=len(stage_definitions),
@@ -2227,7 +2194,7 @@ async def extract_documents(
                 elif retry_stages_mode:
                     mark_attempted_stage(ctx.source_path, current_stage)
                 async with semaphore:
-                    data = await call_with_retries(
+                    data, used_provider, used_model, used_structured = await call_with_retries(
                         ctx.provider,
                         ctx.model_name,
                         messages,
@@ -2241,9 +2208,13 @@ async def extract_documents(
                         client=client,
                         validator=stage_validator,
                         key_rotator=ctx.rotator,
+                        route_pool=route_pool,
                         throttle=throttle,
                         stats=stats,
                     )
+                ctx.provider = used_provider
+                ctx.model_name = used_model
+                ctx.structured_mode = used_structured
                 async with state.lock:
                     ctx.stages[current_stage] = data
                     ctx.stage_meta[current_stage] = {"prompt_hash": prompt_hash}

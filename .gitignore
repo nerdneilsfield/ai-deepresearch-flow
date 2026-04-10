@@ -241,6 +241,7 @@ pnpm-lock.yaml
 fix-mermaid-errors.json
 .gitignore
 fix-math-errors.json
+push-static-errors.json
 test-data/
 
 ocr.toml

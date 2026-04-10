@@ -19,13 +19,13 @@ from deepresearch_flow.paper.config import (
 )
 from deepresearch_flow.paper.extract import (
     ExtractionError,
-    _select_doc_runtime,
     call_with_retries,
     extract_documents,
     filter_results_with_errors,
     merge_retry_error_entries,
 )
 from deepresearch_flow.paper.providers.base import ProviderError
+from deepresearch_flow.paper.routing import RoutePool, parse_model_selector
 from deepresearch_flow.paper.schema import validate_schema
 
 
@@ -236,7 +236,7 @@ def test_call_with_retries_falls_back_to_plain_json_when_model_lacks_structured_
 
     monkeypatch.setattr("deepresearch_flow.paper.extract.call_provider", fake_call_provider)
 
-    async def _run() -> dict[str, object]:
+    async def _run() -> tuple[dict[str, object], ProviderConfig, str, str]:
         async with httpx.AsyncClient() as client:
             return await call_with_retries(
                 provider,
@@ -253,11 +253,14 @@ def test_call_with_retries_falls_back_to_plain_json_when_model_lacks_structured_
                 validator=validator,
             )
 
-    result = asyncio.run(_run())
+    result, used_provider, used_model, used_structured = asyncio.run(_run())
     assert result == {"paper_title": "Test", "paper_authors": ["Alice"]}
+    assert used_provider.name == "test-provider"
+    assert used_model == "dummy-model"
+    assert used_structured == "none"
 
 
-def test_select_doc_runtime_uses_selected_model_capability_for_structured_mode() -> None:
+def test_route_pool_uses_selected_model_capability_for_structured_mode() -> None:
     provider = ProviderConfig(
         name="test-provider",
         type="openai_compatible",
@@ -300,18 +303,13 @@ def test_select_doc_runtime_uses_selected_model_capability_for_structured_mode()
         main_model=[MainModelConfig(model="test-provider/plain-model", weight=1)],
     )
 
-    routed_provider, model_name, structured_mode, _ = _select_doc_runtime(
-        config=config,
-        provider=provider,
-        model_name="plain-model",
-        model_selector=None,
-        cooldown_seconds=1.0,
-        verbose=False,
-    )
+    selector = parse_model_selector("test-provider/plain-model", config)
+    pool = RoutePool.from_selector(config, selector, cooldown_seconds=1.0, verbose=False)
+    route = asyncio.run(pool.get())
 
-    assert model_name == "plain-model"
-    assert structured_mode == "none"
-    assert routed_provider.models[0].model_name == "plain-model"
+    assert route.model.model_name == "plain-model"
+    assert route.structured_mode == "none"
+    assert route.provider.models[0].model_name == "plain-model"
 
 
 def test_extract_documents_retry_failure_drops_stale_output_entry(

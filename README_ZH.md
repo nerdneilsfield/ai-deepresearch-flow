@@ -1268,12 +1268,16 @@ config.toml 支持：
 
 - 多 Provider：OpenAI、DashScope、Gemini、Claude、Ollama 等。
 - 通过 `main_model`、`providers[].base[]`、`providers[].base[].key[]` 实现三级加权负载均衡。
-- `--model` 同时支持单个 `provider/model`、内联 JSON 模型池、以及 `@file` JSON 模型池。
+- 真实 LLM 请求会从共享的 runtime pool 中取 route，因此 `model -> base -> key` 的加权选择是按请求执行，而不是只在进程启动时选一次。
+- `--model` 同时支持单个 `provider/model`、内联 JSON 模型池、以及 `@file` JSON 模型池。`paper extract` 省略 `--model` 时会回退到 `config.toml` 的 `main_model`。
 - 环境变量：使用 `env:VAR_NAME` 安全注入密钥。
 
 示例：
 
 ```bash
+# 使用 config.toml 的 main_model
+uv run deepresearch-flow paper extract --input ./docs
+
 # 固定单模型
 uv run deepresearch-flow paper extract --input ./docs --model openai/gpt-4o-mini
 
@@ -1303,7 +1307,7 @@ uv run deepresearch-flow utils test-mode \
   --write-back
 ```
 
-`utils test-mode` 目前只会按权重选中一条 `base + key` 路径进行探测，所以结果代表这次选中的路由，而不是 provider 下所有路由的穷举结论。
+`utils test-mode` 目前只会按权重选中一条 `base + key` 路径进行探测；而正常的提取、翻译、识别修复、标签生成流程，都会在每次请求前从 runtime pool 中重新选路。
 
 详见 `config.example.toml`。
 

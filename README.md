@@ -1297,12 +1297,16 @@ The config.toml is your control center. It supports:
 
 - Multiple Providers: mix and match OpenAI, DeepSeek (DashScope), Gemini, Claude, and Ollama.
 - Weighted model routing via `main_model`, weighted URL routing via `providers[].base[]`, and weighted key routing via `providers[].base[].key[]`.
-- Model Routing: `--model` accepts a single `provider/model`, an inline JSON model pool, or an `@file` JSON model pool.
+- Request-time route pooling: real LLM requests pull routes from a shared runtime pool, so weighted `model -> base -> key` selection happens per request, not just once at process startup.
+- Model Routing: `--model` accepts a single `provider/model`, an inline JSON model pool, or an `@file` JSON model pool. If omitted in `paper extract`, the command falls back to `config.toml` `main_model`.
 - Environment Variables: keep secrets safe using `env:VAR_NAME` syntax.
 
 Examples:
 
 ```bash
+# Use config.toml main_model
+uv run deepresearch-flow paper extract --input ./docs
+
 # Fixed model
 uv run deepresearch-flow paper extract --input ./docs --model openai/gpt-4o-mini
 
@@ -1332,7 +1336,7 @@ uv run deepresearch-flow utils test-mode \
   --write-back
 ```
 
-`utils test-mode` currently probes only one weighted `base + key` path per requested model, so the result reflects the selected route at probe time rather than every route under the provider.
+`utils test-mode` probes one weighted `base + key` path per requested model. Normal extraction, translation, recognize repair, and tag-generation flows now select routes from the runtime pool per request.
 
 See `config.example.toml` for a full reference.
 

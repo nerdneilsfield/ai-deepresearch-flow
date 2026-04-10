@@ -17,6 +17,7 @@ import httpx
 from deepresearch_flow.paper.config import ProviderConfig, resolve_api_keys
 from deepresearch_flow.paper.llm import call_provider, backoff_delay
 from deepresearch_flow.paper.providers.base import ProviderError
+from deepresearch_flow.paper.routing import RoutePool
 from deepresearch_flow.translator.config import TranslateConfig
 from deepresearch_flow.translator.fixers import fix_markdown
 from deepresearch_flow.translator.placeholder import PlaceHolderStore
@@ -553,12 +554,21 @@ class MarkdownTranslator:
         stage: str,
         group_index: int,
         dump_callback: Callable[[DumpSnapshot], None] | None,
+        route_pool: RoutePool | None = None,
     ) -> str:
         attempts = 0
         while True:
             attempts += 1
             if throttle:
                 await throttle.tick()
+            current_provider = provider
+            current_model = model
+            current_api_key = api_key
+            if route_pool is not None:
+                route = await route_pool.get()
+                current_provider = route.provider
+                current_model = route.model.model_name
+                current_api_key = route.key.value
             messages = build_translation_messages(
                 self.cfg.source_lang, self.cfg.target_lang, group_text
             )
@@ -566,11 +576,11 @@ class MarkdownTranslator:
             try:
                 async with semaphore:
                     response = await call_provider(
-                        provider,
-                        model,
+                        current_provider,
+                        current_model,
                         messages,
                         {},
-                        api_key,
+                        current_api_key,
                         timeout,
                         "none",
                         client,
@@ -583,8 +593,8 @@ class MarkdownTranslator:
                             "stage": stage,
                             "group_index": group_index,
                             "attempt": attempts,
-                            "provider": provider.name,
-                            "model": model,
+                            "provider": current_provider.name,
+                            "model": current_model,
                             "messages": messages,
                             "response": response,
                             "elapsed_ms": elapsed_ms,
@@ -610,8 +620,8 @@ class MarkdownTranslator:
                             "stage": stage,
                             "group_index": group_index,
                             "attempt": attempts,
-                            "provider": provider.name,
-                            "model": model,
+                            "provider": current_provider.name,
+                            "model": current_model,
                             "messages": messages,
                             "error": str(exc),
                             "retryable": exc.retryable,
@@ -630,6 +640,12 @@ class MarkdownTranslator:
                         elapsed_ms,
                         exc,
                     )
+                if route_pool is not None:
+                    quota_hit = await route_pool.mark_quota_exceeded(route, str(exc), exc.status_code)
+                    if quota_hit:
+                        continue
+                    if exc.retryable:
+                        await route_pool.mark_error(route)
                 if exc.retryable and attempts < max_retries:
                     await asyncio.sleep(backoff_delay(1.0, attempts, 20.0))
                     continue
@@ -660,6 +676,9 @@ class MarkdownTranslator:
         request_log: list[dict[str, Any]] | None = None,
         dump_callback: Callable[[DumpSnapshot], None] | None = None,
         group_concurrency: int = 1,
+        route_pool: RoutePool | None = None,
+        fallback_route_pool: RoutePool | None = None,
+        fallback_route_pool_2: RoutePool | None = None,
     ) -> TranslationResult:
         if fix_level != "off":
             text = fix_markdown(text, fix_level)
@@ -715,13 +734,14 @@ class MarkdownTranslator:
             retry_limit_value: int,
             provider_value: ProviderConfig,
             model_value: str,
+            route_pool_value: RoutePool | None,
         ) -> list[str]:
             if not groups:
                 return []
             outputs: list[str] = [""] * len(groups)
 
             async def run_one(idx: int, group_text: str) -> tuple[int, str]:
-                api_key = await rotator.next_key()
+                api_key = None if route_pool_value is not None else await rotator.next_key()
                 response = await self._translate_group(
                     group_text,
                     provider_value,
@@ -737,6 +757,7 @@ class MarkdownTranslator:
                     stage,
                     idx,
                     dump_callback,
+                    route_pool=route_pool_value,
                 )
                 return idx, response
 
@@ -800,6 +821,7 @@ class MarkdownTranslator:
             max_retries,
             provider,
             model,
+            route_pool,
         )
 
         translated_nodes = self._ungroup_groups(outputs, nodes)
@@ -869,6 +891,7 @@ class MarkdownTranslator:
                     retry_limit,
                     provider,
                     model,
+                    route_pool,
                 )
                 retry_nodes = self._ungroup_groups(
                     retry_outputs, failed_nodes, fill_missing=False
@@ -944,6 +967,7 @@ class MarkdownTranslator:
                     fallback_retry_limit,
                     fallback_provider,
                     fallback_model,
+                    fallback_route_pool,
                 )
                 retry_nodes = self._ungroup_groups(
                     retry_outputs, failed_nodes, fill_missing=False
@@ -1019,6 +1043,7 @@ class MarkdownTranslator:
                     fallback_retry_limit,
                     fallback_provider_2,
                     fallback_model_2,
+                    fallback_route_pool_2,
                 )
                 retry_nodes = self._ungroup_groups(
                     retry_outputs, failed_nodes, fill_missing=False

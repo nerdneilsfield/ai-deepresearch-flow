@@ -18,6 +18,7 @@ import httpx
 
 from deepresearch_flow.paper.llm import backoff_delay, call_provider
 from deepresearch_flow.paper.providers.base import ProviderError
+from deepresearch_flow.paper.routing import RoutePool, structured_mode_for_model
 from deepresearch_flow.paper.utils import parse_json, short_hash
 
 try:
@@ -27,18 +28,6 @@ except ImportError:  # pragma: no cover - dependency guard
     LatexWalkerError = Exception
 
 logger = logging.getLogger(__name__)
-
-
-def _structured_mode_for_provider(provider) -> str:
-    models = getattr(provider, "models", None) or []
-    if models:
-        model = models[0]
-        if getattr(model, "is_support_json_schema", False):
-            return "json_schema"
-        if getattr(model, "is_support_json_object", False):
-            return "json_object"
-    return "none"
-
 
 @dataclass(frozen=True)
 class FormulaSpan:
@@ -564,30 +553,28 @@ def _parse_repairs(response: str) -> dict[str, str]:
 
 async def repair_batch(
     issues: list[FormulaIssue],
-    provider,
-    model_name: str,
-    api_key: str | None,
+    route_pool: RoutePool,
     timeout: float,
     max_retries: int,
     client: httpx.AsyncClient,
-    structured_override: list[str] | None = None,
 ) -> tuple[dict[str, str], str | None]:
     messages = build_repair_messages(issues)
     schema = repair_schema()
     last_error: str | None = None
-    use_structured = structured_override[0] if structured_override else _structured_mode_for_provider(provider)
     for attempt in range(max_retries + 1):
+        route = await route_pool.get()
+        use_structured = structured_mode_for_model(route.model)
         try:
             response = await call_provider(
-                provider,
-                model_name,
+                route.provider,
+                route.model.model_name,
                 messages,
                 schema,
-                api_key,
+                route.key.value,
                 timeout,
                 use_structured,
                 client,
-                max_tokens=provider.max_tokens,
+                max_tokens=route.provider.max_tokens,
             )
             repairs = _parse_repairs(response)
             return repairs, None
@@ -599,20 +586,29 @@ async def repair_batch(
             return {}, last_error
         except ProviderError as exc:
             if exc.structured_error and use_structured != "none":
-                logger.warning(
-                    "Structured response failed; retrying without structured output "
-                    "(provider=%s, model=%s, status_code=%s): %s",
-                    provider.name,
-                    model_name,
-                    exc.status_code if exc.status_code is not None else "unknown",
-                    str(exc),
-                )
-                use_structured = "none"
-                if structured_override is not None:
-                    structured_override[0] = "none"
+                try:
+                    response = await call_provider(
+                        route.provider,
+                        route.model.model_name,
+                        messages,
+                        schema,
+                        route.key.value,
+                        timeout,
+                        "none",
+                        client,
+                        max_tokens=route.provider.max_tokens,
+                    )
+                    repairs = _parse_repairs(response)
+                    return repairs, None
+                except Exception as fallback_exc:
+                    last_error = str(fallback_exc)
+                    continue
+            quota_hit = await route_pool.mark_quota_exceeded(route, str(exc), exc.status_code)
+            if quota_hit:
                 continue
             last_error = str(exc)
             if exc.retryable and attempt < max_retries:
+                await route_pool.mark_error(route)
                 await asyncio.sleep(backoff_delay(1.0, attempt + 1, 20.0))
                 continue
             return {}, last_error
@@ -631,9 +627,7 @@ async def fix_math_text(
     line_offset: int,
     field_path: str | None,
     item_index: int | None,
-    provider,
-    model_name: str,
-    api_key: str | None,
+    route_pool: RoutePool,
     timeout: float,
     max_retries: int,
     batch_size: int,
@@ -701,14 +695,11 @@ async def fix_math_text(
         batches = list(iter_batches(issues, batch_size, max_batch_chars))
 
         # Shared mutable container so all batches see structured mode fallback
-        structured_override: list[str] = [_structured_mode_for_provider(provider)]
-
         # Parallel batch repair
         batch_results = await asyncio.gather(
             *[
                 repair_batch(
-                    batch, provider, model_name, api_key, timeout, max_retries, client,
-                    structured_override=structured_override,
+                    batch, route_pool, timeout, max_retries, client,
                 )
                 for batch in batches
             ],

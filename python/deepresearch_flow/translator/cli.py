@@ -20,7 +20,7 @@ from rich.table import Table
 from deepresearch_flow.paper.config import ProviderConfig, load_config, resolve_api_keys
 from deepresearch_flow.paper.routing import (
     parse_model_selector,
-    resolve_model_capability,
+    RoutePool,
     select_runtime_route,
 )
 from deepresearch_flow.paper.utils import (
@@ -248,18 +248,10 @@ def translate(
         selector = parse_model_selector(model_ref, config)
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
-    if selector.kind == "single" and selector.fixed_model:
-        provider_name, selected_model_name = selector.fixed_model.split("/", 1)
-        provider, _capability = resolve_model_capability(
-            provider_name,
-            selected_model_name,
-            config.providers,
-        )
-        model_name = selected_model_name
-    else:
-        route = select_runtime_route(config, selector)
-        provider = replace(route.provider, base=[route.base], models=[route.model])
-        model_name = route.model.model_name
+    route = select_runtime_route(config, selector)
+    provider = replace(route.provider, base=[route.base], models=[route.model])
+    model_name = route.model.model_name
+    route_pool = RoutePool.from_selector(config, selector, cooldown_seconds=1.0, verbose=verbose)
     if provider.type in {
         "openai_compatible",
         "dashscope",
@@ -271,27 +263,25 @@ def translate(
             raise click.ClickException(f"{provider.type} providers require api_keys")
     fallback_provider: ProviderConfig | None = None
     fallback_model_name: str | None = None
+    fallback_route_pool: RoutePool | None = None
     if fallback_model_ref:
         try:
             fallback_selector = parse_model_selector(fallback_model_ref, config)
         except ValueError as exc:
             raise click.ClickException(str(exc)) from exc
-        if fallback_selector.kind == "single" and fallback_selector.fixed_model:
-            provider_name, selected_model_name = fallback_selector.fixed_model.split("/", 1)
-            fallback_provider, _fallback_capability = resolve_model_capability(
-                provider_name,
-                selected_model_name,
-                config.providers,
-            )
-            fallback_model_name = selected_model_name
-        else:
-            fallback_route = select_runtime_route(config, fallback_selector)
-            fallback_provider = replace(
-                fallback_route.provider,
-                base=[fallback_route.base],
-                models=[fallback_route.model],
-            )
-            fallback_model_name = fallback_route.model.model_name
+        fallback_route = select_runtime_route(config, fallback_selector)
+        fallback_provider = replace(
+            fallback_route.provider,
+            base=[fallback_route.base],
+            models=[fallback_route.model],
+        )
+        fallback_model_name = fallback_route.model.model_name
+        fallback_route_pool = RoutePool.from_selector(
+            config,
+            fallback_selector,
+            cooldown_seconds=1.0,
+            verbose=verbose,
+        )
         if fallback_provider.type in {
             "openai_compatible",
             "dashscope",
@@ -305,27 +295,25 @@ def translate(
                 )
     fallback_provider_2: ProviderConfig | None = None
     fallback_model_name_2: str | None = None
+    fallback_route_pool_2: RoutePool | None = None
     if fallback_model_ref_2:
         try:
             fallback_selector_2 = parse_model_selector(fallback_model_ref_2, config)
         except ValueError as exc:
             raise click.ClickException(str(exc)) from exc
-        if fallback_selector_2.kind == "single" and fallback_selector_2.fixed_model:
-            provider_name, selected_model_name = fallback_selector_2.fixed_model.split("/", 1)
-            fallback_provider_2, _fallback_capability_2 = resolve_model_capability(
-                provider_name,
-                selected_model_name,
-                config.providers,
-            )
-            fallback_model_name_2 = selected_model_name
-        else:
-            fallback_route_2 = select_runtime_route(config, fallback_selector_2)
-            fallback_provider_2 = replace(
-                fallback_route_2.provider,
-                base=[fallback_route_2.base],
-                models=[fallback_route_2.model],
-            )
-            fallback_model_name_2 = fallback_route_2.model.model_name
+        fallback_route_2 = select_runtime_route(config, fallback_selector_2)
+        fallback_provider_2 = replace(
+            fallback_route_2.provider,
+            base=[fallback_route_2.base],
+            models=[fallback_route_2.model],
+        )
+        fallback_model_name_2 = fallback_route_2.model.model_name
+        fallback_route_pool_2 = RoutePool.from_selector(
+            config,
+            fallback_selector_2,
+            cooldown_seconds=1.0,
+            verbose=verbose,
+        )
         if fallback_provider_2.type in {
             "openai_compatible",
             "dashscope",
@@ -527,6 +515,9 @@ def translate(
             request_log=request_log if dump_requests_log else None,
             dump_callback=write_dump if debug_root is not None else None,
             group_concurrency=group_concurrency,
+            route_pool=route_pool,
+            fallback_route_pool=fallback_route_pool,
+            fallback_route_pool_2=fallback_route_pool_2,
         )
         output_path = output_map[path]
         output_path.write_text(result.translated_text, encoding="utf-8")
