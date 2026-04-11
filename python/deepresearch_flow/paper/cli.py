@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import click
+from rich.console import Console
+from rich.table import Table
 
 from deepresearch_flow.paper.config import load_config, resolve_api_keys
 from deepresearch_flow.paper.extract import extract_documents, configure_logging
@@ -18,6 +21,122 @@ from deepresearch_flow.paper.template_registry import list_template_names, load_
 @click.group()
 def paper() -> None:
     """Paper extraction and database commands."""
+
+
+async def _run_search(
+    *,
+    config,
+    vector_dir: Path,
+    query_text: str,
+    top_n: int,
+    year: int | None,
+    venue: str | None,
+    no_rerank: bool,
+    no_hybrid: bool,
+) -> None:
+    import httpx
+
+    from deepresearch_flow.paper.embedding import call_embedding
+    from deepresearch_flow.paper.routing import select_runtime_route
+    from deepresearch_flow.paper.reranker import OpenAICompatibleReranker
+    from deepresearch_flow.paper.search import hybrid_search, rank_keyword_rows, validate_venue_filter
+    from deepresearch_flow.paper.vector_store import open_store, scan_rows
+
+    if not config.embedding:
+        raise click.ClickException("Config missing [embedding] section")
+
+    selector = ParsedModelSelector(
+        kind="single",
+        fixed_model=f"{config.embedding.provider}/{config.embedding.model}",
+        pool=[],
+    )
+    route = select_runtime_route(config, selector)
+    if not route.model.is_support_embedding:
+        raise click.ClickException(
+            f"Configured embedding model does not advertise embedding support: {config.embedding.provider}/{config.embedding.model}"
+        )
+    db = open_store(vector_dir)
+
+    where_parts: list[str] = []
+    if year is not None:
+        where_parts.append(f"year = {year}")
+    if venue:
+        try:
+            validated_venue = validate_venue_filter(venue)
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
+        where_parts.append(f"venue = {json.dumps(validated_venue)}")
+    where = " AND ".join(where_parts) if where_parts else None
+    keyword_rows = scan_rows(db)
+    if year is not None:
+        keyword_rows = [row for row in keyword_rows if int(row.get("year") or 0) == year]
+    if venue:
+        try:
+            venue_lower = validate_venue_filter(venue).lower()
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
+        keyword_rows = [
+            row for row in keyword_rows if venue_lower in str(row.get("venue") or "").strip().lower()
+        ]
+
+    keyword_search_fn = None
+    if not no_hybrid and keyword_rows:
+        keyword_search_fn = lambda q, limit=30: rank_keyword_rows(keyword_rows, q, limit=limit)
+
+    reranker = None
+    if not no_rerank and config.rerank and config.rerank.enabled:
+        rerank_selector = ParsedModelSelector(
+            kind="single",
+            fixed_model=f"{config.rerank.provider}/{config.rerank.model}",
+            pool=[],
+        )
+        rerank_route = select_runtime_route(config, rerank_selector)
+        if not rerank_route.model.is_support_rerank:
+            raise click.ClickException(
+                f"Configured rerank model does not advertise rerank support: {config.rerank.provider}/{config.rerank.model}"
+            )
+        reranker = OpenAICompatibleReranker(
+            base_url=rerank_route.base.url,
+            api_key=rerank_route.key.value,
+            model=config.rerank.model,
+        )
+
+    async with httpx.AsyncClient() as client:
+        embedding = await call_embedding(
+            base_url=route.base.url,
+            api_key=route.key.value,
+            model=config.embedding.model,
+            texts=[query_text],
+            dimensions=config.embedding.dimensions,
+            client=client,
+        )
+        results = await hybrid_search(
+            query_vector=embedding.vectors[0],
+            query_text=query_text,
+            vector_store_db=db,
+            keyword_search_fn=keyword_search_fn,
+            reranker=reranker,
+            vector_top_k=(config.search.vector_top_k if config.search else 50),
+            keyword_top_k=(config.search.keyword_top_k if config.search else 30),
+            rerank_top_n=top_n,
+            hybrid=not no_hybrid and bool(config.search.hybrid if config.search else True),
+            where=where,
+            client=client,
+        )
+
+    table = Table(title="paper search")
+    table.add_column("doc_id", style="cyan")
+    table.add_column("score", style="white")
+    table.add_column("score_type", style="magenta")
+    table.add_column("matched_field", style="green")
+    for result in results:
+        table.add_row(
+            result.doc_id,
+            f"{result.score:.4f}",
+            result.score_type,
+            result.matched_field,
+        )
+    Console().print(table)
 
 
 @paper.command()
@@ -398,6 +517,112 @@ def extract(
             sleep_time=sleep_time,
             verbose=verbose,
             model_selector=model_selector,
+        )
+    )
+
+
+@paper.command()
+@click.option("-c", "--config", "config_path", default="config.toml", help="Path to config.toml")
+@click.option("-i", "--input", "input_paths", multiple=True, help="Input paper_infos JSON (repeatable)")
+@click.option("--snapshot-db", "snapshot_db", default=None, help="Snapshot SQLite database path")
+@click.option("--static-export-dir", "static_export_dir", default=None, help="Snapshot static export directory")
+@click.option("--md-root", "md_roots", multiple=True, help="Source markdown root directory")
+@click.option("--md-translated-root", "md_translated_roots", multiple=True, help="Translated markdown root directory")
+@click.option("--output-embed-db", "output_embed_db", default=None, help="LanceDB output directory")
+@click.option("--template-tag", "template_tag", default=None, help="Override template tag for all JSON inputs")
+@click.option("--force", is_flag=True, help="Delete existing index and rebuild from scratch")
+@click.option("-v", "--verbose", is_flag=True, help="Verbose logging")
+def embed(
+    config_path: str,
+    input_paths: tuple[str, ...],
+    snapshot_db: str | None,
+    static_export_dir: str | None,
+    md_roots: tuple[str, ...],
+    md_translated_roots: tuple[str, ...],
+    output_embed_db: str | None,
+    template_tag: str | None,
+    force: bool,
+    verbose: bool,
+) -> None:
+    """Build vector embeddings for paper search."""
+    config = load_config(config_path)
+    if not config.embedding:
+        raise click.ClickException("Config missing [embedding] section")
+
+    has_json = bool(input_paths)
+    has_snapshot = snapshot_db is not None
+    if not has_json and not has_snapshot:
+        raise click.ClickException("Provide -i <json> or --snapshot-db <db>")
+    if has_json and has_snapshot:
+        raise click.ClickException("-i and --snapshot-db are mutually exclusive")
+    if has_snapshot and not static_export_dir:
+        raise click.ClickException("--snapshot-db requires --static-export-dir")
+
+    vector_dir = Path(output_embed_db or (config.search.vector_dir if config.search else "paper_vectors"))
+    if force and vector_dir.exists():
+        import shutil
+
+        click.echo(f"Removing existing vector index at {vector_dir} (--force)")
+        shutil.rmtree(vector_dir)
+
+    from deepresearch_flow.paper.embed_pipeline import run_embed_pipeline
+
+    asyncio.run(
+        run_embed_pipeline(
+            config=config,
+            input_paths=[Path(p) for p in input_paths] if has_json else None,
+            snapshot_db=Path(snapshot_db) if snapshot_db else None,
+            static_export_dir=Path(static_export_dir) if static_export_dir else None,
+            md_roots=[Path(p) for p in md_roots],
+            md_translated_roots=[Path(p) for p in md_translated_roots],
+            vector_dir=vector_dir,
+            template_tag_override=template_tag,
+            verbose=verbose,
+        )
+    )
+    click.echo("Embedding complete.")
+
+
+@paper.command()
+@click.option("-c", "--config", "config_path", default="config.toml", help="Path to config.toml")
+@click.option("--embed-db", "embed_db", default=None, help="LanceDB directory to query")
+@click.option("-q", "--query", "query_text", required=True, help="Search query")
+@click.option("--top-n", "top_n", type=int, default=10, help="Number of results")
+@click.option("--year", "year", type=int, default=None, help="Filter by year")
+@click.option("--venue", "venue", default=None, help="Filter by venue")
+@click.option("--no-rerank", "no_rerank", is_flag=True, help="Disable reranking")
+@click.option("--no-hybrid", "no_hybrid", is_flag=True, help="Vector-only, no keyword recall")
+@click.option("-v", "--verbose", is_flag=True, help="Verbose logging")
+def search(
+    config_path: str,
+    embed_db: str | None,
+    query_text: str,
+    top_n: int,
+    year: int | None,
+    venue: str | None,
+    no_rerank: bool,
+    no_hybrid: bool,
+    verbose: bool,
+) -> None:
+    """Search papers using hybrid semantic + keyword search."""
+    config = load_config(config_path)
+    if not config.embedding:
+        raise click.ClickException("Config missing [embedding] section")
+
+    vector_dir = Path(embed_db or (config.search.vector_dir if config.search else "paper_vectors"))
+    if not vector_dir.exists():
+        raise click.ClickException(f"Vector index not found at {vector_dir}. Run 'paper embed' first.")
+
+    asyncio.run(
+        _run_search(
+            config=config,
+            vector_dir=vector_dir,
+            query_text=query_text,
+            top_n=top_n,
+            year=year,
+            venue=venue,
+            no_rerank=no_rerank,
+            no_hybrid=no_hybrid,
         )
     )
 
