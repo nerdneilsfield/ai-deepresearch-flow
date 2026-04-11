@@ -14,6 +14,8 @@ def _mock_rerank_transport() -> httpx.MockTransport:
         body = json.loads(request.content)
         assert request.method == "POST"
         assert request.url.path.endswith("/rerank")
+        assert request.headers["authorization"] == "Bearer key"
+        assert request.headers["content-type"] == "application/json"
         assert body == {
             "model": "test-reranker",
             "query": "test query",

@@ -80,6 +80,7 @@ class OpenAICompatibleReranker:
             },
             headers={
                 "Authorization": f"Bearer {self._api_key}",
+                "Content-Type": "application/json",
             },
         )
         response.raise_for_status()
