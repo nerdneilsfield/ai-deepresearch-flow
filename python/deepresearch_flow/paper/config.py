@@ -61,12 +61,42 @@ class ModelCapability:
     is_stream: bool
     is_support_json_schema: bool
     is_support_json_object: bool
+    is_support_embedding: bool = False
+    is_support_rerank: bool = False
 
 
 @dataclass(frozen=True)
 class MainModelConfig:
     model: str
     weight: int
+
+
+@dataclass(frozen=True)
+class EmbeddingConfig:
+    model: str
+    dimensions: int
+    normalized: bool
+    batch_size: int
+    chunk_max_tokens: int
+    chunk_overlap_tokens: int
+    provider: str
+
+
+@dataclass(frozen=True)
+class RerankConfig:
+    enabled: bool
+    model: str
+    top_n: int
+    provider: str
+
+
+@dataclass(frozen=True)
+class SearchConfig:
+    vector_dir: str
+    vector_top_k: int
+    keyword_top_k: int
+    hybrid: bool
+    access_token: str | None = None
 
 
 @dataclass(frozen=True)
@@ -108,6 +138,9 @@ class PaperConfig:
     render: RenderConfig
     providers: list[ProviderConfig]
     main_model: list[MainModelConfig]
+    embedding: EmbeddingConfig | None = None
+    rerank: RerankConfig | None = None
+    search: SearchConfig | None = None
 
 
 DEFAULT_EXTRACT = ExtractConfig(
@@ -264,6 +297,8 @@ def _parse_model_capabilities(value: Any, provider_name: str) -> list[ModelCapab
                 is_stream=_as_bool(item.get("is_stream"), False),
                 is_support_json_schema=_as_bool(item.get("is_support_json_schema"), False),
                 is_support_json_object=_as_bool(item.get("is_support_json_object"), False),
+                is_support_embedding=_as_bool(item.get("is_support_embedding"), False),
+                is_support_rerank=_as_bool(item.get("is_support_rerank"), False),
             )
         )
     return parsed
@@ -299,6 +334,66 @@ def _model_declared(providers: list[ProviderConfig], model_ref: str) -> bool:
             continue
         return any(model.model_name == model_name for model in provider.models)
     return False
+
+
+def _parse_embedding_config(value: Any) -> EmbeddingConfig | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("Config [embedding] must be an object")
+
+    model = _as_str(value.get("model"))
+    provider = _as_str(value.get("provider"))
+    if not model or not provider:
+        raise ValueError("Config [embedding] must include model and provider")
+
+    return EmbeddingConfig(
+        model=model,
+        dimensions=_as_int(value.get("dimensions"), 0),
+        normalized=_as_bool(value.get("normalized"), False),
+        batch_size=_as_int(value.get("batch_size"), 0),
+        chunk_max_tokens=_as_int(value.get("chunk_max_tokens"), 0),
+        chunk_overlap_tokens=_as_int(value.get("chunk_overlap_tokens"), 0),
+        provider=provider,
+    )
+
+
+def _parse_rerank_config(value: Any) -> RerankConfig | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("Config [rerank] must be an object")
+
+    model = _as_str(value.get("model"))
+    provider = _as_str(value.get("provider"))
+    if not model or not provider:
+        raise ValueError("Config [rerank] must include model and provider")
+
+    return RerankConfig(
+        enabled=_as_bool(value.get("enabled"), False),
+        model=model,
+        top_n=_as_int(value.get("top_n"), 0),
+        provider=provider,
+    )
+
+
+def _parse_search_config(value: Any) -> SearchConfig | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("Config [search] must be an object")
+
+    vector_dir = _as_str(value.get("vector_dir"))
+    if not vector_dir:
+        raise ValueError("Config [search] must include vector_dir")
+
+    return SearchConfig(
+        vector_dir=vector_dir,
+        vector_top_k=_as_int(value.get("vector_top_k"), 0),
+        keyword_top_k=_as_int(value.get("keyword_top_k"), 0),
+        hybrid=_as_bool(value.get("hybrid"), False),
+        access_token=_as_str(value.get("access_token"), None),
+    )
 
 
 def load_config(path: str) -> PaperConfig:
@@ -338,6 +433,9 @@ def load_config(path: str) -> PaperConfig:
 
     render_data = data.get("render", {})
     render = RenderConfig(template_path=_as_str(render_data.get("template_path"), DEFAULT_RENDER.template_path))
+    embedding = _parse_embedding_config(data.get("embedding"))
+    rerank = _parse_rerank_config(data.get("rerank"))
+    search = _parse_search_config(data.get("search"))
 
     providers_data = data.get("providers", [])
     if not isinstance(providers_data, list) or not providers_data:
@@ -406,6 +504,9 @@ def load_config(path: str) -> PaperConfig:
         render=render,
         providers=providers,
         main_model=main_model,
+        embedding=embedding,
+        rerank=rerank,
+        search=search,
     )
 
 
