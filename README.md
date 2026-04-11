@@ -264,6 +264,51 @@ uv run deepresearch-flow paper db serve \
   --host 127.0.0.1
 ```
 
+#### Step 4.1: Add Semantic Search (Optional)
+
+Build a LanceDB vector index from extracted JSON or an existing snapshot:
+
+```bash
+# Build from one or more extracted JSON files
+uv run deepresearch-flow paper embed \
+  --config ./config.toml \
+  --input ./paper_infos.json \
+  --output-embed-db ./paper_vectors
+
+# Or build alongside snapshot generation
+uv run deepresearch-flow paper db snapshot build \
+  --input ./paper_infos.json \
+  --output-embed-db ./paper_vectors
+```
+
+Search from the CLI:
+
+```bash
+uv run deepresearch-flow paper search \
+  --config ./config.toml \
+  --embed-db ./paper_vectors \
+  --query "attention mechanism in transformer" \
+  --top-n 10
+```
+
+Enable semantic search in the local Web UI:
+
+```bash
+uv run deepresearch-flow paper db serve \
+  --input ./paper_infos.json \
+  --md-root ./docs \
+  --md-translated-root ./docs \
+  --embed-db ./paper_vectors \
+  --search-access-token "your-token"
+```
+
+Notes:
+
+- `paper embed` accepts repeatable `-i/--input` JSON files and merges multiple templates for the same paper.
+- `paper search` uses the configured embedding provider/model, optional hybrid recall, and optional cloud reranking.
+- The Web UI exposes a lock button next to the search bar. After you enter the token once, it is stored in the browser and reused for `/api/papers/semantic`.
+- `paper db snapshot build --output-embed-db` builds the snapshot and LanceDB index in one pass.
+
 #### Step 4.5: Build Snapshot + Serve API + Frontend (Recommended)
 
 Build a production snapshot (SQLite + static assets), serve a read-only API, and run the frontend.

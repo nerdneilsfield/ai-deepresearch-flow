@@ -257,6 +257,51 @@ uv run deepresearch-flow paper db serve \
   --host 127.0.0.1
 ```
 
+#### 步骤 4.1：启用语义搜索（可选）
+
+先从抽取结果或 snapshot 构建 LanceDB 向量索引：
+
+```bash
+# 从一个或多个抽取 JSON 构建向量库
+uv run deepresearch-flow paper embed \
+  --config ./config.toml \
+  --input ./paper_infos.json \
+  --output-embed-db ./paper_vectors
+
+# 或在构建 snapshot 时顺手生成向量库
+uv run deepresearch-flow paper db snapshot build \
+  --input ./paper_infos.json \
+  --output-embed-db ./paper_vectors
+```
+
+在 CLI 里执行语义搜索：
+
+```bash
+uv run deepresearch-flow paper search \
+  --config ./config.toml \
+  --embed-db ./paper_vectors \
+  --query "attention mechanism in transformer" \
+  --top-n 10
+```
+
+在本地 Web UI 中开启语义搜索：
+
+```bash
+uv run deepresearch-flow paper db serve \
+  --input ./paper_infos.json \
+  --md-root ./docs \
+  --md-translated-root ./docs \
+  --embed-db ./paper_vectors \
+  --search-access-token "your-token"
+```
+
+说明：
+
+- `paper embed` 支持重复传入 `-i/--input`，会把同一篇论文的多个模板一起合并入索引。
+- `paper search` 会使用配置里的 embedding provider/model，并可选启用 hybrid recall 和云端 rerank。
+- Web UI 搜索框右侧会出现锁按钮。输入一次 token 后会保存在浏览器中，后续访问 `/api/papers/semantic` 会自动复用。
+- `paper db snapshot build --output-embed-db` 可以一次生成 snapshot 和 LanceDB 向量索引。
+
 #### 步骤 5：启用 MCP（FastMCP Streamable HTTP + SSE）
 
 本项目使用 [FastMCP](https://gofastmcp.com) 提供 MCP 服务，挂载在 snapshot API 的 `/mcp` 与 `/mcp-sse` 路径下。

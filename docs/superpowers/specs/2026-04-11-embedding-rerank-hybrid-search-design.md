@@ -1,0 +1,608 @@
+# Embedding, Rerank & Hybrid Search Design Spec
+
+**Date:** 2026-04-11
+**Status:** Draft
+**Scope:** Add LanceDB-backed vector indexing, hybrid (BM25 + vector) search, cloud reranking, and token-gated frontend access to the paper search pipeline.
+
+## Overview
+
+This change adds three capabilities to deepresearch-flow:
+
+1. **Embedding pipeline** — `paper embed` converts extracted paper JSON into vector chunks stored in LanceDB.
+2. **Hybrid search** — `paper search` and `/api/papers/semantic` combine BM25 keyword recall with vector recall, then rerank via cloud API.
+3. **Token-gated frontend** — Web UI users enter an access token (stored in IndexedDB) to unlock semantic search; unauthenticated users fall back to keyword search.
+
+## Goals
+
+- Upgrade paper search from keyword-only to semantic + keyword hybrid.
+- Use a single embedding model (bge-m3) across local Ollama and cloud API.
+- Store vectors in an embedded database (LanceDB) with no external services.
+- Prevent index corruption when switching embedding providers.
+- Keep hybrid search behind an optional access token to prevent abuse.
+
+## Non-Goals
+
+- Multi-user authentication or RBAC.
+- Local reranking (cloud-only in v1).
+- Automatic embedding after `paper extract` (separate command in v1).
+- Sparse/ColBERT retrieval from bge-m3 (dense vectors only in v1).
+
+## Configuration
+
+### New config sections
+
+```toml
+[embedding]
+model = "bge-m3"
+dimensions = 1024
+normalized = true
+batch_size = 32
+chunk_max_tokens = 512
+chunk_overlap_tokens = 64
+provider = "ollama"                    # references [[providers]].name
+
+[rerank]
+enabled = true
+model = "BAAI/bge-reranker-v2-m3"
+top_n = 10
+provider = "siliconflow"              # references [[providers]].name
+
+[search]
+vector_dir = "paper_vectors"
+vector_top_k = 50
+keyword_top_k = 30
+hybrid = true
+access_token = "env:SEARCH_ACCESS_TOKEN"   # optional; omit to allow open access
+```
+
+### ModelCapability extension
+
+Two new boolean fields on the existing `ModelCapability` dataclass:
+
+- `is_support_embedding`
+- `is_support_rerank`
+
+These fields are declared per model in `[[providers]].models[]`, alongside the existing capability flags. The embedding and rerank config sections reference a provider by name; the system resolves the named model within that provider and verifies the corresponding capability flag is true.
+
+### Provider declaration examples
+
+```toml
+[[providers]]
+name = "ollama"
+type = "openai_compatible"
+base = [{ url = "http://localhost:11434/v1", weight = 1, key = [{ value = "ollama", weight = 1 }] }]
+models = [
+  { model_name = "bge-m3", is_stream = false, is_support_json_schema = false, is_support_json_object = false, is_support_embedding = true, is_support_rerank = false }
+]
+
+[[providers]]
+name = "siliconflow"
+type = "openai_compatible"
+base = [{ url = "https://api.siliconflow.cn/v1", weight = 1, key = [{ value = "env:SF_API_KEY", weight = 1 }] }]
+models = [
+  { model_name = "BAAI/bge-reranker-v2-m3", is_stream = false, is_support_json_schema = false, is_support_json_object = false, is_support_embedding = false, is_support_rerank = true },
+  { model_name = "bge-m3", is_stream = false, is_support_json_schema = false, is_support_json_object = false, is_support_embedding = true, is_support_rerank = false }
+]
+```
+
+## Embedding pipeline
+
+### Embedding API contract
+
+All embedding providers (Ollama, DashScope, SiliconFlow) use the OpenAI-compatible `/v1/embeddings` endpoint.
+
+Request:
+
+```json
+{
+  "model": "bge-m3",
+  "input": ["text1", "text2"],
+  "dimensions": 1024
+}
+```
+
+Response:
+
+```json
+{
+  "data": [
+    { "embedding": [0.1, 0.2, "..."], "index": 0 },
+    { "embedding": [0.3, 0.4, "..."], "index": 1 }
+  ],
+  "usage": { "prompt_tokens": 42 }
+}
+```
+
+Ollama confirmed: supports `/v1/embeddings` with `model`, `input` (string or array of strings), `encoding_format`, and `dimensions` fields.
+
+### Embedding does not use RoutePool
+
+Embedding is a batch offline operation. It resolves the configured provider's first base + key via `select_runtime_route` once at startup. Per-request weighted selection and cooldown tracking are unnecessary.
+
+### Data sources
+
+`paper embed` accepts two mutually exclusive data source modes:
+
+1. **paper_infos JSON files** (`-i`, repeatable) — one or more extraction output files. The same paper may appear in multiple files extracted by different templates (e.g. `paper_infos_simple.json` and `paper_infos_deep_read.json`). All inputs are loaded and grouped by resolved paper identity (doc_id). Each template's extraction for a given document is embedded separately, tagged by `template_tag`.
+2. **Snapshot DB + static export dir** (`--snapshot-db` + `--static-export-dir`) — an existing snapshot SQLite database plus its companion static export directory. The embed command reads paper metadata from the `paper` table (title, year, venue, authors, tags via join tables), queries `paper_summary` for available template tags, and loads summary content from `static_export/summary/{paper_id}/{template_tag}.json` for each template. Source markdown is loaded from `static_export/md/{source_md_content_hash}.md`, translated markdown from `static_export/md_translate/{lang}/{md_content_hash}.md`.
+
+Both paths produce the same intermediate representation: a list of per-document records, each carrying metadata, template-specific structured fields, and optionally source/translated markdown. From that point, the chunking, embedding, and vector store layers are identical regardless of data source.
+
+### Document identity (`doc_id`)
+
+`doc_id` is the paper-level identity key, not a file path hash. The same paper appearing in multiple JSON files or with different source paths must resolve to the same `doc_id`.
+
+- **Snapshot mode:** `doc_id` = `paper_id` from the database (already a stable identity).
+- **JSON mode:** `doc_id` is resolved using the same identity logic as snapshot build — prefer DOI if present, then BibTeX key, then metadata fingerprint (title + authors + year), then fall back to SHA-256 of source_path. The resolution function is shared with `snapshot/builder.py` to guarantee consistency.
+
+This prevents duplicate embeddings when the same paper appears under different file paths across multiple `-i` inputs.
+
+### Chunking strategy
+
+Documents are split into chunks before embedding. Because the project supports multiple extraction templates (simple, simple_phi, deep_read, etc.) with heterogeneous output shapes, chunking is driven by a **template adapter** that extracts canonical searchable fields from each record.
+
+### Template adapter
+
+Each adapter implements a function:
+
+```python
+def extract_searchable_fields(record: dict, template_tag: str) -> list[SearchableField]
+
+@dataclass(frozen=True)
+class SearchableField:
+    field_name: str        # e.g. "title", "summary", "qa[0]"
+    chunk_type: str        # title / abstract / content / qa / source_md / translated_md
+    text: str
+    template_tag: str      # e.g. "simple", "deep_read", or "" for template-independent fields
+    lang: str              # language code, e.g. "en", "zh"; empty for non-translation fields
+```
+
+The adapter examines the record's actual keys and extracts what is present. Missing fields are silently skipped (not all templates produce all field types).
+
+v1 ships adapters for `simple` and `simple_phi` templates. A fallback adapter handles unknown templates by scanning all string-valued top-level fields as `content` type.
+
+### Multi-template handling
+
+A single document may have been extracted by multiple templates. Each template's structured fields are embedded independently with its own `template_tag`. Template-independent content (title, source markdown, translated markdown) is embedded once with `template_tag = ""` to avoid duplication.
+
+### Chunk types
+
+| chunk_type | Typical source fields | Template-scoped | Strategy |
+|-----------|----------------------|----------------|----------|
+| `title` | `title` | No (shared) | Single chunk, no splitting |
+| `abstract` | `abstract`, `summary` | Yes (per template) | Split only if exceeds `chunk_max_tokens` |
+| `content` | Other text fields (e.g. `findings`, `methodology`, `contributions`) | Yes (per template) | Sliding window split: `chunk_max_tokens` window, `chunk_overlap_tokens` overlap |
+| `qa` | Q&A pairs (if present) | Yes (per template) | Each Q+A concatenated as one chunk, no splitting |
+| `source_md` | Source markdown file | No (shared) | Sliding window split, same parameters as content |
+| `translated_md` | Translated markdown file | No (shared, per lang) | Sliding window split, `lang` field set to language code |
+
+Each chunk carries a `field_name` (e.g. `deep_read/findings`, `simple/summary`, `qa[0]`) for result attribution. For template-scoped chunks, `field_name` is prefixed with the template tag.
+
+Token counting uses `tiktoken` (cl100k_base) as an approximate chunking heuristic. bge-m3 uses an XLM-R tokenizer internally, so cl100k_base token counts will diverge from real model input lengths, especially for CJK text. The `chunk_max_tokens` setting is therefore a soft budget, not a hard model-input guarantee. Chunks that fall within 80% of the limit are safe; the 20% margin absorbs tokenizer divergence. If tighter alignment is needed in the future, the chunker can be swapped to a character-budget or sentence-boundary strategy without changing the rest of the pipeline.
+
+## Vector store
+
+### LanceDB
+
+LanceDB is an embedded vector database. Storage is a single directory (default `paper_vectors/`), no daemon process. Installed via `pip install lancedb`.
+
+### Capacity estimate
+
+For a 4,000-paper corpus with multi-template extraction, source markdown, and one translation language:
+
+| Content | Chunks per paper | Total chunks | Storage |
+|---------|-----------------|-------------|---------|
+| Structured fields (per template, ~2 templates avg) | ~15 | 60K | ~400 MB |
+| Source markdown | ~25 | 100K | ~600 MB |
+| Translated markdown (1 lang) | ~25 | 100K | ~600 MB |
+| **Total** | **~65** | **~260K** | **~1.6 GB** |
+
+At 260K rows, brute-force vector scan completes in 50-100ms. No ANN index needed at this scale. If the corpus grows beyond 100K documents, IVF-PQ indexing can be added without schema changes.
+
+### Table schema
+
+Table name: `paper_chunks`
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | string | `{doc_id}_{template_key}_{chunk_type}_{chunk_index}` (unique row key; see ID serialization below) |
+| `doc_id` | string | Paper-level identity (see Document identity section) |
+| `source_path` | string | Original file path (empty for snapshot-only papers) |
+| `template_tag` | string | Extraction template (e.g. `simple`, `deep_read`); empty for shared chunks |
+| `chunk_type` | string | title / abstract / content / qa / source_md / translated_md |
+| `chunk_index` | int | Chunk sequence number within this type+template |
+| `field_name` | string | Source field (e.g. `deep_read/findings`, `simple/summary`, `qa[0]`) |
+| `lang` | string | Language code for translated_md chunks (e.g. `zh`); empty otherwise |
+| `text` | string | Chunk text |
+| `content_hash` | string | SHA-256 of chunk text |
+| `vector` | vector[1024] | bge-m3 embedding |
+| `title` | string | Document title (denormalized for display) |
+| `year` | int | Publication year |
+| `authors` | string | Comma-separated |
+| `venue` | string | Publication venue |
+| `tags` | string | Comma-separated |
+
+Metadata columns are denormalized so LanceDB can filter directly (e.g. `where year = 2024 AND tags LIKE '%NLP%'`) without joining back to source data.
+
+### Chunk ID serialization
+
+The `id` column uses `_` as separator: `{doc_id}_{template_key}_{chunk_type}_{chunk_index}`.
+
+`template_key` is derived from `template_tag`:
+- Template-scoped chunks: `template_key` = `template_tag` (e.g. `simple`, `deep_read`).
+- Shared chunks (title, source_md, translated_md): `template_key` = `_shared`.
+
+The literal `_shared` is a reserved value. Template tags must not use this name.
+
+For translated_md chunks, the language code is appended to chunk_type: `translated_md_zh`, `translated_md_en`. This keeps `id` globally unique without adding another separator dimension.
+
+Examples:
+- `abc123_simple_abstract_0`
+- `abc123_deep_read_content_3`
+- `abc123__shared_title_0`
+- `abc123__shared_source_md_7`
+- `abc123__shared_translated_md_zh_2`
+
+### Index metadata (hard validation)
+
+A file `index_meta.json` is stored in the vector directory:
+
+```json
+{
+  "model": "bge-m3",
+  "dimensions": 1024,
+  "normalized": true,
+  "provider": "ollama",
+  "index_version": 1
+}
+```
+
+Validation rules:
+
+- `paper embed` reads `index_meta.json` on startup.
+- If `model`, `dimensions`, or `normalized` do not match current config, the command fails immediately with an explicit error. This prevents silent corruption when switching providers or models.
+- If `index_meta.json` does not exist (first run), it is created.
+- `index_version` is a format version number. Schema changes increment it. Mismatch is a fatal error.
+
+### Incremental update
+
+`paper embed` runs incrementally by default. The update unit is a **group** defined as `(doc_id, template_key)`. Each group is tracked and rebuilt independently:
+
+- **Shared group** `(doc_id, _shared)`: contains title, source_md, translated_md chunks.
+- **Template group** `(doc_id, <template_tag>)`: contains abstract, content, qa chunks for that template.
+
+A change in one group does not trigger rebuild of other groups for the same document. For example, re-extracting a paper with `deep_read` only rebuilds the `(doc_id, deep_read)` group; the `_shared` group and `(doc_id, simple)` group are untouched if their hashes still match.
+
+Update procedure:
+
+1. Read data source (JSON files or snapshot), generate chunks grouped by `(doc_id, template_key)`.
+2. For each chunk, compute `content_hash` = SHA-256(text).
+3. For each group, compute `group_hash` = SHA-256 of sorted `content_hash` values in that group.
+4. Query LanceDB for existing `(doc_id, template_key) -> group_hash` (stored in a lightweight `_group_meta` table or derived from the chunks).
+5. **Group hash matches** -> skip entirely.
+6. **Group hash differs or new group** -> delete all chunks with matching `(doc_id, template_key)`, re-embed, write.
+7. **Orphan groups** (in LanceDB but not in source data) -> delete all their chunks.
+8. Update `index_meta.json` statistics (doc_count, template_count, chunk_count, last_updated).
+
+### Force rebuild
+
+`--force` deletes the entire vector directory (including `index_meta.json`) and rebuilds from scratch. This handles three scenarios:
+
+- Re-embedding all documents after content changes.
+- Switching to a different embedding model (index_meta model mismatch would otherwise be a fatal error).
+- Schema version upgrade (index_meta `index_version` mismatch).
+
+The command prints a warning line before deleting: `Removing existing vector index at <path> (--force)`. No interactive confirmation (CLI tool convention).
+
+## Rerank
+
+### Provider abstraction
+
+Rerank is implemented behind a Protocol interface from the start:
+
+```python
+class RerankProvider(Protocol):
+    async def rerank(
+        self,
+        query: str,
+        documents: list[str],
+        *,
+        top_n: int,
+        client: httpx.AsyncClient,
+    ) -> RerankResult: ...
+
+@dataclass(frozen=True)
+class RerankResult:
+    indices: list[int]
+    scores: list[float]
+```
+
+The first implementation is `OpenAICompatibleReranker`, covering providers that expose a `/v1/rerank` endpoint (SiliconFlow, Jina, etc.).
+
+### Rerank API contract
+
+The reranker implementation sends a `POST /v1/rerank` request. The model name comes from `rerank.model` in config and is resolved against the provider's `models[]` declarations at startup (must have `is_support_rerank = true`). No model name is hardcoded in the implementation.
+
+Request (minimum required fields):
+
+```json
+{
+  "model": "<from config>",
+  "query": "...",
+  "documents": ["doc1", "doc2", ...],
+  "top_n": 10,
+  "return_documents": false
+}
+```
+
+The implementation extracts only `results[].index` and `results[].relevance_score` from the response. All other response fields (token usage, metadata, document text) are treated as optional and provider-specific. The implementation must tolerate missing or differently-shaped metadata fields across providers.
+
+Provider-specific optional request fields (e.g. `instruction` for Qwen3-Reranker, `max_chunks_per_doc` for bge-reranker) are not sent by default. They can be added via provider-level config extension if needed in the future.
+
+The rerank model and endpoint format should be verified against the provider's current API documentation before implementation, as providers update available models and response shapes frequently. The Protocol abstraction ensures new provider formats can be added without changing consumers.
+
+### Rerank input
+
+Rerank receives the best-matching chunk text per document, not the full document. This keeps latency and cost predictable.
+
+### Degradation
+
+If `rerank.enabled = false` or the rerank API call fails, the pipeline returns results sorted by vector similarity score. The system does not fail because rerank is unavailable.
+
+## Search pipeline
+
+### Query flow
+
+```
+User query
+    |
+    +-- embed query (bge-m3) -> LanceDB vector search (top vector_top_k)
+    |                           optional metadata filter: year, venue, tags
+    |
+    +-- BM25/FTS keyword search (top keyword_top_k)
+    |   (uses existing PaperIndex keyword matching)
+    |
+    v
+Aggregate by doc_id: take highest chunk score per doc
+Deduplicate and merge both result sets
+    |
+    v
+Rerank (cloud API, bge-reranker-v2-m3)
+    input: query + best chunk text per doc
+    output: relevance_score ordering
+    |
+    v
+Return top rerank.top_n results
+```
+
+### doc_id aggregation
+
+Vector search returns chunk-level results. A single document may have chunks from multiple templates, source markdown, and translations. All chunks are aggregated to **document level by `doc_id`** — not by `(doc_id, template_tag)`. The goal is one result row per paper.
+
+For each `doc_id`, the aggregation selects the single best chunk (highest cosine similarity). That chunk's text is sent to the reranker. The response includes attribution metadata from the winning chunk:
+
+- `matched_chunk`: the chunk text
+- `matched_field`: the field name (e.g. `deep_read/findings`, `simple/summary`)
+- `matched_template`: the template tag (e.g. `deep_read`, or `_shared` for source_md/title)
+- `matched_chunk_type`: e.g. `content`, `source_md`, `translated_md`
+- `matched_lang`: language code if translated_md, empty otherwise
+
+This means a search for a Chinese phrase might surface a hit via `translated_md` chunk, while a search for a technical term might surface a hit via `deep_read/methodology` chunk — both returning the same paper as one result row.
+
+BM25/keyword results carry a keyword rank position but no vector score. Vector results carry a vector score but may have no keyword rank.
+
+### Hybrid fusion: Reciprocal Rank Fusion (RRF)
+
+When both vector and keyword results are present, they are merged using RRF:
+
+```
+rrf_score(doc) = sum over each list L where doc appears: 1 / (k + rank_in_L)
+```
+
+where `k = 60` (standard RRF constant). Each retrieval path (vector, keyword) is one list. Documents appearing in both lists get contributions from both ranks.
+
+RRF produces a unified score for every candidate regardless of which retrieval path found it. This score is used for pre-rerank ordering and as the final score when rerank is disabled or fails.
+
+### Modes
+
+- `hybrid = true` (default): both vector and keyword recall, merged via RRF, reranked.
+- `--no-hybrid`: vector-only recall, no RRF needed, still reranked.
+- `--no-rerank`: vector + keyword recall (if hybrid), sorted by RRF score, no rerank API call.
+
+### Score semantics in response
+
+- When rerank succeeds: `score` = reranker's `relevance_score` (0-1 range, provider-defined).
+- When rerank is disabled or fails: `score` = RRF score (hybrid mode) or cosine similarity (vector-only mode).
+- The `score_type` field in the response indicates which: `"rerank"`, `"rrf"`, or `"cosine"`.
+
+## Token-gated frontend access
+
+### Backend
+
+`search.access_token` in config is optional. When set:
+
+- `/api/papers/semantic` requires `Authorization: Bearer <token>` header.
+- Token is compared to config value (resolved via `resolve_key_value` for `env:` support).
+- Mismatch or missing header returns `403 Forbidden`.
+- The existing `/api/papers` keyword search endpoint is unaffected.
+
+When `access_token` is not configured, `/api/papers/semantic` is open to all requests.
+
+### Frontend
+
+**No-token state:**
+
+- Search bar works normally with keyword search.
+- A lock icon button appears beside the search bar. Hover tooltip: "Unlock semantic search".
+- Clicking opens a DaisyUI modal/popover with:
+  - Input field, placeholder "Enter access token".
+  - "Unlock" button.
+  - On submit: sends a probe request to `/api/papers/semantic?q=test&top_n=1`.
+  - Success: token saved to IndexedDB, lock icon changes to unlocked state, search switches to hybrid mode.
+  - Failure: red inline error "Invalid token".
+
+**Token state:**
+
+- Page load reads token from IndexedDB.
+- Search bar operates in hybrid mode. A small "Semantic" badge or icon change indicates the active mode.
+- Every `/api/papers/semantic` request includes the `Authorization` header.
+- If any request returns 403 (token revoked), IndexedDB is cleared, UI reverts to lock state, search falls back to keyword mode.
+
+**IndexedDB schema:**
+
+- Database name: `deepresearch_flow`
+- Object store: `settings`
+- Key: `search_access_token`
+- Value: `{ token: "...", saved_at: "2026-04-11T..." }`
+
+## CLI commands
+
+### `paper embed`
+
+Two data source modes (mutually exclusive):
+
+```bash
+# From one or more paper_infos JSON files (same paper, different templates)
+deepresearch-flow paper embed \
+  -c config.toml \
+  -i paper_infos_simple.json \
+  -i paper_infos_deep_read.json \
+  --output-embed-db ./embed_vectors
+
+# Optionally include source markdown and translated markdown directories
+deepresearch-flow paper embed \
+  -c config.toml \
+  -i paper_infos_simple.json \
+  --md-root ./markdowns \
+  --md-translated-root ./translated_md \
+  --output-embed-db ./embed_vectors
+
+# From existing snapshot DB (when original JSON is lost)
+# Source markdown and translations are read from static export automatically
+deepresearch-flow paper embed \
+  -c config.toml \
+  --snapshot-db snapshot.db \
+  --static-export-dir ./static_export \
+  --output-embed-db ./embed_vectors
+
+# Force full rebuild (deletes existing vector index first)
+deepresearch-flow paper embed \
+  -c config.toml \
+  --snapshot-db snapshot.db \
+  --static-export-dir ./static_export \
+  --output-embed-db ./embed_vectors \
+  --force
+```
+
+`-i` is repeatable. Multiple JSON files are merged by resolved paper identity (doc_id).
+
+`template_tag` resolution for each JSON input follows a strict priority:
+
+1. **CLI override** (`--template-tag <tag>`): if provided, applies to all `-i` inputs that don't self-declare. When multiple `-i` files are passed with different templates, use one `--template-tag` per `-i` pair is not supported; use option 2 or 3 instead.
+2. **Explicit field in JSON**: if the top-level object or each record contains a `template_tag` or `prompt_template` field, that value is used.
+3. **Fallback error**: if neither CLI nor JSON provides a template tag, the command fails with an explicit error listing which input files are missing template identification.
+
+No filename-convention guessing. Template identity must be explicit.
+
+`--md-root` and `--md-translated-root` are optional for JSON mode. When provided, source/translated markdown files are matched to documents by source_hash and embedded as `source_md` / `translated_md` chunks. For snapshot mode, these files are loaded from the static export directory automatically.
+
+`--output-embed-db` specifies the LanceDB output directory. Falls back to `search.vector_dir` from config if omitted.
+
+### `paper db snapshot build` integration
+
+Snapshot build can optionally generate the vector index in the same pass:
+
+```bash
+deepresearch-flow paper db snapshot build \
+  --input paper_infos.json \
+  --output-db snapshot.db \
+  --static-export-dir ./static_export \
+  --output-embed-db ./embed_vectors
+```
+
+When `--output-embed-db` is specified, the build command runs embedding after snapshot construction, using the freshly built snapshot as data source. Without this flag, no embedding step runs (existing behavior unchanged).
+
+### `paper search`
+
+```bash
+# Hybrid search with rerank
+deepresearch-flow paper search \
+  -c config.toml \
+  --embed-db ./embed_vectors \
+  -q "attention mechanism in transformer" --top-n 10
+
+# With metadata filters
+deepresearch-flow paper search -c config.toml --embed-db ./embed_vectors -q "..." --year 2024 --venue NeurIPS
+
+# Without rerank
+deepresearch-flow paper search -c config.toml --embed-db ./embed_vectors -q "..." --no-rerank
+
+# Vector-only (no keyword recall)
+deepresearch-flow paper search -c config.toml --embed-db ./embed_vectors -q "..." --no-hybrid
+```
+
+`--embed-db` specifies the LanceDB directory to query. Falls back to `search.vector_dir` from config if omitted.
+
+## Web API
+
+### New endpoint
+
+```
+GET /api/papers/semantic?q=<query>&top_n=10&year=2024&venue=NeurIPS&rerank=true
+```
+
+Requires `Authorization: Bearer <token>` header when `search.access_token` is configured.
+
+Response format matches existing `/api/papers`, with additional fields per result:
+
+- `score`: relevance score (see Score semantics section for interpretation)
+- `score_type`: one of `"rerank"`, `"rrf"`, or `"cosine"` — indicates what `score` represents
+- `matched_chunk`: the chunk text that matched best for this document
+- `matched_field`: source field name (e.g. `deep_read/findings`, `simple/summary`)
+- `matched_template`: template tag of the winning chunk (e.g. `deep_read`, `_shared`)
+- `matched_chunk_type`: chunk type (e.g. `content`, `source_md`, `translated_md`)
+- `matched_lang`: language code if `translated_md`, empty string otherwise
+
+### Existing endpoint unchanged
+
+`/api/papers` keyword search continues to work without authentication.
+
+### Web server: loading the vector index
+
+```bash
+deepresearch-flow paper db api serve \
+  --snapshot-db snapshot.db \
+  --static-export-dir ./static_export \
+  --embed-db ./embed_vectors
+```
+
+When `--embed-db` is provided, the server loads the LanceDB index and enables `/api/papers/semantic`. When omitted, only keyword search is available (current behavior, no breakage).
+
+## File map
+
+| File | Action | Responsibility |
+|------|--------|----------------|
+| `python/deepresearch_flow/paper/embedding.py` | Create | `/v1/embeddings` call, batch embedding |
+| `python/deepresearch_flow/paper/reranker.py` | Create | RerankProvider Protocol, OpenAICompatibleReranker |
+| `python/deepresearch_flow/paper/vector_store.py` | Create | LanceDB read/write, schema definition, incremental logic, index_meta validation |
+| `python/deepresearch_flow/paper/chunker.py` | Create | Document chunking strategies, template adapters |
+| `python/deepresearch_flow/paper/embed_source.py` | Create | Unified data source abstraction: load from JSON or snapshot DB + static export |
+| `python/deepresearch_flow/paper/search.py` | Create | Hybrid search pipeline (embed query, retrieve, merge via RRF, rerank, aggregate) |
+| `python/deepresearch_flow/paper/config.py` | Modify | Add `EmbeddingConfig`, `RerankConfig`, `SearchConfig` dataclasses; extend `ModelCapability` |
+| `python/deepresearch_flow/paper/cli.py` | Modify | Add `paper embed` and `paper search` commands with `--output-embed-db` / `--embed-db` / `--snapshot-db` |
+| `python/deepresearch_flow/paper/snapshot/builder.py` | Modify | Add optional `--output-embed-db` to snapshot build |
+| `python/deepresearch_flow/paper/db.py` | Modify | Register `--embed-db` on `api serve` command |
+| `python/deepresearch_flow/paper/web/app.py` | Modify | Load LanceDB index when `embed_db` path is provided |
+| `python/deepresearch_flow/paper/web/handlers/api.py` | Modify | Add `/api/papers/semantic` endpoint with token validation |
+| Frontend search component | Modify | Token input UI, IndexedDB read/write, search mode switching |
+| Tests | Create | Unit tests for each new module |
+
+## New dependencies
+
+```
+lancedb        # embedded vector database
+pyarrow        # LanceDB underlying format
+tiktoken       # approximate token counting for chunk splitting (not exact bge-m3 tokenizer)
+```
+
+No `torch`, `sentence-transformers`, or other heavy ML dependencies. Local embedding runs entirely via Ollama HTTP API.
