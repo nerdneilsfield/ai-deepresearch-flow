@@ -15,6 +15,7 @@ from deepresearch_flow.paper.web.constants import DEFAULT_PDFJS_CDN_BASE_URL, PD
 from deepresearch_flow.paper.web.handlers import (
     api_markdown,
     api_papers,
+    api_papers_semantic,
     api_pdf,
     api_stats,
     index_page,
@@ -78,6 +79,9 @@ def create_app(
     static_mode: str | None = None,
     static_export_dir: Path | None = None,
     pdfjs_cdn_base_url: str | None = None,
+    embed_db: Path | None = None,
+    search_access_token: str | None = None,
+    paper_config=None,
 ) -> Starlette:
     papers = load_and_merge_papers(db_paths, bibtex_path, cache_dir, use_cache, pdf_roots=pdf_roots)
 
@@ -140,6 +144,7 @@ def create_app(
         Route("/stats", stats_page, methods=["GET"]),
         Route("/paper/{source_hash:str}", paper_detail, methods=["GET"]),
         Route("/api/papers", api_papers, methods=["GET"]),
+        Route("/api/papers/semantic", api_papers_semantic, methods=["GET"]),
         Route("/api/stats", api_stats, methods=["GET"]),
         Route("/api/pdf/{source_hash:str}", api_pdf, methods=["GET"]),
         Route("/api/dev/markdown/{source_hash:str}", api_markdown, methods=["GET"]),
@@ -203,4 +208,12 @@ def create_app(
     app.state.asset_config = asset_config
     app.state.static_export_dir = export_dir
     app.state.pdfjs_cdn_base_url = pdfjs_cdn_base_url
+    if embed_db and embed_db.exists():
+        from deepresearch_flow.paper.vector_store import open_store
+
+        app.state.embed_db = open_store(embed_db)
+    else:
+        app.state.embed_db = None
+    app.state.search_access_token = search_access_token
+    app.state.paper_config = paper_config
     return app

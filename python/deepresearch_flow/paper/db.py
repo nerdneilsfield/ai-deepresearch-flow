@@ -376,6 +376,7 @@ def register_db_commands(db_group: click.Group) -> None:
 
     @snapshot_group.command("build")
     @click.option("-i", "--input", "input_paths", multiple=True, required=True, help="Input JSON file path")
+    @click.option("-c", "--config", "config_path", default="config.toml", help="Path to config.toml")
     @click.option("-b", "--bibtex", "bibtex_path", default=None, help="Optional BibTeX file path")
     @click.option(
         "--md-root",
@@ -412,8 +413,10 @@ def register_db_commands(db_group: click.Group) -> None:
         default=None,
         help="Optional previous snapshot DB path for identity continuity",
     )
+    @click.option("--output-embed-db", "output_embed_db", default=None, help="Build LanceDB vector index alongside snapshot")
     def snapshot_build(
         input_paths: tuple[str, ...],
+        config_path: str,
         bibtex_path: str | None,
         md_roots: tuple[str, ...],
         md_translated_roots: tuple[str, ...],
@@ -421,6 +424,7 @@ def register_db_commands(db_group: click.Group) -> None:
         output_db: str,
         static_export_dir: str,
         previous_snapshot_db: str | None,
+        output_embed_db: str | None,
     ) -> None:
         """Build a production snapshot (SQLite + static export)."""
         from deepresearch_flow.paper.snapshot.builder import SnapshotBuildOptions, build_snapshot
@@ -438,6 +442,19 @@ def register_db_commands(db_group: click.Group) -> None:
         build_snapshot(opts)
         click.echo(f"Wrote snapshot DB: {opts.output_db}")
         click.echo(f"Wrote static export: {opts.static_export_dir}")
+        if output_embed_db:
+            from deepresearch_flow.paper.embed_pipeline import run_embed_pipeline
+
+            click.echo(f"Building vector index at {output_embed_db}...")
+            config = load_config(config_path)
+            asyncio.run(
+                run_embed_pipeline(
+                    config=config,
+                    snapshot_db=opts.output_db,
+                    static_export_dir=opts.static_export_dir,
+                    vector_dir=Path(output_embed_db),
+                )
+            )
 
     @snapshot_group.group("unpack")
     def snapshot_unpack_group() -> None:
@@ -1554,6 +1571,9 @@ def register_db_commands(db_group: click.Group) -> None:
     )
     @click.option("--host", default="127.0.0.1", show_default=True, help="Bind host")
     @click.option("--port", default=8000, type=int, show_default=True, help="Bind port")
+    @click.option("--embed-db", "embed_db", default=None, help="LanceDB directory for semantic search")
+    @click.option("--search-access-token", "search_access_token", default=None, envvar="SEARCH_ACCESS_TOKEN", help="Token to gate semantic search")
+    @click.option("-c", "--config", "config_path", default="config.toml", help="Path to config.toml")
     @click.option(
         "--language",
         "fallback_language",
@@ -1575,6 +1595,9 @@ def register_db_commands(db_group: click.Group) -> None:
         pdfjs_cdn_base_url: str | None,
         host: str,
         port: int,
+        embed_db: str | None,
+        search_access_token: str | None,
+        config_path: str,
         fallback_language: str,
     ) -> None:
         """Serve a local, read-only web UI for a paper database JSON file."""
@@ -1582,6 +1605,7 @@ def register_db_commands(db_group: click.Group) -> None:
         import uvicorn
 
         try:
+            paper_config = load_config(config_path)
             app = create_app(
                 db_paths=[Path(path) for path in input_paths],
                 fallback_language=fallback_language,
@@ -1595,6 +1619,9 @@ def register_db_commands(db_group: click.Group) -> None:
                 static_mode=static_mode,
                 static_export_dir=Path(static_export_dir) if static_export_dir else None,
                 pdfjs_cdn_base_url=pdfjs_cdn_base_url,
+                embed_db=Path(embed_db) if embed_db else None,
+                search_access_token=search_access_token,
+                paper_config=paper_config,
             )
         except Exception as exc:
             raise click.ClickException(str(exc)) from exc
