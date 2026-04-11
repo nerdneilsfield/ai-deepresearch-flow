@@ -215,11 +215,7 @@ def _normalize_label_linebreaks(text: str) -> str:
             return block
         return block.replace("\n", "<br/>")
 
-    return re.sub(
-        r"\[[^\]]*\]",
-        lambda match: fix_block(match.group(0)),
-        text,
-    )
+    return _replace_square_blocks(text, fix_block)
 
 
 def _repair_edge_labels(text: str) -> str:
@@ -277,15 +273,16 @@ def _normalize_cylinder_labels(text: str) -> str:
 
 
 def _wrap_html_labels(text: str) -> str:
-    def repl(match: re.Match[str]) -> str:
-        inner = match.group(1).replace('"', "'")
-        return f'["{inner}"]'
+    def fix_block(block: str) -> str:
+        inner = block[1:-1]
+        if "<br" not in inner:
+            return block
+        stripped = inner.strip()
+        if stripped.startswith(('"', "'")) and stripped.endswith(('"', "'")):
+            return block
+        return f'["{inner.replace(chr(34), chr(39))}"]'
 
-    return re.sub(
-        r"\[([^\]]*<br\s*/?>[^\]]*)\]",
-        repl,
-        text,
-    )
+    return _replace_square_blocks(text, fix_block)
 
 
 def _close_unbalanced_labels(text: str) -> str:
@@ -294,12 +291,77 @@ def _close_unbalanced_labels(text: str) -> str:
         if line.startswith("%%"):
             lines.append(line)
             continue
-        opens = line.count("[")
-        closes = line.count("]")
+        opens, closes = _count_structural_square_brackets(line)
         if opens > closes:
             line = line + ("]" * (opens - closes))
         lines.append(line)
     return "\n".join(lines)
+
+
+def _replace_square_blocks(text: str, transform: Callable[[str], str]) -> str:
+    parts: list[str] = []
+    last = 0
+    for start, end in _iter_square_blocks(text):
+        parts.append(text[last:start])
+        parts.append(transform(text[start:end]))
+        last = end
+    parts.append(text[last:])
+    return "".join(parts)
+
+
+def _iter_square_blocks(text: str) -> Iterable[tuple[int, int]]:
+    idx = 0
+    while idx < len(text):
+        if text[idx] != "[":
+            idx += 1
+            continue
+        start = idx
+        idx += 1
+        depth = 1
+        quote: str | None = None
+        escaped = False
+        while idx < len(text) and depth > 0:
+            ch = text[idx]
+            if quote:
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == quote:
+                    quote = None
+            else:
+                if ch in "\"'":
+                    quote = ch
+                elif ch == "[":
+                    depth += 1
+                elif ch == "]":
+                    depth -= 1
+            idx += 1
+        if depth == 0:
+            yield start, idx
+
+
+def _count_structural_square_brackets(text: str) -> tuple[int, int]:
+    opens = 0
+    closes = 0
+    quote: str | None = None
+    escaped = False
+    for ch in text:
+        if quote:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == quote:
+                quote = None
+            continue
+        if ch in "\"'":
+            quote = ch
+        elif ch == "[":
+            opens += 1
+        elif ch == "]":
+            closes += 1
+    return opens, closes
 
 
 def _quote_label_text(label: str) -> str:
@@ -539,6 +601,22 @@ def strip_mermaid_fences(text: str) -> str:
     return stripped.strip()
 
 
+def _finalize_repaired_mermaid(text: str) -> tuple[str, str | None]:
+    stripped = strip_mermaid_fences(text)
+    validation = validate_mermaid(stripped)
+    if not validation:
+        return stripped, None
+
+    cleaned = cleanup_mermaid(stripped)
+    if cleaned != stripped:
+        cleaned_validation = validate_mermaid(cleaned)
+        if not cleaned_validation:
+            return cleaned, None
+        validation = cleaned_validation
+
+    return stripped, validation
+
+
 async def repair_batch(
     issues: list[MermaidIssue],
     route_pool: RoutePool,
@@ -739,9 +817,7 @@ async def fix_mermaid_text(
                         }
                     )
                     continue
-                repaired = strip_mermaid_fences(repaired)
-                repaired = cleanup_mermaid(repaired)
-                validation = validate_mermaid(repaired)
+                repaired, validation = _finalize_repaired_mermaid(repaired)
                 if validation:
                     stats.diagrams_failed += 1
                     error_records.append(
@@ -1014,9 +1090,7 @@ async def repair_all_diagrams_global(
                     progress_cb()
                 continue
 
-            repaired = strip_mermaid_fences(repaired)
-            repaired = cleanup_mermaid(repaired)
-            validation = validate_mermaid(repaired)
+            repaired, validation = _finalize_repaired_mermaid(repaired)
 
             if validation:
                 stats.diagrams_failed += 1
