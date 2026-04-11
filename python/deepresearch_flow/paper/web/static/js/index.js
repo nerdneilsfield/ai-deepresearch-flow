@@ -5,6 +5,81 @@
   var page = 1;
   var loading = false;
   var done = false;
+  var semanticMode = false;
+  var semanticToken = "";
+  var TOKEN_DB_NAME = "deepresearch_flow";
+  var TOKEN_STORE_NAME = "settings";
+  var TOKEN_KEY = "search_access_token";
+
+  function openSettingsDb() {
+    return new Promise(function(resolve, reject) {
+      if (!window.indexedDB) {
+        reject(new Error("IndexedDB not available"));
+        return;
+      }
+      var request = window.indexedDB.open(TOKEN_DB_NAME, 1);
+      request.onupgradeneeded = function(event) {
+        var db = event.target.result;
+        if (!db.objectStoreNames.contains(TOKEN_STORE_NAME)) {
+          db.createObjectStore(TOKEN_STORE_NAME);
+        }
+      };
+      request.onsuccess = function() { resolve(request.result); };
+      request.onerror = function() { reject(request.error || new Error("Failed to open IndexedDB")); };
+    });
+  }
+
+  function readToken() {
+    return openSettingsDb().then(function(db) {
+      return new Promise(function(resolve, reject) {
+        var tx = db.transaction(TOKEN_STORE_NAME, "readonly");
+        var store = tx.objectStore(TOKEN_STORE_NAME);
+        var request = store.get(TOKEN_KEY);
+        request.onsuccess = function() {
+          var value = request.result;
+          if (value && typeof value === "object" && typeof value.token === "string") {
+            resolve(value.token);
+            return;
+          }
+          if (typeof value === "string") {
+            resolve(value);
+            return;
+          }
+          resolve("");
+        };
+        request.onerror = function() { reject(request.error || new Error("Failed to read token")); };
+      }).finally(function() { db.close(); });
+    }).catch(function() {
+      return "";
+    });
+  }
+
+  function writeToken(token) {
+    return openSettingsDb().then(function(db) {
+      return new Promise(function(resolve, reject) {
+        var tx = db.transaction(TOKEN_STORE_NAME, "readwrite");
+        var store = tx.objectStore(TOKEN_STORE_NAME);
+        var request = store.put({ token: token, saved_at: new Date().toISOString() }, TOKEN_KEY);
+        request.onsuccess = function() { resolve(); };
+        request.onerror = function() { reject(request.error || new Error("Failed to write token")); };
+      }).finally(function() { db.close(); });
+    });
+  }
+
+  function clearToken() {
+    semanticToken = "";
+    return openSettingsDb().then(function(db) {
+      return new Promise(function(resolve, reject) {
+        var tx = db.transaction(TOKEN_STORE_NAME, "readwrite");
+        var store = tx.objectStore(TOKEN_STORE_NAME);
+        var request = store.delete(TOKEN_KEY);
+        request.onsuccess = function() { resolve(); };
+        request.onerror = function() { reject(request.error || new Error("Failed to clear token")); };
+      }).finally(function() { db.close(); });
+    }).catch(function() {
+      return undefined;
+    });
+  }
 
   function currentParams(nextPage) {
     var params = new URLSearchParams();
@@ -31,6 +106,64 @@
     addMulti("filterSummary", "summary");
     addMulti("filterTemplate", "template");
     return params;
+  }
+
+  function currentSemanticParams() {
+    var params = new URLSearchParams();
+    params.set("top_n", "30");
+    var q = document.getElementById("query").value.trim();
+    if (q) params.set("q", q);
+    var advYear = document.getElementById("advYear");
+    if (advYear && advYear.value.trim()) params.set("year", advYear.value.trim());
+    var advVenue = document.getElementById("advVenue");
+    if (advVenue && advVenue.value.trim()) params.set("venue", advVenue.value.trim());
+    return params;
+  }
+
+  function setTokenError(message) {
+    var tokenError = document.getElementById("token-error");
+    if (!tokenError) return;
+    if (!message) {
+      tokenError.style.display = "none";
+      tokenError.textContent = "";
+      return;
+    }
+    tokenError.textContent = message;
+    tokenError.style.display = "block";
+  }
+
+  function updateSemanticUi() {
+    var badge = document.getElementById("semantic-badge");
+    var icon = document.getElementById("semantic-icon");
+    var toggle = document.getElementById("semantic-toggle");
+    if (badge) badge.style.display = semanticMode ? "inline-flex" : "none";
+    if (icon) icon.textContent = semanticMode ? "🔓" : "🔒";
+    if (toggle) toggle.title = semanticMode ? "Semantic search unlocked" : "Unlock semantic search";
+  }
+
+  function deactivateSemanticMode() {
+    semanticMode = false;
+    semanticToken = "";
+    updateSemanticUi();
+  }
+
+  function activateSemanticMode(token) {
+    semanticMode = true;
+    semanticToken = token;
+    updateSemanticUi();
+  }
+
+  function probeSemanticToken(token) {
+    return fetch("/api/papers/semantic?probe=1", {
+      headers: {
+        "Authorization": "Bearer " + token
+      }
+    }).then(function(response) {
+      if (!response.ok) {
+        throw new Error(response.status === 403 ? "Invalid token" : "Semantic search unavailable");
+      }
+      return response.json();
+    });
   }
 
   function escapeHtml(text) {
@@ -144,28 +277,43 @@
     loading = true;
     var loadingEl = document.getElementById("loading");
     if (loadingEl) loadingEl.textContent = "Loading...";
-    var url = "/api/papers?" + currentParams(page).toString();
-    fetch(url).then(function(res) { return res.json(); }).then(function(data) {
-      if (data.stats) updateStats(data.stats);
-      var results = document.getElementById("results");
-    if (results) {
-      var startIndex = (data.page - 1) * data.page_size;
-      for (var i = 0; i < data.items.length; i++) {
-        results.insertAdjacentHTML("beforeend", renderItem(data.items[i], startIndex + i + 1));
-      }
-      if (window.renderMathInElement) {
-        renderMathInElement(results, {
-          delimiters: [
-            {left: '$$', right: '$$', display: true},
-            {left: '$', right: '$', display: false},
-            {left: '\\\\(', right: '\\\\)', display: false},
-            {left: '\\\\[', right: '\\\\]', display: true}
-          ],
-          throwOnError: false
+    var url = semanticMode ? "/api/papers/semantic?" + currentSemanticParams().toString() : "/api/papers?" + currentParams(page).toString();
+    var headers = {};
+    if (semanticMode && semanticToken) {
+      headers.Authorization = "Bearer " + semanticToken;
+    }
+    fetch(url, { headers: headers }).then(function(res) {
+      if (semanticMode && res.status === 403) {
+        return clearToken().then(function() {
+          deactivateSemanticMode();
+          throw new Error("semantic-forbidden");
         });
       }
-    }
-      if (!data.has_more) {
+      return res.json();
+    }).then(function(data) {
+      if (!semanticMode && data.stats) updateStats(data.stats);
+      var results = document.getElementById("results");
+      if (results) {
+        var startIndex = semanticMode ? 0 : (data.page - 1) * data.page_size;
+        for (var i = 0; i < data.items.length; i++) {
+          results.insertAdjacentHTML("beforeend", renderItem(data.items[i], startIndex + i + 1));
+        }
+        if (window.renderMathInElement) {
+          renderMathInElement(results, {
+            delimiters: [
+              {left: '$$', right: '$$', display: true},
+              {left: '$', right: '$', display: false},
+              {left: '\\\\(', right: '\\\\)', display: false},
+              {left: '\\\\[', right: '\\\\]', display: true}
+            ],
+            throwOnError: false
+          });
+        }
+      }
+      if (semanticMode) {
+        done = true;
+        if (loadingEl) loadingEl.textContent = data.items.length ? "Semantic results loaded." : "No semantic results.";
+      } else if (!data.has_more) {
         done = true;
         if (loadingEl) loadingEl.textContent = "End.";
       } else {
@@ -173,8 +321,13 @@
         if (loadingEl) loadingEl.textContent = "Scroll to load more...";
       }
       loading = false;
-    }).catch(function() {
+    }).catch(function(error) {
       loading = false;
+      if (error && error.message === "semantic-forbidden") {
+        if (loadingEl) loadingEl.textContent = "Semantic token expired. Falling back to keyword search...";
+        resetAndLoad();
+        return;
+      }
       if (loadingEl) loadingEl.textContent = "Error loading papers.";
     });
   }
@@ -229,6 +382,68 @@
         resetAndLoad();
       });
     }
+    var semanticToggle = document.getElementById("semantic-toggle");
+    var tokenModal = document.getElementById("token-modal");
+    var tokenSubmit = document.getElementById("token-submit");
+    var tokenCancel = document.getElementById("token-cancel");
+    var tokenInput = document.getElementById("token-input");
+    if (semanticToggle && tokenModal) {
+      semanticToggle.addEventListener("click", function() {
+        setTokenError("");
+        if (semanticMode) {
+          clearToken().then(function() {
+            deactivateSemanticMode();
+            resetAndLoad();
+          });
+          return;
+        }
+        if (typeof tokenModal.showModal === "function") {
+          tokenModal.showModal();
+        } else {
+          tokenModal.setAttribute("open", "open");
+        }
+        if (tokenInput) tokenInput.focus();
+      });
+    }
+    if (tokenCancel && tokenModal) {
+      tokenCancel.addEventListener("click", function() {
+        setTokenError("");
+        if (typeof tokenModal.close === "function") {
+          tokenModal.close();
+        } else {
+          tokenModal.removeAttribute("open");
+        }
+      });
+    }
+    if (tokenSubmit && tokenInput && tokenModal) {
+      tokenSubmit.addEventListener("click", function() {
+        var token = tokenInput.value.trim();
+        if (!token) {
+          setTokenError("Token is required");
+          return;
+        }
+        setTokenError("");
+        probeSemanticToken(token).then(function() {
+          return writeToken(token).then(function() {
+            activateSemanticMode(token);
+            if (typeof tokenModal.close === "function") {
+              tokenModal.close();
+            } else {
+              tokenModal.removeAttribute("open");
+            }
+            resetAndLoad();
+          });
+        }).catch(function(error) {
+          setTokenError(error && error.message ? error.message : "Invalid token");
+        });
+      });
+      tokenInput.addEventListener("keydown", function(event) {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          tokenSubmit.click();
+        }
+      });
+    }
   }
 
   function initScrollHandler() {
@@ -255,7 +470,19 @@
     initEventListeners();
     initScrollHandler();
     initSummaryToggle();
-    loadMore();
+    updateSemanticUi();
+    readToken().then(function(token) {
+      if (!token) return;
+      return probeSemanticToken(token).then(function() {
+        activateSemanticMode(token);
+      }).catch(function() {
+        return clearToken().then(function() {
+          deactivateSemanticMode();
+        });
+      });
+    }).finally(function() {
+      loadMore();
+    });
   }
 
   if (document.readyState === "loading") {
