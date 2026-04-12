@@ -81,6 +81,28 @@ class TestPreProtectSafety:
         assert "[^2]: second" in result
         assert "```\ncode\n```" in result
 
+    def test_fix_markdown_keeps_footnote_entries_on_separate_lines(self):
+        text = "# References\n1) first\n2) second\n"
+        result = fix_markdown(text, "normal")
+        assert "[^1]: first\n[^2]: second" in result
+
+    def test_fix_markdown_resets_notes_state_after_next_heading(self):
+        text = "# References\n1) first\n## Appendix\n2) second\n"
+        result = fix_markdown(text, "normal")
+        assert "[^1]: first\n" in result
+        assert "## Appendix\n2) second" in result
+
+    def test_fix_markdown_does_not_rewrite_reference_like_brackets_inside_urls(self):
+        text = "See https://api.example.com/v1[2]/data for details."
+        result = fix_markdown(text, "normal")
+        assert "<https://api.example.com/v1[2]/data>" in result
+        assert "[^2]" not in result
+
+    def test_link_processor_preserves_balanced_parentheses_in_urls(self):
+        text = "See https://en.wikipedia.org/wiki/Function_(mathematics)."
+        result = LinkProcessor().fix_links(text)
+        assert result == "See <https://en.wikipedia.org/wiki/Function_(mathematics)>."
+
     def test_aggressive_title_cleanup_skips_fenced_code_blocks(self):
         text = "# 1. Intro\n```\n# 2. Inside code\n```\n# 3. Outro"
         result = fix_markdown(text, "aggressive")

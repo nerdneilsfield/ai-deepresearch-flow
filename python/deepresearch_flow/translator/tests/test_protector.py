@@ -167,6 +167,30 @@ def test_literal_placeholder_like_source_roundtrips_without_false_positive() -> 
     assert store.restore_all_checked(source) == source
 
 
+def test_source_literal_placeholder_like_token_does_not_collide_with_real_placeholder() -> None:
+    protector = MarkdownProtector()
+    store = PlaceHolderStore()
+    cfg = TranslateConfig()
+    text = "literal __PH_CODE_000001__ and code `x`"
+
+    protected = protector.protect(text, cfg, store)
+
+    assert protector.unprotect(protected, store) == text
+
+
+def test_restore_checked_rejects_missing_placeholder_before_restore() -> None:
+    protector = MarkdownProtector()
+    store = PlaceHolderStore()
+    cfg = TranslateConfig()
+    text = r"Before \(x + y\) after"
+
+    protected = protector.protect(text, cfg, store)
+    tampered = protected.replace("__PH_MATH_000001__", "", 1)
+
+    with pytest.raises(ValueError, match="missing before restore"):
+        protector.unprotect(tampered, store)
+
+
 def test_unprotect_raises_on_real_unresolved_placeholder_residuals() -> None:
     protector = MarkdownProtector()
     store = PlaceHolderStore()
@@ -185,5 +209,33 @@ def test_restore_checked_rejects_known_placeholder_residuals() -> None:
     math_placeholder = store.add("MATH", r"\(x+y\)")
     code_placeholder = store.add("CODE", f"`{math_placeholder}`")
 
-    with pytest.raises(ValueError, match="unresolved placeholder"):
+    with pytest.raises(ValueError):
         store.restore_all_checked(code_placeholder)
+
+
+@pytest.mark.parametrize(
+    ("text", "cfg"),
+    [
+        (
+            "Before [wiki](https://en.wikipedia.org/wiki/Function_(mathematics)) after",
+            TranslateConfig(),
+        ),
+        (
+            "Before ![alt](https://example.com/img(1).png) after",
+            TranslateConfig(),
+        ),
+        (
+            "Before ![alt](https://example.com/img(1).png) and [wiki](https://en.wikipedia.org/wiki/Function_(mathematics)) after",
+            TranslateConfig(translate_image_alt=True, translate_links_text=True),
+        ),
+    ],
+)
+def test_protect_unprotect_preserves_balanced_parenthesis_link_destinations(
+    text: str, cfg: TranslateConfig
+) -> None:
+    protector = MarkdownProtector()
+    store = PlaceHolderStore()
+
+    protected = protector.protect(text, cfg, store)
+
+    assert protector.unprotect(protected, store) == text

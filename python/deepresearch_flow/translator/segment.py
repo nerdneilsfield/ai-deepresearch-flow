@@ -175,6 +175,7 @@ def reassemble_segments(segments: Iterable[Segment], nodes: dict[int, Node]) -> 
             continue
         for node_id in node_ids:
             node = nodes.get(node_id)
-            if node is not None:
-                parts.append(node.translated_text)
+            if node is None:
+                raise ValueError(f"missing node during reassembly: {node_id}")
+            parts.append(node.translated_text or node.origin_text)
     return "".join(parts)

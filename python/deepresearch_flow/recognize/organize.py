@@ -25,6 +25,7 @@ from deepresearch_flow.recognize.markdown import (
 logger = logging.getLogger(__name__)
 _RUMDL_PATH = shutil.which("rumdl")
 _RUMDL_WARNED = False
+_RUMDL_TIMEOUT_SECONDS = 5.0
 
 
 async def _format_markdown(text: str) -> str:
@@ -43,7 +44,14 @@ async def _format_markdown(text: str) -> str:
                 capture_output=True,
                 text=True,
                 check=False,
+                timeout=_RUMDL_TIMEOUT_SECONDS,
             )
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                "rumdl fmt timed out after %.1fs; skip markdown formatting (recognize)",
+                _RUMDL_TIMEOUT_SECONDS,
+            )
+            return text
         except OSError as exc:
             message = str(exc).strip() or "unknown error"
             logger.warning("rumdl fmt failed (oserror=%s): %s", type(exc).__name__, message)

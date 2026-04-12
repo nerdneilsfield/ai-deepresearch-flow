@@ -11,27 +11,35 @@ class PlaceHolderStore:
     _placeholder_like = re.compile(r"__PH_[A-Z0-9_]+__")
 
     def __init__(self) -> None:
-        self._map: dict[str, str] = {}
+        self._map: dict[tuple[str, str], str] = {}
         self._rev: dict[str, str] = {}
         self._kind_count: dict[str, int] = {}
         self._source_placeholder_likes: set[str] = set()
         self.length = 0
 
     def add(self, kind: str, text: str) -> str:
-        if text in self._map:
-            return self._map[text]
+        key = (kind, text)
+        if key in self._map:
+            return self._map[key]
 
-        self.length += 1
-        length_str = str(self.length).zfill(6)
-        placeholder = f"__PH_{kind}_{length_str}__"
-        self._map[text] = placeholder
+        while True:
+            self.length += 1
+            length_str = str(self.length).zfill(6)
+            placeholder = f"__PH_{kind}_{length_str}__"
+            if placeholder not in self._rev and placeholder not in self._source_placeholder_likes:
+                break
+
+        self._map[key] = placeholder
         self._rev[placeholder] = text
         self._kind_count[kind] = self._kind_count.get(kind, 0) + 1
         return placeholder
 
     def save(self, file_path: str) -> None:
         payload = {
-            "map": self._map,
+            "entries": [
+                {"kind": kind, "text": text, "placeholder": placeholder}
+                for (kind, text), placeholder in self._map.items()
+            ],
             "rev": self._rev,
             "kind_count": self._kind_count,
             "source_placeholder_likes": sorted(self._source_placeholder_likes),
@@ -42,7 +50,22 @@ class PlaceHolderStore:
     def load(self, file_path: str) -> None:
         with open(file_path, "r", encoding="utf-8") as handle:
             payload = json.load(handle)
-        self._map = payload.get("map", {})
+        entries = payload.get("entries")
+        if isinstance(entries, list):
+            self._map = {
+                (str(entry.get("kind", "")), str(entry.get("text", ""))): str(
+                    entry.get("placeholder", "")
+                )
+                for entry in entries
+                if entry.get("placeholder")
+            }
+        else:
+            legacy_map = payload.get("map", {})
+            self._map = {}
+            for text, placeholder in legacy_map.items():
+                match = re.match(r"__PH_([A-Z0-9]+)_\d+__", str(placeholder))
+                kind = match.group(1) if match else "LEGACY"
+                self._map[(str(kind), str(text))] = str(placeholder)
         self._rev = payload.get("rev", {})
         self._kind_count = payload.get("kind_count", {})
         self._source_placeholder_likes = set(payload.get("source_placeholder_likes", []))
@@ -85,6 +108,11 @@ class PlaceHolderStore:
         )
 
     def restore_all_checked(self, text: str, *, ignore_source_literals: bool = True) -> str:
+        missing = self.diff_missing(text)
+        if missing:
+            raise ValueError(
+                "placeholder token(s) missing before restore: " + ", ".join(missing)
+            )
         restored = self.restore_all(text)
         source_literals = self._source_placeholder_likes if ignore_source_literals else set()
         residual = [
@@ -106,7 +134,13 @@ class PlaceHolderStore:
         return [ph for ph in self._map.values() if ph not in text]
 
     def snapshot(self) -> Dict[str, str]:
-        return dict(self._map)
+        return {
+            f"{kind}\n{text}": placeholder
+            for (kind, text), placeholder in self._map.items()
+        }
+
+    def placeholders(self) -> set[str]:
+        return set(self._rev)
 
     def kind_counts(self) -> Dict[str, int]:
         return dict(self._kind_count)

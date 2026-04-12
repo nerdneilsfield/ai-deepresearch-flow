@@ -106,6 +106,7 @@ class MarkdownTranslator:
         self.protector = MarkdownProtector()
         self._rumdl_path = shutil.which("rumdl")
         self._rumdl_warned = False
+        self._rumdl_timeout_seconds = 5.0
 
         self._rx_preserve = re.compile(
             r"@@PRESERVE_(\d+)@@[\s\S]*?@@/PRESERVE_\1@@", re.DOTALL
@@ -127,7 +128,7 @@ class MarkdownTranslator:
         )
 
         self._rx_node_unpack = re.compile(
-            r"(?:<|@@)NODE_START_(\d{4})(?:>|@@)(.*?)(?:</NODE_END_\1>|@@NODE_END_\1@@)",
+            r"(?:<|@@)NODE_START_(\d+)(?:>|@@)(.*?)(?:</NODE_END_\1>|@@NODE_END_\1@@)",
             re.DOTALL,
         )
 
@@ -375,9 +376,18 @@ class MarkdownTranslator:
                 input=text,
                 text=True,
                 capture_output=True,
+                timeout=self._rumdl_timeout_seconds,
             )
 
-        result = await asyncio.to_thread(run)
+        try:
+            result = await asyncio.to_thread(run)
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                "rumdl fmt timed out (stage=%s, timeout=%.1fs); skip markdown formatting",
+                stage,
+                self._rumdl_timeout_seconds,
+            )
+            return text
         if result.returncode != 0:
             logger.warning(
                 "rumdl fmt failed (stage=%s, rc=%s): %s",
@@ -836,7 +846,7 @@ class MarkdownTranslator:
         )
 
         translated_nodes = self._ungroup_groups(outputs, nodes)
-        valid_placeholders = set(store.snapshot().values())
+        valid_placeholders = store.placeholders()
         if valid_placeholders:
             for node in translated_nodes.values():
                 if node.translated_text:

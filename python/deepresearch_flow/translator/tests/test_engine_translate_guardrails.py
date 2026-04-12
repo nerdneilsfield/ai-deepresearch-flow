@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 import re
+import subprocess
 
 import httpx
 import pytest
@@ -167,3 +168,41 @@ def test_translated_headings_keep_original_levels_after_post_format(monkeypatch)
     assert "# 标题" in result.translated_text
     assert "### I. 引言" in result.translated_text
     assert "### II. 相关工作" in result.translated_text
+
+
+def test_translate_handles_node_ids_beyond_four_digits(monkeypatch) -> None:
+    translator = _make_translator(max_chunk_chars=10**9, retry_failed_nodes=False)
+    text = "".join(f"# Heading {i}\n" for i in range(10005))
+
+    async def fake_translate_group(self, group_text, *args, **kwargs):
+        return re.sub(
+            r"(<NODE_START_\d+>\n)(.*?)(\n</NODE_END_\d+>)",
+            lambda m: f"{m.group(1)}ZH: {m.group(2)}{m.group(3)}",
+            group_text,
+            flags=re.DOTALL,
+        )
+
+    async def fake_format(self, content, stage):
+        return content
+
+    monkeypatch.setattr(MarkdownTranslator, "_translate_group", fake_translate_group)
+    monkeypatch.setattr(MarkdownTranslator, "_format_markdown", fake_format)
+
+    result = asyncio.run(_run_translate(translator, text))
+
+    assert "ZH: # Heading 9999" in result.translated_text
+    assert "ZH: # Heading 10000" in result.translated_text
+    assert "ZH: # Heading 10004" in result.translated_text
+
+
+def test_engine_format_markdown_returns_original_on_rumdl_timeout(monkeypatch) -> None:
+    translator = _make_translator()
+    translator._rumdl_path = "rumdl"
+
+    def fake_run():
+        raise subprocess.TimeoutExpired(cmd=["rumdl", "fmt"], timeout=5.0)
+
+    monkeypatch.setattr(translator, "_rumdl_timeout_seconds", 5.0)
+    monkeypatch.setattr("deepresearch_flow.translator.engine.subprocess.run", lambda *a, **k: fake_run())
+
+    assert asyncio.run(translator._format_markdown("# Title\n", "post")) == "# Title\n"

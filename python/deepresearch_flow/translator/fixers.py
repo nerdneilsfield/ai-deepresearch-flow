@@ -59,8 +59,7 @@ class LinkProcessor:
         self._patterns = {
             "url": re.compile(
                 r"(?<!<)(?<!]\()(?:(?<=^)|(?<=\s)|(?<=[\(\[{\"“]))"
-                r"(https?://[^\s\)\]\}>]+)"
-                r"(?=[\s\)\]\}>.,!?;:，。！？；：]|$)"
+                r"(https?://\S+)"
             ),
             "email": re.compile(
                 r"(?<!<)(?<!]\()(?<![\w.%+-])"
@@ -88,9 +87,26 @@ class LinkProcessor:
         def bracket_urls(value: str) -> str:
             def repl(match: re.Match) -> str:
                 url = match.group(1)
-                if len(url) > 1 and url[-1] in ".,!?;:，。！？；：" and url[-2].isalnum():
-                    return f"<{url[:-1]}>{url[-1]}"
-                return f"<{url}>"
+                suffix = ""
+                while url:
+                    if url[-1] in ".,!?;:，。！？；：":
+                        suffix = url[-1] + suffix
+                        url = url[:-1]
+                        continue
+                    if url.endswith(")") and url.count("(") < url.count(")"):
+                        suffix = ")" + suffix
+                        url = url[:-1]
+                        continue
+                    if url.endswith("]") and url.count("[") < url.count("]"):
+                        suffix = "]" + suffix
+                        url = url[:-1]
+                        continue
+                    if url.endswith("}") and url.count("{") < url.count("}"):
+                        suffix = "}" + suffix
+                        url = url[:-1]
+                        continue
+                    break
+                return f"<{url}>{suffix}"
 
             return _sub(self._patterns["url"], repl)
 
@@ -517,10 +533,27 @@ _RE_NESTED_MAILTO = re.compile(r"<mailto:(?:<mailto:)+([^<>]+?)>+")
 
 _RE_FENCED_BLOCK = re.compile(r"^(`{3,}|~{3,}).*?^\1\s*$", re.MULTILINE | re.DOTALL)
 _RE_DISPLAY_MATH = re.compile(r"\$\$[\s\S]+?\$\$")
-_RE_PAREN_MATH = re.compile(r"\\\((?:.|\n)*?\\\)", re.DOTALL)
-_RE_BRACKET_MATH = re.compile(r"\\\[(?:.|\n)*?\\\]", re.DOTALL)
 _RE_HTML_CODE = re.compile(r"<code>.*?</code>", re.DOTALL)
 _RE_INLINE_CODE = re.compile(r"(`+)(.*?)(\1)", re.DOTALL)
+_RE_AUTOLINK = re.compile(r"<https?://[^>]+>|<mailto:[^<>]+>|<tel:[^>]+>")
+
+
+def _scan_latex_delimited_ranges(
+    text: str, open_delim: str, close_delim: str
+) -> list[tuple[int, int]]:
+    ranges: list[tuple[int, int]] = []
+    start = 0
+    while True:
+        idx = text.find(open_delim, start)
+        if idx < 0:
+            break
+        end = text.find(close_delim, idx + len(open_delim))
+        if end < 0:
+            start = idx + len(open_delim)
+            continue
+        ranges.append((idx, end + len(close_delim)))
+        start = end + len(close_delim)
+    return ranges
 
 
 def _build_protected_ranges(text: str, *, include_inline_math: bool) -> list[tuple[int, int]]:
@@ -529,16 +562,17 @@ def _build_protected_ranges(text: str, *, include_inline_math: bool) -> list[tup
     patterns = [
         _RE_FENCED_BLOCK,
         _RE_DISPLAY_MATH,
-        _RE_PAREN_MATH,
-        _RE_BRACKET_MATH,
         _RE_HTML_CODE,
         _RE_INLINE_CODE,
+        _RE_AUTOLINK,
     ]
     if include_inline_math:
         patterns.append(_RE_INLINE_MATH)
     for pattern in patterns:
         for m in pattern.finditer(text):
             ranges.append((m.start(), m.end()))
+    ranges.extend(_scan_latex_delimited_ranges(text, r"\(", r"\)"))
+    ranges.extend(_scan_latex_delimited_ranges(text, r"\[", r"\]"))
     ranges.sort()
     return ranges
 
@@ -736,7 +770,7 @@ def _normalize_footnote_definitions_preserving_state(text: str) -> str:
         heading_match = notes_heading_re.match(stripped)
         if heading_match:
             in_notes = True
-            notes_level = len(stripped.split(" ")[0].lstrip("#"))
+            notes_level = len(stripped.split(" ", 1)[0])
             last_note_index = None
         elif notes_heading_plain_re.match(stripped):
             in_notes = True
@@ -744,11 +778,9 @@ def _normalize_footnote_definitions_preserving_state(text: str) -> str:
             last_note_index = None
         elif re.match(r"^#{1,6}\s+", stripped):
             if notes_level is not None:
-                level = len(stripped.split(" ")[0].lstrip("#"))
-                if level <= notes_level:
-                    in_notes = False
-                    notes_level = None
-                    last_note_index = None
+                in_notes = False
+                notes_level = None
+                last_note_index = None
 
         match = re.match(r"^\[\^([0-9]+)\]\s+", line)
         if match:
@@ -767,8 +799,9 @@ def _normalize_footnote_definitions_preserving_state(text: str) -> str:
                     last_note_index = len(out) - 1
                 else:
                     number = list_match.group(1)
-                    rest = line[list_match.end() :].strip()
-                    out.append(f"[^{number}]: {rest}")
+                    line_ending = "\n" if line.endswith("\n") else ""
+                    rest = line[list_match.end() :].rstrip("\r\n")
+                    out.append(f"[^{number}]: {rest}{line_ending}")
                     last_note_index = len(out) - 1
                 offset = line_end
                 continue
@@ -779,7 +812,10 @@ def _normalize_footnote_definitions_preserving_state(text: str) -> str:
                     offset = line_end
                     continue
                 if line.startswith((" ", "\t")):
-                    out[last_note_index] = f"{out[last_note_index]} {line.strip()}"
+                    line_ending = "\n" if out[last_note_index].endswith("\n") else ""
+                    out[last_note_index] = (
+                        out[last_note_index].rstrip("\r\n") + f" {line.strip()}{line_ending}"
+                    )
                     offset = line_end
                     continue
 
@@ -807,8 +843,8 @@ def fix_markdown(text: str, level: str) -> str:
     title_processor = TitleProcessor()
 
     text = merge_paragraphs(text)
-    text = ref_processor.fix_references(text)
     text = link_processor.fix_links(text)
+    text = ref_processor.fix_references(text)
     text = pseudo_processor.wrap_pseudocode_blocks(text)
 
     if level == "aggressive":

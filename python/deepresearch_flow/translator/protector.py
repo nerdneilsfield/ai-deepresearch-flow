@@ -278,6 +278,85 @@ class MarkdownProtector:
         return "".join(out)
 
     @staticmethod
+    def _scan_inline_bracket(text: str, start: int, open_char: str, close_char: str) -> int | None:
+        i = start + 1
+        n = len(text)
+        while i < n:
+            if text[i] == "\\":
+                i += 2
+                continue
+            if text[i] == close_char:
+                return i
+            i += 1
+        return None
+
+    @staticmethod
+    def _scan_balanced_parens(text: str, start: int) -> int | None:
+        depth = 1
+        i = start + 1
+        n = len(text)
+        while i < n:
+            if text[i] == "\\":
+                i += 2
+                continue
+            if text[i] == "(":
+                depth += 1
+            elif text[i] == ")":
+                depth -= 1
+                if depth == 0:
+                    return i
+            i += 1
+        return None
+
+    @staticmethod
+    def _freeze_inline_links_and_images(
+        text: str, cfg: TranslateConfig, store: PlaceHolderStore
+    ) -> str:
+        out: List[str] = []
+        i = 0
+        n = len(text)
+        while i < n:
+            is_image = text[i] == "!" and i + 1 < n and text[i + 1] == "["
+            is_link = text[i] == "["
+            if not is_image and not is_link:
+                out.append(text[i])
+                i += 1
+                continue
+
+            start = i
+            bracket_start = i + 1 if is_image else i
+            bracket_end = MarkdownProtector._scan_inline_bracket(text, bracket_start, "[", "]")
+            if bracket_end is None or bracket_end + 1 >= n or text[bracket_end + 1] != "(":
+                out.append(text[i])
+                i += 1
+                continue
+            paren_end = MarkdownProtector._scan_balanced_parens(text, bracket_end + 1)
+            if paren_end is None:
+                out.append(text[i])
+                i += 1
+                continue
+
+            full = text[start : paren_end + 1]
+            if is_image:
+                if not cfg.translate_image_alt:
+                    out.append(store.add("IMAGE", full))
+                else:
+                    head = "!["
+                    alt = text[bracket_start + 1 : bracket_end]
+                    tail = text[bracket_end + 1 : paren_end + 1]
+                    out.append(f"{head}{alt}]{store.add('IMGURL', tail)}")
+            else:
+                if not cfg.translate_links_text:
+                    out.append(store.add("LINK", full))
+                else:
+                    head = "["
+                    label = text[bracket_start + 1 : bracket_end]
+                    tail = text[bracket_end + 1 : paren_end + 1]
+                    out.append(f"{head}{label}]{store.add('LINKURL', tail)}")
+            i = paren_end + 1
+        return "".join(out)
+
+    @staticmethod
     def _freeze_inline(text: str, cfg: TranslateConfig, store: PlaceHolderStore) -> str:
         s = text
 
@@ -291,35 +370,7 @@ class MarkdownProtector:
 
         s = MarkdownProtector._freeze_paren_math(s, store)
 
-        img_pattern = re.compile(r"!\[(?:[^\]\\]|\\.)*?\]\((?:[^()\\]|\\.)*?\)")
-        if not cfg.translate_image_alt:
-            s = img_pattern.sub(lambda m: store.add("IMAGE", m.group(0)), s)
-        else:
-            def repl_img_alt(match: re.Match) -> str:
-                full = match.group(0)
-                match2 = re.match(r"(!\[)(.*?)(\]\()(.+)(\))", full)
-                if not match2:
-                    return store.add("IMAGE", full)
-                head, alt, mid, tail, endp = match2.groups()
-                placeholder = store.add("IMGURL", mid + tail + endp)
-                return f"{head}{alt}{placeholder}"
-
-            s = img_pattern.sub(repl_img_alt, s)
-
-        link_pattern = re.compile(r"\[(?:[^\]\\]|\\.)*?\]\((?:[^()\\]|\\.)*?\)")
-        if not cfg.translate_links_text:
-            s = link_pattern.sub(lambda m: store.add("LINK", m.group(0)), s)
-        else:
-            def repl_link_text(match: re.Match) -> str:
-                full = match.group(0)
-                match2 = re.match(r"(\[)(.*?)(\]\()(.+)(\))", full)
-                if not match2:
-                    return store.add("LINK", full)
-                lbr, txt, mid, tail, rbr = match2.groups()
-                placeholder = store.add("LINKURL", mid + tail + rbr)
-                return f"{lbr}{txt}{placeholder}"
-
-            s = link_pattern.sub(repl_link_text, s)
+        s = MarkdownProtector._freeze_inline_links_and_images(s, cfg, store)
 
         ref_link_pattern = re.compile(r"\[(?:[^\]\\]|\\.)*?\]\[[^\]]+\]")
         s = ref_link_pattern.sub(lambda m: store.add("REFLINK", m.group(0)), s)
@@ -327,7 +378,7 @@ class MarkdownProtector:
         autolink_pattern = re.compile(r"<(?:https?://|mailto:)[^>]+>")
         s = autolink_pattern.sub(lambda m: store.add("AUTOLINK", m.group(0)), s)
 
-        url_pattern = re.compile(r"(https?://[^ )\n]+)")
+        url_pattern = re.compile(r"(https?://[^ \n]+)")
         s = url_pattern.sub(lambda m: store.add("URL", m.group(0)), s)
 
         block_math_pattern = re.compile(r"\$\$[\s\S]+?\$\$")
