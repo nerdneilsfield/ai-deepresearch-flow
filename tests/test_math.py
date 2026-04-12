@@ -56,6 +56,29 @@ def test_extract_math_spans_reclassifies_prose_like_display_blocks() -> None:
     assert spans == []
 
 
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("price is $5. code: `$HOME` and math $x+y$", [("$", "x+y")]),
+        (
+            "This is $\\underline{\\text{__PH_AUTOLINK_000106__}}$ end",
+            [],
+        ),
+        (
+            "$$\nDownloaded on March 30, 2026 at 20:06:42 UTC from IEEE Xplore. Restrictions apply.\n## 5 IMPLEMENTING THE INDEX ON A GPU\nThe cost is $x+y$ in the text.\n$$\n",
+            [],
+        ),
+        ("valid block:\n$$\na+b\n$$\n", [("$$", "\na+b\n")]),
+    ],
+)
+def test_extract_math_spans_seed_classification(
+    text: str, expected: list[tuple[str, str]]
+) -> None:
+    spans = math.extract_math_spans(text, 0)
+
+    assert [(span.delimiter, span.content) for span in spans] == expected
+
+
 def test_cleanup_formula_preserves_latex_commands_with_n_and_right() -> None:
     original = (
         r"f_{c}(c_{1},c_{2})=\begin{cases}"

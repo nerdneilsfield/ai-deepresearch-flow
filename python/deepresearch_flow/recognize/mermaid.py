@@ -109,6 +109,7 @@ def cleanup_mermaid(text: str) -> str:
     cleaned = _normalize_cylinder_labels(cleaned)
     cleaned = _wrap_html_labels(cleaned)
     cleaned = _balance_labels_before_arrows(cleaned)
+    cleaned = _sanitize_quoted_label_text(cleaned)
     cleaned = _quote_nested_bracket_labels(cleaned)
     cleaned = _close_unbalanced_labels(cleaned)
     cleaned = _split_compacted_statements(cleaned)
@@ -300,6 +301,20 @@ def _quote_nested_bracket_labels(text: str) -> str:
     return _replace_square_blocks(text, fix_block)
 
 
+def _sanitize_quoted_label_text(text: str) -> str:
+    def fix_block(block: str) -> str:
+        inner = block[1:-1]
+        stripped = inner.strip()
+        if len(stripped) < 2:
+            return block
+        if stripped[0] == '"' and stripped[-1] == '"':
+            sanitized_inner = stripped[1:-1].replace('"', "'")
+            return f'[\"{sanitized_inner}\"]'
+        return block
+
+    return _replace_square_blocks(text, fix_block)
+
+
 def _balance_labels_before_arrows(text: str) -> str:
     arrows = ("-->", "-.->", "==>")
     lines: list[str] = []
@@ -403,6 +418,9 @@ def _count_structural_square_brackets(text: str) -> tuple[int, int]:
 def _quote_label_text(label: str) -> str:
     stripped = label.strip()
     if stripped.startswith(('"', "'")) and stripped.endswith(('"', "'")):
+        if stripped[0] == '"' and '"' in stripped[1:-1]:
+            inner = stripped[1:-1].replace('"', "'")
+            return f'"{inner}"'
         return stripped
     return f'"{stripped.replace(chr(34), chr(39))}"'
 

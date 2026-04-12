@@ -84,6 +84,8 @@ def test_fix_mermaid_text_accepts_valid_repair_without_recleanup(monkeypatch) ->
         ("区间[-π, π)", 'A["区间[-π, π)"] --> B["ok"]'),
         ("中括号[abc]", 'A["中括号[abc]"] --> B["ok"]'),
         ("a|b|c", 'A["a|b|c"] --> B["ok"]'),
+        ('He said "hi"', 'A["He said \'hi\'"] --> B["ok"]'),
+        ("路径/斜杠\\反斜杠", 'A["路径/斜杠\\反斜杠"] --> B["ok"]'),
     ],
 )
 def test_cleanup_mermaid_preserves_quoted_special_character_labels(
@@ -94,7 +96,8 @@ def test_cleanup_mermaid_preserves_quoted_special_character_labels(
     cleaned = mermaid.cleanup_mermaid(original)
 
     assert expected_fragment in cleaned
-    assert cleaned.rstrip("\n") == original.rstrip("\n")
+    if '"' not in label:
+        assert cleaned.rstrip("\n") == original.rstrip("\n")
 
 
 @pytest.mark.parametrize("break_tag", ["<br>", "<br/>", "<br />"])
@@ -120,6 +123,27 @@ def test_cleanup_mermaid_repairs_unquoted_labels_with_nested_brackets() -> None:
     cleaned = mermaid.cleanup_mermaid(original)
 
     assert cleaned == 'flowchart LR\nB["数据增强：z轴随机旋转[-π, π)]"] --> C[ok]'
+
+
+@pytest.mark.parametrize(
+    "original,expected",
+    [
+        (
+            "flowchart LR\nA[区间[-π, π)] --> B[ok]\n",
+            'flowchart LR\nA["区间[-π, π)]"] --> B[ok]',
+        ),
+        (
+            "flowchart LR\nA[中括号[abc]] --> B[ok]\n",
+            'flowchart LR\nA["中括号[abc]"] --> B[ok]',
+        ),
+    ],
+)
+def test_cleanup_mermaid_repairs_unquoted_nested_bracket_labels_parametrically(
+    original: str, expected: str
+) -> None:
+    cleaned = mermaid.cleanup_mermaid(original)
+
+    assert cleaned == expected
 
 
 def test_cleanup_mermaid_is_idempotent_for_compacted_and_bracketed_labels() -> None:
