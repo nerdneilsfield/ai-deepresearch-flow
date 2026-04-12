@@ -9,8 +9,18 @@ import pytest
 from deepresearch_flow.paper.embed_source import (
     DocumentMetadata,
     EmbedDocument,
+    _as_joined_text,
+    _candidate_tokens,
+    _extract_metadata,
+    _extract_title,
+    _extract_year,
+    _file_matches,
     _match_source_md,
     _match_translations,
+    _read_json_payload,
+    _resolve_markdown_file,
+    _row_text,
+    _update_metadata_if_preferred,
     load_from_json,
     load_from_snapshot,
     resolve_template_tag,
@@ -27,6 +37,138 @@ def test_resolve_template_tag_priority_and_error() -> None:
 
     with pytest.raises(ValueError, match="template"):
         resolve_template_tag({}, None)
+
+
+def test_internal_metadata_helpers_handle_fallbacks_and_joining() -> None:
+    assert _extract_title({"paper_title": " Paper ", "title": "Fallback"}) == ("Paper", 2)
+    assert _extract_title({"title": " 123 "}) == ("123", 1)
+    assert _extract_title({"title": 456}) == ("456", 1)
+    assert _extract_title({}) == ("", 0)
+
+    assert _as_joined_text(None) == ""
+    assert _as_joined_text("  Alice  ") == "Alice"
+    assert _as_joined_text([" Alice ", "", "Bob"]) == "Alice, Bob"
+    assert _as_joined_text({"x": 1}) == "{'x': 1}"
+
+    assert _extract_year({"year": "2024"}) == 2024
+    assert _extract_year({"year": "bad", "publication_date": "2023-01-01"}) == 2023
+    assert _extract_year({"publication_date": ""}) == 0
+
+    metadata, rank = _extract_metadata(
+        {
+            "paper_title": "Paper",
+            "year": "2024",
+            "_authors": ["Alice", "Bob"],
+            "_venue": "ACL",
+            "_tags": ["tag-a", "tag-b"],
+            "source_path": "source.md",
+        }
+    )
+    assert rank == 2
+    assert metadata == DocumentMetadata(
+        title="Paper",
+        year=2024,
+        authors="Alice, Bob",
+        venue="ACL",
+        tags="tag-a, tag-b",
+        source_path="source.md",
+    )
+
+
+def test_read_json_payload_supports_list_dict_and_nested_papers(tmp_path: Path) -> None:
+    list_path = tmp_path / "list.json"
+    dict_path = tmp_path / "dict.json"
+    nested_path = tmp_path / "nested.json"
+    bad_path = tmp_path / "bad.json"
+
+    list_path.write_text(json.dumps([{"a": 1}, "x"]), encoding="utf-8")
+    dict_path.write_text(json.dumps({"a": 1}), encoding="utf-8")
+    nested_path.write_text(json.dumps({"papers": [{"a": 1}, "x"]}), encoding="utf-8")
+    bad_path.write_text(json.dumps("oops"), encoding="utf-8")
+
+    assert _read_json_payload(list_path) == [{"a": 1}]
+    assert _read_json_payload(dict_path) == [{"a": 1}]
+    assert _read_json_payload(nested_path) == [{"a": 1}]
+    with pytest.raises(ValueError, match="Unsupported JSON payload"):
+        _read_json_payload(bad_path)
+
+
+def test_candidate_tokens_file_matches_and_markdown_resolution(tmp_path: Path) -> None:
+    record = {
+        "source_md_content_hash": "hash-a",
+        "source_hash": "hash-a",
+        "source_path": "nested/paper.md",
+    }
+    tokens = _candidate_tokens(record)
+    assert tokens == ["hash-a", "nested/paper.md", "paper.md", "paper"]
+
+    md_root = tmp_path / "md"
+    md_root.mkdir()
+    nested = md_root / "nested"
+    nested.mkdir()
+    paper = nested / "paper.md"
+    paper.write_text("paper", encoding="utf-8")
+    direct_name = md_root / "paper.md"
+    direct_name.write_text("direct-name", encoding="utf-8")
+    direct_stem = md_root / "hash-a.md"
+    direct_stem.write_text("direct-stem", encoding="utf-8")
+
+    assert _file_matches(paper, tokens) is True
+    assert _file_matches(md_root / "other.md", tokens) is False
+    assert _resolve_markdown_file(tmp_path / "missing", record) is None
+    assert _resolve_markdown_file(md_root / "paper.txt", record) is None
+    assert _resolve_markdown_file(direct_name, record) == direct_name
+    assert _resolve_markdown_file(md_root, {"source_path": "nested/paper.md"}) == paper
+    assert _resolve_markdown_file(md_root, {"source_path": "other/paper.md"}) == direct_name
+    assert _resolve_markdown_file(md_root, {"source_path": "hash-a"}) == direct_stem
+
+
+def test_match_helpers_and_metadata_update_preference(tmp_path: Path) -> None:
+    md_root = tmp_path / "md"
+    md_root.mkdir()
+    (md_root / "paper.md").write_text("source markdown", encoding="utf-8")
+
+    translated_root = tmp_path / "translated"
+    (translated_root / "en").mkdir(parents=True)
+    (translated_root / "en" / "paper.md").write_text("english translation", encoding="utf-8")
+    (translated_root / "fr-file").write_text("not a dir", encoding="utf-8")
+
+    record = {"source_path": "paper.md"}
+    assert _match_source_md(record, [md_root]) == "source markdown"
+    assert _match_source_md(record, [tmp_path / "missing"]) is None
+    assert _match_translations(record, [translated_root, tmp_path / "missing"]) == {"en": "english translation"}
+
+    doc = EmbedDocument(
+        doc_id="doc-1",
+        metadata=DocumentMetadata(title="", year=0, authors="", venue="", tags="", source_path=""),
+    )
+    ranks: dict[str, int] = {}
+    _update_metadata_if_preferred(
+        doc,
+        DocumentMetadata(title="Fallback", year=2023, authors="", venue="", tags="", source_path=""),
+        title_rank=1,
+        title_ranks=ranks,
+    )
+    _update_metadata_if_preferred(
+        doc,
+        DocumentMetadata(title="Preferred", year=2024, authors="", venue="", tags="", source_path=""),
+        title_rank=2,
+        title_ranks=ranks,
+    )
+    assert doc.metadata.title == "Preferred"
+    assert ranks["doc-1"] == 2
+
+
+def test_row_text_prefers_first_non_empty_value() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute("SELECT '' AS a, '  title  ' AS b, NULL AS c").fetchone()
+        assert row is not None
+        assert _row_text(row, "a", "b", "c") == "title"
+        assert _row_text(row, "missing", "a") == ""
+    finally:
+        conn.close()
 
 
 def test_match_helpers_use_source_path_and_hash(tmp_path: Path) -> None:
