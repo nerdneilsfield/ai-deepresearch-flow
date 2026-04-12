@@ -31,21 +31,53 @@ This change adds three capabilities to deepresearch-flow:
 
 ### New config sections
 
+Embedding and rerank have their own independent provider lists, completely separate from the chat completion `[[providers]]`. This avoids mixing concerns and lets each model carry its own parameters (dimensions, max_context, etc.).
+
 ```toml
 [embedding]
-model = "bge-m3"
-dimensions = 1024
+default_model = "Qwen3-Embedding-4B"
+default_provider = "ollama"
+dimensions = 1024                       # output dimensions (can be overridden per model)
 normalized = true
 batch_size = 32
 chunk_max_tokens = 512
 chunk_overlap_tokens = 64
-provider = "ollama"                    # references [[providers]].name
+
+[[embedding.providers]]
+name = "ollama"
+type = "openai_compatible"
+base_url = "http://localhost:11434/v1"
+api_key = "ollama"
+models = [
+  { model_name = "Qwen3-Embedding-4B", dimensions = 1024, max_context = 32768 },
+  { model_name = "bge-m3", dimensions = 1024, max_context = 8192 }
+]
+
+[[embedding.providers]]
+name = "siliconflow"
+type = "openai_compatible"
+base_url = "https://api.siliconflow.cn/v1"
+api_key = "env:SF_API_KEY"
+models = [
+  { model_name = "Qwen/Qwen3-Embedding-4B", dimensions = 2560, max_context = 32768 },
+  { model_name = "bge-m3", dimensions = 1024, max_context = 8192 }
+]
 
 [rerank]
 enabled = true
-model = "BAAI/bge-reranker-v2-m3"
+default_model = "BAAI/bge-reranker-v2-m3"
+default_provider = "siliconflow"
 top_n = 10
-provider = "siliconflow"              # references [[providers]].name
+
+[[rerank.providers]]
+name = "siliconflow"
+type = "openai_compatible"
+base_url = "https://api.siliconflow.cn/v1"
+api_key = "env:SF_API_KEY"
+models = [
+  { model_name = "BAAI/bge-reranker-v2-m3", max_context = 8192, max_chunks_per_doc = 1024 },
+  { model_name = "Qwen/Qwen3-Reranker-8B", max_context = 32768, instruction = "Rerank documents by relevance" }
+]
 
 [search]
 vector_dir = "paper_vectors"
@@ -55,35 +87,26 @@ hybrid = true
 access_token = "env:SEARCH_ACCESS_TOKEN"   # optional; omit to allow open access
 ```
 
-### ModelCapability extension
+### Design decisions
 
-Two new boolean fields on the existing `ModelCapability` dataclass:
+**Embedding and rerank providers are independent from chat completion `[[providers]]`.** The chat completion providers carry weighted `base[]` with `key[]` pools, `structured_mode` capabilities, and `RoutePool` semantics. Embedding and rerank are structurally different:
 
-- `is_support_embedding`
-- `is_support_rerank`
+- Embedding providers have a flat `base_url` + `api_key` (no weighted multi-endpoint routing needed for batch offline work).
+- Each model carries its own parameters: `dimensions`, `max_context` for embedding; `max_context`, `max_chunks_per_doc`, `instruction` for rerank.
+- No `is_support_embedding` / `is_support_rerank` flags on `ModelCapability`. The capability is implicit: if a model is declared under `[[embedding.providers]]`, it supports embedding.
 
-These fields are declared per model in `[[providers]].models[]`, alongside the existing capability flags. The embedding and rerank config sections reference a provider by name; the system resolves the named model within that provider and verifies the corresponding capability flag is true.
+**`default_model` + `default_provider` specify the active configuration.** CLI can override with `--model` and `--provider`.
 
-### Provider declaration examples
+**Per-model `dimensions` overrides the top-level `[embedding].dimensions`.** The top-level value is the index-level dimension used by LanceDB and validated by `index_meta.json`. The per-model value is what gets sent to the API. They must match for the active model; validation fails at startup if they diverge.
 
-```toml
-[[providers]]
-name = "ollama"
-type = "openai_compatible"
-base = [{ url = "http://localhost:11434/v1", weight = 1, key = [{ value = "ollama", weight = 1 }] }]
-models = [
-  { model_name = "bge-m3", is_stream = false, is_support_json_schema = false, is_support_json_object = false, is_support_embedding = true, is_support_rerank = false }
-]
+**`max_context` semantics:**
 
-[[providers]]
-name = "siliconflow"
-type = "openai_compatible"
-base = [{ url = "https://api.siliconflow.cn/v1", weight = 1, key = [{ value = "env:SF_API_KEY", weight = 1 }] }]
-models = [
-  { model_name = "BAAI/bge-reranker-v2-m3", is_stream = false, is_support_json_schema = false, is_support_json_object = false, is_support_embedding = false, is_support_rerank = true },
-  { model_name = "bge-m3", is_stream = false, is_support_json_schema = false, is_support_json_object = false, is_support_embedding = true, is_support_rerank = false }
-]
-```
+- Embedding: `chunk_max_tokens` must not exceed the active model's `max_context`. Validated at startup; violation is a fatal error.
+- Rerank: document text passed to the rerank API is truncated to `max_context` tokens. Prevents API rejection for long chunks.
+
+### Chat completion `[[providers]]` and `ModelCapability` are unchanged
+
+No new fields on `ModelCapability`. The existing `[[providers]]` structure continues to serve chat completion only. Embedding and rerank are fully self-contained under `[embedding]` and `[rerank]`.
 
 ## Embedding pipeline
 
@@ -115,9 +138,9 @@ Response:
 
 Ollama confirmed: supports `/v1/embeddings` with `model`, `input` (string or array of strings), `encoding_format`, and `dimensions` fields.
 
-### Embedding does not use RoutePool
+### Embedding provider resolution
 
-Embedding is a batch offline operation. It resolves the configured provider's first base + key via `select_runtime_route` once at startup. Per-request weighted selection and cooldown tracking are unnecessary.
+Embedding uses its own `[[embedding.providers]]` list, not the chat completion `[[providers]]`. At startup, `default_provider` + `default_model` are resolved to a `(base_url, api_key, model_name, dimensions, max_context)` tuple. No `RoutePool` or weighted selection — embedding providers have a flat `base_url` + `api_key`, suitable for batch offline work.
 
 ### Data sources
 
@@ -170,15 +193,37 @@ A single document may have been extracted by multiple templates. Each template's
 | chunk_type | Typical source fields | Template-scoped | Strategy |
 |-----------|----------------------|----------------|----------|
 | `title` | `title` | No (shared) | Single chunk, no splitting |
-| `abstract` | `abstract`, `summary` | Yes (per template) | Split only if exceeds `chunk_max_tokens` |
-| `content` | Other text fields (e.g. `findings`, `methodology`, `contributions`) | Yes (per template) | Sliding window split: `chunk_max_tokens` window, `chunk_overlap_tokens` overlap |
+| `abstract` | `abstract`, `summary` | Yes (per template) | Paragraph-first split (see below) |
+| `content` | Other text fields (e.g. `findings`, `methodology`, `contributions`) | Yes (per template) | Paragraph-first split |
 | `qa` | Q&A pairs (if present) | Yes (per template) | Each Q+A concatenated as one chunk, no splitting |
-| `source_md` | Source markdown file | No (shared) | Sliding window split, same parameters as content |
-| `translated_md` | Translated markdown file | No (shared, per lang) | Sliding window split, `lang` field set to language code |
+| `source_md` | Source markdown file | No (shared) | Paragraph-first split |
+| `translated_md` | Translated markdown file | No (shared, per lang) | Paragraph-first split, `lang` field set to language code |
 
 Each chunk carries a `field_name` (e.g. `deep_read/findings`, `simple/summary`, `qa[0]`) for result attribution. For template-scoped chunks, `field_name` is prefixed with the template tag.
 
-Token counting uses `tiktoken` (cl100k_base) as an approximate chunking heuristic. bge-m3 uses an XLM-R tokenizer internally, so cl100k_base token counts will diverge from real model input lengths, especially for CJK text. The `chunk_max_tokens` setting is therefore a soft budget, not a hard model-input guarantee. Chunks that fall within 80% of the limit are safe; the 20% margin absorbs tokenizer divergence. If tighter alignment is needed in the future, the chunker can be swapped to a character-budget or sentence-boundary strategy without changing the rest of the pipeline.
+### Paragraph-first chunking strategy
+
+Chunks are built by accumulating complete paragraphs, not by sliding a fixed-size window over raw text. This preserves the natural semantic boundaries of academic writing.
+
+Algorithm:
+
+1. Split text into paragraphs by double newline (`\n\n`).
+2. Initialize an empty accumulator.
+3. For each paragraph:
+   - If appending this paragraph keeps the accumulator within `chunk_max_tokens`, append it.
+   - If appending would exceed the limit, flush the accumulator as one chunk and start a new accumulator with this paragraph.
+   - If a single paragraph alone exceeds `chunk_max_tokens`, fall back to sliding window split for that paragraph only (`chunk_max_tokens` window, `chunk_overlap_tokens` overlap), then continue accumulating.
+4. Flush any remaining accumulator as the final chunk.
+
+This means:
+- Most chunks are one or more complete paragraphs.
+- `matched_chunk` in search results returns coherent, readable text.
+- Only rare ultra-long paragraphs (e.g. a massive table or code block) hit the sliding window fallback.
+- `chunk_overlap_tokens` only applies to the sliding window fallback, not to paragraph boundaries (paragraphs are self-contained; no overlap needed).
+
+### Token counting
+
+Token counting uses `tiktoken` (cl100k_base) as an approximate heuristic. The actual embedding model tokenizer may differ (e.g. XLM-R for bge-m3, Qwen tokenizer for Qwen3-Embedding). The `chunk_max_tokens` setting is a soft budget with ~20% margin to absorb tokenizer divergence. The paragraph-first strategy further reduces sensitivity to exact token counts since boundaries are structural, not positional.
 
 ## Vector store
 
@@ -188,7 +233,7 @@ LanceDB is an embedded vector database. Storage is a single directory (default `
 
 ### Capacity estimate
 
-For a 4,000-paper corpus with multi-template extraction, source markdown, and one translation language:
+For a 4,000-paper corpus with multi-template extraction, source markdown, and one translation language (dimensions = 1024):
 
 | Content | Chunks per paper | Total chunks | Storage |
 |---------|-----------------|-------------|---------|
@@ -197,7 +242,7 @@ For a 4,000-paper corpus with multi-template extraction, source markdown, and on
 | Translated markdown (1 lang) | ~25 | 100K | ~600 MB |
 | **Total** | **~65** | **~260K** | **~1.6 GB** |
 
-At 260K rows, brute-force vector scan completes in 50-100ms. No ANN index needed at this scale. If the corpus grows beyond 100K documents, IVF-PQ indexing can be added without schema changes.
+Storage scales linearly with `dimensions`: at 2560 dimensions the vector portion is ~2.5x larger (~4 GB total). At 260K rows, brute-force vector scan completes in 50-100ms regardless of dimension. No ANN index needed at this scale.
 
 ### Table schema
 
@@ -215,7 +260,7 @@ Table name: `paper_chunks`
 | `lang` | string | Language code for translated_md chunks (e.g. `zh`); empty otherwise |
 | `text` | string | Chunk text |
 | `content_hash` | string | SHA-256 of chunk text |
-| `vector` | vector[1024] | bge-m3 embedding |
+| `vector` | vector[N] | Embedding vector; N = `[embedding].dimensions` from config (e.g. 1024, 2560) |
 | `title` | string | Document title (denormalized for display) |
 | `year` | int | Publication year |
 | `authors` | string | Comma-separated |
@@ -249,7 +294,7 @@ A file `index_meta.json` is stored in the vector directory:
 
 ```json
 {
-  "model": "bge-m3",
+  "model": "Qwen3-Embedding-4B",
   "dimensions": 1024,
   "normalized": true,
   "provider": "ollama",
@@ -263,6 +308,8 @@ Validation rules:
 - If `model`, `dimensions`, or `normalized` do not match current config, the command fails immediately with an explicit error. This prevents silent corruption when switching providers or models.
 - If `index_meta.json` does not exist (first run), it is created.
 - `index_version` is a format version number. Schema changes increment it. Mismatch is a fatal error.
+
+**`dimensions` drives the LanceDB vector column width.** The `paper_chunks` table's `vector` column is created with `pa.list_(pa.float32(), dimensions)` on first run, where `dimensions` comes from `index_meta.json`. This value is never hardcoded. Changing dimensions requires `--force` rebuild.
 
 ### Incremental update
 
@@ -321,7 +368,7 @@ The first implementation is `OpenAICompatibleReranker`, covering providers that 
 
 ### Rerank API contract
 
-The reranker implementation sends a `POST /v1/rerank` request. The model name comes from `rerank.model` in config and is resolved against the provider's `models[]` declarations at startup (must have `is_support_rerank = true`). No model name is hardcoded in the implementation.
+The reranker implementation sends a `POST /v1/rerank` request. The model name comes from `rerank.default_model` and is resolved against `[[rerank.providers]]` at startup. The active provider is determined by `rerank.default_provider`. Per-model parameters (`max_context`, `max_chunks_per_doc`, `instruction`) are read from the model entry and passed to the API call if present. No model name is hardcoded in the implementation.
 
 Request (minimum required fields):
 
@@ -588,7 +635,7 @@ When `--embed-db` is provided, the server loads the LanceDB index and enables `/
 | `python/deepresearch_flow/paper/chunker.py` | Create | Document chunking strategies, template adapters |
 | `python/deepresearch_flow/paper/embed_source.py` | Create | Unified data source abstraction: load from JSON or snapshot DB + static export |
 | `python/deepresearch_flow/paper/search.py` | Create | Hybrid search pipeline (embed query, retrieve, merge via RRF, rerank, aggregate) |
-| `python/deepresearch_flow/paper/config.py` | Modify | Add `EmbeddingConfig`, `RerankConfig`, `SearchConfig` dataclasses; extend `ModelCapability` |
+| `python/deepresearch_flow/paper/config.py` | Modify | Add `EmbeddingConfig` (with `EmbeddingProviderConfig`, `EmbeddingModelConfig`), `RerankConfig` (with `RerankProviderConfig`, `RerankModelConfig`), `SearchConfig` dataclasses. No changes to `ModelCapability`. |
 | `python/deepresearch_flow/paper/cli.py` | Modify | Add `paper embed` and `paper search` commands with `--output-embed-db` / `--embed-db` / `--snapshot-db` |
 | `python/deepresearch_flow/paper/snapshot/builder.py` | Modify | Add optional `--output-embed-db` to snapshot build |
 | `python/deepresearch_flow/paper/db.py` | Modify | Register `--embed-db` on `api serve` command |

@@ -8,11 +8,10 @@ from pathlib import Path
 
 import httpx
 
-from deepresearch_flow.paper.chunker import SearchableField, chunk_fields, extract_searchable_fields
+from deepresearch_flow.paper.chunker import Chunk, SearchableField, chunk_fields, extract_searchable_fields
 from deepresearch_flow.paper.config import PaperConfig
 from deepresearch_flow.paper.embed_source import EmbedDocument, load_from_json, load_from_snapshot
 from deepresearch_flow.paper.embedding import call_embedding
-from deepresearch_flow.paper.routing import ParsedModelSelector, select_runtime_route
 from deepresearch_flow.paper.vector_store import (
     ChunkRow,
     build_chunk_id,
@@ -52,8 +51,8 @@ def _build_searchable_fields(doc: EmbedDocument) -> list[SearchableField]:
     return deduped
 
 
-def _group_chunks_by_template_key(chunks: list[object]) -> dict[str, list[object]]:
-    groups: dict[str, list[object]] = {}
+def _group_chunks_by_template_key(chunks: list[Chunk]) -> dict[str, list[Chunk]]:
+    groups: dict[str, list[Chunk]] = {}
     for chunk in chunks:
         template_key = chunk.template_tag if chunk.template_tag else _SHARED_KEY
         groups.setdefault(template_key, []).append(chunk)
@@ -88,20 +87,16 @@ async def run_embed_pipeline(
     else:
         raise ValueError("No input source provided")
 
+    provider_config, model_config = embedding_config.resolve_active()
+
     validate_index_meta(
         vector_dir,
-        model=embedding_config.model,
+        model=model_config.model_name,
         dimensions=embedding_config.dimensions,
         normalized=embedding_config.normalized,
-        provider=embedding_config.provider,
+        provider=provider_config.name,
     )
 
-    selector = ParsedModelSelector(
-        kind="single",
-        fixed_model=f"{embedding_config.provider}/{embedding_config.model}",
-        pool=[],
-    )
-    route = select_runtime_route(config, selector)
     db = open_store(vector_dir)
     existing_hashes = read_group_hashes(db)
 
@@ -177,9 +172,9 @@ async def run_embed_pipeline(
         for start in range(0, len(texts), embedding_config.batch_size):
             batch = texts[start : start + embedding_config.batch_size]
             result = await call_embedding(
-                base_url=route.base.url,
-                api_key=route.key.value,
-                model=embedding_config.model,
+                base_url=provider_config.base_url,
+                api_key=provider_config.api_key,
+                model=model_config.model_name,
                 texts=batch,
                 dimensions=embedding_config.dimensions,
                 client=client,
@@ -213,6 +208,6 @@ async def run_embed_pipeline(
         for row, vector in zip(rows_to_write, vectors, strict=True)
     ]
     delete_groups(db, groups_to_delete + list(orphan_keys))
-    write_chunks(db, final_rows)
+    write_chunks(db, final_rows, dimensions=embedding_config.dimensions)
     update_index_meta_stats(vector_dir, db)
     logger.info("Embedded %d chunks across %d documents", len(final_rows), len(docs))

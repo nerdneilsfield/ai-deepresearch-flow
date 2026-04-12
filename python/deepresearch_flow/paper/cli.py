@@ -37,7 +37,6 @@ async def _run_search(
     import httpx
 
     from deepresearch_flow.paper.embedding import call_embedding
-    from deepresearch_flow.paper.routing import select_runtime_route
     from deepresearch_flow.paper.reranker import OpenAICompatibleReranker
     from deepresearch_flow.paper.search import hybrid_search, rank_keyword_rows, validate_venue_filter
     from deepresearch_flow.paper.vector_store import open_store, scan_rows
@@ -45,16 +44,7 @@ async def _run_search(
     if not config.embedding:
         raise click.ClickException("Config missing [embedding] section")
 
-    selector = ParsedModelSelector(
-        kind="single",
-        fixed_model=f"{config.embedding.provider}/{config.embedding.model}",
-        pool=[],
-    )
-    route = select_runtime_route(config, selector)
-    if not route.model.is_support_embedding:
-        raise click.ClickException(
-            f"Configured embedding model does not advertise embedding support: {config.embedding.provider}/{config.embedding.model}"
-        )
+    embedding_provider, embedding_model = config.embedding.resolve_active()
     db = open_store(vector_dir)
 
     where_parts: list[str] = []
@@ -80,32 +70,41 @@ async def _run_search(
         ]
 
     keyword_search_fn = None
+    document_text_by_doc_id = {
+        str(row.get("doc_id") or "").strip(): "\n".join(
+            part
+            for part in (
+                str(row.get("title") or "").strip(),
+                str(row.get("text") or "").strip(),
+                str(row.get("authors") or "").strip(),
+                str(row.get("venue") or "").strip(),
+                str(row.get("tags") or "").strip(),
+            )
+            if part
+        )
+        for row in keyword_rows
+        if str(row.get("doc_id") or "").strip()
+    }
     if not no_hybrid and keyword_rows:
         keyword_search_fn = lambda q, limit=30: rank_keyword_rows(keyword_rows, q, limit=limit)
 
     reranker = None
     if not no_rerank and config.rerank and config.rerank.enabled:
-        rerank_selector = ParsedModelSelector(
-            kind="single",
-            fixed_model=f"{config.rerank.provider}/{config.rerank.model}",
-            pool=[],
-        )
-        rerank_route = select_runtime_route(config, rerank_selector)
-        if not rerank_route.model.is_support_rerank:
-            raise click.ClickException(
-                f"Configured rerank model does not advertise rerank support: {config.rerank.provider}/{config.rerank.model}"
-            )
+        rerank_provider, rerank_model = config.rerank.resolve_active()
         reranker = OpenAICompatibleReranker(
-            base_url=rerank_route.base.url,
-            api_key=rerank_route.key.value,
-            model=config.rerank.model,
+            base_url=rerank_provider.base_url,
+            api_key=rerank_provider.api_key,
+            model=rerank_model.model_name,
+            max_context=rerank_model.max_context,
+            max_chunks_per_doc=rerank_model.max_chunks_per_doc,
+            instruction=rerank_model.instruction,
         )
 
     async with httpx.AsyncClient() as client:
         embedding = await call_embedding(
-            base_url=route.base.url,
-            api_key=route.key.value,
-            model=config.embedding.model,
+            base_url=embedding_provider.base_url,
+            api_key=embedding_provider.api_key,
+            model=embedding_model.model_name,
             texts=[query_text],
             dimensions=config.embedding.dimensions,
             client=client,
@@ -121,6 +120,7 @@ async def _run_search(
             rerank_top_n=top_n,
             hybrid=not no_hybrid and bool(config.search.hybrid if config.search else True),
             where=where,
+            document_text_resolver=lambda doc_id: document_text_by_doc_id.get(doc_id, doc_id),
             client=client,
         )
 

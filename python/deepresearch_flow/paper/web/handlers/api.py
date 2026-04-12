@@ -32,21 +32,15 @@ from deepresearch_flow.paper.search import validate_venue_filter
 
 async def _embed_query(text: str, config: Any, client_obj: httpx.AsyncClient) -> list[float]:
     from deepresearch_flow.paper.embedding import call_embedding
-    from deepresearch_flow.paper.routing import ParsedModelSelector, select_runtime_route
 
     if config is None or config.embedding is None:
         raise ValueError("Semantic search embedding config is unavailable")
 
-    selector = ParsedModelSelector(
-        kind="single",
-        fixed_model=f"{config.embedding.provider}/{config.embedding.model}",
-        pool=[],
-    )
-    route = select_runtime_route(config, selector)
+    provider_config, model_config = config.embedding.resolve_active()
     result = await call_embedding(
-        base_url=route.base.url,
-        api_key=route.key.value,
-        model=config.embedding.model,
+        base_url=provider_config.base_url,
+        api_key=provider_config.api_key,
+        model=model_config.model_name,
         texts=[text],
         dimensions=config.embedding.dimensions,
         client=client_obj,
@@ -328,7 +322,6 @@ async def api_papers_semantic(request: Request) -> JSONResponse:
     where = " AND ".join(where_parts) if where_parts else None
 
     from deepresearch_flow.paper.reranker import OpenAICompatibleReranker
-    from deepresearch_flow.paper.routing import ParsedModelSelector, select_runtime_route
     from deepresearch_flow.paper.search import hybrid_search
 
     paper_config = getattr(request.app.state, "paper_config", None)
@@ -352,18 +345,15 @@ async def api_papers_semantic(request: Request) -> JSONResponse:
 
     reranker = None
     if paper_config is not None and paper_config.rerank and paper_config.rerank.enabled:
-        rerank_selector = ParsedModelSelector(
-            kind="single",
-            fixed_model=f"{paper_config.rerank.provider}/{paper_config.rerank.model}",
-            pool=[],
+        rerank_provider, rerank_model = paper_config.rerank.resolve_active()
+        reranker = OpenAICompatibleReranker(
+            base_url=rerank_provider.base_url,
+            api_key=rerank_provider.api_key,
+            model=rerank_model.model_name,
+            max_context=rerank_model.max_context,
+            max_chunks_per_doc=rerank_model.max_chunks_per_doc,
+            instruction=rerank_model.instruction,
         )
-        rerank_route = select_runtime_route(paper_config, rerank_selector)
-        if rerank_route.model.is_support_rerank:
-            reranker = OpenAICompatibleReranker(
-                base_url=rerank_route.base.url,
-                api_key=rerank_route.key.value,
-                model=paper_config.rerank.model,
-            )
 
     async with httpx.AsyncClient() as client:
         try:

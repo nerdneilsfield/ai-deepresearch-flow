@@ -117,7 +117,7 @@ def open_store(vector_dir: Path) -> lancedb.DBConnection:
     return lancedb.connect(str(vector_dir))
 
 
-def _chunks_schema() -> pa.Schema:
+def _chunks_schema(dimensions: int) -> pa.Schema:
     return pa.schema(
         [
             pa.field("id", pa.string()),
@@ -130,7 +130,7 @@ def _chunks_schema() -> pa.Schema:
             pa.field("lang", pa.string()),
             pa.field("text", pa.string()),
             pa.field("content_hash", pa.string()),
-            pa.field("vector", pa.list_(pa.float32(), 1024)),
+            pa.field("vector", pa.list_(pa.float32(), dimensions)),
             pa.field("title", pa.string()),
             pa.field("year", pa.int32()),
             pa.field("authors", pa.string()),
@@ -140,7 +140,7 @@ def _chunks_schema() -> pa.Schema:
     )
 
 
-def write_chunks(db: lancedb.DBConnection, rows: list[ChunkRow]) -> None:
+def write_chunks(db: lancedb.DBConnection, rows: list[ChunkRow], *, dimensions: int) -> None:
     if not rows:
         return
     data = [
@@ -167,7 +167,7 @@ def write_chunks(db: lancedb.DBConnection, rows: list[ChunkRow]) -> None:
     if _CHUNKS_TABLE in _table_names(db):
         db.open_table(_CHUNKS_TABLE).add(data)
     else:
-        db.create_table(_CHUNKS_TABLE, data=data, schema=_chunks_schema())
+        db.create_table(_CHUNKS_TABLE, data=data, schema=_chunks_schema(dimensions))
 
 
 def delete_groups(db: lancedb.DBConnection, groups: list[tuple[str, str]]) -> None:

@@ -8,19 +8,15 @@ import pytest
 
 from deepresearch_flow.paper.embedding import EmbeddingResult
 from deepresearch_flow.paper.config import (
-    BaseConfig,
     EmbeddingConfig,
-    KeyConfig,
-    MainModelConfig,
-    ModelCapability,
+    EmbeddingModelConfig,
+    EmbeddingProviderConfig,
     PaperConfig,
-    ProviderConfig,
     DEFAULT_EXTRACT,
     DEFAULT_RENDER,
 )
 from deepresearch_flow.paper.embed_pipeline import run_embed_pipeline
-from deepresearch_flow.paper.vector_store import open_store, scan_rows
-from deepresearch_flow.paper.vector_store import load_index_meta
+from deepresearch_flow.paper.vector_store import load_index_meta, open_store, scan_rows
 
 
 def _write_json(tmp_path: Path) -> Path:
@@ -38,51 +34,31 @@ def _write_json(tmp_path: Path) -> Path:
     return path
 
 
-def _test_config() -> PaperConfig:
+def _test_config(*, api_key: str = "ollama") -> PaperConfig:
+    # These pipeline tests exercise embedding-only plumbing and intentionally bypass
+    # chat provider/main_model validation by constructing PaperConfig directly.
     return PaperConfig(
         extract=DEFAULT_EXTRACT,
         render=DEFAULT_RENDER,
-        providers=[
-            ProviderConfig(
-                name="ollama",
-                type="openai_compatible",
-                base=[
-                    BaseConfig(
-                        url="http://localhost:11434/v1",
-                        weight=1,
-                        key=[KeyConfig(value="ollama", weight=1)],
-                    )
-                ],
-                models=[
-                    ModelCapability(
-                        model_name="bge-m3",
-                        is_stream=False,
-                        is_support_json_schema=False,
-                        is_support_json_object=False,
-                        is_support_embedding=True,
-                    )
-                ],
-                api_version=None,
-                deployment=None,
-                project_id=None,
-                location=None,
-                credentials_path=None,
-                anthropic_version=None,
-                max_tokens=None,
-                extra_headers={},
-                system_prompt=None,
-                user_prompt=None,
-            )
-        ],
-        main_model=[MainModelConfig(model="ollama/bge-m3", weight=1)],
+        providers=[],
+        main_model=[],
         embedding=EmbeddingConfig(
-            model="bge-m3",
+            default_model="bge-m3",
+            default_provider="ollama",
             dimensions=1024,
             normalized=True,
             batch_size=2,
             chunk_max_tokens=512,
             chunk_overlap_tokens=64,
-            provider="ollama",
+            providers=[
+                EmbeddingProviderConfig(
+                    name="ollama",
+                    type="openai_compatible",
+                    base_url="http://localhost:11434/v1",
+                    api_key=api_key,
+                    models=[EmbeddingModelConfig(model_name="bge-m3", dimensions=1024, max_context=8192)],
+                )
+            ],
         ),
         rerank=None,
         search=None,
@@ -94,8 +70,6 @@ def test_pipeline_creates_index_meta(tmp_path: Path, monkeypatch) -> None:
     vector_dir = tmp_path / "vectors"
 
     async def fake_embed(base_url, api_key, model, texts, *, dimensions=None, client=None):
-        from deepresearch_flow.paper.embedding import EmbeddingResult
-
         return EmbeddingResult(
             vectors=[[0.1] * 1024 for _ in texts],
             model=model,
@@ -123,8 +97,6 @@ def test_pipeline_incremental_skips_unchanged(tmp_path: Path, monkeypatch) -> No
     async def counting_embed(base_url, api_key, model, texts, *, dimensions=None, client=None):
         nonlocal call_count
         call_count += len(texts)
-        from deepresearch_flow.paper.embedding import EmbeddingResult
-
         return EmbeddingResult(
             vectors=[[0.1] * 1024 for _ in texts],
             model=model,
@@ -294,3 +266,49 @@ def test_pipeline_updates_index_meta_stats(tmp_path: Path, monkeypatch) -> None:
     assert meta["template_count"] == 1
     assert meta["chunk_count"] > 0
     assert isinstance(meta["last_updated"], str) and meta["last_updated"]
+
+
+def test_pipeline_resolves_embedding_provider_without_runtime_route(tmp_path: Path, monkeypatch) -> None:
+    json_path = _write_json(tmp_path)
+    vector_dir = tmp_path / "vectors"
+    def boom_select_runtime_route(*args, **kwargs):  # noqa: ANN001, ARG001
+        raise AssertionError("select_runtime_route should not be used for embedding")
+
+    monkeypatch.setattr(
+        "deepresearch_flow.paper.embed_pipeline.select_runtime_route",
+        boom_select_runtime_route,
+        raising=False,
+    )
+
+    seen: dict[str, object] = {}
+
+    async def fake_embed(base_url, api_key, model, texts, *, dimensions=None, client=None):  # noqa: ANN001
+        seen.update(
+            {
+                "base_url": base_url,
+                "api_key": api_key,
+                "model": model,
+                "dimensions": dimensions,
+                "texts": list(texts),
+            }
+        )
+        return EmbeddingResult(
+            vectors=[[0.1] * 1024 for _ in texts],
+            model=model,
+            usage_tokens=len(texts),
+        )
+
+    monkeypatch.setattr("deepresearch_flow.paper.embed_pipeline.call_embedding", fake_embed)
+
+    asyncio.run(
+        run_embed_pipeline(
+            config=_test_config(api_key="resolved-embed-key"),
+            input_paths=[json_path],
+            vector_dir=vector_dir,
+        )
+    )
+
+    assert seen["base_url"] == "http://localhost:11434/v1"
+    assert seen["api_key"] == "resolved-embed-key"
+    assert seen["model"] == "bge-m3"
+    assert seen["dimensions"] == 1024

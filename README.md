@@ -120,6 +120,52 @@ models = [
 ]
 ```
 
+```toml
+[embedding]
+default_model = "Qwen3-Embedding-4B"
+default_provider = "ollama"
+dimensions = 1024
+normalized = true
+batch_size = 32
+chunk_max_tokens = 512
+chunk_overlap_tokens = 64
+
+[[embedding.providers]]
+name = "ollama"
+type = "openai_compatible"
+base_url = "http://localhost:11434/v1"
+api_key = "ollama"
+models = [
+  { model_name = "Qwen3-Embedding-4B", dimensions = 1024, max_context = 32768 },
+  { model_name = "bge-m3", dimensions = 1024, max_context = 8192 }
+]
+
+[[embedding.providers]]
+name = "siliconflow"
+type = "openai_compatible"
+base_url = "https://api.siliconflow.cn/v1"
+api_key = "env:SF_KEY"
+models = [
+  { model_name = "Qwen/Qwen3-Embedding-4B", dimensions = 2560, max_context = 32768 }
+]
+
+[rerank]
+enabled = true
+default_model = "BAAI/bge-reranker-v2-m3"
+default_provider = "siliconflow"
+top_n = 10
+
+[[rerank.providers]]
+name = "siliconflow"
+type = "openai_compatible"
+base_url = "https://api.siliconflow.cn/v1"
+api_key = "env:SF_KEY"
+models = [
+  { model_name = "BAAI/bge-reranker-v2-m3", max_context = 8192, max_chunks_per_doc = 1024 },
+  { model_name = "Qwen/Qwen3-Reranker-8B", max_context = 32768, instruction = "Rerank by relevance" }
+]
+```
+
 ### 3) The "Zero to Hero" Workflow
 
 #### Step 1: Extract Insights
@@ -305,7 +351,7 @@ uv run deepresearch-flow paper db serve \
 Notes:
 
 - `paper embed` accepts repeatable `-i/--input` JSON files and merges multiple templates for the same paper.
-- `paper search` uses the configured embedding provider/model, optional hybrid recall, and optional cloud reranking.
+- `paper search` uses the configured embedding provider/model from `[[embedding.providers]]`, optional hybrid recall, and optional cloud reranking from `[[rerank.providers]]`.
 - The Web UI exposes a lock button next to the search bar. After you enter the token once, it is stored in the browser and reused for `/api/papers/semantic`.
 - `paper db snapshot build --output-embed-db` builds the snapshot and LanceDB index in one pass.
 

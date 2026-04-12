@@ -76,7 +76,11 @@ def _first_text(record: dict[str, Any], keys: tuple[str, ...]) -> str | None:
     return None
 
 
-def _chunk_text(text: str, *, max_tokens: int, overlap_tokens: int) -> list[str]:
+def _count_tokens(text: str) -> int:
+    return len(_ENCODE(text))
+
+
+def _sliding_window_split(text: str, *, max_tokens: int, overlap_tokens: int) -> list[str]:
     tokens = _ENCODE(text)
     if len(tokens) <= max_tokens:
         return [text]
@@ -90,6 +94,44 @@ def _chunk_text(text: str, *, max_tokens: int, overlap_tokens: int) -> list[str]
         chunks.append(_DECODE(segment))
         if start + max_tokens >= len(tokens):
             break
+    return chunks
+
+
+def _paragraph_first_split(text: str, *, max_tokens: int, overlap_tokens: int) -> list[str]:
+    paragraphs = [paragraph.strip() for paragraph in text.split("\n\n") if paragraph.strip()]
+    if not paragraphs:
+        return [text.strip()] if text.strip() else []
+
+    chunks: list[str] = []
+    accumulator: list[str] = []
+    acc_tokens = 0
+
+    for paragraph in paragraphs:
+        paragraph_tokens = _count_tokens(paragraph)
+
+        if paragraph_tokens > max_tokens:
+            if accumulator:
+                chunks.append("\n\n".join(accumulator))
+                accumulator = []
+                acc_tokens = 0
+            chunks.extend(
+                _sliding_window_split(
+                    paragraph, max_tokens=max_tokens, overlap_tokens=overlap_tokens
+                )
+            )
+            continue
+
+        if accumulator and acc_tokens + paragraph_tokens > max_tokens:
+            chunks.append("\n\n".join(accumulator))
+            accumulator = []
+            acc_tokens = 0
+
+        accumulator.append(paragraph)
+        acc_tokens += paragraph_tokens
+
+    if accumulator:
+        chunks.append("\n\n".join(accumulator))
+
     return chunks
 
 
@@ -117,7 +159,7 @@ def chunk_fields(
             continue
 
         for chunk_index, text in enumerate(
-            _chunk_text(field.text, max_tokens=max_tokens, overlap_tokens=overlap_tokens)
+            _paragraph_first_split(field.text, max_tokens=max_tokens, overlap_tokens=overlap_tokens)
         ):
             chunks.append(
                 Chunk(

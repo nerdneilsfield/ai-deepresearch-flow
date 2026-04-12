@@ -9,6 +9,7 @@ from deepresearch_flow.paper.vector_store import (
     INDEX_VERSION,
     ChunkRow,
     build_chunk_id,
+    _chunks_schema,
     load_index_meta,
     open_store,
     query_vector,
@@ -119,7 +120,12 @@ def test_write_and_query_chunks(tmp_path: Path) -> None:
             tags="transformer",
         ),
     ]
-    write_chunks(db, rows)
+    write_chunks(db, rows, dimensions=1024)
     results = query_vector(db, [0.1] * 1024, top_k=5)
     assert len(results) >= 1
     assert results[0]["doc_id"] == "doc1"
+
+
+def test_chunks_schema_uses_requested_dimensions() -> None:
+    schema = _chunks_schema(2560)
+    assert schema.field("vector").type.list_size == 2560

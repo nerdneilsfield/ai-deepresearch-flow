@@ -92,3 +92,43 @@ def test_chunk_fields_uses_sliding_window_for_long_content() -> None:
     assert [chunk.chunk_index for chunk in chunks] == list(range(len(chunks)))
     assert all(chunk.field_name == "deep_read/findings" for chunk in chunks)
     assert all(chunk.template_tag == "deep_read" for chunk in chunks)
+
+
+
+def test_chunk_fields_keeps_complete_paragraphs_together() -> None:
+    para_a = ("alpha " * 80).strip()
+    para_b = ("beta " * 80).strip()
+    text = f"{para_a}\n\n{para_b}"
+    field = SearchableField(
+        field_name="deep_read/findings",
+        chunk_type="content",
+        text=text,
+        template_tag="deep_read",
+        lang="",
+    )
+
+    chunks = chunk_fields([field], max_tokens=120, overlap_tokens=10)
+
+    assert [chunk.text for chunk in chunks] == [para_a, para_b]
+    assert all("\n\n" not in chunk.text for chunk in chunks)
+
+
+
+def test_chunk_fields_does_not_overlap_across_paragraph_chunks() -> None:
+    para_a = ("alpha " * 60).strip()
+    para_b = ("beta " * 60).strip()
+    para_c = ("gamma " * 60).strip()
+    text = f"{para_a}\n\n{para_b}\n\n{para_c}"
+    field = SearchableField(
+        field_name="deep_read/findings",
+        chunk_type="content",
+        text=text,
+        template_tag="deep_read",
+        lang="",
+    )
+
+    chunks = chunk_fields([field], max_tokens=120, overlap_tokens=10)
+
+    assert len(chunks) == 2
+    assert chunks[0].text == f"{para_a}\n\n{para_b}"
+    assert chunks[1].text == para_c

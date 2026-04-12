@@ -61,8 +61,19 @@ class ModelCapability:
     is_stream: bool
     is_support_json_schema: bool
     is_support_json_object: bool
-    is_support_embedding: bool = False
-    is_support_rerank: bool = False
+
+    def __init__(
+        self,
+        model_name: str,
+        is_stream: bool,
+        is_support_json_schema: bool,
+        is_support_json_object: bool,
+        **_: Any,
+    ) -> None:
+        object.__setattr__(self, "model_name", model_name)
+        object.__setattr__(self, "is_stream", is_stream)
+        object.__setattr__(self, "is_support_json_schema", is_support_json_schema)
+        object.__setattr__(self, "is_support_json_object", is_support_json_object)
 
 
 @dataclass(frozen=True)
@@ -72,22 +83,165 @@ class MainModelConfig:
 
 
 @dataclass(frozen=True)
+class EmbeddingModelConfig:
+    model_name: str
+    dimensions: int
+    max_context: int
+
+
+@dataclass(frozen=True)
+class EmbeddingProviderConfig:
+    name: str
+    type: str
+    base_url: str
+    api_key: str
+    models: list[EmbeddingModelConfig]
+
+
+@dataclass(frozen=True)
 class EmbeddingConfig:
-    model: str
+    default_model: str
+    default_provider: str
     dimensions: int
     normalized: bool
     batch_size: int
     chunk_max_tokens: int
     chunk_overlap_tokens: int
-    provider: str
+    providers: list[EmbeddingProviderConfig]
+
+    def __init__(
+        self,
+        *,
+        default_model: str | None = None,
+        default_provider: str | None = None,
+        dimensions: int = 1024,
+        normalized: bool = True,
+        batch_size: int = 32,
+        chunk_max_tokens: int = 512,
+        chunk_overlap_tokens: int = 64,
+        providers: list[EmbeddingProviderConfig] | None = None,
+        model: str | None = None,
+        provider: str | None = None,
+        **_: Any,
+    ) -> None:
+        object.__setattr__(self, "default_model", default_model or model or "")
+        object.__setattr__(self, "default_provider", default_provider or provider or "")
+        object.__setattr__(self, "dimensions", dimensions)
+        object.__setattr__(self, "normalized", normalized)
+        object.__setattr__(self, "batch_size", batch_size)
+        object.__setattr__(self, "chunk_max_tokens", chunk_max_tokens)
+        object.__setattr__(self, "chunk_overlap_tokens", chunk_overlap_tokens)
+        object.__setattr__(self, "providers", providers or [])
+
+    @property
+    def model(self) -> str:
+        """Compatibility alias for older call sites."""
+        return self.default_model
+
+    @property
+    def provider(self) -> str:
+        """Compatibility alias for older call sites."""
+        return self.default_provider
+
+    def resolve_active(self) -> tuple[EmbeddingProviderConfig, EmbeddingModelConfig]:
+        active_provider = next(
+            (provider for provider in self.providers if provider.name == self.default_provider),
+            None,
+        )
+        if active_provider is None:
+            raise ValueError(f"Embedding provider '{self.default_provider}' not found")
+
+        active_model = next(
+            (model for model in active_provider.models if model.model_name == self.default_model),
+            None,
+        )
+        if active_model is None:
+            raise ValueError(
+                f"Model '{self.default_model}' not found in embedding provider '{self.default_provider}'"
+            )
+        if active_model.dimensions != self.dimensions:
+            raise ValueError(
+                f"Embedding dimensions mismatch: top-level={self.dimensions}, "
+                f"model {active_model.model_name}={active_model.dimensions}"
+            )
+        if self.chunk_max_tokens > active_model.max_context:
+            raise ValueError(
+                f"chunk_max_tokens ({self.chunk_max_tokens}) exceeds "
+                f"model {active_model.model_name} max_context ({active_model.max_context})"
+            )
+        return active_provider, active_model
+
+
+@dataclass(frozen=True)
+class RerankModelConfig:
+    model_name: str
+    max_context: int
+    max_chunks_per_doc: int | None = None
+    instruction: str | None = None
+
+
+@dataclass(frozen=True)
+class RerankProviderConfig:
+    name: str
+    type: str
+    base_url: str
+    api_key: str
+    models: list[RerankModelConfig]
 
 
 @dataclass(frozen=True)
 class RerankConfig:
     enabled: bool
-    model: str
+    default_model: str
+    default_provider: str
     top_n: int
-    provider: str
+    providers: list[RerankProviderConfig]
+
+    def __init__(
+        self,
+        enabled: bool = False,
+        *,
+        default_model: str | None = None,
+        default_provider: str | None = None,
+        top_n: int = 10,
+        providers: list[RerankProviderConfig] | None = None,
+        model: str | None = None,
+        provider: str | None = None,
+        **_: Any,
+    ) -> None:
+        object.__setattr__(self, "enabled", enabled)
+        object.__setattr__(self, "default_model", default_model or model or "")
+        object.__setattr__(self, "default_provider", default_provider or provider or "")
+        object.__setattr__(self, "top_n", top_n)
+        object.__setattr__(self, "providers", providers or [])
+
+    @property
+    def model(self) -> str:
+        """Compatibility alias for older call sites."""
+        return self.default_model
+
+    @property
+    def provider(self) -> str:
+        """Compatibility alias for older call sites."""
+        return self.default_provider
+
+    def resolve_active(self) -> tuple[RerankProviderConfig, RerankModelConfig]:
+        active_provider = next(
+            (provider for provider in self.providers if provider.name == self.default_provider),
+            None,
+        )
+        if active_provider is None:
+            raise ValueError(f"Rerank provider '{self.default_provider}' not found")
+
+        active_model = next(
+            (model for model in active_provider.models if model.model_name == self.default_model),
+            None,
+        )
+        if active_model is None:
+            raise ValueError(
+                f"Model '{self.default_model}' not found in rerank provider '{self.default_provider}'"
+            )
+        return active_provider, active_model
 
 
 @dataclass(frozen=True)
@@ -297,8 +451,6 @@ def _parse_model_capabilities(value: Any, provider_name: str) -> list[ModelCapab
                 is_stream=_as_bool(item.get("is_stream"), False),
                 is_support_json_schema=_as_bool(item.get("is_support_json_schema"), False),
                 is_support_json_object=_as_bool(item.get("is_support_json_object"), False),
-                is_support_embedding=_as_bool(item.get("is_support_embedding"), False),
-                is_support_rerank=_as_bool(item.get("is_support_rerank"), False),
             )
         )
     return parsed
@@ -336,26 +488,145 @@ def _model_declared(providers: list[ProviderConfig], model_ref: str) -> bool:
     return False
 
 
+def _parse_embedding_model_configs(
+    value: Any, provider_name: str, default_dimensions: int
+) -> list[EmbeddingModelConfig]:
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"Embedding provider '{provider_name}' must include non-empty models")
+
+    parsed: list[EmbeddingModelConfig] = []
+    for idx, item in enumerate(value):
+        field_name = f"embedding.providers[{provider_name}].models[{idx}]"
+        if not isinstance(item, dict):
+            raise ValueError(f"{field_name} must be an object")
+        model_name = _as_str(item.get("model_name"))
+        if not model_name:
+            raise ValueError(f"{field_name} must include model_name")
+        parsed.append(
+            EmbeddingModelConfig(
+                model_name=model_name,
+                dimensions=_as_int(item.get("dimensions"), default_dimensions),
+                max_context=_as_int(item.get("max_context"), 8192),
+            )
+        )
+    return parsed
+
+
+def _parse_embedding_provider_configs(value: Any, default_dimensions: int) -> list[EmbeddingProviderConfig]:
+    if not isinstance(value, list) or not value:
+        raise ValueError("Config [embedding] must include non-empty providers")
+
+    parsed: list[EmbeddingProviderConfig] = []
+    for idx, item in enumerate(value):
+        field_name = f"embedding.providers[{idx}]"
+        if not isinstance(item, dict):
+            raise ValueError(f"{field_name} must be an object")
+        name = _as_str(item.get("name"))
+        if not name:
+            raise ValueError(f"{field_name} must include name")
+        base_url = _as_str(item.get("base_url"))
+        if not base_url:
+            raise ValueError(f"{field_name} must include base_url")
+        api_key = _as_str(item.get("api_key"))
+        if not api_key:
+            raise ValueError(f"{field_name} must include api_key")
+        parsed.append(
+            EmbeddingProviderConfig(
+                name=name,
+                type=_as_str(item.get("type"), "openai_compatible") or "openai_compatible",
+                base_url=base_url,
+                api_key=resolve_key_value(api_key),
+                models=_parse_embedding_model_configs(item.get("models"), name, default_dimensions),
+            )
+        )
+    return parsed
+
+
 def _parse_embedding_config(value: Any) -> EmbeddingConfig | None:
     if value is None:
         return None
     if not isinstance(value, dict):
         raise ValueError("Config [embedding] must be an object")
 
-    model = _as_str(value.get("model"))
-    provider = _as_str(value.get("provider"))
-    if not model or not provider:
-        raise ValueError("Config [embedding] must include model and provider")
+    default_model = _as_str(value.get("default_model"))
+    default_provider = _as_str(value.get("default_provider"))
+    if not default_model or not default_provider:
+        raise ValueError("Config [embedding] must include default_model and default_provider")
 
+    dimensions = _as_int(value.get("dimensions"), 1024)
     return EmbeddingConfig(
-        model=model,
-        dimensions=_as_int(value.get("dimensions"), 0),
-        normalized=_as_bool(value.get("normalized"), False),
-        batch_size=_as_int(value.get("batch_size"), 0),
-        chunk_max_tokens=_as_int(value.get("chunk_max_tokens"), 0),
-        chunk_overlap_tokens=_as_int(value.get("chunk_overlap_tokens"), 0),
-        provider=provider,
+        default_model=default_model,
+        default_provider=default_provider,
+        dimensions=dimensions,
+        normalized=_as_bool(value.get("normalized"), True),
+        batch_size=_as_int(value.get("batch_size"), 32),
+        chunk_max_tokens=_as_int(value.get("chunk_max_tokens"), 512),
+        chunk_overlap_tokens=_as_int(value.get("chunk_overlap_tokens"), 64),
+        providers=_parse_embedding_provider_configs(value.get("providers"), dimensions),
     )
+
+
+def _parse_rerank_model_configs(value: Any, provider_name: str) -> list[RerankModelConfig]:
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"Rerank provider '{provider_name}' must include non-empty models")
+
+    parsed: list[RerankModelConfig] = []
+    for idx, item in enumerate(value):
+        field_name = f"rerank.providers[{provider_name}].models[{idx}]"
+        if not isinstance(item, dict):
+            raise ValueError(f"{field_name} must be an object")
+        model_name = _as_str(item.get("model_name"))
+        if not model_name:
+            raise ValueError(f"{field_name} must include model_name")
+        parsed.append(
+            RerankModelConfig(
+                model_name=model_name,
+                max_context=_as_int(item.get("max_context"), 8192),
+                max_chunks_per_doc=(
+                    _as_int(item.get("max_chunks_per_doc"), 0)
+                    if item.get("max_chunks_per_doc") is not None
+                    else None
+                ),
+                instruction=_as_str(item.get("instruction"), None),
+            )
+        )
+    return parsed
+
+
+def _parse_rerank_provider_configs(value: Any, *, required: bool) -> list[RerankProviderConfig]:
+    if value is None:
+        value = []
+    if not isinstance(value, list):
+        raise ValueError("Config [rerank].providers must be an array")
+    if required and not value:
+        raise ValueError("Config [rerank] must include non-empty providers")
+    if not value:
+        return []
+
+    parsed: list[RerankProviderConfig] = []
+    for idx, item in enumerate(value):
+        field_name = f"rerank.providers[{idx}]"
+        if not isinstance(item, dict):
+            raise ValueError(f"{field_name} must be an object")
+        name = _as_str(item.get("name"))
+        if not name:
+            raise ValueError(f"{field_name} must include name")
+        base_url = _as_str(item.get("base_url"))
+        if not base_url:
+            raise ValueError(f"{field_name} must include base_url")
+        api_key = _as_str(item.get("api_key"))
+        if not api_key:
+            raise ValueError(f"{field_name} must include api_key")
+        parsed.append(
+            RerankProviderConfig(
+                name=name,
+                type=_as_str(item.get("type"), "openai_compatible") or "openai_compatible",
+                base_url=base_url,
+                api_key=resolve_key_value(api_key),
+                models=_parse_rerank_model_configs(item.get("models"), name),
+            )
+        )
+    return parsed
 
 
 def _parse_rerank_config(value: Any) -> RerankConfig | None:
@@ -364,16 +635,18 @@ def _parse_rerank_config(value: Any) -> RerankConfig | None:
     if not isinstance(value, dict):
         raise ValueError("Config [rerank] must be an object")
 
-    model = _as_str(value.get("model"))
-    provider = _as_str(value.get("provider"))
-    if not model or not provider:
-        raise ValueError("Config [rerank] must include model and provider")
+    enabled = _as_bool(value.get("enabled"), False)
+    default_model = _as_str(value.get("default_model"), "") or ""
+    default_provider = _as_str(value.get("default_provider"), "") or ""
+    if enabled and (not default_model or not default_provider):
+        raise ValueError("Config [rerank] must include default_model and default_provider")
 
     return RerankConfig(
-        enabled=_as_bool(value.get("enabled"), False),
-        model=model,
-        top_n=_as_int(value.get("top_n"), 0),
-        provider=provider,
+        enabled=enabled,
+        default_model=default_model,
+        default_provider=default_provider,
+        top_n=_as_int(value.get("top_n"), 10),
+        providers=_parse_rerank_provider_configs(value.get("providers"), required=enabled),
     )
 
 
@@ -392,7 +665,11 @@ def _parse_search_config(value: Any) -> SearchConfig | None:
         vector_top_k=_as_int(value.get("vector_top_k"), 0),
         keyword_top_k=_as_int(value.get("keyword_top_k"), 0),
         hybrid=_as_bool(value.get("hybrid"), False),
-        access_token=_as_str(value.get("access_token"), None),
+        access_token=(
+            resolve_key_value(raw_token)
+            if (raw_token := _as_str(value.get("access_token"), None))
+            else None
+        ),
     )
 
 
@@ -433,9 +710,6 @@ def load_config(path: str) -> PaperConfig:
 
     render_data = data.get("render", {})
     render = RenderConfig(template_path=_as_str(render_data.get("template_path"), DEFAULT_RENDER.template_path))
-    embedding = _parse_embedding_config(data.get("embedding"))
-    rerank = _parse_rerank_config(data.get("rerank"))
-    search = _parse_search_config(data.get("search"))
 
     providers_data = data.get("providers", [])
     if not isinstance(providers_data, list) or not providers_data:
@@ -491,6 +765,10 @@ def load_config(path: str) -> PaperConfig:
             raise ValueError(f"Provider '{name}' requires anthropic_version")
 
         providers.append(parsed_provider)
+
+    embedding = _parse_embedding_config(data.get("embedding"))
+    rerank = _parse_rerank_config(data.get("rerank"))
+    search = _parse_search_config(data.get("search"))
 
     main_model = _parse_main_model(data.get("main_model"))
     for item in main_model:
