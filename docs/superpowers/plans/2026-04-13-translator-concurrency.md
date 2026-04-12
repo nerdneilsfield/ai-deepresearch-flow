@@ -52,6 +52,17 @@ This plan does not cover:
 Extract the first half of `translate()` (lines 698–729) into a new public method on `MarkdownTranslator`. This includes fix, format, protect, split, skip placeholder-only nodes, and group:
 
 ```python
+@dataclass
+class PreprocessResult:
+    original_text: str
+    protected_text: str
+    segments: list
+    nodes: dict[int, Node]
+    store: PlaceHolderStore
+    initial_groups: list[str]
+    skip_count: int
+    total_nodes: int
+
 async def preprocess_document(
     self,
     text: str,
@@ -59,11 +70,10 @@ async def preprocess_document(
     format_enabled: bool,
     dump_callback: Callable[[DumpSnapshot], None] | None = None,
     request_log: list[dict[str, Any]] | None = None,
-) -> tuple[str, str, list, dict[int, Node], PlaceHolderStore, list[str]]:
+) -> PreprocessResult:
     """Extract the preprocessing phase from translate().
 
-    Returns:
-        (original_text, protected_text, segments, nodes, store, initial_groups)
+    Returns a PreprocessResult with all data needed by DocumentContext.
     """
     original_text = text
     if fix_level != "off":
@@ -83,13 +93,18 @@ async def preprocess_document(
             )
         )
     segments, nodes = split_to_segments(protected, self.cfg.max_chunk_chars)
+    total_nodes = len(nodes)
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug("Segments: %d", len(segments))
-        logger.debug("Nodes: %d", len(nodes))
+        logger.debug("Nodes: %d", total_nodes)
 
+    skip_count = 0
     for node in nodes.values():
         if self._is_placeholder_only(node.origin_text):
             node.translated_text = node.origin_text
+            skip_count += 1
+    if skip_count:
+        logger.debug("Skipped %d placeholder-only nodes", skip_count)
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug("Placeholder counts: %s", store.kind_counts())
 
@@ -97,7 +112,16 @@ async def preprocess_document(
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug("Groups: %d", len(groups))
 
-    return original_text, protected, segments, nodes, store, groups
+    return PreprocessResult(
+        original_text=original_text,
+        protected_text=protected,
+        segments=segments,
+        nodes=nodes,
+        store=store,
+        initial_groups=groups,
+        skip_count=skip_count,
+        total_nodes=total_nodes,
+    )
 ```
 
 - [ ] **Step 2: Write `finalize_document()` method**
@@ -387,10 +411,18 @@ class DocumentContext:
     nodes: dict[int, Node]
     store: PlaceHolderStore
 
+    # Preprocess stats (immutable after creation)
+    total_nodes: int = 0
+    skip_count: int = 0
+    initial_groups_count: int = 0
+
     # Translation state (written only by DocumentActor)
     translated_nodes: dict[int, Node] = field(default_factory=dict)
     pending_counts: dict[str, int] = field(default_factory=dict)
     stage: DocStage = DocStage.PREPROCESSED
+    # Per-stage group counts for final stats/logging
+    stage_group_counts: dict[str, int] = field(default_factory=dict)
+    retry_rounds: int = 0
 
     # Debug / stats
     request_log: list[dict[str, Any]] | None = None
@@ -688,32 +720,59 @@ class DocumentActor:
 
     async def on_completion(self, event: CompletionEvent) -> None:
         async with self._lock:
-            # 1. Apply result
+            # 1. Unpack group response into per-node translations.
+            #    A group may contain multiple nodes packed with NODE_START/END
+            #    markers. _ungroup_nodes() parses these and returns a dict of
+            #    {nid: Node} with translated_text set per node. For failed
+            #    groups (ok=False), each node gets empty translated_text.
+            if event.ok and event.response:
+                unpacked = self._translator._ungroup_nodes(
+                    event.response, self._ctx.nodes,
+                )
+                for nid, node in unpacked.items():
+                    self._ctx.translated_nodes[nid] = node
+            else:
+                for nid in event.node_ids:
+                    if nid in self._ctx.nodes:
+                        orig = self._ctx.nodes[nid]
+                        self._ctx.translated_nodes[nid] = Node(
+                            nid=nid,
+                            origin_text=orig.origin_text,
+                            translated_text="",
+                        )
+
+            # 2. Apply placeholder typo fix + alignment on newly unpacked nodes
+            valid_phs = self._ctx.store.placeholders()
             for nid in event.node_ids:
-                if nid in self._ctx.nodes:
-                    node = self._ctx.nodes[nid]
-                    self._ctx.translated_nodes[nid] = Node(
-                        nid=nid,
-                        origin_text=node.origin_text,
-                        translated_text=event.response if event.ok else "",
+                node = self._ctx.translated_nodes.get(nid)
+                if node is None or not node.translated_text:
+                    continue
+                if valid_phs:
+                    node.translated_text = self._translator._fix_placeholder_typos(
+                        node.translated_text, valid_phs,
+                    )
+                orig = self._ctx.nodes.get(nid)
+                if orig is not None:
+                    node.translated_text = self._translator._align_placeholders(
+                        orig.origin_text, node.translated_text,
                     )
 
-            # 2. Decrement pending and inflight
+            # 3. Decrement pending and inflight
             stage_key = event.stage.value
             self._ctx.pending_counts[stage_key] = (
                 self._ctx.pending_counts.get(stage_key, 1) - 1
             )
             self._inflight = max(self._inflight - 1, 0)
 
-            # 3. Credit refill
+            # 4. Credit refill
             if self._pending_groups:
                 self._emit_up_to_credit(event.stage)
 
-            # 4. Report progress
+            # 5. Report progress
             if self._progress is not None:
                 await self._progress.advance_groups(stage_key, 1)
 
-            # 5. Check if stage is complete
+            # 6. Check if stage is complete
             if (
                 self._ctx.pending_counts.get(stage_key, 0) <= 0
                 and not self._pending_groups
@@ -721,11 +780,10 @@ class DocumentActor:
                 await self._try_advance()
 
     async def _try_advance(self) -> None:
-        failed = {
-            nid: node
-            for nid, node in self._ctx.translated_nodes.items()
-            if not node.translated_text or not node.translated_text.strip()
-        }
+        # Use the translator's real failure detection (placeholder mismatch,
+        # target-script guardrails, similarity ratio, etc.) — not just
+        # "empty string" checks.
+        failed = self._translator._collect_failed_nodes(self._ctx.translated_nodes)
         next_stage = self._next_available_stage()
         if failed and next_stage is not None:
             self._transition_to(next_stage)
@@ -742,6 +800,8 @@ class DocumentActor:
             ]
             self._pending_groups = groups
             self._ctx.pending_counts[next_stage.value] = len(groups)
+            self._ctx.stage_group_counts[next_stage.value] = len(groups)
+            self._ctx.retry_rounds += 1
             self._inflight = 0
             self._emit_up_to_credit(next_stage)
             if self._progress is not None:
@@ -1050,21 +1110,22 @@ class Scheduler:
     ) -> DocumentContext:
         text = path.read_text(encoding="utf-8")
         request_log = [] if request_log_enabled else None
-        original, protected, segments, nodes, store, groups = (
-            await self._translator.preprocess_document(
-                text, fix_level, format_enabled, request_log=request_log,
-            )
+        result = await self._translator.preprocess_document(
+            text, fix_level, format_enabled, request_log=request_log,
         )
         doc_id = f"{path.stem}.{id(path)}"
         return DocumentContext(
             doc_id=doc_id,
             source_path=path,
             output_path=output_path,
-            original_text=original,
-            protected_text=protected,
-            segments=segments,
-            nodes=nodes,
-            store=store,
+            original_text=result.original_text,
+            protected_text=result.protected_text,
+            segments=result.segments,
+            nodes=result.nodes,
+            store=result.store,
+            total_nodes=result.total_nodes,
+            skip_count=result.skip_count,
+            initial_groups_count=len(result.initial_groups),
             request_log=request_log,
         )
 
@@ -1116,23 +1177,8 @@ class Scheduler:
 
     def _make_finalize_fn(self, format_enabled: bool) -> Callable:
         async def finalize(ctx: DocumentContext) -> None:
-            # Apply placeholder fixes before finalize
-            valid_placeholders = ctx.store.placeholders()
-            if valid_placeholders:
-                for node in ctx.translated_nodes.values():
-                    if node.translated_text:
-                        node.translated_text = self._translator._fix_placeholder_typos(
-                            node.translated_text, valid_placeholders
-                        )
-            for node in ctx.translated_nodes.values():
-                if node.translated_text:
-                    origin = ctx.nodes.get(node.nid)
-                    if origin is not None:
-                        node.translated_text = self._translator._align_placeholders(
-                            origin.origin_text, node.translated_text
-                        )
-
-            # Merge translated_nodes back into nodes
+            # Placeholder fix + alignment already applied in on_completion.
+            # Merge translated_nodes back into nodes for reassembly.
             for nid, node in ctx.translated_nodes.items():
                 if nid in ctx.nodes:
                     ctx.nodes[nid].translated_text = node.translated_text
@@ -1147,6 +1193,25 @@ class Scheduler:
             )
             ctx.output_path.parent.mkdir(parents=True, exist_ok=True)
             ctx.output_path.write_text(result, encoding="utf-8")
+
+            # Log per-document stats matching current CLI output contract
+            failed = self._translator._collect_failed_nodes(ctx.translated_nodes)
+            failed_count = len(failed)
+            success_count = max(ctx.total_nodes - failed_count, 0)
+            retry_groups = sum(
+                v for k, v in ctx.stage_group_counts.items()
+                if k != DocStage.TRANSLATING.value
+            )
+            logger.info(
+                "Translated %s | nodes=%d ok=%d fail=%d skip=%d groups=%d retries=%d",
+                ctx.source_path.name,
+                ctx.total_nodes,
+                success_count,
+                failed_count,
+                ctx.skip_count,
+                ctx.initial_groups_count,
+                retry_groups,
+            )
         return finalize
 
     async def _worker(self, queue: asyncio.Queue, config: QueueConfig) -> None:
@@ -1165,11 +1230,15 @@ class Scheduler:
                 elif rotator is not None:
                     api_key = await rotator.next_key()
 
-                # 2. Acquire permits, then call LLM
+                # 2. Acquire permits, then call LLM.
+                #    Throttle ownership stays inside _translate_group()
+                #    (it already calls throttle.tick() before each attempt).
+                #    Do NOT tick here — that would double-throttle.
                 async with config.provider_semaphore:
                     async with self._global_sem:
-                        if self._throttle:
-                            await self._throttle.tick()
+                        # Thread request_log from DocumentContext for debug output
+                        ctx = self._actors.get(task.doc_id)
+                        req_log = ctx._ctx.request_log if ctx else None
                         response = await self._translator._translate_group(
                             task.group_text,
                             config.provider,
@@ -1180,10 +1249,10 @@ class Scheduler:
                             self._throttle,
                             config.max_tokens,
                             config.retry_limit,
-                            None,  # request_log handled at actor level
+                            req_log,
                             task.stage.value,
                             task.group_index,
-                            None,  # dump_callback
+                            None,  # dump_callback — per-group dumps deferred
                             route=route,
                         )
                 await self._result_queue.put(CompletionEvent(
