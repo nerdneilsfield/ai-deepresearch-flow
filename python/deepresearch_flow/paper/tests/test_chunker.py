@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 from deepresearch_flow.paper.chunker import (
+    _build_encoder,
+    _first_text,
+    _paragraph_first_split,
+    _resolve_title,
+    _sliding_window_split,
     SearchableField,
     chunk_fields,
     extract_searchable_fields,
@@ -49,6 +54,97 @@ def test_extract_searchable_fields_fallback_scans_string_fields() -> None:
     assert [field.chunk_type for field in fields] == ["title", "content"]
     assert fields[0].text == "Fallback Title"
     assert fields[1].text == "Some text content"
+
+
+def test_internal_text_helpers_ignore_blank_values() -> None:
+    record = {
+        "paper_title": "   ",
+        "title": "Fallback Title",
+        "summary": "  ",
+        "abstract": "Abstract text",
+    }
+
+    assert _resolve_title(record) == "Fallback Title"
+    assert _first_text(record, ("summary", "abstract")) == "Abstract text"
+    assert _first_text({"summary": "   ", "abstract": None}, ("summary", "abstract")) is None
+
+
+def test_build_encoder_fallback_without_tiktoken(monkeypatch) -> None:
+    monkeypatch.setattr("deepresearch_flow.paper.chunker.tiktoken", None)
+
+    encode, decode = _build_encoder()
+
+    assert encode("hello, world!") == ["hello", ",", "world", "!"]
+    assert decode(["hello", ",", "world", "!"]) == "hello , world !"
+
+
+def test_sliding_window_split_short_and_paragraph_split_empty() -> None:
+    assert _sliding_window_split("short text", max_tokens=10, overlap_tokens=2) == ["short text"]
+    assert _paragraph_first_split("   ", max_tokens=10, overlap_tokens=2) == []
+
+
+def test_paragraph_first_split_long_paragraph_uses_windowing() -> None:
+    chunks = _paragraph_first_split(("word " * 20).strip(), max_tokens=5, overlap_tokens=1)
+    assert len(chunks) > 1
+    assert all(chunk.strip() for chunk in chunks)
+
+
+def test_paragraph_first_split_flushes_accumulator_before_long_paragraph() -> None:
+    short = ("alpha " * 3).strip()
+    long = ("beta " * 20).strip()
+
+    chunks = _paragraph_first_split(f"{short}\n\n{long}", max_tokens=5, overlap_tokens=1)
+
+    assert chunks[0] == short
+    assert len(chunks) > 2
+
+
+def test_extract_searchable_fields_skips_invalid_qa_items_and_blank_content() -> None:
+    record = {
+        "paper_title": "Paper Title",
+        "summary": "Summary",
+        "qa": [
+            "not-a-dict",
+            {"question": "  What?  ", "answer": 123},
+            {"q": None, "a": "  Answer  "},
+            {"question": "   ", "answer": "   "},
+        ],
+        "notes": "   ",
+        "body": "Useful body text",
+    }
+
+    fields = extract_searchable_fields(record, "simple")
+
+    assert [field.chunk_type for field in fields] == ["title", "abstract", "qa", "qa", "content"]
+    assert fields[2].text == "Q: What?\nA:"
+    assert fields[3].text == "Q: \nA: Answer"
+    assert fields[4].field_name == "simple/body"
+
+
+def test_extract_searchable_fields_fallback_without_title_only_keeps_strings() -> None:
+    record = {
+        "count": 3,
+        "empty": "   ",
+        "body": "Useful body text",
+    }
+
+    fields = extract_searchable_fields(record, "unknown_template")
+
+    assert [field.field_name for field in fields] == ["unknown_template/body"]
+
+
+def test_chunk_fields_skips_blank_text_fields() -> None:
+    fields = [
+        SearchableField(
+            field_name="empty",
+            chunk_type="content",
+            text="   ",
+            template_tag="simple",
+            lang="",
+        )
+    ]
+
+    assert chunk_fields(fields, max_tokens=10, overlap_tokens=2) == []
 
 
 def test_chunk_fields_keeps_title_and_qa_unsplit() -> None:

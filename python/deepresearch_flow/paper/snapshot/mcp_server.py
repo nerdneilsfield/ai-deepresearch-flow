@@ -131,16 +131,17 @@ def _validate_query(query: str, cfg: McpSnapshotConfig) -> str:
     Raises:
         ToolError: If query is invalid or too long.
     """
-    if not query or not query.strip():
+    normalized = query.strip() if query else ""
+    if not normalized:
         raise McpToolError("invalid_query", "Query cannot be empty")
-    if len(query) > cfg.limits.max_query_length:
+    if len(normalized) > cfg.limits.max_query_length:
         raise McpToolError(
             "query_too_long",
             f"Query exceeds maximum length of {cfg.limits.max_query_length}",
-            length=len(query),
+            length=len(normalized),
             max_length=cfg.limits.max_query_length
         )
-    return query.strip()
+    return normalized
 
 
 def _validate_paper_id(paper_id: str, cfg: McpSnapshotConfig) -> str:

@@ -9,6 +9,10 @@ from deepresearch_flow.paper.snapshot.identity import (
     paper_id_for_key,
 )
 from deepresearch_flow.paper.snapshot.text import (
+    _is_cjk_char,
+    _md_renderer,
+    normalize_query_punctuation,
+    split_mixed_cjk_latin,
     insert_cjk_spaces,
     markdown_to_plain_text,
     merge_adjacent_markers,
@@ -57,6 +61,10 @@ class TestIdentity(unittest.TestCase):
 
 
 class TestSearchText(unittest.TestCase):
+    def test_is_cjk_char_distinguishes_latin(self) -> None:
+        self.assertTrue(_is_cjk_char("深"))
+        self.assertFalse(_is_cjk_char("A"))
+
     def test_rewrite_search_query_cjk_phrase(self) -> None:
         self.assertEqual(rewrite_search_query("深度学习"), "\"深 度 学 习\"")
 
@@ -66,6 +74,9 @@ class TestSearchText(unittest.TestCase):
     def test_rewrite_search_query_boolean(self) -> None:
         self.assertEqual(rewrite_search_query("lidar AND localization"), "lidar AND localization")
 
+    def test_rewrite_search_query_empty_after_cleanup(self) -> None:
+        self.assertEqual(rewrite_search_query("  ，。！？  "), "")
+
     def test_markdown_to_plain_text_strips_tables(self) -> None:
         md = "hello\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\nworld"
         plain = markdown_to_plain_text(md)
@@ -74,17 +85,39 @@ class TestSearchText(unittest.TestCase):
         self.assertNotIn("1", plain)
         self.assertNotIn("2", plain)
 
+    def test_markdown_to_plain_text_handles_empty_and_breaks_and_images(self) -> None:
+        self.assertEqual(markdown_to_plain_text(""), "")
+        md = "hello  \nworld\n![Alt Text](https://example.com/a.png)\n![](https://example.com/b.png)"
+        plain = markdown_to_plain_text(md)
+        self.assertIn("hello", plain)
+        self.assertIn("world", plain)
+        self.assertIn("Alt Text", plain)
+
+    def test_md_renderer_enables_tables(self) -> None:
+        token_types = [token.type for token in _md_renderer().parse("| a |\n|---|\n| b |")]
+        self.assertIn("table_open", token_types)
+
     def test_cjk_spacing_roundtrip(self) -> None:
         original = "深度学习"
         spaced = insert_cjk_spaces(original)
         self.assertEqual(spaced, "深 度 学 习")
         self.assertEqual(remove_cjk_spaces(spaced), original)
 
+    def test_remove_cjk_spaces_leaves_non_cjk_spaces(self) -> None:
+        self.assertEqual(remove_cjk_spaces("no-spaces"), "no-spaces")
+        self.assertEqual(remove_cjk_spaces("深 度 learning"), "深度 learning")
+
     def test_merge_adjacent_markers(self) -> None:
         self.assertEqual(
             merge_adjacent_markers("[[[深]]][[[度]]]"),
             "[[[深度]]]",
         )
+
+    def test_normalize_query_punctuation_and_split_mixed_tokens(self) -> None:
+        self.assertEqual(normalize_query_punctuation("深度学习，transformer！"), "深度学习 transformer ")
+        self.assertEqual(normalize_query_punctuation(""), "")
+        self.assertEqual(split_mixed_cjk_latin(""), [])
+        self.assertEqual(split_mixed_cjk_latin("abc深度def"), ["abc", "深度", "def"])
 
     def test_markdown_monthly_facets_exist_after_build(self) -> None:
         # This is a lightweight schema sanity check (no full build here).
