@@ -101,25 +101,78 @@ def extract_math_spans(text: str, context_chars: int) -> list[FormulaSpan]:
         )
 
     block_ranges = [(span.start, span.end) for span in spans]
-    inline_pattern = re.compile(r"(?<!\\)\$(?!\s|\$)([^$\n]+?)(?<!\\)\$(?!\$)")
-    for match in inline_pattern.finditer(masked):
-        if any(start <= match.start() < end for start, end in block_ranges):
-            continue
-        content = text[match.start() + 1 : match.end() - 1]
-        line = text.count("\n", 0, match.start()) + 1
-        context = text[max(0, match.start() - context_chars) : match.end() + context_chars]
-        spans.append(
-            FormulaSpan(
-                start=match.start(),
-                end=match.end(),
-                delimiter="$",
-                content=content,
-                line=line,
-                context=context,
-            )
-        )
+    spans.extend(_extract_inline_math_spans(text, masked, context_chars, block_ranges))
 
     return sorted(spans, key=lambda span: span.start)
+
+
+def _looks_like_inline_math(content: str) -> bool:
+    stripped = content.strip()
+    if not stripped or "`" in stripped:
+        return False
+    if any(token in stripped for token in ("\\", "^", "_", "{", "}", "=", "+", "-", "*", "/", "(", ")", "[", "]")):
+        return True
+    if re.fullmatch(r"[A-Za-z](?:[A-Za-z0-9]|_[A-Za-z0-9]+)*", stripped):
+        return True
+    return False
+
+
+def _extract_inline_math_spans(
+    text: str,
+    masked: str,
+    context_chars: int,
+    block_ranges: list[tuple[int, int]],
+) -> list[FormulaSpan]:
+    spans: list[FormulaSpan] = []
+    idx = 0
+    while idx < len(masked):
+        start = masked.find("$", idx)
+        if start < 0:
+            break
+        if start > 0 and masked[start - 1] == "\\":
+            idx = start + 1
+            continue
+        if start + 1 >= len(masked) or masked[start + 1] in {"$", " ", "\n"}:
+            idx = start + 1
+            continue
+        if any(block_start <= start < block_end for block_start, block_end in block_ranges):
+            idx = start + 1
+            continue
+
+        end = start + 1
+        matched = False
+        while True:
+            end = masked.find("$", end)
+            if end < 0:
+                break
+            if masked[end - 1] == "\\":
+                end += 1
+                continue
+            if end + 1 < len(masked) and masked[end + 1] == "$":
+                break
+            content = text[start + 1 : end]
+            if _looks_like_inline_math(content):
+                line = text.count("\n", 0, start) + 1
+                context = text[max(0, start - context_chars) : end + 1 + context_chars]
+                spans.append(
+                    FormulaSpan(
+                        start=start,
+                        end=end + 1,
+                        delimiter="$",
+                        content=content,
+                        line=line,
+                        context=context,
+                    )
+                )
+                idx = end + 1
+                matched = True
+                break
+            end += 1
+
+        if not matched:
+            idx = start + 1
+
+    return spans
 
 
 def cleanup_formula(text: str) -> str:

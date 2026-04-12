@@ -20,6 +20,17 @@ def test_cleanup_formula_preserves_cases_linebreaks() -> None:
     assert cleaned == original
 
 
+def test_extract_math_spans_skips_currency_and_code_like_dollar_sequences() -> None:
+    text = "price is $5. code: `$HOME` and math $x+y$\n```\n$z$\n```\n$$\na+b\n$$\n"
+
+    spans = math.extract_math_spans(text, 0)
+
+    assert [(span.delimiter, span.content) for span in spans] == [
+        ("$", "x+y"),
+        ("$$", "\na+b\n"),
+    ]
+
+
 def test_cleanup_formula_preserves_latex_commands_with_n_and_right() -> None:
     original = (
         r"f_{c}(c_{1},c_{2})=\begin{cases}"

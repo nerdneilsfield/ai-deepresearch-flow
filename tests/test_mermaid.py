@@ -105,6 +105,14 @@ def test_cleanup_mermaid_repairs_compacted_statement_boundary() -> None:
     assert cleaned == 'flowchart LR\nA["x"]\nB --> C["y"]'
 
 
+def test_cleanup_mermaid_repairs_unquoted_labels_with_nested_brackets() -> None:
+    original = "flowchart LR\nB[数据增强：z轴随机旋转[-π, π)] --> C[ok]\n"
+
+    cleaned = mermaid.cleanup_mermaid(original)
+
+    assert cleaned == 'flowchart LR\nB["数据增强：z轴随机旋转[-π, π)]"] --> C[ok]'
+
+
 def test_cleanup_mermaid_is_idempotent_for_compacted_and_bracketed_labels() -> None:
     original = (
         "flowchart LR\n"

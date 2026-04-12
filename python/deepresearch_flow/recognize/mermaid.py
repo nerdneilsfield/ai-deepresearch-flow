@@ -108,6 +108,8 @@ def cleanup_mermaid(text: str) -> str:
     cleaned = _normalize_label_linebreaks(cleaned)
     cleaned = _normalize_cylinder_labels(cleaned)
     cleaned = _wrap_html_labels(cleaned)
+    cleaned = _balance_labels_before_arrows(cleaned)
+    cleaned = _quote_nested_bracket_labels(cleaned)
     cleaned = _close_unbalanced_labels(cleaned)
     cleaned = _split_compacted_statements(cleaned)
     cleaned = _split_chained_edges(cleaned)
@@ -283,6 +285,40 @@ def _wrap_html_labels(text: str) -> str:
         return f'["{inner.replace(chr(34), chr(39))}"]'
 
     return _replace_square_blocks(text, fix_block)
+
+
+def _quote_nested_bracket_labels(text: str) -> str:
+    def fix_block(block: str) -> str:
+        inner = block[1:-1]
+        stripped = inner.strip()
+        if stripped.startswith(('"', "'")) and stripped.endswith(('"', "'")):
+            return block
+        if "[" not in inner and "]" not in inner:
+            return block
+        return f"[{_quote_label_text(inner)}]"
+
+    return _replace_square_blocks(text, fix_block)
+
+
+def _balance_labels_before_arrows(text: str) -> str:
+    arrows = ("-->", "-.->", "==>")
+    lines: list[str] = []
+    for line in text.splitlines():
+        if line.startswith("%%"):
+            lines.append(line)
+            continue
+        balanced = line
+        for arrow in arrows:
+            if arrow not in balanced:
+                continue
+            head, tail = balanced.split(arrow, 1)
+            opens, closes = _count_structural_square_brackets(head)
+            if opens > closes:
+                head = head.rstrip() + ("]" * (opens - closes)) + " "
+            balanced = f"{head}{arrow}{tail}"
+            break
+        lines.append(balanced)
+    return "\n".join(lines)
 
 
 def _close_unbalanced_labels(text: str) -> str:
