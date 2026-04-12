@@ -26,6 +26,7 @@ This plan does not cover:
 - `protector.py`, `placeholder.py`, `segment.py`, `fixers.py`, `prompts.py`, `config.py`
 - `paper/routing.py`, `paper/llm.py`, `paper/providers/*`
 - Translation quality, prompt engineering, or content policy
+- Per-attempt `dump_callback` in scheduler workers (intentional scope cut; `request_log` is preserved, staged debug dumps are deferred to a future iteration)
 
 ---
 
@@ -731,6 +732,17 @@ class DocumentActor:
                 )
                 for nid, node in unpacked.items():
                     self._ctx.translated_nodes[nid] = node
+                # Backfill: any node_id in the group that was NOT unpacked
+                # (incomplete payload, missing NODE_START/END marker) must be
+                # recorded as failed so _collect_failed_nodes() sees it.
+                for nid in event.node_ids:
+                    if nid not in unpacked and nid in self._ctx.nodes:
+                        orig = self._ctx.nodes[nid]
+                        self._ctx.translated_nodes[nid] = Node(
+                            nid=nid,
+                            origin_text=orig.origin_text,
+                            translated_text="",
+                        )
             else:
                 for nid in event.node_ids:
                     if nid in self._ctx.nodes:
@@ -1252,7 +1264,16 @@ class Scheduler:
                             req_log,
                             task.stage.value,
                             task.group_index,
-                            None,  # dump_callback — per-group dumps deferred
+                            # dump_callback: scheduler v1 does NOT wire
+                            # per-attempt dump_callback into workers. The
+                            # --dump-nodes / --dump-protected / --dump-placeholders
+                            # debug outputs are written once at finalize time
+                            # (via the compat wrapper or a future scheduler hook),
+                            # not per-group. request_log IS preserved above.
+                            # This is an intentional scope cut — per-attempt
+                            # staged dumps can be added later without changing
+                            # the scheduler's core interfaces.
+                            None,
                             route=route,
                         )
                 await self._result_queue.put(CompletionEvent(
