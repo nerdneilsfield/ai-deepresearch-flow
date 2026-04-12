@@ -1,5 +1,6 @@
 import asyncio
 from dataclasses import dataclass
+from pathlib import Path
 
 import pytest
 
@@ -57,12 +58,6 @@ MERMAID_CLEANUP_SEEDS = [
         seed_id="pipes",
     ),
     MermaidCleanupSeed(
-        kind="repair",
-        original='flowchart LR\nA["He said "hi""] --> B["ok"]\n',
-        expected='flowchart LR\nA["He said \'hi\'"] --> B["ok"]\n',
-        seed_id="inner-double-quotes",
-    ),
-    MermaidCleanupSeed(
         kind="pass",
         original='flowchart LR\nA["路径/斜杠\\反斜杠"] --> B["ok"]\n',
         expected='flowchart LR\nA["路径/斜杠\\反斜杠"] --> B["ok"]\n',
@@ -73,6 +68,12 @@ MERMAID_CLEANUP_SEEDS = [
         original='flowchart LR\nA["100% & <tag>"] --> B["ok"]\n',
         expected='flowchart LR\nA["100% & <tag>"] --> B["ok"]\n',
         seed_id="percent-amp-angle-brackets",
+    ),
+    MermaidCleanupSeed(
+        kind="repair",
+        original='flowchart LR\nA[a<br>"b"] --> B["ok"]\n',
+        expected='flowchart LR\nA["a<br>&quot;b&quot;"] --> B["ok"]',
+        seed_id="html-label-inner-quotes",
     ),
     MermaidCleanupSeed(
         kind="repair",
@@ -211,9 +212,118 @@ def test_cleanup_mermaid_preserves_html_break_label_variants(break_tag: str) -> 
     assert cleaned.rstrip("\n") == original.rstrip("\n")
 
 
+def test_cleanup_mermaid_sanitizes_inner_label_quotes_without_binding_strategy() -> None:
+    original = 'flowchart LR\nA["He said "hi""] --> B["ok"]\n'
+
+    cleaned = mermaid.cleanup_mermaid(original)
+
+    assert cleaned != original
+    assert cleaned.startswith("flowchart LR\nA[")
+    assert "He said " in cleaned
+    assert "hi" in cleaned
+    assert '--> B["ok"]' in cleaned
+    assert cleaned.count('A["') == 1
+    assert '""]' not in cleaned
+    assert "&quot;" in cleaned
+
+
 @pytest.mark.parametrize("original", MERMAID_IDEMPOTENT_REPAIR_INPUTS)
 def test_cleanup_mermaid_is_idempotent_across_seed_repairs(original: str) -> None:
     assert_mermaid_cleanup_idempotent(original)
+
+
+def test_fix_mermaid_text_handles_cancelled_error_results(monkeypatch) -> None:
+    async def fake_repair_batch(*_args, **_kwargs):
+        raise asyncio.CancelledError("cancelled")
+
+    monkeypatch.setattr(mermaid, "validate_mermaid", lambda *_args, **_kwargs: "parse error")
+    monkeypatch.setattr(mermaid, "repair_batch", fake_repair_batch)
+    monkeypatch.setattr(mermaid, "short_hash", lambda _path: "abc")
+
+    original = 'flowchart LR\nA["x"]B --> C["y"]\n'
+    stats = mermaid.MermaidFixStats()
+    span = mermaid.MermaidSpan(
+        start=0,
+        end=len(original),
+        content=original,
+        line=1,
+        context="",
+    )
+
+    updated, errors = asyncio.run(
+        mermaid.fix_mermaid_text(
+            text=original,
+            file_path="demo.md",
+            line_offset=1,
+            field_path=None,
+            item_index=None,
+            route_pool=object(),  # type: ignore[arg-type]
+            timeout=1.0,
+            max_retries=0,
+            batch_size=1,
+            context_chars=0,
+            client=None,  # type: ignore[arg-type]
+            stats=stats,
+            spans=[span],
+        )
+    )
+
+    assert updated == original
+    assert len(errors) == 1
+    assert errors[0]["path"] == "demo.md"
+    assert stats.diagrams_failed == 1
+
+
+def test_repair_all_diagrams_global_handles_cancelled_validation_results(
+    monkeypatch,
+) -> None:
+    original = 'flowchart LR\nA["x"] --> B["y"]\n'
+    span = mermaid.MermaidSpan(
+        start=0,
+        end=len(original),
+        content=original,
+        line=1,
+        context="",
+    )
+    issue = mermaid.MermaidIssue(
+        issue_id="abc:1:0",
+        span=span,
+        errors=["not_validated"],
+        field_path=None,
+        item_index=None,
+    )
+    task = mermaid.DiagramTask(
+        file_path=Path("demo.md"),
+        file_line_offset=1,
+        field_path=None,
+        item_index=None,
+        span=span,
+        issue=issue,
+    )
+
+    async def fake_to_thread(*_args, **_kwargs):
+        raise asyncio.CancelledError("cancelled")
+
+    monkeypatch.setattr(mermaid.asyncio, "to_thread", fake_to_thread)
+
+    stats = mermaid.MermaidFixStats()
+    replacements, errors = asyncio.run(
+        mermaid.repair_all_diagrams_global(
+            tasks=[task],
+            batch_size=1,
+            max_concurrent_batches=1,
+            route_pool=object(),  # type: ignore[arg-type]
+            timeout=1.0,
+            max_retries=0,
+            client=None,  # type: ignore[arg-type]
+            stats=stats,
+        )
+    )
+
+    assert replacements == {}
+    assert len(errors) == 1
+    assert errors[0]["path"] == "demo.md"
+    assert stats.diagrams_failed == 1
 
 
 @pytest.mark.parametrize(

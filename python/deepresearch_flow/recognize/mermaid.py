@@ -283,7 +283,7 @@ def _wrap_html_labels(text: str) -> str:
         stripped = inner.strip()
         if stripped.startswith(('"', "'")) and stripped.endswith(('"', "'")):
             return block
-        return f'["{inner.replace(chr(34), chr(39))}"]'
+        return f'["{inner.replace(chr(34), "&quot;")}"]'
 
     return _replace_square_blocks(text, fix_block)
 
@@ -308,7 +308,7 @@ def _sanitize_quoted_label_text(text: str) -> str:
         if len(stripped) < 2:
             return block
         if stripped[0] == '"' and stripped[-1] == '"':
-            sanitized_inner = stripped[1:-1].replace('"', "'")
+            sanitized_inner = stripped[1:-1].replace('"', "&quot;")
             return f'[\"{sanitized_inner}\"]'
         return block
 
@@ -419,10 +419,10 @@ def _quote_label_text(label: str) -> str:
     stripped = label.strip()
     if stripped.startswith(('"', "'")) and stripped.endswith(('"', "'")):
         if stripped[0] == '"' and '"' in stripped[1:-1]:
-            inner = stripped[1:-1].replace('"', "'")
+            inner = stripped[1:-1].replace('"', "&quot;")
             return f'"{inner}"'
         return stripped
-    return f'"{stripped.replace(chr(34), chr(39))}"'
+    return f'"{stripped.replace(chr(34), "&quot;")}"'
 
 
 def _split_chained_edges(text: str) -> str:
@@ -824,7 +824,7 @@ async def fix_mermaid_text(
         
         # Process results
         for batch, result in zip(batches, batch_results):
-            if isinstance(result, Exception):
+            if isinstance(result, BaseException):
                 # Entire batch failed with exception
                 error = str(result)
                 for issue in batch:
@@ -1039,8 +1039,28 @@ async def repair_all_diagrams_global(
             async with validate_semaphore:
                 return await asyncio.to_thread(validate_and_cleanup, task.span.content)
 
-        results = await asyncio.gather(*[validate_one(task) for task in needs_validation])
-        for task, (status, payload) in zip(needs_validation, results):
+        results = await asyncio.gather(
+            *[validate_one(task) for task in needs_validation],
+            return_exceptions=True,
+        )
+        for task, result in zip(needs_validation, results):
+            if isinstance(result, BaseException):
+                stats.diagrams_failed += 1
+                error_records.append(
+                    {
+                        "path": str(task.file_path),
+                        "line": task.file_line_offset + task.span.line - 1,
+                        "mermaid": task.span.content,
+                        "errors": [f"validation_error: {result}"],
+                        "field_path": task.field_path,
+                        "item_index": task.item_index,
+                    }
+                )
+                if progress_cb:
+                    progress_cb()
+                continue
+
+            status, payload = result
             if status == "clean":
                 if progress_cb:
                     progress_cb()
@@ -1077,7 +1097,7 @@ async def repair_all_diagrams_global(
     )
 
     for batch, result in zip(batches, results):
-        if isinstance(result, Exception):
+        if isinstance(result, BaseException):
             error_msg = str(result)
             for issue in batch:
                 stats.diagrams_failed += 1

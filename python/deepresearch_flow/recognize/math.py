@@ -202,16 +202,22 @@ def _extract_inline_math_spans(
     return spans
 
 
+def _repair_spaced_command(match: re.Match[str]) -> str:
+    command = match.group(1)
+    if len(command) == 1 or command.isupper() or command in _KNOWN_LATEX_COMMANDS:
+        return f"\\{command}"
+    return f"\\text{{{command}}}"
+
+
 def cleanup_formula(text: str) -> str:
     cleaned = text.replace("\u00a0", " ").strip()
     cleaned = _restore_json_escaped_commands(cleaned)
-    cleaned = re.sub(r"\\\s+([A-Za-z])", r"\\\1", cleaned)
+    cleaned = re.sub(r"\\\s+([A-Za-z]+)", _repair_spaced_command, cleaned)
     cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
     cleaned = re.sub(r"\n[ \t]+", "\n", cleaned)
     cleaned = re.sub(r"\\\(\s*cdot\s*\)", r"\\cdot", cleaned)
     cleaned = re.sub(r"\\\s*Max\b", r"\\max", cleaned)
     cleaned = re.sub(r"\\\s*Min\b", r"\\min", cleaned)
-    cleaned = re.sub(r"\\\s+([A-Za-z]{2,})", r"\\text{\1}", cleaned)
     cleaned = re.sub(
         r"([A-Za-z0-9_{}\\]+)\^([A-Za-z0-9_{}]+)\^([A-Za-z0-9_{}]+)",
         r"({\1}^{\2})^{\3}",
@@ -260,7 +266,10 @@ def _collapse_spaced_text(text: str) -> str:
             j = i
             while j < len(tokens) and len(tokens[j]) == 1:
                 j += 1
-            out.append("".join(tokens[i:j]))
+            if j - i >= 3:
+                out.append("".join(tokens[i:j]))
+            else:
+                out.extend(tokens[i:j])
             i = j
         else:
             out.append(tokens[i])
@@ -486,7 +495,12 @@ def _restore_json_escaped_commands(text: str) -> str:
 def _normalize_unknown_commands(text: str) -> str:
     def replace(match: re.Match[str]) -> str:
         command = match.group(1)
-        if command in _KNOWN_LATEX_COMMANDS or not command[:1].isupper():
+        if (
+            command in _KNOWN_LATEX_COMMANDS
+            or len(command) == 1
+            or command.isupper()
+            or not command[:1].isupper()
+        ):
             return match.group(0)
         return f"\\text{{{command}}}"
 
@@ -609,8 +623,15 @@ def validate_formula(text: str, display_mode: bool) -> list[str]:
 def apply_replacements(text: str, replacements: list[tuple[int, int, str]]) -> str:
     if not replacements:
         return text
+    ordered = sorted(replacements, key=lambda item: (item[0], item[1]))
+    for start, end, _value in ordered:
+        if start > end:
+            raise ValueError("replacement span start exceeds end")
+    for (_start, prev_end, _), (next_start, _next_end, _) in zip(ordered, ordered[1:]):
+        if prev_end > next_start:
+            raise ValueError("replacement spans overlap")
     updated = text
-    for start, end, value in sorted(replacements, key=lambda item: item[0], reverse=True):
+    for start, end, value in sorted(ordered, key=lambda item: item[0], reverse=True):
         updated = updated[:start] + value + updated[end:]
     return updated
 
@@ -672,6 +693,13 @@ def iter_batches(
     batch_chars = 0
     for item in items:
         item_chars = _estimate_issue_chars(item)
+        if item_chars > max_batch_chars:
+            logger.warning(
+                "formula issue %s exceeds max_batch_chars=%d (%d chars); sending singleton batch",
+                item.issue_id,
+                max_batch_chars,
+                item_chars,
+            )
         if batch and (len(batch) >= batch_size or batch_chars + item_chars > max_batch_chars):
             yield batch
             batch = []

@@ -1,5 +1,6 @@
 import asyncio
 from dataclasses import dataclass
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -83,6 +84,7 @@ CLEANUP_FORMULA_PASS_SEEDS = [
         id="pass:latex-commands-with-neq-and-right",
     ),
     pytest.param(r"\Rightarrow \Big \Re \Im", id="pass:uppercase-standard-commands"),
+    pytest.param(r"\L \O \S \P \AA", id="pass:single-letter-uppercase-commands"),
     pytest.param(r"\text{\textbf{t e r m}}", id="pass:nested-braced-text"),
 ]
 
@@ -108,6 +110,11 @@ CLEANUP_FORMULA_REPAIR_SEEDS = [
             r"\end{cases}"
         ),
         id="repair:json-control-char-damage",
+    ),
+    pytest.param(
+        r"\ begin{cases} x \ end{cases} \ Rightarrow y \ AA",
+        r"\begin{cases} x \end{cases} \Rightarrow y \AA",
+        id="repair:spaced-known-commands",
     ),
 ]
 
@@ -197,6 +204,14 @@ def test_cleanup_formula_does_not_treat_line_breaks_as_control_commands() -> Non
     assert math.cleanup_formula("x\rho") == "x\rho"
 
 
+def test_cleanup_formula_preserves_legitimate_text_spaces() -> None:
+    original = r"\text{a b} + \operatorname{a b}"
+
+    cleaned = math.cleanup_formula(original)
+
+    assert cleaned == original
+
+
 @pytest.mark.parametrize(
     "original",
     [
@@ -216,6 +231,35 @@ def test_cleanup_formula_is_idempotent_for_valid_inputs(original: str) -> None:
 
 def test_strip_wrapping_delimiters_rejects_empty_payload() -> None:
     assert math.strip_wrapping_delimiters("$$", "$$") == "$$"
+
+
+def test_apply_replacements_rejects_overlapping_spans() -> None:
+    with pytest.raises(ValueError, match="overlap"):
+        math.apply_replacements("abcdef", [(1, 3, "X"), (2, 4, "Y")])
+
+
+def test_iter_batches_warns_for_oversized_singleton(caplog) -> None:
+    issue = math.FormulaIssue(
+        issue_id="abc:0",
+        span=math.FormulaSpan(
+            start=0,
+            end=0,
+            delimiter="$$",
+            content="x" * 120,
+            line=1,
+            context="",
+        ),
+        errors=["parse error"],
+        cleaned="x" * 120,
+        field_path=None,
+        item_index=None,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        batches = list(math.iter_batches([issue], batch_size=1, max_batch_chars=10))
+
+    assert batches == [[issue]]
+    assert any("exceeds max_batch_chars" in record.message for record in caplog.records)
 
 
 def test_finalize_repaired_formula_keeps_errors_aligned_with_returned_formula(
