@@ -8,9 +8,19 @@ from deepresearch_flow.paper.providers.base import ProviderError
 
 EXTRACT_MATH_SPAN_SEEDS = [
     pytest.param(
+        "plain inline math $x+y$ only",
+        [("$", "x+y")],
+        id="pass:inline-math",
+    ),
+    pytest.param(
         "price is $5. code: `$HOME` and math $x+y$",
         [("$", "x+y")],
         id="reclassify:currency-and-code-pass-real-inline-math",
+    ),
+    pytest.param(
+        "shell var only $HOME should stay prose",
+        [],
+        id="reclassify:shell-var-only",
     ),
     pytest.param(
         "This is $\\underline{\\text{__PH_AUTOLINK_000106__}}$ end",

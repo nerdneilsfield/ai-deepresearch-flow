@@ -49,6 +49,12 @@ MERMAID_LABEL_PASS_OR_REPAIR_SEEDS = [
         "pass",
         id="pass:slashes",
     ),
+    pytest.param(
+        "100% & <tag>",
+        'A["100% & <tag>"] --> B["ok"]',
+        "pass",
+        id="pass:percent-amp-angle-brackets",
+    ),
 ]
 
 
@@ -79,6 +85,7 @@ MERMAID_IDEMPOTENT_REPAIR_INPUTS = [
     'flowchart LR\nA["x"]B --> C["y"]\n',
     "flowchart LR\nA[中括号[abc]] --> B[ok]\n",
     'flowchart LR\nA["He said "hi""] --> B["ok"]\n',
+    'flowchart LR\nA["a<br>b"]B --> C["ok"]\n',
 ]
 
 
