@@ -247,12 +247,22 @@ async def feeder(self, paths: list[Path]):
         actor = DocumentActor(ctx, self.queue_map)
         self.actors[ctx.doc_id] = actor
         actor.on_done_callback = window_sem.release
-        await actor.start()  # enqueue initial groups
+        await actor.start()  # enqueue first batch of initial groups
 ```
+
+### Per-Document Emission Credit
+
+A large document may have hundreds of initial groups. Enqueueing them all at once would flood the initial_queue and starve other documents. To prevent this, each DocumentActor holds an **emission credit** that limits how many groups it can have in-flight at once.
+
+- `max_inflight_per_doc`: defaults to `initial_workers * 2` (enough to keep workers fed without monopolizing the queue).
+- When a DocumentActor enters TRANSLATING, it enqueues up to `max_inflight_per_doc` groups and holds the rest in a local `pending_groups` list.
+- Each time `on_completion` processes a result for the current stage, the actor emits one more group from `pending_groups` (if any remain).
+- The same credit mechanism applies to retry/fallback stages.
+- `pending_counts` tracks both enqueued and locally-held groups, so `_try_advance()` only fires when truly all groups (including unemitted ones) are resolved.
 
 ### Worker
 
-All queues share the same worker template:
+All queues share the same worker template. Route acquisition happens **before** semaphore acquisition to avoid holding scarce permits while waiting on RoutePool cooldown/quota pauses:
 
 ```python
 async def worker(queue, config, global_sem, translator, client, ...):
@@ -262,23 +272,32 @@ async def worker(queue, config, global_sem, translator, client, ...):
             queue.task_done()
             break
         try:
+            # 1. Acquire route first (may wait on cooldown — no permits held)
+            route = None
+            if config.route_pool is not None:
+                route = await config.route_pool.get()
+
+            # 2. Then acquire permits
             async with config.provider_semaphore:
                 async with global_sem:
                     response = await translator._translate_group(
                         task.group_text, config.provider, config.model,
-                        client, api_key, timeout, ...,
-                        route_pool=config.route_pool,
+                        client, route, timeout, ...,
                     )
             await result_queue.put(CompletionEvent(
                 doc_id=task.doc_id, stage=task.stage,
                 group_index=task.group_index, node_ids=task.node_ids,
                 ok=True, response=response,
             ))
-        except ProviderError:
+        except ProviderError as exc:
+            if route is not None and config.route_pool is not None:
+                await config.route_pool.mark_error(route)
             await result_queue.put(CompletionEvent(..., ok=False, response=""))
         finally:
             queue.task_done()
 ```
+
+This means `_translate_group()` no longer calls `route_pool.get()` internally. Instead, it receives a resolved `route: RuntimeRoute | None` parameter. The worker is responsible for route lifecycle (acquisition, error marking).
 
 ### Dispatcher
 
@@ -308,14 +327,15 @@ class DocumentActor:
         self._lock = asyncio.Lock()
 
     async def start(self) -> None:
-        """Transition PREPROCESSED → TRANSLATING, enqueue initial groups."""
+        """Transition PREPROCESSED → TRANSLATING, enqueue up to max_inflight_per_doc initial groups."""
         ...
 
     async def on_completion(self, event: CompletionEvent) -> None:
         async with self._lock:
             # 1. Apply translated nodes (placeholder typo fix + alignment)
             # 2. Decrement pending_counts[event.stage]
-            # 3. If pending reaches zero: _try_advance()
+            # 3. Emit next group from pending_groups if any (credit refill)
+            # 4. If all groups resolved (enqueued + pending_groups empty): _try_advance()
 
     async def _try_advance(self) -> None:
         failed = self._collect_failed_nodes()
@@ -422,7 +442,7 @@ Returns: `(protected_text, segments, nodes, store, initial_groups)`
 
 Returns: final restored text
 
-**`_translate_group()`** — mostly unchanged. The `semaphore` parameter is removed from its signature because concurrency control now lives in the worker (two-layer semaphore acquisition happens before calling `_translate_group`). All other parameters remain.
+**`_translate_group()`** — signature changes: `semaphore` parameter removed (concurrency control lives in worker), `route_pool` parameter replaced by `route: RuntimeRoute | None` (route acquisition lives in worker). The worker acquires the route before permits, then passes the resolved route in. Error marking (`mark_error`, `mark_quota_exceeded`) also moves to the worker. Internal LLM call logic is unchanged.
 
 ### Eliminate Retry/Fallback Code Duplication
 
@@ -446,11 +466,11 @@ These stay on `MarkdownTranslator` and are called by DocumentActor:
 
 ## CLI Changes
 
-### Removed Parameters
+### Deprecated Parameters
 
-| Parameter | Reason |
-|-----------|--------|
-| `--group-concurrency` | Replaced by `--initial-workers` |
+| Parameter | Mapping | Behavior |
+|-----------|---------|----------|
+| `--group-concurrency` | Alias for `--initial-workers` | Emits deprecation warning, maps value to `--initial-workers`. If both are specified, `--initial-workers` wins. |
 
 ### New Parameters
 
@@ -477,13 +497,12 @@ These stay on `MarkdownTranslator` and are called by DocumentActor:
 
 | Stage | Content | Independently Deliverable | Rollback |
 |-------|---------|--------------------------|----------|
-| 1 | Split `translate()` into `preprocess_document()` + `finalize_document()`, `translate()` calls both internally | Yes | Merge back |
-| 2 | Eliminate retry/fallback/fallback_2 triple loop into unified provider-chain loop inside `translate()` | Yes | git revert |
-| 3 | New `scheduler.py`: DocumentContext, DocStage state machine, DocumentActor, 4 queues + workers, Scheduler.run() | Yes | Fall back to translate() |
-| 4 | Rewire `cli.py`: remove `--group-concurrency`, add new params, entry point becomes `scheduler.run()` | Yes | Revert CLI |
-| 5 | ProgressReporter with per-stage bars | Yes | Revert to old ProgressTracker |
+| 1 | Extract `preprocess_document()`, `finalize_document()`, and shared result-apply helpers from `translate()`. `translate()` calls the extracted methods internally. No control-flow rewrite — the triple retry/fallback loop stays as-is in `translate()`. | Yes | Merge back |
+| 2 | New `scheduler.py`: DocumentContext, DocStage state machine, DocumentActor, 4 queues + workers, Scheduler.run(). The retry/fallback control flow lives here; the old triple loop in `translate()` is not touched (it remains for the compatibility wrapper). | Yes | Fall back to translate() |
+| 3 | Rewire `cli.py`: deprecate `--group-concurrency` (alias to `--initial-workers`), add new params, entry point becomes `scheduler.run()` | Yes | Revert CLI |
+| 4 | ProgressReporter with per-stage bars | Yes | Revert to old ProgressTracker |
 
-Stages 1-2 are pure refactoring with no behavior change. Stage 3 is the core new code. Stages 4-5 are wiring.
+Stage 1 is pure extraction with no behavior change. Stage 2 is the core new code. Stages 3-4 are wiring.
 
 ---
 
