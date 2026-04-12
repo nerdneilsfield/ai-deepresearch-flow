@@ -29,15 +29,57 @@ EXTRACT_MATH_SPAN_SEEDS = [
     ),
 ]
 
+CLEANUP_FORMULA_PASS_SEEDS = [
+    pytest.param(
+        (
+            r"f_{h}(\Delta h)=\begin{cases}"
+            r"p_{h}, & \min\left(\Delta h,1-\Delta h\right)>t_{h}\\"
+            r"0, & \text{otherwise}"
+            r"\end{cases},"
+        ),
+        id="pass:cases-linebreaks",
+    ),
+    pytest.param(
+        (
+            r"f_{c}(c_{1},c_{2})=\begin{cases}"
+            r"p_{c}, & c_{1}\neq c_{2}\\"
+            r"0, & \text{otherwise}"
+            r"\end{cases}."
+        ),
+        id="pass:latex-commands-with-neq-and-right",
+    ),
+    pytest.param(r"\Rightarrow \Big \Re \Im", id="pass:uppercase-standard-commands"),
+    pytest.param(r"\text{\textbf{t e r m}}", id="pass:nested-braced-text"),
+]
 
-def test_cleanup_formula_preserves_cases_linebreaks() -> None:
-    original = (
-        r"f_{h}(\Delta h)=\begin{cases}"
-        r"p_{h}, & \min\left(\Delta h,1-\Delta h\right)>t_{h}\\"
-        r"0, & \text{otherwise}"
-        r"\end{cases},"
-    )
+CLEANUP_FORMULA_REPAIR_SEEDS = [
+    pytest.param(
+        (
+            "\\sigma_{v}(v_{i},v_{j})="
+            "\begin{cases}"
+            "\\exp\\left(-\\frac{\\delta(h_{i},h_{j})+\\delta(w_{i},w_{j})+"
+            "\\delta(d_{i},d_{j})}{3}"
+            "\\right), & "
+            "\text{若 } l_{i}=l_{j}\\\\"
+            "0, & "
+            "\text{其他情况}"
+            "\\end{cases}"
+        ),
+        (
+            r"\sigma_{v}(v_{i},v_{j})=\begin{cases}"
+            r"\exp\left(-\frac{\delta(h_{i},h_{j})+\delta(w_{i},w_{j})+"
+            r"\delta(d_{i},d_{j})}{3}\right), & "
+            r"\text{若 } l_{i}=l_{j}\\"
+            r"0, & \text{其他情况}"
+            r"\end{cases}"
+        ),
+        id="repair:json-control-char-damage",
+    ),
+]
 
+
+@pytest.mark.parametrize("original", CLEANUP_FORMULA_PASS_SEEDS)
+def test_cleanup_formula_pass_seeds_are_unchanged(original: str) -> None:
     cleaned = math.cleanup_formula(original)
 
     assert cleaned == original
@@ -88,40 +130,8 @@ def test_extract_math_spans_seed_classification(
     assert [(span.delimiter, span.content) for span in spans] == expected
 
 
-def test_cleanup_formula_preserves_latex_commands_with_n_and_right() -> None:
-    original = (
-        r"f_{c}(c_{1},c_{2})=\begin{cases}"
-        r"p_{c}, & c_{1}\neq c_{2}\\"
-        r"0, & \text{otherwise}"
-        r"\end{cases}."
-    )
-
-    cleaned = math.cleanup_formula(original)
-
-    assert cleaned == original
-
-
-def test_cleanup_formula_recovers_control_char_escaped_commands() -> None:
-    broken = (
-        "\\sigma_{v}(v_{i},v_{j})="
-        "\begin{cases}"
-        "\\exp\\left(-\\frac{\\delta(h_{i},h_{j})+\\delta(w_{i},w_{j})+"
-        "\\delta(d_{i},d_{j})}{3}"
-        "\\right), & "
-        "\text{若 } l_{i}=l_{j}\\\\"
-        "0, & "
-        "\text{其他情况}"
-        "\\end{cases}"
-    )
-    expected = (
-        r"\sigma_{v}(v_{i},v_{j})=\begin{cases}"
-        r"\exp\left(-\frac{\delta(h_{i},h_{j})+\delta(w_{i},w_{j})+"
-        r"\delta(d_{i},d_{j})}{3}\right), & "
-        r"\text{若 } l_{i}=l_{j}\\"
-        r"0, & \text{其他情况}"
-        r"\end{cases}"
-    )
-
+@pytest.mark.parametrize(("broken", "expected"), CLEANUP_FORMULA_REPAIR_SEEDS)
+def test_cleanup_formula_repair_seeds(broken: str, expected: str) -> None:
     cleaned = math.cleanup_formula(broken)
 
     assert cleaned == expected
@@ -130,22 +140,6 @@ def test_cleanup_formula_recovers_control_char_escaped_commands() -> None:
 def test_cleanup_formula_does_not_treat_line_breaks_as_control_commands() -> None:
     assert math.cleanup_formula("x\nabla") == "x\nabla"
     assert math.cleanup_formula("x\rho") == "x\rho"
-
-
-def test_cleanup_formula_preserves_standard_uppercase_commands() -> None:
-    original = r"\Rightarrow \Big \Re \Im"
-
-    cleaned = math.cleanup_formula(original)
-
-    assert cleaned == original
-
-
-def test_cleanup_formula_handles_nested_braced_text_commands() -> None:
-    original = r"\text{\textbf{t e r m}}"
-
-    cleaned = math.cleanup_formula(original)
-
-    assert cleaned == original
 
 
 @pytest.mark.parametrize(
