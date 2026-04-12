@@ -164,8 +164,10 @@ def cleanup_formula(text: str) -> str:
 
 
 def _collapse_spaced_text(text: str) -> str:
-    prefix = re.match(r"^\s*", text).group(0)
-    suffix = re.search(r"\s*$", text).group(0)
+    prefix_match = re.match(r"^\s*", text)
+    suffix_match = re.search(r"\s*$", text)
+    prefix = prefix_match.group(0) if prefix_match else ""
+    suffix = suffix_match.group(0) if suffix_match else ""
     core_end = len(text) - len(suffix) if suffix else len(text)
     core = text[len(prefix) : core_end]
     tokens = core.split()

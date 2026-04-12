@@ -1,5 +1,7 @@
 import asyncio
 
+import pytest
+
 from deepresearch_flow.recognize import mermaid
 
 
@@ -74,3 +76,42 @@ def test_fix_mermaid_text_accepts_valid_repair_without_recleanup(monkeypatch) ->
     assert updated.rstrip("\n") == repaired.rstrip("\n")
     assert errors == []
     assert stats.diagrams_repaired == 1
+
+
+@pytest.mark.parametrize(
+    ("label", "expected_fragment"),
+    [
+        ("区间[-π, π)", 'A["区间[-π, π)"] --> B["ok"]'),
+        ("中括号[abc]", 'A["中括号[abc]"] --> B["ok"]'),
+        ("a|b|c", 'A["a|b|c"] --> B["ok"]'),
+    ],
+)
+def test_cleanup_mermaid_preserves_quoted_special_character_labels(
+    label: str, expected_fragment: str
+) -> None:
+    original = f'flowchart LR\nA["{label}"] --> B["ok"]\n'
+
+    cleaned = mermaid.cleanup_mermaid(original)
+
+    assert expected_fragment in cleaned
+    assert cleaned.rstrip("\n") == original.rstrip("\n")
+
+
+def test_cleanup_mermaid_repairs_compacted_statement_boundary() -> None:
+    original = 'flowchart LR\nA["x"]B --> C["y"]\n'
+
+    cleaned = mermaid.cleanup_mermaid(original)
+
+    assert cleaned == 'flowchart LR\nA["x"]\nB --> C["y"]'
+
+
+def test_cleanup_mermaid_is_idempotent_for_compacted_and_bracketed_labels() -> None:
+    original = (
+        "flowchart LR\n"
+        'A["区间[-π, π)"]B --> C["ok"]\n'
+    )
+
+    once = mermaid.cleanup_mermaid(original)
+    twice = mermaid.cleanup_mermaid(once)
+
+    assert twice == once

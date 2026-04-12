@@ -46,6 +46,42 @@ def test_inline_code_is_frozen_before_other_inline_protectors() -> None:
     assert protector.unprotect(protected, store) == text
 
 
+def test_inline_dollar_math_is_frozen_and_restored_unchanged() -> None:
+    protector = MarkdownProtector()
+    store = PlaceHolderStore()
+    cfg = TranslateConfig()
+    text = "Before $x + y$ after"
+
+    protected = protector.protect(text, cfg, store)
+
+    assert "__PH_MATH_" in protected
+    assert protector.unprotect(protected, store) == text
+
+
+def test_bracket_math_is_frozen_and_restored_unchanged() -> None:
+    protector = MarkdownProtector()
+    store = PlaceHolderStore()
+    cfg = TranslateConfig()
+    text = r"Before \[x + y\] after"
+
+    protected = protector.protect(text, cfg, store)
+
+    assert "__PH_MATHBLOCK_" in protected
+    assert protector.unprotect(protected, store) == text
+
+
+def test_display_math_is_frozen_and_restored_unchanged() -> None:
+    protector = MarkdownProtector()
+    store = PlaceHolderStore()
+    cfg = TranslateConfig()
+    text = "Before\n$$\nx + y\n$$\nAfter"
+
+    protected = protector.protect(text, cfg, store)
+
+    assert "__PH_MATHBLOCK_" in protected
+    assert protector.unprotect(protected, store) == text
+
+
 def test_embedded_fence_like_line_keeps_entire_code_fence_together() -> None:
     protector = MarkdownProtector()
     store = PlaceHolderStore()

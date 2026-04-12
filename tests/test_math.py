@@ -1,6 +1,10 @@
 import asyncio
+from types import SimpleNamespace
+
+import pytest
 
 from deepresearch_flow.recognize import math
+from deepresearch_flow.paper.providers.base import ProviderError
 
 
 def test_cleanup_formula_preserves_cases_linebreaks() -> None:
@@ -76,6 +80,27 @@ def test_cleanup_formula_handles_nested_braced_text_commands() -> None:
     assert cleaned == original
 
 
+@pytest.mark.parametrize(
+    "original",
+    [
+        r"\Rightarrow \Big \Re \Im",
+        (
+            r"f_{h}(\Delta h)=\begin{cases}"
+            r"p_{h}, & \min\left(\Delta h,1-\Delta h\right)>t_{h}\\"
+            r"0, & \text{otherwise}"
+            r"\end{cases},"
+        ),
+        r"\text{\textbf{term}}",
+    ],
+)
+def test_cleanup_formula_is_idempotent_for_valid_inputs(original: str) -> None:
+    once = math.cleanup_formula(original)
+    twice = math.cleanup_formula(once)
+
+    assert once == original
+    assert twice == once
+
+
 def test_strip_wrapping_delimiters_rejects_empty_payload() -> None:
     assert math.strip_wrapping_delimiters("$$", "$$") == "$$"
 
@@ -139,6 +164,87 @@ def test_fix_math_text_handles_cancelled_error_results(monkeypatch) -> None:
     assert updated == "$$broken$$"
     assert len(errors) == 1
     assert any(err.startswith("batch_exception:") for err in errors[0]["errors"])
+
+
+def test_repair_batch_structured_fallback_succeeds_without_consuming_retries(
+    monkeypatch,
+) -> None:
+    issue = math.FormulaIssue(
+        issue_id="abc:0",
+        span=math.FormulaSpan(
+            start=0,
+            end=0,
+            delimiter="$$",
+            content="broken",
+            line=1,
+            context="",
+        ),
+        errors=["parse error"],
+        cleaned="broken",
+        field_path=None,
+        item_index=None,
+    )
+
+    class DummyRoutePool:
+        def __init__(self) -> None:
+            self.route = SimpleNamespace(
+                provider=SimpleNamespace(max_tokens=1024),
+                model=SimpleNamespace(model_name="demo-model"),
+                key=SimpleNamespace(value="demo-key"),
+            )
+            self.mark_error_calls = 0
+
+        async def get(self):
+            return self.route
+
+        async def mark_quota_exceeded(self, *_args, **_kwargs) -> bool:
+            return False
+
+        async def mark_error(self, *_args, **_kwargs) -> None:
+            self.mark_error_calls += 1
+
+    calls: list[str] = []
+
+    async def fake_call_provider(
+        _provider,
+        _model_name,
+        _messages,
+        _schema,
+        _api_key,
+        _timeout,
+        structured_mode,
+        _client,
+        *,
+        max_tokens,
+    ):
+        assert max_tokens == 1024
+        calls.append(structured_mode)
+        if structured_mode != "none":
+            raise ProviderError(
+                "structured failed",
+                retryable=False,
+                structured_error=True,
+            )
+        return '{"items":[{"id":"abc:0","latex":"x"}]}'
+
+    monkeypatch.setattr(math, "call_provider", fake_call_provider)
+    monkeypatch.setattr(math, "structured_mode_for_model", lambda _model: "json_schema")
+
+    route_pool = DummyRoutePool()
+    repairs, error = asyncio.run(
+        math.repair_batch(
+            [issue],
+            route_pool=route_pool,  # type: ignore[arg-type]
+            timeout=1.0,
+            max_retries=0,
+            client=None,  # type: ignore[arg-type]
+        )
+    )
+
+    assert repairs == {"abc:0": "x"}
+    assert error is None
+    assert calls == ["json_schema", "none"]
+    assert route_pool.mark_error_calls == 0
 
 
 def test_fix_math_text_accepts_valid_repair_without_recleanup(monkeypatch) -> None:
