@@ -117,7 +117,7 @@ def test_failed_nodes_fall_back_to_origin_without_post_processing_mutation(
 
     async def fake_translate_group(self, group_text, *args, **kwargs):
         return re.sub(
-            r"(<NODE_START_\d{4}>\n)(.*?)(\n</NODE_END_\d{4}>)",
+            r"(<NODE_START_\d+>\n)(.*?)(\n</NODE_END_\d+>)",
             r"\1\3",
             group_text,
             flags=re.DOTALL,

@@ -178,6 +178,15 @@ def test_source_literal_placeholder_like_token_does_not_collide_with_real_placeh
     assert protector.unprotect(protected, store) == text
 
 
+def test_placeholder_store_distinguishes_same_text_across_kinds() -> None:
+    store = PlaceHolderStore()
+
+    code_placeholder = store.add("CODE", "same")
+    math_placeholder = store.add("MATH", "same")
+
+    assert code_placeholder != math_placeholder
+
+
 def test_restore_checked_rejects_missing_placeholder_before_restore() -> None:
     protector = MarkdownProtector()
     store = PlaceHolderStore()

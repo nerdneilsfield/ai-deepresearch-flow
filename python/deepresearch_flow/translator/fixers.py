@@ -15,6 +15,7 @@ class ReferenceProcessor:
                 re.MULTILINE,
             ),
             "reference_range": re.compile(r"\[(\d+)\-(\d+)\]"),
+            "reference_split_range": re.compile(r"\[(\d+)\]\s*[-–—]\s*\[(\d+)\]"),
             "reference_multi": re.compile(r"\[(\d+(?:,\s*\d+)*)\]"),
             "reference_single": re.compile(r"\[(\d+)\]"),
         }
@@ -36,6 +37,13 @@ class ReferenceProcessor:
         )
         text = _sub(
             self._patterns["reference_range"],
+            lambda match: " ".join(
+                f"[^{i}]"
+                for i in range(int(match.group(1)), int(match.group(2)) + 1)
+            ),
+        )
+        text = _sub(
+            self._patterns["reference_split_range"],
             lambda match: " ".join(
                 f"[^{i}]"
                 for i in range(int(match.group(1)), int(match.group(2)) + 1)
@@ -777,7 +785,7 @@ def _normalize_footnote_definitions_preserving_state(text: str) -> str:
             notes_level = None
             last_note_index = None
         elif re.match(r"^#{1,6}\s+", stripped):
-            if notes_level is not None:
+            if in_notes:
                 in_notes = False
                 notes_level = None
                 last_note_index = None
@@ -818,6 +826,8 @@ def _normalize_footnote_definitions_preserving_state(text: str) -> str:
                     )
                     offset = line_end
                     continue
+            if notes_level is None and stripped and not notes_heading_plain_re.match(stripped):
+                in_notes = False
 
         if not protected_line:
             line = re.sub(r"(?<!\^)\[(\d{1,4})\]", r"[^\1]", line)

@@ -57,6 +57,16 @@ class TestPreProtectSafety:
         )
         assert ReferenceProcessor().fix_references(text) == text
 
+    def test_fix_markdown_expands_split_reference_ranges(self):
+        text = "See [2]-[7] for details."
+        result = fix_markdown(text, "normal")
+        assert result == "See [^2] [^3] [^4] [^5] [^6] [^7] for details."
+
+    def test_fix_markdown_expands_split_reference_ranges_with_spaces(self):
+        text = "See [2] - [4] for details."
+        result = fix_markdown(text, "normal")
+        assert result == "See [^2] [^3] [^4] for details."
+
     def test_urls_emails_phones_inside_protected_looking_content_unchanged(self):
         text = (
             "Math \\(see https://example.com, foo@bar.com, 555-123-4567\\)\n"
@@ -91,6 +101,12 @@ class TestPreProtectSafety:
         result = fix_markdown(text, "normal")
         assert "[^1]: first\n" in result
         assert "## Appendix\n2) second" in result
+
+    def test_fix_markdown_resets_plain_notes_state_after_non_note_paragraph(self):
+        text = "References\n1) first\nAppendix\n2) second\n"
+        result = fix_markdown(text, "normal")
+        assert "[^1]: first\n" in result
+        assert "Appendix\n2) second" in result
 
     def test_fix_markdown_does_not_rewrite_reference_like_brackets_inside_urls(self):
         text = "See https://api.example.com/v1[2]/data for details."

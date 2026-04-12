@@ -116,7 +116,7 @@ def test_translate_uses_fallback_model_after_group_provider_error(
         if model == "gpt-4.1":
             raise ProviderError("timeout", retryable=True)
         return re.sub(
-            r"(<NODE_START_\d{4}>\n)(.*?)(\n</NODE_END_\d{4}>)",
+            r"(<NODE_START_\d+>\n)(.*?)(\n</NODE_END_\d+>)",
             r"\1已翻译文本\3",
             group_text,
             flags=re.DOTALL,
