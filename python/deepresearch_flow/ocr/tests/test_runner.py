@@ -28,6 +28,23 @@ class FakeBackend:
         return OcrResult(pages=self._pages)
 
 
+class FailingBackend:
+    """Raises an error for every OCR request."""
+
+    def ocr(self, file_path: Path) -> OcrResult:
+        raise RuntimeError(f"boom: {file_path.name}")
+
+
+class FakeProgress:
+    """Simple progress recorder for runner tests."""
+
+    def __init__(self) -> None:
+        self.updates: list[int] = []
+
+    def update(self, amount: int) -> None:
+        self.updates.append(amount)
+
+
 # --- Tests --------------------------------------------------------------------
 
 
@@ -164,6 +181,18 @@ class TestRunOcr:
         assert (output_dir / "a" / "full.md").exists()
         assert (output_dir / "b" / "full.md").exists()
 
+    def test_progress_updates_once_per_file(self, tmp_path: Path) -> None:
+        input_dir = tmp_path / "input"
+        input_dir.mkdir()
+        (input_dir / "a.pdf").write_bytes(b"%PDF")
+        (input_dir / "b.pdf").write_bytes(b"%PDF")
+        progress = FakeProgress()
+
+        backend = FakeBackend([OcrPage(page_index=0, markdown="text", images={})])
+        run_ocr(backend, input_dir, tmp_path / "output", progress=progress)
+
+        assert progress.updates == [1, 1]
+
     def test_empty_result_skipped(self, tmp_path: Path) -> None:
         pdf = tmp_path / "empty.pdf"
         pdf.write_bytes(b"%PDF")
@@ -228,6 +257,22 @@ class TestRunOcr:
         assert stats["processed"] == 1
         assert stats["skipped"] == 0
         assert (output_dir / "doc" / "full.md").read_text() == "v2"
+
+    def test_progress_updates_for_failed_files(self, tmp_path: Path) -> None:
+        pdf = tmp_path / "doc.pdf"
+        pdf.write_bytes(b"%PDF")
+        progress = FakeProgress()
+
+        stats, _ = run_ocr(
+            FailingBackend(),
+            pdf,
+            tmp_path / "output",
+            max_retries=1,
+            progress=progress,
+        )
+
+        assert stats["failed"] == 1
+        assert progress.updates == [1]
 
 
 class TestMigrateToHashNames:
