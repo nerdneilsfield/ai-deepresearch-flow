@@ -8,7 +8,7 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypedDict
+from typing import Protocol, TypedDict
 
 from deepresearch_flow.ocr.base import OcrBackend, OcrPage
 
@@ -22,6 +22,12 @@ class OcrStats(TypedDict):
     processed: int
     failed: int
     skipped: int
+
+
+class ProgressBarLike(Protocol):
+    """Minimal progress API needed by the runner."""
+
+    def update(self, amount: int) -> None: ...
 
 
 def discover_files(path: Path) -> list[Path]:
@@ -135,6 +141,7 @@ def run_ocr(
     *,
     overwrite: bool = False,
     max_retries: int = 1,
+    progress: ProgressBarLike | None = None,
 ) -> tuple[OcrStats, list[OcrFileResult]]:
     """Run OCR on input file(s) and write results to output_dir."""
     files = discover_files(input_path)
@@ -142,44 +149,48 @@ def run_ocr(
     results: list[OcrFileResult] = []
 
     for file_path in files:
-        if not overwrite and _has_existing_output(output_dir, file_path.stem):
-            logger.info("Skipping (already exists): %s", file_path.name)
-            stats["skipped"] += 1
-            results.append(OcrFileResult(name=file_path.name, status="skipped"))
-            continue
-
-        logger.info("Processing: %s", file_path.name)
         try:
-            result = _ocr_with_retry(backend, file_path, max_retries)
-        except Exception as exc:
-            logger.error("Failed to OCR %s after %d attempt(s): %s", file_path.name, max_retries, exc)
-            stats["failed"] += 1
+            if not overwrite and _has_existing_output(output_dir, file_path.stem):
+                logger.info("Skipping (already exists): %s", file_path.name)
+                stats["skipped"] += 1
+                results.append(OcrFileResult(name=file_path.name, status="skipped"))
+                continue
+
+            logger.info("Processing: %s", file_path.name)
+            try:
+                result = _ocr_with_retry(backend, file_path, max_retries)
+            except Exception as exc:
+                logger.error("Failed to OCR %s after %d attempt(s): %s", file_path.name, max_retries, exc)
+                stats["failed"] += 1
+                results.append(OcrFileResult(
+                    name=file_path.name, status="failed", error=str(exc),
+                ))
+                continue
+
+            if not result.pages:
+                logger.warning("Empty OCR result for %s, skipping", file_path.name)
+                stats["skipped"] += 1
+                results.append(OcrFileResult(name=file_path.name, status="skipped"))
+                continue
+
+            doc_dir = output_dir / file_path.stem
+            if overwrite and doc_dir.exists():
+                import shutil
+                shutil.rmtree(doc_dir)
+
+            doc_dir = _resolve_output_dir(output_dir, file_path.stem)
+            markdown, images, missing = _merge_pages(result.pages)
+            _write_output(doc_dir, markdown, images, missing)
+
+            stats["processed"] += 1
             results.append(OcrFileResult(
-                name=file_path.name, status="failed", error=str(exc),
+                name=file_path.name, status="processed",
+                pages=len(result.pages), images=len(images),
             ))
-            continue
-
-        if not result.pages:
-            logger.warning("Empty OCR result for %s, skipping", file_path.name)
-            stats["skipped"] += 1
-            results.append(OcrFileResult(name=file_path.name, status="skipped"))
-            continue
-
-        doc_dir = output_dir / file_path.stem
-        if overwrite and doc_dir.exists():
-            import shutil
-            shutil.rmtree(doc_dir)
-
-        doc_dir = _resolve_output_dir(output_dir, file_path.stem)
-        markdown, images, missing = _merge_pages(result.pages)
-        _write_output(doc_dir, markdown, images, missing)
-
-        stats["processed"] += 1
-        results.append(OcrFileResult(
-            name=file_path.name, status="processed",
-            pages=len(result.pages), images=len(images),
-        ))
-        logger.info("Written: %s/full.md (%d pages)", doc_dir.name, len(result.pages))
+            logger.info("Written: %s/full.md (%d pages)", doc_dir.name, len(result.pages))
+        finally:
+            if progress is not None:
+                progress.update(1)
 
     return stats, results
 

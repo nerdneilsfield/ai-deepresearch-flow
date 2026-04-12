@@ -6,6 +6,7 @@ import asyncio
 from dataclasses import replace
 import json
 import logging
+import sys
 import time
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterable
@@ -84,6 +85,10 @@ def _warn_if_not_empty(output_dir: Path) -> None:
     if output_dir.exists() and any(output_dir.iterdir()):
         item_count = sum(1 for _ in output_dir.iterdir())
         logger.warning("Output directory not empty: %s (items=%d)", output_dir, item_count)
+
+
+def _stderr_is_interactive() -> bool:
+    return sys.stderr.isatty()
 
 
 def _print_summary(title: str, rows: list[tuple[str, str]]) -> None:
@@ -478,7 +483,7 @@ def ocr(input_path: str, config_path: str, output_dir: str | None, overwrite: bo
 
     from deepresearch_flow.ocr.config import load_ocr_config
     from deepresearch_flow.ocr.factory import create_backend
-    from deepresearch_flow.ocr.runner import run_ocr
+    from deepresearch_flow.ocr.runner import discover_files, run_ocr
 
     configure_logging(verbose)
     console = Console()
@@ -500,7 +505,27 @@ def ocr(input_path: str, config_path: str, output_dir: str | None, overwrite: bo
     console.print(f"Input:  {input_path}")
     console.print(f"Output: {resolved_output}")
 
-    stats, results = run_ocr(backend, Path(input_path), resolved_output, overwrite=overwrite, max_retries=max_retries)
+    progress: tqdm | None = None
+    input_path_obj = Path(input_path)
+    try:
+        if _stderr_is_interactive():
+            progress = tqdm(
+                total=len(discover_files(input_path_obj)),
+                desc="ocr",
+                unit="file",
+            )
+
+        stats, results = run_ocr(
+            backend,
+            input_path_obj,
+            resolved_output,
+            overwrite=overwrite,
+            max_retries=max_retries,
+            progress=progress,
+        )
+    finally:
+        if progress is not None:
+            progress.close()
 
     # Build rich table.
     status_style = {"processed": "green", "skipped": "dim", "failed": "bold red"}
