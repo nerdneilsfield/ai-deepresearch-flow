@@ -11,7 +11,7 @@ import httpx
 from starlette.applications import Starlette
 
 from fastmcp import FastMCP
-from fastmcp.exceptions import ToolError
+from fastmcp.exceptions import ToolError as FastMCPToolError
 
 from deepresearch_flow.paper.snapshot.common import ApiLimits, _column_exists, _open_ro_conn, _table_exists
 from deepresearch_flow.paper.snapshot.text import merge_adjacent_markers, remove_cjk_spaces, rewrite_search_query
@@ -19,6 +19,19 @@ from deepresearch_flow.paper.snapshot.text import merge_adjacent_markers, remove
 _DEFAULT_MAX_CHARS = 50_000
 _DEFAULT_TIMEOUT = 10.0
 _PAPER_ID_PATTERN = re.compile(r'^[a-zA-Z0-9_-]+$')
+
+
+class McpToolError(FastMCPToolError):
+    """Backward-compatible MCP tool error with code/details fields."""
+
+    def __init__(self, code: str, message: str, **details: Any) -> None:
+        self.code = code
+        self.message = message
+        self.details = details
+        super().__init__(message)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"error": self.code, "message": self.message, **self.details}
 
 
 @dataclass(frozen=True)
@@ -60,6 +73,12 @@ mcp = FastMCP("Paper DB MCP")
 def configure(config: McpSnapshotConfig) -> None:
     global _CONFIG
     _CONFIG = config
+
+
+def _allowed_methods_for_transport(transport: Literal["streamable-http", "sse"]) -> set[str]:
+    if transport == "sse":
+        return {"GET", "POST", "OPTIONS"}
+    return {"POST", "OPTIONS"}
 
 
 
@@ -113,9 +132,9 @@ def _validate_query(query: str, cfg: McpSnapshotConfig) -> str:
         ToolError: If query is invalid or too long.
     """
     if not query or not query.strip():
-        raise ToolError("invalid_query", "Query cannot be empty")
+        raise McpToolError("invalid_query", "Query cannot be empty")
     if len(query) > cfg.limits.max_query_length:
-        raise ToolError(
+        raise McpToolError(
             "query_too_long",
             f"Query exceeds maximum length of {cfg.limits.max_query_length}",
             length=len(query),
@@ -131,16 +150,16 @@ def _validate_paper_id(paper_id: str, cfg: McpSnapshotConfig) -> str:
         ToolError: If paper_id is invalid.
     """
     if not paper_id:
-        raise ToolError("invalid_paper_id", "Paper ID cannot be empty")
+        raise McpToolError("invalid_paper_id", "Paper ID cannot be empty")
     if len(paper_id) > cfg.max_paper_id_length:
-        raise ToolError(
+        raise McpToolError(
             "paper_id_too_long",
             f"Paper ID exceeds maximum length of {cfg.max_paper_id_length}",
             length=len(paper_id),
             max_length=cfg.max_paper_id_length
         )
     if not _PAPER_ID_PATTERN.match(paper_id):
-        raise ToolError(
+        raise McpToolError(
             "invalid_paper_id_format",
             "Paper ID must contain only alphanumeric characters, hyphens, and underscores",
             paper_id=paper_id
@@ -373,7 +392,7 @@ def get_paper_metadata(paper_id: str) -> dict[str, Any]:
             (paper_id,),
         ).fetchone()
         if not row:
-            raise ToolError("not_found", "paper not found", paper_id=paper_id)
+            raise McpToolError("not_found", "paper not found", paper_id=paper_id)
         template_rows = conn.execute(
             "SELECT template_tag FROM paper_summary WHERE paper_id = ?",
             (paper_id,),
@@ -421,17 +440,17 @@ def get_paper_bibtex(paper_id: str) -> dict[str, Any]:
             (paper_id,),
         ).fetchone()
         if not paper_row:
-            raise ToolError("paper_not_found", "paper not found", paper_id=paper_id)
+            raise McpToolError("paper_not_found", "paper not found", paper_id=paper_id)
 
         if not _table_exists(conn, "paper_bibtex"):
-            raise ToolError("bibtex_not_found", "bibtex not found", paper_id=paper_id)
+            raise McpToolError("bibtex_not_found", "bibtex not found", paper_id=paper_id)
 
         bib_row = conn.execute(
             "SELECT bibtex_raw, bibtex_key, entry_type FROM paper_bibtex WHERE paper_id = ?",
             (paper_id,),
         ).fetchone()
         if not bib_row:
-            raise ToolError("bibtex_not_found", "bibtex not found", paper_id=paper_id)
+            raise McpToolError("bibtex_not_found", "bibtex not found", paper_id=paper_id)
 
         return {
             "paper_id": paper_id,
@@ -458,7 +477,7 @@ def get_paper_summary(paper_id: str, template: str | None = None, max_chars: int
     try:
         payload, available = _load_summary_json(paper_id, template)
     except RuntimeError as exc:
-        raise ToolError(
+        raise McpToolError(
             "asset_fetch_failed",
             "Failed to fetch summary asset",
             paper_id=paper_id,
@@ -467,7 +486,7 @@ def get_paper_summary(paper_id: str, template: str | None = None, max_chars: int
         ) from exc
     
     if payload is None:
-        raise ToolError(
+        raise McpToolError(
             "template_not_available",
             "Template not available",
             paper_id=paper_id,
@@ -491,7 +510,7 @@ def get_paper_source(paper_id: str, max_chars: int | None = None) -> str:
     try:
         content = _load_source_markdown(paper_id)
     except RuntimeError as exc:
-        raise ToolError(
+        raise McpToolError(
             "asset_fetch_failed",
             "Failed to fetch source asset",
             paper_id=paper_id,
@@ -499,7 +518,7 @@ def get_paper_source(paper_id: str, max_chars: int | None = None) -> str:
         ) from exc
     
     if content is None:
-        raise ToolError(
+        raise McpToolError(
             "source_not_available",
             "Source markdown not available",
             paper_id=paper_id
@@ -575,7 +594,7 @@ def list_top_facets(category: str, limit: int = 20) -> list[dict[str, Any]]:
     }
     table = table_map.get((category or "").strip().lower())
     if not table:
-        raise ToolError(
+        raise McpToolError(
             "invalid_category",
             f"Invalid category: {category}. Must be one of: {', '.join(table_map.keys())}",
             category=category
@@ -719,7 +738,7 @@ def resource_translation(paper_id: str, lang: str) -> str:
     try:
         content = _load_translation_markdown(paper_id, lang.lower())
     except RuntimeError as exc:
-        raise ToolError(
+        raise McpToolError(
             "asset_fetch_failed",
             "Failed to fetch translation asset",
             paper_id=paper_id,
@@ -728,7 +747,7 @@ def resource_translation(paper_id: str, lang: str) -> str:
         ) from exc
     
     if content is None:
-        raise ToolError(
+        raise McpToolError(
             "translation_not_available",
             "Translation not available",
             paper_id=paper_id,

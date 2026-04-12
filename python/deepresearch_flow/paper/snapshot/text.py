@@ -149,8 +149,6 @@ def rewrite_search_query(user_query: str) -> str:
                 # Remove FTS special characters to prevent syntax errors
                 safe = re.sub(r"[^0-9A-Za-z._+-]+", "", seg)
                 if safe:
-                    # Quote terms to prevent FTS column syntax (column:term) interpretation
-                    out.append(f'"{safe.lower()}"')
+                    out.append(safe.lower())
 
     return " ".join(out)
-
