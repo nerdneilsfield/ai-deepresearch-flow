@@ -291,13 +291,21 @@ async def worker(queue, config, global_sem, translator, client, ...):
             ))
         except ProviderError as exc:
             if route is not None and config.route_pool is not None:
-                await config.route_pool.mark_error(route)
+                # Distinguish quota hit from generic retryable error.
+                # mark_quota_exceeded returns True if the route was paused
+                # for quota; the current _translate_group() already does
+                # this distinction via exc.status_code — we preserve it.
+                quota_hit = await config.route_pool.mark_quota_exceeded(
+                    route, str(exc), exc.status_code,
+                )
+                if not quota_hit and exc.retryable:
+                    await config.route_pool.mark_error(route)
             await result_queue.put(CompletionEvent(..., ok=False, response=""))
         finally:
             queue.task_done()
 ```
 
-This means `_translate_group()` no longer calls `route_pool.get()` internally. Instead, it receives a resolved `route: RuntimeRoute | None` parameter. The worker is responsible for route lifecycle (acquisition, error marking).
+This means `_translate_group()` no longer calls `route_pool.get()` internally. Instead, it receives a resolved `route: RuntimeRoute | None` parameter. The worker is responsible for the full route lifecycle: acquisition (before permits), quota/error marking (on failure). The `ProviderError.status_code` and `ProviderError.retryable` fields drive the `mark_quota_exceeded` vs `mark_error` decision, preserving the existing RoutePool contract.
 
 ### Dispatcher
 
@@ -343,12 +351,21 @@ class DocumentActor:
         if failed and next_stage is not None:
             self._transition_to(next_stage)
             groups = self._group_failed_nodes(failed)
-            for i, group in enumerate(groups):
-                self._queues[next_stage].put_nowait(group)
+            # Same emission credit as initial: enqueue first batch,
+            # hold the rest in pending_groups for credit refill.
+            self._pending_groups = groups
             self._ctx.pending_counts[next_stage.value] = len(groups)
+            self._emit_up_to_credit(next_stage)
         else:
             self._transition_to(DocStage.FINALIZING)
             await self._finalize()
+
+    def _emit_up_to_credit(self, stage: DocStage) -> None:
+        """Enqueue groups up to max_inflight_per_doc; keep rest in pending_groups."""
+        while self._pending_groups and self._inflight < self._max_inflight_per_doc:
+            group = self._pending_groups.pop(0)
+            self._queues[stage].put_nowait(group)
+            self._inflight += 1
 
     def _transition_to(self, target: DocStage) -> None:
         if target not in TRANSITIONS[self._ctx.stage]:
@@ -512,7 +529,7 @@ Stage 1 is pure extraction with no behavior change. Stage 2 is the core new code
 
 | File | Action |
 |------|--------|
-| `python/deepresearch_flow/translator/engine.py` | Refactor: split translate(), remove triple loop, retain helpers |
+| `python/deepresearch_flow/translator/engine.py` | Refactor: extract preprocess/finalize/result-apply helpers from translate(). The old translate() with its triple retry loop is retained as a compatibility wrapper; the new control flow lives in scheduler.py. |
 | `python/deepresearch_flow/translator/cli.py` | Modify: new params, replace process loop with scheduler |
 | `python/deepresearch_flow/translator/scheduler.py` | Create: Scheduler, DocumentContext, DocumentActor, DocStage, workers |
 | `python/deepresearch_flow/translator/progress.py` | Create: ProgressReporter |
