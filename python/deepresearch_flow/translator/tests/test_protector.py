@@ -128,6 +128,20 @@ def test_display_math_is_frozen_and_restored_unchanged() -> None:
     assert protector.unprotect(protected, store) == text
 
 
+def test_display_math_with_markdown_like_link_syntax_does_not_create_nested_placeholders() -> None:
+    protector = MarkdownProtector()
+    store = PlaceHolderStore()
+    cfg = TranslateConfig()
+    text = "$$ [\\prod_{i=1}^{M}L_{i}](T_{r}I)=T_{r}[\\prod_{i=1}^{M}L_{i}](I). $$"
+
+    protected = protector.protect(text, cfg, store)
+
+    assert "__PH_MATHBLOCK_" in protected
+    assert "__PH_LINK_" not in protected
+    assert store.diff_missing(protected) == []
+    assert protector.unprotect(protected, store) == text
+
+
 def test_embedded_fence_like_line_keeps_entire_code_fence_together() -> None:
     protector = MarkdownProtector()
     store = PlaceHolderStore()

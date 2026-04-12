@@ -206,3 +206,58 @@ def test_engine_format_markdown_returns_original_on_rumdl_timeout(monkeypatch) -
     monkeypatch.setattr("deepresearch_flow.translator.engine.subprocess.run", lambda *a, **k: fake_run())
 
     assert asyncio.run(translator._format_markdown("# Title\n", "post")) == "# Title\n"
+
+
+def test_email_group_address_is_not_marked_failed_when_left_unchanged(monkeypatch) -> None:
+    translator = _make_translator(retry_failed_nodes=False, retry_times=1, target_lang="zh")
+    text = "{hanjiaming, jian.ding, xuenan, guisong.xia}@whu.edu.cn\n"
+
+    async def fake_translate_group(self, group_text, *args, **kwargs):
+        return group_text
+
+    async def fake_format(self, content, stage):
+        return content
+
+    monkeypatch.setattr(MarkdownTranslator, "_translate_group", fake_translate_group)
+    monkeypatch.setattr(MarkdownTranslator, "_format_markdown", fake_format)
+
+    result = asyncio.run(_run_translate(translator, text))
+
+    assert result.translated_text.strip() == text.strip()
+    assert result.stats.failed_nodes == 0
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "{fanzhaoxin, luzhiwu, hejun}@ruc.edu.cn, __PH_AUTOLINK_000031__, __PH_AUTOLINK_000032__\n",
+        "@inproceedings{segmatch2017,\n",
+        "colset TH = product INT*INT*STRING*INT*INT;\n",
+        "### A. 3D-RoFormer\n",
+        "• FAST - ORB - DBoW2\n",
+        r"104  $ \left|\begin{array}{c} \text{end} \\ \text{end} \\ \text{end}",
+        "## CCS Concepts\n",
+        "rsfs.royalsocietypublishing.org\n",
+        "humidity: INT;\n",
+        "~end pose\n",
+        r"__PH_MATHBLOCK_000057__ \begin{aligned}h^{\prime}(t)&=\mathbf{A}h(t)+\mathbf{B}x(t)\end{aligned}",
+    ],
+)
+def test_nontranslatable_structured_lines_are_not_marked_failed_when_left_unchanged(
+    monkeypatch, text: str
+) -> None:
+    translator = _make_translator(retry_failed_nodes=False, retry_times=1, target_lang="zh")
+
+    async def fake_translate_group(self, group_text, *args, **kwargs):
+        return group_text
+
+    async def fake_format(self, content, stage):
+        return content
+
+    monkeypatch.setattr(MarkdownTranslator, "_translate_group", fake_translate_group)
+    monkeypatch.setattr(MarkdownTranslator, "_format_markdown", fake_format)
+
+    result = asyncio.run(_run_translate(translator, text))
+
+    assert result.translated_text.strip() == text.strip()
+    assert result.stats.failed_nodes == 0

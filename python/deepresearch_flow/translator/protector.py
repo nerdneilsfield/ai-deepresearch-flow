@@ -368,7 +368,16 @@ class MarkdownProtector:
         inline_code_pattern = re.compile(r"(?<!`)(`+)([^`\n]+?)\1(?!`)")
         s = inline_code_pattern.sub(lambda m: store.add("CODE", m.group(0)), s)
 
+        block_math_pattern = re.compile(r"\$\$[\s\S]+?\$\$")
+        s = block_math_pattern.sub(lambda m: store.add("MATHBLOCK", m.group(0)), s)
+
+        block_math_bracket_pattern = re.compile(r"\\\[[\s\S]+?\\\]")
+        s = block_math_bracket_pattern.sub(lambda m: store.add("MATHBLOCK", m.group(0)), s)
+
         s = MarkdownProtector._freeze_paren_math(s, store)
+
+        inline_math_pattern = re.compile(r"\$(?!\s)([^$\n]+?)\$(?!\$)")
+        s = inline_math_pattern.sub(lambda m: store.add("MATH", m.group(0)), s)
 
         s = MarkdownProtector._freeze_inline_links_and_images(s, cfg, store)
 
@@ -380,15 +389,6 @@ class MarkdownProtector:
 
         url_pattern = re.compile(r"(https?://[^ \n]+)")
         s = url_pattern.sub(lambda m: store.add("URL", m.group(0)), s)
-
-        block_math_pattern = re.compile(r"\$\$[\s\S]+?\$\$")
-        s = block_math_pattern.sub(lambda m: store.add("MATHBLOCK", m.group(0)), s)
-
-        block_math_bracket_pattern = re.compile(r"\\\[[\s\S]+?\\\]")
-        s = block_math_bracket_pattern.sub(lambda m: store.add("MATHBLOCK", m.group(0)), s)
-
-        inline_math_pattern = re.compile(r"\$(?!\s)([^$\n]+?)\$(?!\$)")
-        s = inline_math_pattern.sub(lambda m: store.add("MATH", m.group(0)), s)
 
         footref_pattern = re.compile(r"\[\^[^\]]+\]")
         s = footref_pattern.sub(lambda m: store.add("FOOTREF", m.group(0)), s)

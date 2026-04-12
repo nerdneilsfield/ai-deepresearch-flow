@@ -180,6 +180,14 @@ class MarkdownTranslator:
         text = s.strip()
         if not text:
             return False
+        if re.match(r"^[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$", text):
+            return True
+        if re.match(
+            r"^(?:\{[A-Za-z0-9._%+\-]+(?:\s*,\s*[A-Za-z0-9._%+\-]+)+\}|[A-Za-z0-9._%+\-]+)"
+            r"@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$",
+            text,
+        ):
+            return True
         if "__PH_" in text:
             core = self._strip_untranslatables(text)
             if len(core) <= 2:
@@ -200,8 +208,121 @@ class MarkdownTranslator:
         if text.upper() == text and len(re.findall(r"[A-Z]+", text)) <= 6:
             return True
         if len(re.findall(r"[A-Za-z]+", text)) <= 2 and len(text) <= 24:
-            return True
+            if " " not in text or re.search(r"[/._\-]|\d", text):
+                return True
         return False
+
+    def _looks_like_contact_line(self, s: str) -> bool:
+        text = s.strip().strip(",;")
+        if not text or "@" not in text:
+            return False
+        normalized = re.sub(r"__PH_[A-Z0-9_]+__", "PH", text)
+        normalized = normalized.replace("<", "").replace(">", "")
+        normalized = re.sub(r"\}\s*@\s*", "}@", normalized)
+        normalized = re.sub(r"([A-Za-z0-9._%+\-])\s*@\s*", r"\1@", normalized)
+        email_like = re.compile(
+            r"(?:\{\s*[A-Za-z0-9._%+\-]+(?:\s*[,;]\s*[A-Za-z0-9._%+\-]+)+\s*\}\s*|[A-Za-z0-9._%+\-]+)"
+            r"@\s*[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"
+        )
+        domain_like = re.compile(r"[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+        probe = normalized
+        probe = email_like.sub("ITEM", probe)
+        probe = re.sub(r"\bPH\b", "ITEM", probe)
+        probe = domain_like.sub("ITEM", probe)
+        probe = re.sub(r"ITEM(?:\s*,\s*ITEM)+", "ITEM", probe)
+        return probe == "ITEM"
+
+    def _looks_like_latex_heavy(self, s: str) -> bool:
+        text = s.strip()
+        if not text:
+            return False
+        if "__PH_MATHBLOCK_" in text and re.search(r"\\(?:left|right|begin|end|mathbf|mathrm|mathcal)", text):
+            return True
+        marker_count = len(re.findall(r"\\[A-Za-z]+|\\\[|\\\]|\$|_\{|[\^_]", text))
+        if marker_count < 3:
+            return False
+        plain_words = re.findall(r"[A-Za-z]{2,}", re.sub(r"\\[A-Za-z]+", " ", text))
+        return len(plain_words) <= 8
+
+    def _looks_like_bibtex_or_dsl(self, s: str) -> bool:
+        text = s.strip()
+        if not text:
+            return False
+        patterns = (
+            r"^@\w+",
+            r"^(?:colset|var|val)\b",
+            r"^(?:insert\s+into|select\b|from\b|where\b)",
+            r"^[A-Za-z_][A-Za-z0-9_]*\s*=",
+            r"^[A-Za-z_][A-Za-z0-9_]*\s*:\s*[A-Z][A-Z0-9_]*;?$",
+            r"^\d+:\s+\w+\[",
+            r"^t\s*=\s*t\.plus\(",
+            r"^~\w+(?:\s+\w+){0,2}$",
+        )
+        return any(re.match(pattern, text, flags=re.IGNORECASE) for pattern in patterns)
+
+    def _looks_like_technical_label(self, s: str) -> bool:
+        text = s.strip()
+        if not text:
+            return False
+        text = re.sub(r"^#{1,6}\s+[A-Z]\.\s*", "", text)
+        text = re.sub(r"^#{1,6}\s*", "", text)
+        text = re.sub(r"^[•\-\*]\s*", "", text)
+        text = re.sub(r"__PH_[A-Z0-9_]+__", "", text)
+        text = text.strip().strip(".,;:")
+        if not text:
+            return False
+        if text.lower() in {"bibtex", "ccs concepts"}:
+            return True
+        raw_tokens = [token for token in re.split(r"\s+", text) if token and token != "-"]
+        if not raw_tokens or len(raw_tokens) > 6:
+            return False
+        interesting = False
+        for token in raw_tokens:
+            if not re.match(r"^[A-Za-z0-9][A-Za-z0-9./_+\-]*$", token):
+                return False
+            if (
+                re.search(r"\d", token)
+                or "/" in token
+                or "-" in token
+                or re.search(r"[A-Z]{2,}", token)
+                or re.search(r"[a-z][A-Z]|[A-Z][a-z].*[A-Z]", token)
+            ):
+                interesting = True
+        return interesting
+
+    def _looks_like_author_list(self, s: str) -> bool:
+        text = s.strip()
+        if not text or len(text) > 160:
+            return False
+        parts = [part for part in re.split(r"\s+", text) if part]
+        if len(parts) < 6 or len(parts) > 20:
+            return False
+        valid = 0
+        for part in parts:
+            cleaned = part.strip(",.;:*†‡").rstrip("*")
+            if re.match(r"^[A-Z][A-Za-zÀ-ÿ]+(?:[-'][A-Za-zÀ-ÿ]+)*$", cleaned):
+                valid += 1
+                continue
+            return False
+        return valid >= 6
+
+    def _looks_like_nontranslatable_text(self, s: str) -> bool:
+        text = s.strip()
+        if not text:
+            return False
+        if re.fullmatch(r"(?:__PH_[A-Z0-9_]+__\s*)+", text):
+            return True
+        return any(
+            (
+                self._looks_like_identifier(text),
+                self._looks_like_person_name(text),
+                self._looks_like_contact_line(text),
+                self._looks_like_latex_heavy(text),
+                self._looks_like_bibtex_or_dsl(text),
+                self._looks_like_technical_label(text),
+                self._looks_like_author_list(text),
+            )
+        )
 
     def _looks_like_person_name(self, s: str) -> bool:
         text = s.strip()
@@ -268,7 +389,7 @@ class MarkdownTranslator:
             return True
         if self._contains_target_script(trans, self.cfg.target_lang):
             return True
-        return self._looks_like_identifier(orig) or self._looks_like_person_name(orig)
+        return self._looks_like_nontranslatable_text(orig)
 
     def _translation_failure_reason(self, orig: str, trans: str) -> str | None:
         if self._placeholders_multiset(orig) != self._placeholders_multiset(trans):
@@ -286,9 +407,7 @@ class MarkdownTranslator:
             None, self._normalize_for_compare(orig), self._normalize_for_compare(trans)
         ).ratio()
         if ratio >= 0.92 and not self._contains_target_script(trans, self.cfg.target_lang):
-            if self._looks_like_identifier(orig):
-                return None
-            if self._looks_like_person_name(orig):
+            if self._looks_like_nontranslatable_text(orig):
                 return None
             return f"missing_target_script ratio={ratio:.2f}"
         return None
