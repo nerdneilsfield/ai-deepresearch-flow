@@ -25,7 +25,7 @@ from deepresearch_flow.recognize.markdown import (
 logger = logging.getLogger(__name__)
 _RUMDL_PATH = shutil.which("rumdl")
 _RUMDL_WARNED = False
-_RUMDL_TIMEOUT_SECONDS = 5.0
+_RUMDL_TIMEOUT_SECONDS = 120.0
 
 
 async def _format_markdown(text: str) -> str:

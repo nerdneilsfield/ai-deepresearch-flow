@@ -106,7 +106,7 @@ class MarkdownTranslator:
         self.protector = MarkdownProtector()
         self._rumdl_path = shutil.which("rumdl")
         self._rumdl_warned = False
-        self._rumdl_timeout_seconds = 5.0
+        self._rumdl_timeout_seconds = 120.0
 
         self._rx_preserve = re.compile(
             r"@@PRESERVE_(\d+)@@[\s\S]*?@@/PRESERVE_\1@@", re.DOTALL
