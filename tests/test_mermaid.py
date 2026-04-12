@@ -1,83 +1,94 @@
 import asyncio
+from dataclasses import dataclass
 
 import pytest
 
 from deepresearch_flow.recognize import mermaid
 
+@dataclass(frozen=True)
+class MermaidCleanupSeed:
+    kind: str
+    original: str
+    expected: str
+    seed_id: str
 
-MERMAID_PASS_SEEDS = [
-    pytest.param(
-        (
+
+MERMAID_CLEANUP_SEEDS = [
+    MermaidCleanupSeed(
+        kind="pass",
+        original=(
             "flowchart LR\n"
             "B[模型训练] --> B1[\"训练集：KITTI 00序列库帧<br/>"
             "损失：懒三元组损失<br/>数据增强：z轴随机旋转[-π, π)\"]\n"
             "B --> B2[对比方法]\n"
         ),
-        id="pass:quoted-html-label-with-brackets",
+        expected=(
+            "flowchart LR\n"
+            "B[模型训练] --> B1[\"训练集：KITTI 00序列库帧<br/>"
+            "损失：懒三元组损失<br/>数据增强：z轴随机旋转[-π, π)\"]\n"
+            "B --> B2[对比方法]\n"
+        ),
+        seed_id="quoted-html-label-with-brackets",
     ),
-]
-
-
-MERMAID_LABEL_PASS_OR_REPAIR_SEEDS = [
-    pytest.param(
-        "区间[-π, π)",
-        'A["区间[-π, π)"] --> B["ok"]',
-        "pass",
-        id="pass:quoted-brackets",
+    MermaidCleanupSeed(
+        kind="pass",
+        original='flowchart LR\nA["区间[-π, π)"] --> B["ok"]\n',
+        expected='flowchart LR\nA["区间[-π, π)"] --> B["ok"]\n',
+        seed_id="quoted-brackets",
     ),
-    pytest.param(
-        "中括号[abc]",
-        'A["中括号[abc]"] --> B["ok"]',
-        "pass",
-        id="pass:quoted-square-brackets",
+    MermaidCleanupSeed(
+        kind="pass",
+        original='flowchart LR\nA["中括号[abc]"] --> B["ok"]\n',
+        expected='flowchart LR\nA["中括号[abc]"] --> B["ok"]\n',
+        seed_id="quoted-square-brackets",
     ),
-    pytest.param(
-        "a|b|c",
-        'A["a|b|c"] --> B["ok"]',
-        "pass",
-        id="pass:pipes",
+    MermaidCleanupSeed(
+        kind="pass",
+        original='flowchart LR\nA["a|b|c"] --> B["ok"]\n',
+        expected='flowchart LR\nA["a|b|c"] --> B["ok"]\n',
+        seed_id="pipes",
     ),
-    pytest.param(
-        'He said "hi"',
-        'A["He said \'hi\'"] --> B["ok"]',
-        "repair",
-        id="repair:inner-double-quotes",
+    MermaidCleanupSeed(
+        kind="repair",
+        original='flowchart LR\nA["He said "hi""] --> B["ok"]\n',
+        expected='flowchart LR\nA["He said \'hi\'"] --> B["ok"]\n',
+        seed_id="inner-double-quotes",
     ),
-    pytest.param(
-        "路径/斜杠\\反斜杠",
-        'A["路径/斜杠\\反斜杠"] --> B["ok"]',
-        "pass",
-        id="pass:slashes",
+    MermaidCleanupSeed(
+        kind="pass",
+        original='flowchart LR\nA["路径/斜杠\\反斜杠"] --> B["ok"]\n',
+        expected='flowchart LR\nA["路径/斜杠\\反斜杠"] --> B["ok"]\n',
+        seed_id="slashes",
     ),
-    pytest.param(
-        "100% & <tag>",
-        'A["100% & <tag>"] --> B["ok"]',
-        "pass",
-        id="pass:percent-amp-angle-brackets",
+    MermaidCleanupSeed(
+        kind="pass",
+        original='flowchart LR\nA["100% & <tag>"] --> B["ok"]\n',
+        expected='flowchart LR\nA["100% & <tag>"] --> B["ok"]\n',
+        seed_id="percent-amp-angle-brackets",
     ),
-]
-
-
-MERMAID_REPAIR_SEEDS = [
-    pytest.param(
-        'flowchart LR\nA["x"]B --> C["y"]\n',
-        'flowchart LR\nA["x"]\nB --> C["y"]',
-        id="repair:compacted-statement",
+    MermaidCleanupSeed(
+        kind="repair",
+        original='flowchart LR\nA["x"]B --> C["y"]\n',
+        expected='flowchart LR\nA["x"]\nB --> C["y"]',
+        seed_id="compacted-statement",
     ),
-    pytest.param(
-        "flowchart LR\nB[数据增强：z轴随机旋转[-π, π)] --> C[ok]\n",
-        'flowchart LR\nB["数据增强：z轴随机旋转[-π, π)]"] --> C[ok]',
-        id="repair:single-unquoted-nested-bracket-label",
+    MermaidCleanupSeed(
+        kind="repair",
+        original="flowchart LR\nB[数据增强：z轴随机旋转[-π, π)] --> C[ok]\n",
+        expected='flowchart LR\nB["数据增强：z轴随机旋转[-π, π)]"] --> C[ok]',
+        seed_id="single-unquoted-nested-bracket-label",
     ),
-    pytest.param(
-        "flowchart LR\nA[区间[-π, π)] --> B[ok]\n",
-        'flowchart LR\nA["区间[-π, π)]"] --> B[ok]',
-        id="repair:interval-brackets",
+    MermaidCleanupSeed(
+        kind="repair",
+        original="flowchart LR\nA[区间[-π, π)] --> B[ok]\n",
+        expected='flowchart LR\nA["区间[-π, π)]"] --> B[ok]',
+        seed_id="interval-brackets",
     ),
-    pytest.param(
-        "flowchart LR\nA[中括号[abc]] --> B[ok]\n",
-        'flowchart LR\nA["中括号[abc]"] --> B[ok]',
-        id="repair:nested-square-brackets",
+    MermaidCleanupSeed(
+        kind="repair",
+        original="flowchart LR\nA[中括号[abc]] --> B[ok]\n",
+        expected='flowchart LR\nA["中括号[abc]"] --> B[ok]',
+        seed_id="nested-square-brackets",
     ),
 ]
 
@@ -89,11 +100,17 @@ MERMAID_IDEMPOTENT_REPAIR_INPUTS = [
 ]
 
 
-@pytest.mark.parametrize("original", MERMAID_PASS_SEEDS)
-def test_cleanup_mermaid_preserves_pass_seeds(original: str) -> None:
-    cleaned = mermaid.cleanup_mermaid(original)
+@pytest.mark.parametrize(
+    "seed",
+    [
+        pytest.param(seed, id=f"{seed.kind}:{seed.seed_id}")
+        for seed in MERMAID_CLEANUP_SEEDS
+    ],
+)
+def test_cleanup_mermaid_seed_table(seed: MermaidCleanupSeed) -> None:
+    cleaned = mermaid.cleanup_mermaid(seed.original)
 
-    assert cleaned.rstrip("\n") == original.rstrip("\n")
+    assert cleaned.rstrip("\n") == seed.expected.rstrip("\n")
 
 
 def test_fix_mermaid_text_accepts_valid_repair_without_recleanup(monkeypatch) -> None:
@@ -156,22 +173,6 @@ def test_fix_mermaid_text_accepts_valid_repair_without_recleanup(monkeypatch) ->
     assert stats.diagrams_repaired == 1
 
 
-@pytest.mark.parametrize(
-    ("label", "expected_fragment", "classification"),
-    MERMAID_LABEL_PASS_OR_REPAIR_SEEDS,
-)
-def test_cleanup_mermaid_preserves_quoted_special_character_labels(
-    label: str, expected_fragment: str, classification: str
-) -> None:
-    original = f'flowchart LR\nA["{label}"] --> B["ok"]\n'
-
-    cleaned = mermaid.cleanup_mermaid(original)
-
-    assert expected_fragment in cleaned
-    if classification == "pass":
-        assert cleaned.rstrip("\n") == original.rstrip("\n")
-
-
 @pytest.mark.parametrize("break_tag", ["<br>", "<br/>", "<br />"])
 def test_cleanup_mermaid_preserves_html_break_label_variants(break_tag: str) -> None:
     original = f'flowchart LR\nA["a{break_tag}b"] --> B["ok"]\n'
@@ -181,27 +182,8 @@ def test_cleanup_mermaid_preserves_html_break_label_variants(break_tag: str) -> 
     assert cleaned.rstrip("\n") == original.rstrip("\n")
 
 
-@pytest.mark.parametrize(("original", "expected"), MERMAID_REPAIR_SEEDS)
-def test_cleanup_mermaid_repair_seeds(original: str, expected: str) -> None:
-    cleaned = mermaid.cleanup_mermaid(original)
-
-    assert cleaned == expected
-
-
 @pytest.mark.parametrize("original", MERMAID_IDEMPOTENT_REPAIR_INPUTS)
 def test_cleanup_mermaid_is_idempotent_across_seed_repairs(original: str) -> None:
-    once = mermaid.cleanup_mermaid(original)
-    twice = mermaid.cleanup_mermaid(once)
-
-    assert twice == once
-
-
-def test_cleanup_mermaid_is_idempotent_for_compacted_and_bracketed_labels() -> None:
-    original = (
-        "flowchart LR\n"
-        'A["区间[-π, π)"]B --> C["ok"]\n'
-    )
-
     once = mermaid.cleanup_mermaid(original)
     twice = mermaid.cleanup_mermaid(once)
 

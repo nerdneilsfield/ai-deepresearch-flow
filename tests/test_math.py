@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import dataclass
 from types import SimpleNamespace
 
 import pytest
@@ -6,36 +7,50 @@ import pytest
 from deepresearch_flow.recognize import math
 from deepresearch_flow.paper.providers.base import ProviderError
 
-EXTRACT_MATH_SPAN_SEEDS = [
-    pytest.param(
-        "plain inline math $x+y$ only",
-        [("$", "x+y")],
-        id="pass:inline-math",
+@dataclass(frozen=True)
+class MathSpanSeed:
+    kind: str
+    text: str
+    expected: list[tuple[str, str]]
+    seed_id: str
+
+
+MATH_SPAN_SEEDS = [
+    MathSpanSeed(
+        kind="pass",
+        text="plain inline math $x+y$ only",
+        expected=[("$", "x+y")],
+        seed_id="inline-math",
     ),
-    pytest.param(
-        "price is $5. code: `$HOME` and math $x+y$",
-        [("$", "x+y")],
-        id="reclassify:currency-and-code-pass-real-inline-math",
+    MathSpanSeed(
+        kind="reclassify",
+        text="price is $5. code: `$HOME` and math $x+y$",
+        expected=[("$", "x+y")],
+        seed_id="currency-and-code-pass-real-inline-math",
     ),
-    pytest.param(
-        "shell var only $HOME should stay prose",
-        [],
-        id="reclassify:shell-var-only",
+    MathSpanSeed(
+        kind="reclassify",
+        text="shell var only $HOME should stay prose",
+        expected=[],
+        seed_id="shell-var-only",
     ),
-    pytest.param(
-        "This is $\\underline{\\text{__PH_AUTOLINK_000106__}}$ end",
-        [],
-        id="reclassify:inline-placeholder-pollution",
+    MathSpanSeed(
+        kind="reclassify",
+        text="This is $\\underline{\\text{__PH_AUTOLINK_000106__}}$ end",
+        expected=[],
+        seed_id="inline-placeholder-pollution",
     ),
-    pytest.param(
-        "$$\nDownloaded on March 30, 2026 at 20:06:42 UTC from IEEE Xplore. Restrictions apply.\n## 5 IMPLEMENTING THE INDEX ON A GPU\nThe cost is $x+y$ in the text.\n$$\n",
-        [],
-        id="reclassify:prose-display-block",
+    MathSpanSeed(
+        kind="reclassify",
+        text="$$\nDownloaded on March 30, 2026 at 20:06:42 UTC from IEEE Xplore. Restrictions apply.\n## 5 IMPLEMENTING THE INDEX ON A GPU\nThe cost is $x+y$ in the text.\n$$\n",
+        expected=[],
+        seed_id="prose-display-block",
     ),
-    pytest.param(
-        "valid block:\n$$\na+b\n$$\n",
-        [("$$", "\na+b\n")],
-        id="pass:display-block",
+    MathSpanSeed(
+        kind="pass",
+        text="valid block:\n$$\na+b\n$$\n",
+        expected=[("$$", "\na+b\n")],
+        seed_id="display-block",
     ),
 ]
 
@@ -131,13 +146,17 @@ def test_extract_math_spans_reclassifies_prose_like_display_blocks() -> None:
     assert spans == []
 
 
-@pytest.mark.parametrize("text,expected", EXTRACT_MATH_SPAN_SEEDS)
-def test_extract_math_spans_seed_classification(
-    text: str, expected: list[tuple[str, str]]
-) -> None:
-    spans = math.extract_math_spans(text, 0)
+@pytest.mark.parametrize(
+    "seed",
+    [
+        pytest.param(seed, id=f"{seed.kind}:{seed.seed_id}")
+        for seed in MATH_SPAN_SEEDS
+    ],
+)
+def test_extract_math_spans_seed_classification(seed: MathSpanSeed) -> None:
+    spans = math.extract_math_spans(seed.text, 0)
 
-    assert [(span.delimiter, span.content) for span in spans] == expected
+    assert [(span.delimiter, span.content) for span in spans] == seed.expected
 
 
 @pytest.mark.parametrize(("broken", "expected"), CLEANUP_FORMULA_REPAIR_SEEDS)
