@@ -424,6 +424,33 @@ def test_repair_batch_structured_fallback_succeeds_without_consuming_retries(
     assert route_pool.mark_error_calls == 0
 
 
+def test_build_repair_messages_math_prompt_prefers_local_syntax_repairs() -> None:
+    issue = math.FormulaIssue(
+        issue_id="abc:0",
+        span=math.FormulaSpan(
+            start=0,
+            end=0,
+            delimiter="$$",
+            content=r"f(x)=\begin{cases}1\0\end{cases}",
+            line=1,
+            context="ctx",
+        ),
+        errors=["parse error"],
+        cleaned=r"f(x)=\begin{cases}1\0\end{cases}",
+        field_path=None,
+        item_index=None,
+    )
+
+    messages = math.build_repair_messages([issue])
+    system = messages[0]["content"]
+
+    assert "Do not translate or paraphrase mathematical meaning" in system
+    assert "Preserve all existing LaTeX commands" in system
+    assert "Only repair local syntax issues" in system
+    assert "Do not turn prose into math" in system
+    assert "return it unchanged" in system
+
+
 def test_fix_math_text_accepts_valid_repair_without_recleanup(monkeypatch) -> None:
     original = (
         r"$$f_{c}(c_{1},c_{2})=\begin{cases}p_{c}&c_{1}\neq c_{2}\0&\text{otherwise}\end{cases}.$$"

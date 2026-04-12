@@ -379,3 +379,29 @@ def test_fix_mermaid_text_rejects_invalid_repairs(
     assert len(errors) == 1
     assert errors[0]["errors"][-1] == seed.expected_error
     assert stats.diagrams_failed == 1
+
+
+def test_build_repair_messages_mermaid_prompt_prefers_shape_preserving_repairs() -> None:
+    issue = mermaid.MermaidIssue(
+        issue_id="abc:0",
+        span=mermaid.MermaidSpan(
+            start=0,
+            end=0,
+            content='flowchart LR\nA["x"] --> B["y"]\n',
+            line=1,
+            context="ctx",
+        ),
+        errors=["parse error"],
+        field_path=None,
+        item_index=None,
+    )
+
+    messages = mermaid.build_repair_messages([issue])
+    system = messages[0]["content"]
+
+    assert "Preserve the original diagram type and direction" in system
+    assert "Always emit labels as ID[\"...\"]" in system
+    assert "Escape double quotes inside labels as &quot;" in system
+    assert "Rebuild the whole broken node or statement" in system
+    assert "return the original diagram unchanged" in system
+    assert "Only use: graph TD" not in system

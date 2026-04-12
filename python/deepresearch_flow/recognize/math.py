@@ -669,8 +669,18 @@ def build_repair_messages(issues: list[FormulaIssue]) -> list[dict[str, str]]:
     ]
     system = (
         "You repair LaTeX math expressions. Fix syntax errors only and keep the "
-        "mathematical meaning unchanged. Return JSON with key 'items' and each "
-        "item containing {\"id\", \"latex\"}. Output JSON only."
+        "mathematical meaning unchanged.\n"
+        "Do not translate or paraphrase mathematical meaning.\n"
+        "Preserve all existing LaTeX commands unless a command is clearly broken "
+        "by escaping or serialization damage.\n"
+        "Only repair local syntax issues such as broken escapes, damaged command "
+        "prefixes, or missing line breaks inside aligned/cases/array-like environments.\n"
+        "Do not rewrite notation style unless required for syntax validity.\n"
+        "Do not turn prose into math. If the input is not salvageable as LaTeX, "
+        "return it unchanged.\n"
+        "Preserve valid delimiters and environments exactly when possible.\n"
+        "Return JSON with key 'items' and each item containing {\"id\", \"latex\"}. "
+        "Output JSON only."
     )
     user = json.dumps({"items": payload}, ensure_ascii=False, indent=2)
     return [

@@ -588,18 +588,21 @@ def build_repair_messages(issues: list[MermaidIssue]) -> list[dict[str, str]]:
     ]
     system = (
         "You repair Mermaid diagrams. Fix syntax errors only and keep the "
-        "meaning unchanged. Return JSON with key 'items' and each item "
-        "containing {\"id\", \"mermaid\"}. Output JSON only.\n\n"
-        "Use this minimal safe subset for all repaired Mermaid output:\n"
-        "- Only use: graph TD\n"
-        "- Node IDs: ASCII letters/digits/underscore only\n"
-        "- Node labels: id[\"中文...\"]\n"
-        "- Line breaks in labels: use <br/> only\n"
-        "- Subgraphs: use subgraph sgN[\"中文标题\"] (no Chinese in IDs)\n"
-        "- No inline comments (remove %% lines)\n"
-        "- Do not use special shapes like [(...)], just use [\"...\"]\n"
-        "- One statement per line; do not glue multiple edges on one line\n"
-        "- Do not use multi-source edges with &: expand into multiple edges\n"
+        "meaning unchanged.\n"
+        "Preserve the original diagram type and direction unless they are themselves invalid.\n"
+        "Always emit labels as ID[\"...\"] when you need to rebuild a node.\n"
+        "Escape double quotes inside labels as &quot;.\n"
+        "If label text contains [ or ], keep them inside the quoted label text; "
+        "do not create nested node delimiters.\n"
+        "Preserve existing valid <br>, <br/>, or <br /> forms unless normalization "
+        "is required to repair syntax.\n"
+        "Rebuild the whole broken node or statement when necessary; do not patch "
+        "only part of a broken label.\n"
+        "Keep one statement per line; do not glue multiple edges on one line.\n"
+        "If you cannot produce a syntactically valid Mermaid diagram with a minimal "
+        "fix, return the original diagram unchanged.\n"
+        "Return JSON with key 'items' and each item containing {\"id\", \"mermaid\"}. "
+        "Output JSON only."
     )
     user = json.dumps({"items": payload}, ensure_ascii=False, indent=2)
     return [
