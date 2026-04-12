@@ -1,0 +1,84 @@
+from __future__ import annotations
+
+import pytest
+
+from deepresearch_flow.translator.config import TranslateConfig
+from deepresearch_flow.translator.placeholder import PlaceHolderStore
+from deepresearch_flow.translator.protector import MarkdownProtector
+
+
+def test_paren_math_is_frozen_and_restored_unchanged() -> None:
+    protector = MarkdownProtector()
+    store = PlaceHolderStore()
+    cfg = TranslateConfig()
+    text = r"Before \(x + y\) after"
+
+    protected = protector.protect(text, cfg, store)
+
+    assert protected != text
+    assert "__PH_MATH_" in protected
+    assert protector.unprotect(protected, store) == text
+
+
+def test_paren_math_scanner_handles_double_backslash_before_close() -> None:
+    protector = MarkdownProtector()
+    store = PlaceHolderStore()
+    cfg = TranslateConfig()
+    text = r"Before \(x \\) y\) after"
+
+    protected = protector.protect(text, cfg, store)
+
+    assert protected == "Before __PH_MATH_000001__ after"
+    assert protector.unprotect(protected, store) == text
+
+
+def test_embedded_fence_like_line_keeps_entire_code_fence_together() -> None:
+    protector = MarkdownProtector()
+    store = PlaceHolderStore()
+    cfg = TranslateConfig()
+    text = (
+        "```python\n"
+        "print('start')\n"
+        "```json\n"
+        "<td>example</td>\n"
+        "print('end')\n"
+        "```\n"
+    )
+
+    protected = protector.protect(text, cfg, store)
+
+    assert store.kind_counts().get("CODEFENCE") == 1
+    assert protector.unprotect(protected, store) == text
+
+
+def test_unknown_placeholder_like_tokens_are_detected() -> None:
+    store = PlaceHolderStore()
+    store.add("CODE", "`x`")
+    text = "before __PH_UNKNOWN_999999__ after"
+
+    assert store.find_unresolved_placeholder_tokens(text) == [
+        "__PH_UNKNOWN_999999__"
+    ]
+    assert store.has_unresolved_placeholder_tokens(text)
+
+
+def test_literal_placeholder_like_source_roundtrips_without_false_positive() -> None:
+    store = PlaceHolderStore()
+    source = "before __PH_LITERAL_000001__ after"
+
+    store.record_source_placeholder_like_tokens(source)
+
+    assert store.restore_all_checked(source) == source
+
+
+def test_unprotect_raises_on_real_unresolved_placeholder_residuals() -> None:
+    protector = MarkdownProtector()
+    store = PlaceHolderStore()
+    cfg = TranslateConfig()
+    text = r"Before \(x + y\) after"
+
+    protected = protector.protect(text, cfg, store)
+    tampered = protected + " __PH_UNKNOWN_999999__"
+
+    with pytest.raises(ValueError, match="unresolved placeholder"):
+        protector.unprotect(tampered, store)

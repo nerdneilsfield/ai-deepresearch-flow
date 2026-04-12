@@ -127,6 +127,14 @@ def test_translate_uses_fallback_model_after_group_provider_error(
         fake_translate_group,
     )
 
+    async def fake_format_markdown(self, text, stage):
+        return text
+
+    monkeypatch.setattr(
+        "deepresearch_flow.translator.cli.MarkdownTranslator._format_markdown",
+        fake_format_markdown,
+    )
+
     runner = CliRunner()
     result = runner.invoke(
         cli,

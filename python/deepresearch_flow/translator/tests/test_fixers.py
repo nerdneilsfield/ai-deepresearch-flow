@@ -5,6 +5,9 @@ from __future__ import annotations
 import pytest
 
 from deepresearch_flow.translator.fixers import (
+    LinkProcessor,
+    ReferenceProcessor,
+    fix_markdown,
     fix_html_table_math_spaces,
     fix_math_delimiter_spaces,
     fix_nested_mailto,
@@ -37,6 +40,51 @@ class TestFixNestedMailto:
         text = "<mailto:<mailto:<mailto:a@b.c>>>"
         result = fix_nested_mailto(text)
         assert fix_nested_mailto(result) == result
+
+
+# ---------------------------------------------------------------------------
+# pre-protect safety
+# ---------------------------------------------------------------------------
+
+class TestPreProtectSafety:
+    def test_reference_markers_inside_math_and_code_unchanged(self):
+        text = (
+            r"Math \(see [1]\) and code ` [2] `\n"
+            "```\n"
+            "[3]\n"
+            "```"
+        )
+        assert ReferenceProcessor().fix_references(text) == text
+
+    def test_urls_emails_phones_inside_protected_looking_content_unchanged(self):
+        text = (
+            r"Math \(see https://example.com, foo@bar.com, 555-123-4567\)\n"
+            "```\n"
+            "https://example.com foo@bar.com 555-123-4567\n"
+            "```"
+        )
+        assert LinkProcessor().fix_links(text) == text
+
+    def test_nested_mailto_inside_code_unchanged(self):
+        text = "```\n<mailto:<mailto:foo@bar.com>>\n```\n`<mailto:<mailto:bar@baz.com>>`"
+        assert fix_nested_mailto(text) == text
+
+    def test_fix_markdown_does_not_mutate_paren_math_before_protection(self):
+        text = r"Before \(see [1] https://example.com foo@bar.com 555-123-4567\) after"
+        assert fix_markdown(text, "normal") == text
+
+    def test_fix_markdown_preserves_footnote_state_across_code_fence(self):
+        text = "# Notes\n1) first\n```\ncode\n```\n2) second"
+        result = fix_markdown(text, "normal")
+        assert "[^1]: first" in result
+        assert "[^2]: second" in result
+        assert "```\ncode\n```" in result
+
+    def test_aggressive_title_cleanup_skips_fenced_code_blocks(self):
+        text = "# 1. Intro\n```\n# 2. Inside code\n```\n# 3. Outro"
+        result = fix_markdown(text, "aggressive")
+        assert "## 1. Intro" in result
+        assert "```\n# 2. Inside code\n```" in result
 
 
 # ---------------------------------------------------------------------------
@@ -140,24 +188,30 @@ class TestFixMathDelimiterSpaces:
 
 class TestFixHtmlTableMathSpaces:
     def test_td_math_spaces(self):
-        text = "<td>Input  $ W \\times H $</td>"
-        assert fix_html_table_math_spaces(text) == "<td>Input $W \\times H$</td>"
+        text = "<table><tr><td>Input  $ W \\times H $</td></tr></table>"
+        assert (
+            fix_html_table_math_spaces(text)
+            == "<table><tr><td>Input $W \\times H$</td></tr></table>"
+        )
 
     def test_td_plus_minus(self):
-        text = "<td>28.88 ( $ \\pm $7.32)</td>"
-        assert fix_html_table_math_spaces(text) == "<td>28.88 ( $\\pm$7.32)</td>"
+        text = "<table><tr><td>28.88 ( $ \\pm $7.32)</td></tr></table>"
+        assert (
+            fix_html_table_math_spaces(text)
+            == "<table><tr><td>28.88 ( $\\pm$7.32)</td></tr></table>"
+        )
 
     def test_td_already_compact(self):
-        text = "<td>$\\mu$m</td>"
+        text = "<table><tr><td>$\\mu$m</td></tr></table>"
         assert fix_html_table_math_spaces(text) == text
 
     def test_td_with_style(self):
-        text = "<td style='text-align: center;'>05 - 200  $ \\mu $s</td>"
-        expected = "<td style='text-align: center;'>05 - 200 $\\mu$s</td>"
+        text = "<table><tr><td style='text-align: center;'>05 - 200  $ \\mu $s</td></tr></table>"
+        expected = "<table><tr><td style='text-align: center;'>05 - 200 $\\mu$s</td></tr></table>"
         assert fix_html_table_math_spaces(text) == expected
 
     def test_multiple_tds(self):
-        text = "<td> $ a $ </td><td> $ b $ </td>"
+        text = "<table><tr><td> $ a $ </td><td> $ b $ </td></tr></table>"
         result = fix_html_table_math_spaces(text)
         assert "$a$" in result
         assert "$b$" in result
@@ -166,7 +220,32 @@ class TestFixHtmlTableMathSpaces:
         text = "<p>text  $ x $</p>"
         assert fix_html_table_math_spaces(text) == text
 
-    def test_idempotent(self):
+    def test_detached_td_fragment_unchanged_if_code_block(self):
+        text = "```\n<td>Input  $ W \\times H $</td>\n```"
+        assert fix_html_table_math_spaces(text) == text
+
+    def test_detached_td_fragment_is_still_safe(self):
         text = "<td>Input  $ W \\times H $</td>"
+        assert fix_html_table_math_spaces(text) == "<td>Input $W \\times H$</td>"
+
+    def test_td_inside_fenced_code_unchanged(self):
+        text = "```\n<table><tr><td>Input  $ W \\times H $</td></tr></table>\n```"
+        assert fix_html_table_math_spaces(text) == text
+
+    def test_td_preserves_mixed_protected_content(self):
+        text = (
+            "<td>before `code` and $ x $ and \\(y\\) and <code>$ z $</code> and "
+            "```\n$ w $\n``` and after $ a $</td>"
+        )
+        result = fix_html_table_math_spaces(text)
+        assert "`code`" in result
+        assert r"\(y\)" in result
+        assert "<code>$ z $</code>" in result
+        assert "```\n$ w $\n```" in result
+        assert "$x$" in result
+        assert "$a$" in result
+
+    def test_idempotent(self):
+        text = "<table><tr><td>Input  $ W \\times H $</td></tr></table>"
         result = fix_html_table_math_spaces(text)
         assert fix_html_table_math_spaces(result) == result

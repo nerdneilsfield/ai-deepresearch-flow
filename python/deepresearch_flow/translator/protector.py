@@ -20,12 +20,13 @@ class MarkdownProtector:
     )
 
     def protect(self, text: str, cfg: TranslateConfig, store: PlaceHolderStore) -> str:
+        store.record_source_placeholder_like_tokens(text)
         stage1 = self._partition_by_blocks(text, cfg, store)
         stage2 = self._freeze_inline(stage1, cfg, store)
         return stage2
 
     def unprotect(self, text: str, store: PlaceHolderStore) -> str:
-        return store.restore_all(text)
+        return store.restore_all_checked(text)
 
     @staticmethod
     def _is_blank(line: str) -> bool:
@@ -38,6 +39,48 @@ class MarkdownProtector:
             return None
         fence = match.group(1)
         return fence[0], len(fence)
+
+    @staticmethod
+    def _line_is_fence_close(line: str, fence_char: str, fence_len: int) -> bool:
+        return (
+            re.match(rf"^\s*{re.escape(fence_char)}{{{fence_len},}}\s*$", line)
+            is not None
+        )
+
+    @staticmethod
+    def _scan_paren_math_end(text: str, start: int) -> int | None:
+        i = start + 2
+        n = len(text)
+        while i < n - 1:
+            if text[i] == "\\" and text[i + 1] == ")":
+                backslashes = 0
+                j = i - 1
+                while j >= start + 2 and text[j] == "\\":
+                    backslashes += 1
+                    j -= 1
+                if backslashes % 2 == 0:
+                    return i + 2
+            i += 1
+        return None
+
+    @staticmethod
+    def _freeze_paren_math(text: str, store: PlaceHolderStore) -> str:
+        out: List[str] = []
+        i = 0
+        n = len(text)
+        while i < n:
+            start = text.find(r"\(", i)
+            if start < 0:
+                out.append(text[i:])
+                break
+            out.append(text[i:start])
+            end = MarkdownProtector._scan_paren_math_end(text, start)
+            if end is None:
+                out.append(text[start:])
+                break
+            out.append(store.add("MATH", text[start:end]))
+            i = end
+        return "".join(out)
 
     @staticmethod
     def _line_is_block_math_open(line: str) -> bool:
@@ -133,8 +176,8 @@ class MarkdownProtector:
             if fence:
                 fence_char, fence_len = fence
                 j = i + 1
-                while j < n and not re.match(
-                    rf"^\s*{re.escape(fence_char)}{{{fence_len},}}", lines[j]
+                while j < n and not MarkdownProtector._line_is_fence_close(
+                    lines[j], fence_char, fence_len
                 ):
                     j += 1
                 if j < n:
@@ -242,6 +285,8 @@ class MarkdownProtector:
             return store.add("LINKDEF", match.group(0))
 
         s = re.sub(r"^\s*\[[^\]]+\]:\s*\S+.*$", repl_link_def, s, flags=re.MULTILINE)
+
+        s = MarkdownProtector._freeze_paren_math(s, store)
 
         img_pattern = re.compile(r"!\[(?:[^\]\\]|\\.)*?\]\((?:[^()\\]|\\.)*?\)")
         if not cfg.translate_image_alt:

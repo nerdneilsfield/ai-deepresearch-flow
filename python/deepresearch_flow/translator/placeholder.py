@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Dict, List
 
 
 class PlaceHolderStore:
+    _placeholder_like = re.compile(r"__PH_[A-Z0-9_]+__")
+
     def __init__(self) -> None:
         self._map: dict[str, str] = {}
         self._rev: dict[str, str] = {}
         self._kind_count: dict[str, int] = {}
+        self._source_placeholder_likes: set[str] = set()
         self.length = 0
 
     def add(self, kind: str, text: str) -> str:
@@ -30,6 +34,7 @@ class PlaceHolderStore:
             "map": self._map,
             "rev": self._rev,
             "kind_count": self._kind_count,
+            "source_placeholder_likes": sorted(self._source_placeholder_likes),
         }
         with open(file_path, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2, ensure_ascii=False)
@@ -40,7 +45,14 @@ class PlaceHolderStore:
         self._map = payload.get("map", {})
         self._rev = payload.get("rev", {})
         self._kind_count = payload.get("kind_count", {})
+        self._source_placeholder_likes = set(payload.get("source_placeholder_likes", []))
         self.length = len(self._map)
+
+    def record_source_placeholder_like_tokens(self, text: str) -> None:
+        self._source_placeholder_likes.update(self.find_placeholder_like_tokens(text))
+
+    def source_placeholder_like_tokens(self) -> set[str]:
+        return set(self._source_placeholder_likes)
 
     def restore_all(self, text: str) -> str:
         for placeholder, raw in sorted(self._rev.items(), key=lambda item: -len(item[0])):
@@ -48,6 +60,41 @@ class PlaceHolderStore:
                 text = text.replace(f"{placeholder}\n", raw)
             text = text.replace(placeholder, raw)
         return text
+
+    def find_placeholder_like_tokens(self, text: str) -> List[str]:
+        return [match.group(0) for match in self._placeholder_like.finditer(text)]
+
+    def find_unresolved_placeholder_tokens(
+        self, text: str, *, ignore_source_literals: bool = True
+    ) -> List[str]:
+        known = set(self._rev)
+        source_literals = self._source_placeholder_likes if ignore_source_literals else set()
+        return [
+            token
+            for token in self.find_placeholder_like_tokens(text)
+            if token not in known and token not in source_literals
+        ]
+
+    def has_unresolved_placeholder_tokens(
+        self, text: str, *, ignore_source_literals: bool = True
+    ) -> bool:
+        return bool(
+            self.find_unresolved_placeholder_tokens(
+                text, ignore_source_literals=ignore_source_literals
+            )
+        )
+
+    def restore_all_checked(self, text: str, *, ignore_source_literals: bool = True) -> str:
+        restored = self.restore_all(text)
+        unresolved = self.find_unresolved_placeholder_tokens(
+            restored, ignore_source_literals=ignore_source_literals
+        )
+        if unresolved:
+            raise ValueError(
+                "unresolved placeholder token(s) remain after restore: "
+                + ", ".join(unresolved)
+            )
+        return restored
 
     def contains_all(self, text: str) -> bool:
         return all(placeholder in text for placeholder in self._map.values())

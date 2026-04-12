@@ -352,6 +352,11 @@ class MarkdownTranslator:
         text = self._normalize_markdown_images(text)
         return self._normalize_markdown_block_math(text)
 
+    def _restore_protected_text(self, text: str, store: PlaceHolderStore) -> str:
+        if self.cfg.strict_placeholder_check:
+            return store.restore_all_checked(text)
+        return store.restore_all(text)
+
     async def _format_markdown(self, text: str, stage: str) -> str:
         if not text.strip():
             return text
@@ -1115,10 +1120,10 @@ class MarkdownTranslator:
                 translated_nodes[nid].translated_text = translated_nodes[nid].origin_text
 
         merged_text = reassemble_segments(segments, translated_nodes)
-        restored = self.protector.unprotect(merged_text, store)
         if format_enabled:
-            restored = await self._format_markdown(restored, "post")
-        restored = self._normalize_markdown_blocks(restored)
+            merged_text = await self._format_markdown(merged_text, "post")
+        merged_text = self._normalize_markdown_blocks(merged_text)
+        restored = self._restore_protected_text(merged_text, store)
 
         return TranslationResult(
             translated_text=restored,

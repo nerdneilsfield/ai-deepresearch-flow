@@ -124,21 +124,13 @@ def extract_math_spans(text: str, context_chars: int) -> list[FormulaSpan]:
 
 def cleanup_formula(text: str) -> str:
     cleaned = text.replace("\u00a0", " ").strip()
-    cleaned = cleaned.replace("\r", "")
-    cleaned = cleaned.replace("\text", "\\text").replace("\tfrac", "\\tfrac")
-    cleaned = cleaned.replace("\t", "")
-    cleaned = re.sub(r"\\(?=\d)", "", cleaned)
-    cleaned = re.sub(r"\\n(?=[A-Za-z])", "", cleaned)
+    cleaned = _restore_json_escaped_commands(cleaned)
     cleaned = re.sub(r"\\\s+([A-Za-z])", r"\\\1", cleaned)
     cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
     cleaned = re.sub(r"\n[ \t]+", "\n", cleaned)
     cleaned = re.sub(r"\\\(\s*cdot\s*\)", r"\\cdot", cleaned)
     cleaned = re.sub(r"\\\s*Max\b", r"\\max", cleaned)
     cleaned = re.sub(r"\\\s*Min\b", r"\\min", cleaned)
-    cleaned = re.sub(r"\x08eta(?=[_\\^,\\s)])", r"\\beta", cleaned)
-    cleaned = re.sub(r"\x08eta\b", r"\\beta", cleaned)
-    cleaned = re.sub(r"\x08ar(?=[_\\{\\^\\s)])", r"\\bar", cleaned)
-    cleaned = re.sub(r"\x08ar\b", r"\\bar", cleaned)
     cleaned = re.sub(r"\\\s+([A-Za-z]{2,})", r"\\text{\1}", cleaned)
     cleaned = re.sub(
         r"([A-Za-z0-9_{}\\]+)\^([A-Za-z0-9_{}]+)\^([A-Za-z0-9_{}]+)",
@@ -152,8 +144,6 @@ def cleanup_formula(text: str) -> str:
         r"\\Big\\\1",
         cleaned,
     )
-    cleaned = re.sub(r"\x08egin\b", r"\\begin", cleaned)
-    cleaned = re.sub(r"\x08oldsymbol\b", r"\\boldsymbol", cleaned)
     cleaned = re.sub(r"\^''", r"^{''}", cleaned)
     cleaned = re.sub(r"\^'", r"^{\\prime}", cleaned)
     cleaned = re.sub(r"\^_", r"^{*}", cleaned)
@@ -174,7 +164,11 @@ def cleanup_formula(text: str) -> str:
 
 
 def _collapse_spaced_text(text: str) -> str:
-    tokens = text.split()
+    prefix = re.match(r"^\s*", text).group(0)
+    suffix = re.search(r"\s*$", text).group(0)
+    core_end = len(text) - len(suffix) if suffix else len(text)
+    core = text[len(prefix) : core_end]
+    tokens = core.split()
     if not tokens:
         return text
     out: list[str] = []
@@ -189,37 +183,87 @@ def _collapse_spaced_text(text: str) -> str:
         else:
             out.append(tokens[i])
             i += 1
-    return " ".join(out)
+    return prefix + " ".join(out) + suffix
+
+
+def _find_matching_brace(text: str, open_index: int) -> int | None:
+    depth = 0
+    idx = open_index
+    while idx < len(text):
+        ch = text[idx]
+        if ch == "\\":
+            idx += 2 if idx + 1 < len(text) else 1
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return idx
+        idx += 1
+    return None
+
+
+def _replace_balanced_braced_command(
+    text: str,
+    command_pattern: re.Pattern[str],
+    transform: Callable[[str], str],
+) -> str:
+    pieces: list[str] = []
+    idx = 0
+    while True:
+        match = command_pattern.search(text, idx)
+        if not match:
+            pieces.append(text[idx:])
+            return "".join(pieces)
+
+        open_index = match.end() - 1
+        close_index = _find_matching_brace(text, open_index)
+        if close_index is None:
+            pieces.append(text[idx:])
+            return "".join(pieces)
+
+        pieces.append(text[idx:match.start()])
+        content = text[match.end() : close_index]
+        if "{" in content or "}" in content:
+            pieces.append(text[match.start() : close_index + 1])
+        else:
+            pieces.append(f"\\{match.group(1)}{{{transform(content)}}}")
+        idx = close_index + 1
 
 
 def _collapse_spaced_text_commands(text: str) -> str:
-    def replace(match: re.Match[str]) -> str:
-        name = match.group(1)
-        content = match.group(2)
-        collapsed = _collapse_spaced_text(content)
-        return f"\\{name}{{{collapsed}}}"
-
-    return re.sub(r"\\(text|operatorname\*?)\s*{([^}]*)}", replace, text)
+    return _replace_balanced_braced_command(
+        text,
+        re.compile(r"\\(text|operatorname\*?)\s*\{"),
+        _collapse_spaced_text,
+    )
 
 
 def _split_text_with_math(text: str) -> str:
-    def replace(match: re.Match[str]) -> str:
-        content = match.group(1)
+    def transform(content: str) -> str:
         collapsed = _collapse_spaced_text(content)
         token = re.search(r"(\\times|\\frac|\\sum|\\prod|\\left|\\right|\^|_)", collapsed)
         if not token:
-            return f"\\text{{{collapsed}}}"
+            return collapsed
         idx = token.start()
         prefix = collapsed[:idx].rstrip()
         suffix = collapsed[idx:].lstrip()
         if not prefix:
             return suffix
-        return f"\\text{{{prefix}}} {suffix}"
+        return f"{prefix} {suffix}"
 
-    return re.sub(r"\\text\s*{([^}]*)}", replace, text)
+    return _replace_balanced_braced_command(
+        text,
+        re.compile(r"\\(text)\s*\{"),
+        transform,
+    )
 
 
 _KNOWN_LATEX_COMMANDS = {
+    "begin",
+    "end",
+    "neq",
     "alpha",
     "beta",
     "gamma",
@@ -257,6 +301,17 @@ _KNOWN_LATEX_COMMANDS = {
     "Phi",
     "Psi",
     "Omega",
+    "Rightarrow",
+    "Leftarrow",
+    "Leftrightarrow",
+    "Longrightarrow",
+    "Longleftarrow",
+    "Longleftrightarrow",
+    "Big",
+    "Bigg",
+    "Re",
+    "Im",
+    "Pr",
     "sin",
     "cos",
     "tan",
@@ -278,6 +333,7 @@ _KNOWN_LATEX_COMMANDS = {
     "argmax",
     "sqrt",
     "frac",
+    "tfrac",
     "cdot",
     "times",
     "left",
@@ -312,6 +368,37 @@ _KNOWN_LATEX_COMMANDS = {
     "tilde",
     "vec",
 }
+
+_CONTROL_CHAR_COMMAND_PREFIXES = {
+    "\x08": "b",
+    "\t": "t",
+    "\f": "f",
+}
+
+
+def _restore_json_escaped_commands(text: str) -> str:
+    restored: list[str] = []
+    idx = 0
+    while idx < len(text):
+        ch = text[idx]
+        prefix = _CONTROL_CHAR_COMMAND_PREFIXES.get(ch)
+        if prefix is None:
+            restored.append(ch)
+            idx += 1
+            continue
+
+        j = idx + 1
+        while j < len(text) and text[j].isalpha():
+            j += 1
+        if j > idx + 1:
+            command = prefix + text[idx + 1 : j]
+            if command in _KNOWN_LATEX_COMMANDS:
+                restored.append("\\" + command)
+                idx = j
+                continue
+        restored.append(ch)
+        idx += 1
+    return "".join(restored)
 
 
 def _normalize_unknown_commands(text: str) -> str:
@@ -532,7 +619,9 @@ def locate_json_field_start(
 def strip_wrapping_delimiters(latex: str, delimiter: str) -> str:
     latex = latex.strip()
     if latex.startswith(delimiter) and latex.endswith(delimiter):
-        return latex[len(delimiter) : -len(delimiter)].strip()
+        inner = latex[len(delimiter) : -len(delimiter)].strip()
+        if inner:
+            return inner
     return latex
 
 
@@ -549,6 +638,23 @@ def _parse_repairs(response: str) -> dict[str, str]:
             if isinstance(issue_id, str) and isinstance(latex, str):
                 repairs[issue_id] = latex
     return repairs
+
+
+def _finalize_repaired_formula(latex: str, delimiter: str) -> tuple[str, list[str]]:
+    stripped = strip_wrapping_delimiters(latex, delimiter)
+    display_mode = delimiter == "$$"
+    errors = validate_formula(stripped, display_mode)
+    if not errors:
+        return stripped, []
+
+    cleaned = cleanup_formula(stripped)
+    if cleaned != stripped:
+        cleaned_errors = validate_formula(cleaned, display_mode)
+        if not cleaned_errors:
+            return cleaned, []
+        return cleaned, cleaned_errors
+
+    return stripped, errors
 
 
 async def repair_batch(
@@ -708,7 +814,7 @@ async def fix_math_text(
         
         # Process results
         for batch, result in zip(batches, batch_results):
-            if isinstance(result, Exception):
+            if isinstance(result, BaseException):
                 # Entire batch failed with exception
                 error = str(result)
                 for issue in batch:
@@ -758,9 +864,7 @@ async def fix_math_text(
                         }
                     )
                     continue
-                repaired = strip_wrapping_delimiters(repaired, issue.span.delimiter)
-                cleaned = cleanup_formula(repaired)
-                errors = validate_formula(cleaned, issue.span.delimiter == "$$")
+                cleaned, errors = _finalize_repaired_formula(repaired, issue.span.delimiter)
                 if errors:
                     stats.formulas_failed += 1
                     error_records.append(

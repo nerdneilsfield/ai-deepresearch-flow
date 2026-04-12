@@ -20,30 +20,37 @@ class ReferenceProcessor:
         }
 
     def fix_references(self, text: str) -> str:
-        for match in re.findall(self._patterns["reference_def"], text):
-            original = f"[{match[0]}] {match[1].strip()}"
-            replacement = f"[^{match[0]}]: {match[1].strip()}\n"
-            text = text.replace(original, replacement)
+        def _sub(pattern: re.Pattern, repl) -> str:
+            protected = _build_protected_ranges(text, include_inline_math=True)
 
-        for match in re.findall(self._patterns["reference_range"], text):
-            original = f"[{match[0]}-{match[1]}]"
-            expanded = " ".join(
-                f"[^{i}]" for i in range(int(match[0]), int(match[1]) + 1)
-            )
-            text = text.replace(original, expanded)
+            def _replace(match: re.Match) -> str:
+                if _in_protected(match.start(), protected):
+                    return match.group(0)
+                return repl(match)
 
-        for match in re.findall(self._patterns["reference_multi"], text):
-            original = f"[{match}]"
-            numbers = [n.strip() for n in match.split(",")]
-            expanded = " ".join(f"[^{n}]" for n in numbers)
-            text = text.replace(original, expanded)
+            return pattern.sub(_replace, text)
 
-        for match in re.findall(self._patterns["reference_single"], text):
-            original = f"[{match}]"
-            replacement = f"[^{match}]"
-            if original in text and f"[^{match}]" not in text.replace(replacement, ""):
-                text = text.replace(original, replacement)
-
+        text = _sub(
+            self._patterns["reference_def"],
+            lambda match: f"[^{match.group(1)}]: {match.group(2).strip()}\n",
+        )
+        text = _sub(
+            self._patterns["reference_range"],
+            lambda match: " ".join(
+                f"[^{i}]"
+                for i in range(int(match.group(1)), int(match.group(2)) + 1)
+            ),
+        )
+        text = _sub(
+            self._patterns["reference_multi"],
+            lambda match: " ".join(
+                f"[^{n.strip()}]" for n in match.group(1).split(",")
+            ),
+        )
+        text = _sub(
+            self._patterns["reference_single"],
+            lambda match: f"[^{match.group(1)}]",
+        )
         return text
 
 
@@ -68,6 +75,16 @@ class LinkProcessor:
         }
 
     def fix_links(self, text: str) -> str:
+        def _sub(pattern: re.Pattern, repl) -> str:
+            protected = _build_protected_ranges(text, include_inline_math=True)
+
+            def _replace(match: re.Match) -> str:
+                if _in_protected(match.start(), protected):
+                    return match.group(0)
+                return repl(match)
+
+            return pattern.sub(_replace, text)
+
         def bracket_urls(value: str) -> str:
             def repl(match: re.Match) -> str:
                 url = match.group(1)
@@ -75,13 +92,13 @@ class LinkProcessor:
                     return f"<{url[:-1]}>{url[-1]}"
                 return f"<{url}>"
 
-            return self._patterns["url"].sub(repl, value)
+            return _sub(self._patterns["url"], repl)
 
         def bracket_emails(value: str) -> str:
-            return self._patterns["email"].sub(r"<mailto:\1>", value)
+            return _sub(self._patterns["email"], lambda match: f"<mailto:{match.group(1)}>")
 
         def bracket_phones(value: str) -> str:
-            return self._patterns["phone"].sub(lambda m: f"<tel:{m.group(1)}>", value)
+            return _sub(self._patterns["phone"], lambda match: f"<tel:{match.group(1)}>")
 
         text = bracket_urls(text)
         text = bracket_emails(text)
@@ -195,6 +212,7 @@ class TitleProcessor:
     def fix_titles(self, text: str) -> str:
         lines = text.split("\n")
         new_lines: list[str] = []
+        in_fence = False
 
         def is_title(line: str) -> bool:
             return re.match(r"^#{1,6}\s+", line) is not None
@@ -208,6 +226,14 @@ class TitleProcessor:
         )
 
         for line in lines:
+            stripped = line.lstrip()
+            if stripped.startswith(("```", "~~~")):
+                in_fence = not in_fence
+                new_lines.append(line)
+                continue
+            if in_fence:
+                new_lines.append(line)
+                continue
             if not is_title(line):
                 new_lines.append(line)
                 continue
@@ -439,13 +465,26 @@ _RE_NESTED_MAILTO = re.compile(r"<mailto:(?:<mailto:)+([^<>]+?)>+")
 
 _RE_FENCED_BLOCK = re.compile(r"^(`{3,}|~{3,}).*?^\1\s*$", re.MULTILINE | re.DOTALL)
 _RE_DISPLAY_MATH = re.compile(r"\$\$[\s\S]+?\$\$")
+_RE_PAREN_MATH = re.compile(r"\\\((?:.|\n)*?\\\)", re.DOTALL)
+_RE_BRACKET_MATH = re.compile(r"\\\[(?:.|\n)*?\\\]", re.DOTALL)
 _RE_HTML_CODE = re.compile(r"<code>.*?</code>", re.DOTALL)
+_RE_INLINE_CODE = re.compile(r"(`+)(.*?)(\1)", re.DOTALL)
 
 
-def _build_protected_ranges(text: str) -> list[tuple[int, int]]:
+def _build_protected_ranges(text: str, *, include_inline_math: bool) -> list[tuple[int, int]]:
     """Return sorted list of (start, end) ranges that must not be modified."""
     ranges: list[tuple[int, int]] = []
-    for pattern in (_RE_FENCED_BLOCK, _RE_DISPLAY_MATH, _RE_HTML_CODE):
+    patterns = [
+        _RE_FENCED_BLOCK,
+        _RE_DISPLAY_MATH,
+        _RE_PAREN_MATH,
+        _RE_BRACKET_MATH,
+        _RE_HTML_CODE,
+        _RE_INLINE_CODE,
+    ]
+    if include_inline_math:
+        patterns.append(_RE_INLINE_MATH)
+    for pattern in patterns:
         for m in pattern.finditer(text):
             ranges.append((m.start(), m.end()))
     ranges.sort()
@@ -463,7 +502,14 @@ def _in_protected(pos: int, ranges: list[tuple[int, int]]) -> bool:
 
 def fix_nested_mailto(text: str) -> str:
     """Collapse nested ``<mailto:<mailto:...>>`` to a single ``<mailto:addr>``."""
-    return _RE_NESTED_MAILTO.sub(r"<mailto:\1>", text)
+    protected = _build_protected_ranges(text, include_inline_math=True)
+
+    def _replace(match: re.Match) -> str:
+        if _in_protected(match.start(), protected):
+            return match.group(0)
+        return f"<mailto:{match.group(1)}>"
+
+    return _RE_NESTED_MAILTO.sub(_replace, text)
 
 
 _RE_INLINE_MATH = re.compile(r"(?<!\$)\$(?!\$)(.*?)\$(?!\$)")
@@ -478,7 +524,7 @@ _RE_ONLY_PUNCT_WORDS = re.compile(r"^[\s.,;:!?a-zA-Z]*$")
 
 def fix_non_math_in_delimiters(text: str) -> str:
     """Strip ``$ ... $`` around content that is not actually math."""
-    protected = _build_protected_ranges(text)
+    protected = _build_protected_ranges(text, include_inline_math=False)
 
     def _replace(m: re.Match) -> str:
         if _in_protected(m.start(), protected):
@@ -497,7 +543,7 @@ def fix_non_math_in_delimiters(text: str) -> str:
 
 def fix_math_delimiter_spaces(text: str) -> str:
     """Trim extra spaces inside inline ``$ ... $`` delimiters."""
-    protected = _build_protected_ranges(text)
+    protected = _build_protected_ranges(text, include_inline_math=False)
 
     def _replace(m: re.Match) -> str:
         if _in_protected(m.start(), protected):
@@ -516,24 +562,181 @@ def fix_math_delimiter_spaces(text: str) -> str:
 _RE_TD_INLINE_MATH = re.compile(r"(<td[^>]*>)(.*?)(</td>)", re.DOTALL)
 
 
+def _apply_transform_outside_protected_ranges(
+    text: str,
+    protected: list[tuple[int, int]],
+    transform,
+    *,
+    start_offset: int = 0,
+) -> str:
+    if not protected:
+        return transform(text)
+
+    text_start = start_offset
+    text_end = start_offset + len(text)
+    out: list[str] = []
+    cursor = 0
+
+    for range_start, range_end in protected:
+        if range_end <= text_start:
+            continue
+        if range_start >= text_end:
+            break
+
+        rel_start = max(range_start, text_start) - text_start
+        rel_end = min(range_end, text_end) - text_start
+
+        if rel_start > cursor:
+            out.append(transform(text[cursor:rel_start]))
+        if rel_end > cursor:
+            out.append(text[rel_start:rel_end])
+            cursor = rel_end
+
+    if cursor < len(text):
+        out.append(transform(text[cursor:]))
+
+    return "".join(out)
+
+
 def fix_html_table_math_spaces(text: str) -> str:
     """Fix math delimiter spaces inside HTML ``<td>`` cells and normalize surrounding whitespace."""
+    protected = _build_protected_ranges(text, include_inline_math=False)
 
     def _fix_cell(m: re.Match) -> str:
         open_tag = m.group(1)
         content = m.group(2)
         close_tag = m.group(3)
-        # Trim inline math spaces within the cell
-        content = _RE_INLINE_MATH.sub(
-            lambda im: f"${im.group(1).strip()}$" if im.group(1).strip() else im.group(0),
+        content = _apply_transform_outside_protected_ranges(
             content,
+            protected,
+            lambda chunk: re.sub(
+                r"(\$)\s{2,}", r"\1 ", re.sub(
+                    r"\s{2,}(\$)", r" \1", _RE_INLINE_MATH.sub(
+                        lambda im: f"${im.group(1).strip()}$"
+                        if im.group(1).strip()
+                        else im.group(0),
+                        chunk,
+                    ),
+                ),
+            ),
+            start_offset=m.start(2),
         )
-        # Normalize double+ spaces around $ to single space
-        content = re.sub(r"\s{2,}(\$)", r" \1", content)
-        content = re.sub(r"(\$)\s{2,}", r"\1 ", content)
         return f"{open_tag}{content}{close_tag}"
 
     return _RE_TD_INLINE_MATH.sub(_fix_cell, text)
+
+
+def _normalize_footnote_definitions_preserving_state(text: str) -> str:
+    lines = text.splitlines(keepends=True)
+    out: list[str] = []
+    in_fence = False
+    fence_char = ""
+    fence_len = 0
+    in_notes = False
+    notes_level: int | None = None
+    notes_heading_re = re.compile(
+        r"^#{1,6}\s*(参考文献|参考资料|参考书目|文献|引用|注释|脚注|notes?|references?|bibliography|works\s+cited|citations?)\b",
+        re.IGNORECASE,
+    )
+    notes_heading_plain_re = re.compile(
+        r"^(参考文献|参考资料|参考书目|文献|引用|注释|脚注|notes?|references?|bibliography|works\s+cited|citations?)\s*:?$",
+        re.IGNORECASE,
+    )
+    last_note_index: int | None = None
+    protected = _build_protected_ranges(text, include_inline_math=True)
+
+    def line_overlaps(start: int, end: int) -> bool:
+        for range_start, range_end in protected:
+            if range_end <= start:
+                continue
+            if range_start >= end:
+                break
+            return True
+        return False
+
+    offset = 0
+    for line in lines:
+        line_start = offset
+        line_end = offset + len(line)
+        protected_line = line_overlaps(line_start, line_end)
+        stripped = line.lstrip()
+        if stripped.startswith(("```", "~~~")):
+            run_len = 0
+            while run_len < len(stripped) and stripped[run_len] == stripped[0]:
+                run_len += 1
+            if not in_fence:
+                in_fence = True
+                fence_char = stripped[0]
+                fence_len = run_len
+            elif stripped[0] == fence_char and run_len >= fence_len:
+                in_fence = False
+                fence_char = ""
+                fence_len = 0
+            out.append(line)
+            offset = line_end
+            continue
+
+        if in_fence:
+            out.append(line)
+            offset = line_end
+            continue
+
+        heading_match = notes_heading_re.match(stripped)
+        if heading_match:
+            in_notes = True
+            notes_level = len(stripped.split(" ")[0].lstrip("#"))
+            last_note_index = None
+        elif notes_heading_plain_re.match(stripped):
+            in_notes = True
+            notes_level = None
+            last_note_index = None
+        elif re.match(r"^#{1,6}\s+", stripped):
+            if notes_level is not None:
+                level = len(stripped.split(" ")[0].lstrip("#"))
+                if level <= notes_level:
+                    in_notes = False
+                    notes_level = None
+                    last_note_index = None
+
+        match = re.match(r"^\[\^([0-9]+)\]\s+", line)
+        if match:
+            if protected_line:
+                out.append(line)
+            else:
+                out.append(re.sub(r"^\[\^([0-9]+)\]\s+", r"[^\1]: ", line))
+            offset = line_end
+            continue
+
+        if in_notes:
+            list_match = re.match(r"^\s*(\d{1,4})[.)]\s+", line)
+            if list_match:
+                if protected_line:
+                    out.append(line)
+                    last_note_index = len(out) - 1
+                else:
+                    number = list_match.group(1)
+                    rest = line[list_match.end() :].strip()
+                    out.append(f"[^{number}]: {rest}")
+                    last_note_index = len(out) - 1
+                offset = line_end
+                continue
+            if last_note_index is not None:
+                if line.strip() == "":
+                    out.append(line)
+                    last_note_index = None
+                    offset = line_end
+                    continue
+                if line.startswith((" ", "\t")):
+                    out[last_note_index] = f"{out[last_note_index]} {line.strip()}"
+                    offset = line_end
+                    continue
+
+        if not protected_line:
+            line = re.sub(r"(?<!\^)\[(\d{1,4})\]", r"[^\1]", line)
+        out.append(line)
+        offset = line_end
+
+    return "".join(out)
 
 
 def fix_markdown(text: str, level: str) -> str:
@@ -572,6 +775,6 @@ def fix_markdown(text: str, level: str) -> str:
     text = normalize_fenced_code_blocks(text)
     text = normalize_mermaid_blocks(text)
     text = normalize_unbalanced_fences(text)
-    text = normalize_footnote_definitions(text)
+    text = _normalize_footnote_definitions_preserving_state(text)
 
     return text
