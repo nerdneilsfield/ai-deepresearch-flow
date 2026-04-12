@@ -499,7 +499,10 @@ def sanitize_table_html(raw: str) -> str:
         parser.close()
     except Exception:
         return f"<pre><code>{html.escape(raw)}</code></pre>"
-    return parser.get_html()
+    sanitized = parser.get_html()
+    if not sanitized and raw.strip():
+        return f"<pre><code>{html.escape(raw)}</code></pre>"
+    return sanitized
 
 
 def sanitize_img_html(raw: str) -> str | None:
