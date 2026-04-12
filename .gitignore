@@ -246,3 +246,6 @@ test-data/
 
 ocr.toml
 /remote.toml
+
+.codex/
+deep_read_LCDall.json
