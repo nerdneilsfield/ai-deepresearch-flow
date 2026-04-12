@@ -6,6 +6,29 @@ import pytest
 from deepresearch_flow.recognize import math
 from deepresearch_flow.paper.providers.base import ProviderError
 
+EXTRACT_MATH_SPAN_SEEDS = [
+    pytest.param(
+        "price is $5. code: `$HOME` and math $x+y$",
+        [("$", "x+y")],
+        id="reclassify:currency-and-code-pass-real-inline-math",
+    ),
+    pytest.param(
+        "This is $\\underline{\\text{__PH_AUTOLINK_000106__}}$ end",
+        [],
+        id="reclassify:inline-placeholder-pollution",
+    ),
+    pytest.param(
+        "$$\nDownloaded on March 30, 2026 at 20:06:42 UTC from IEEE Xplore. Restrictions apply.\n## 5 IMPLEMENTING THE INDEX ON A GPU\nThe cost is $x+y$ in the text.\n$$\n",
+        [],
+        id="reclassify:prose-display-block",
+    ),
+    pytest.param(
+        "valid block:\n$$\na+b\n$$\n",
+        [("$$", "\na+b\n")],
+        id="pass:display-block",
+    ),
+]
+
 
 def test_cleanup_formula_preserves_cases_linebreaks() -> None:
     original = (
@@ -56,31 +79,7 @@ def test_extract_math_spans_reclassifies_prose_like_display_blocks() -> None:
     assert spans == []
 
 
-@pytest.mark.parametrize(
-    "text,expected",
-    [
-        pytest.param(
-            "price is $5. code: `$HOME` and math $x+y$",
-            [("$", "x+y")],
-            id="reclassify:currency-and-code-pass-real-inline-math",
-        ),
-        pytest.param(
-            "This is $\\underline{\\text{__PH_AUTOLINK_000106__}}$ end",
-            [],
-            id="reclassify:inline-placeholder-pollution",
-        ),
-        pytest.param(
-            "$$\nDownloaded on March 30, 2026 at 20:06:42 UTC from IEEE Xplore. Restrictions apply.\n## 5 IMPLEMENTING THE INDEX ON A GPU\nThe cost is $x+y$ in the text.\n$$\n",
-            [],
-            id="reclassify:prose-display-block",
-        ),
-        pytest.param(
-            "valid block:\n$$\na+b\n$$\n",
-            [("$$", "\na+b\n")],
-            id="pass:display-block",
-        ),
-    ],
-)
+@pytest.mark.parametrize("text,expected", EXTRACT_MATH_SPAN_SEEDS)
 def test_extract_math_spans_seed_classification(
     text: str, expected: list[tuple[str, str]]
 ) -> None:
