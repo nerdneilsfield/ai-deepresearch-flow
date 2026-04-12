@@ -1,106 +1,113 @@
 from __future__ import annotations
 
+import json
+import os
 import sqlite3
 import tempfile
-from pathlib import Path
 import unittest
+from pathlib import Path
 
-import httpx
-
-from deepresearch_flow.paper.snapshot.common import (
-    ApiLimits,
-    _column_exists,
-    _open_ro_conn,
-    _open_rw_conn,
-    _table_exists,
-)
 from deepresearch_flow.paper.snapshot.mcp_server import (
+    ApiLimits,
     McpSnapshotConfig,
     McpToolError,
-    _fetch_static_text,
-    _load_static_text,
-    _truncate,
-    _validate_paper_id,
-    _validate_query,
     configure,
+    create_mcp_app,
+    create_mcp_transport_app,
+    resource_metadata,
+    resource_source,
+    resource_summary_default,
     resolve_static_export_dir,
 )
+from deepresearch_flow.paper.snapshot.schema import init_snapshot_db
 
 
-class TestSnapshotCommonHelpers(unittest.TestCase):
-    def test_open_rw_and_ro_connections(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "snapshot.db"
+class TestMcpSnapshotPublicBehavior(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmpdir = tempfile.TemporaryDirectory()
+        root = Path(self.tmpdir.name)
+        self.db_path = root / "snapshot.db"
+        self.static_dir = root / "static"
+        self.static_dir.mkdir(parents=True, exist_ok=True)
+        self._seed_snapshot_db(include_bibtex=True, include_summary=True)
+        configure(self._base_config())
 
-            rw_conn = _open_rw_conn(db_path)
-            try:
-                self.assertIs(rw_conn.row_factory, sqlite3.Row)
-                rw_conn.execute("CREATE TABLE paper (paper_id TEXT PRIMARY KEY, title TEXT)")
-                rw_conn.execute(
-                    "INSERT INTO paper(paper_id, title) VALUES (?, ?)",
-                    ("p1", "Paper One"),
-                )
-                rw_conn.commit()
-            finally:
-                rw_conn.close()
+    def tearDown(self) -> None:
+        self.tmpdir.cleanup()
 
-            ro_conn = _open_ro_conn(db_path)
-            try:
-                row = ro_conn.execute("SELECT paper_id, title FROM paper").fetchone()
-                assert row is not None
-                self.assertEqual(row["paper_id"], "p1")
-                self.assertEqual(row["title"], "Paper One")
-            finally:
-                ro_conn.close()
+    def _base_config(self) -> McpSnapshotConfig:
+        return McpSnapshotConfig(
+            snapshot_db=self.db_path,
+            static_base_url="",
+            static_export_dir=self.static_dir,
+            limits=ApiLimits(max_query_length=8),
+            origin_allowlist=["*"],
+            max_paper_id_length=12,
+        )
 
-    def test_table_and_column_exists(self) -> None:
-        conn = sqlite3.connect(":memory:")
+    def _seed_snapshot_db(self, *, include_bibtex: bool, include_summary: bool) -> None:
+        conn = sqlite3.connect(self.db_path)
         try:
-            conn.execute("CREATE TABLE paper (paper_id TEXT PRIMARY KEY, title TEXT)")
-            self.assertTrue(_table_exists(conn, "paper"))
-            self.assertFalse(_table_exists(conn, "missing_table"))
-            self.assertTrue(_column_exists(conn, "paper", "title"))
-            self.assertFalse(_column_exists(conn, "paper", "doi"))
-            self.assertFalse(_column_exists(conn, "missing_table", "title"))
+            init_snapshot_db(conn)
+            conn.execute(
+                """
+                INSERT INTO paper(
+                    paper_id, paper_key, paper_key_type, doi, title, year, month,
+                    publication_date, venue, preferred_summary_template, summary_preview,
+                    paper_index, source_hash, output_language, provider, model,
+                    prompt_template, extracted_at, pdf_content_hash, source_md_content_hash
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "p1",
+                    "k1",
+                    "doi",
+                    "10.1000/xyz",
+                    "Paper Title",
+                    "2024",
+                    "2024-01",
+                    "2024-01-02",
+                    "Test Venue",
+                    "deep_read",
+                    "Preview text",
+                    1,
+                    "hash",
+                    "en",
+                    "provider",
+                    "model",
+                    "tmpl",
+                    "2024-01-03",
+                    "pdfhash",
+                    "mdhash",
+                ),
+            )
+            if include_summary:
+                conn.execute(
+                    "INSERT INTO paper_summary(paper_id, template_tag) VALUES (?, ?)",
+                    ("p1", "deep_read"),
+                )
+            if include_bibtex:
+                conn.execute(
+                    "INSERT INTO paper_bibtex(paper_id, bibtex_raw, bibtex_key, entry_type) VALUES (?, ?, ?, ?)",
+                    ("p1", "@article{p1,title={Paper Title}}", "p1", "article"),
+                )
+            conn.commit()
         finally:
             conn.close()
 
-
-class TestMcpServerHelpers(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls.tmpdir = tempfile.TemporaryDirectory()
-        root = Path(cls.tmpdir.name)
-        cls.db_path = root / "snapshot.db"
-        cls.static_dir = root / "static"
-        cls.static_dir.mkdir(parents=True, exist_ok=True)
-        cls.db_path.touch()
-        configure(
-            McpSnapshotConfig(
-                snapshot_db=cls.db_path,
-                static_base_url="",
-                static_export_dir=cls.static_dir,
-                limits=ApiLimits(max_query_length=8),
-                origin_allowlist=["*"],
-                max_paper_id_length=12,
-            )
-        )
-
-    @classmethod
-    def tearDownClass(cls) -> None:
-        cls.tmpdir.cleanup()
-
-    def setUp(self) -> None:
-        configure(
-            McpSnapshotConfig(
-                snapshot_db=self.db_path,
-                static_base_url="",
-                static_export_dir=self.static_dir,
-                limits=ApiLimits(max_query_length=8),
-                origin_allowlist=["*"],
-                max_paper_id_length=12,
-            )
-        )
+    def _route_signature(self, app: object) -> list[dict[str, object]]:
+        signature: list[dict[str, object]] = []
+        for route in getattr(app, "routes", []):
+            entry: dict[str, object] = {
+                "type": type(route).__name__,
+                "path": getattr(route, "path", None),
+                "name": getattr(route, "name", None),
+            }
+            methods = getattr(route, "methods", None)
+            if methods is not None:
+                entry["methods"] = sorted(methods)
+            signature.append(entry)
+        return signature
 
     def test_tool_error_to_dict(self) -> None:
         error = McpToolError("bad_input", "Broken", detail="oops")
@@ -111,172 +118,127 @@ class TestMcpServerHelpers(unittest.TestCase):
             {"error": "bad_input", "message": "Broken", "detail": "oops"},
         )
 
-    def test_validate_query_success_and_failures(self) -> None:
-        cfg = McpSnapshotConfig(
-            snapshot_db=self.db_path,
-            static_base_url="",
-            static_export_dir=None,
-            limits=ApiLimits(max_query_length=8),
-            origin_allowlist=["*"],
-        )
-
-        self.assertEqual(_validate_query("  graph  ", cfg), "graph")
-
-        with self.assertRaises(McpToolError) as empty_ctx:
-            _validate_query("   ", cfg)
-        self.assertEqual(empty_ctx.exception.code, "invalid_query")
-
-        with self.assertRaises(McpToolError) as long_ctx:
-            _validate_query("graphsage", cfg)
-        self.assertEqual(long_ctx.exception.code, "query_too_long")
-        self.assertEqual(long_ctx.exception.details["max_length"], 8)
-        self.assertEqual(long_ctx.exception.details["length"], 9)
-
-    def test_validate_paper_id_success_and_failures(self) -> None:
-        cfg = McpSnapshotConfig(
-            snapshot_db=self.db_path,
-            static_base_url="",
-            static_export_dir=None,
-            limits=ApiLimits(),
-            origin_allowlist=["*"],
-            max_paper_id_length=12,
-        )
-
-        self.assertEqual(_validate_paper_id("paper_01-ok", cfg), "paper_01-ok")
-
-        with self.assertRaises(McpToolError) as empty_ctx:
-            _validate_paper_id("", cfg)
-        self.assertEqual(empty_ctx.exception.code, "invalid_paper_id")
-
-        with self.assertRaises(McpToolError) as long_ctx:
-            _validate_paper_id("paper-id-too-long", cfg)
-        self.assertEqual(long_ctx.exception.code, "paper_id_too_long")
-
-        with self.assertRaises(McpToolError) as format_ctx:
-            _validate_paper_id("paper:id", cfg)
-        self.assertEqual(format_ctx.exception.code, "invalid_paper_id_format")
-
-    def test_truncate_behaviors(self) -> None:
-        self.assertEqual(_truncate("abcdef", None), "abcdef")
-        self.assertEqual(_truncate("abcdef", 0), "abcdef")
-        self.assertEqual(_truncate("abc", 10), "abc")
-        self.assertEqual(_truncate("abcdef", 3), "abc\n[truncated: 3 more chars]")
-
-    def test_load_static_text_prefers_local_export_dir(self) -> None:
-        target = self.static_dir / "summary" / "paper.json"
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text("hello world", encoding="utf-8")
-
-        self.assertEqual(_load_static_text("summary/paper.json"), "hello world")
-
-    def test_get_http_client_reuses_shared_client(self) -> None:
-        cfg = McpSnapshotConfig(
-            snapshot_db=self.db_path,
-            static_base_url="https://example.com/static",
-            static_export_dir=None,
-            limits=ApiLimits(),
-            origin_allowlist=["*"],
-        )
-
-        client_a = cfg.get_http_client()
-        client_b = cfg.get_http_client()
-
-        self.assertIs(client_a, client_b)
-
-    def test_fetch_and_load_static_text_over_http(self) -> None:
-        def handler(request: httpx.Request) -> httpx.Response:
-            self.assertEqual(str(request.url), "https://example.com/static/summary/paper.json")
-            return httpx.Response(200, text="remote payload")
-
-        cfg = McpSnapshotConfig(
-            snapshot_db=self.db_path,
-            static_base_url="https://example.com/static",
-            static_export_dir=None,
-            limits=ApiLimits(),
-            origin_allowlist=["*"],
-        )
-        object.__setattr__(cfg, "_http_client", httpx.Client(transport=httpx.MockTransport(handler)))
-        configure(cfg)
-
-        self.assertEqual(_fetch_static_text("summary/paper.json"), "remote payload")
-        self.assertEqual(_load_static_text("summary/paper.json"), "remote payload")
-
-    def test_load_static_text_wraps_http_status_error(self) -> None:
-        def handler(_: httpx.Request) -> httpx.Response:
-            return httpx.Response(404, text="missing")
-
-        cfg = McpSnapshotConfig(
-            snapshot_db=self.db_path,
-            static_base_url="https://example.com/static",
-            static_export_dir=None,
-            limits=ApiLimits(),
-            origin_allowlist=["*"],
-        )
-        object.__setattr__(cfg, "_http_client", httpx.Client(transport=httpx.MockTransport(handler)))
-        configure(cfg)
-
-        with self.assertRaises(RuntimeError) as ctx:
-            _load_static_text("summary/missing.json")
-        self.assertEqual(str(ctx.exception), "asset_fetch_failed:404")
-
-    def test_load_static_text_wraps_request_error(self) -> None:
-        def handler(_: httpx.Request) -> httpx.Response:
-            raise httpx.ConnectError("boom")
-
-        cfg = McpSnapshotConfig(
-            snapshot_db=self.db_path,
-            static_base_url="https://example.com/static",
-            static_export_dir=None,
-            limits=ApiLimits(),
-            origin_allowlist=["*"],
-        )
-        object.__setattr__(cfg, "_http_client", httpx.Client(transport=httpx.MockTransport(handler)))
-        configure(cfg)
-
-        with self.assertRaises(RuntimeError) as ctx:
-            _load_static_text("summary/missing.json")
-        self.assertEqual(str(ctx.exception), "asset_fetch_failed:request_error")
-
-    def test_load_static_text_raises_when_unconfigured(self) -> None:
-        configure(
-            McpSnapshotConfig(
-                snapshot_db=self.db_path,
-                static_base_url="",
-                static_export_dir=None,
-                limits=ApiLimits(),
-                origin_allowlist=["*"],
-            )
-        )
+    def test_resolve_static_export_dir_uses_environment_override(self) -> None:
+        previous = os.environ.get("PAPER_DB_STATIC_EXPORT_DIR")
         try:
-            with self.assertRaises(RuntimeError) as ctx:
-                _load_static_text("summary/missing.json")
-            self.assertEqual(str(ctx.exception), "asset_fetch_failed:not_configured")
-        finally:
             configure(
                 McpSnapshotConfig(
                     snapshot_db=self.db_path,
                     static_base_url="",
-                    static_export_dir=self.static_dir,
+                    static_export_dir=None,
                     limits=ApiLimits(max_query_length=8),
                     origin_allowlist=["*"],
                     max_paper_id_length=12,
                 )
             )
-
-    def test_resolve_static_export_dir(self) -> None:
-        import os
-
-        previous = os.environ.get("PAPER_DB_STATIC_EXPORT_DIR")
-        try:
             os.environ.pop("PAPER_DB_STATIC_EXPORT_DIR", None)
             self.assertIsNone(resolve_static_export_dir())
 
-            temp_path = self.static_dir / "env-static"
-            temp_path.mkdir(exist_ok=True)
-            os.environ["PAPER_DB_STATIC_EXPORT_DIR"] = str(temp_path)
-            self.assertEqual(resolve_static_export_dir(), temp_path)
+            override = self.static_dir / "env-static"
+            override.mkdir(exist_ok=True)
+            os.environ["PAPER_DB_STATIC_EXPORT_DIR"] = str(override)
+            self.assertEqual(resolve_static_export_dir(), override)
         finally:
             if previous is None:
                 os.environ.pop("PAPER_DB_STATIC_EXPORT_DIR", None)
             else:
                 os.environ["PAPER_DB_STATIC_EXPORT_DIR"] = previous
+
+    def test_http_client_is_reused_for_the_same_config(self) -> None:
+        cfg = self._base_config()
+        client1 = cfg.get_http_client()
+        client2 = cfg.get_http_client()
+        self.assertIs(client1, client2)
+
+    def test_resource_metadata_reflects_database_state(self) -> None:
+        payload = json.loads(resource_metadata("p1"))
+        self.assertEqual(payload["paper_id"], "p1")
+        self.assertEqual(payload["title"], "Paper Title")
+        self.assertEqual(payload["venue"], "Test Venue")
+        self.assertEqual(payload["preferred_summary_template"], "deep_read")
+        self.assertEqual(payload["available_summary_templates"], ["deep_read"])
+        self.assertTrue(payload["has_bibtex"])
+
+    def test_resource_metadata_missing_paper_raises_public_error(self) -> None:
+        with self.assertRaises(McpToolError) as ctx:
+            resource_metadata("missing")
+        self.assertEqual(ctx.exception.code, "not_found")
+        self.assertIn("paper not found", str(ctx.exception))
+
+    def test_resource_summary_default_returns_local_summary_content(self) -> None:
+        summary_file = self.static_dir / "summary" / "p1.json"
+        summary_file.parent.mkdir(parents=True, exist_ok=True)
+        summary_file.write_text('{"summary": "ready"}', encoding="utf-8")
+
+        self.assertEqual(resource_summary_default("p1"), '{"summary": "ready"}')
+
+    def test_resource_summary_default_raises_public_error_when_static_asset_is_unavailable(self) -> None:
+        configure(
+            McpSnapshotConfig(
+                snapshot_db=self.db_path,
+                static_base_url="",
+                static_export_dir=None,
+                limits=ApiLimits(max_query_length=8),
+                origin_allowlist=["*"],
+                max_paper_id_length=12,
+            )
+        )
+        try:
+            with self.assertRaises(McpToolError) as ctx:
+                resource_summary_default("p1")
+            self.assertEqual(ctx.exception.code, "asset_fetch_failed")
+            self.assertIn("Failed to fetch summary asset", str(ctx.exception))
+        finally:
+            configure(self._base_config())
+
+    def test_resource_source_reports_missing_asset_cleanly(self) -> None:
+        with self.assertRaises(McpToolError) as ctx:
+            resource_source("p1")
+        self.assertEqual(ctx.exception.code, "asset_fetch_failed")
+        self.assertIn("Failed to fetch source asset", str(ctx.exception))
+
+    def test_resource_source_returns_markdown_when_local_asset_exists(self) -> None:
+        source_file = self.static_dir / "md" / "mdhash.md"
+        source_file.parent.mkdir(parents=True, exist_ok=True)
+        source_file.write_text("# Paper Title\n\nSource body", encoding="utf-8")
+
+        self.assertEqual(resource_source("p1"), "# Paper Title\n\nSource body")
+
+    def test_create_mcp_app_exposes_streamable_http_route(self) -> None:
+        app, lifespan = create_mcp_app(self._base_config())
+        self.assertTrue(callable(lifespan))
+        self.assertIn(
+            {
+                "type": "Route",
+                "path": "/",
+                "name": "StreamableHTTPASGIApp",
+                "methods": ["DELETE", "POST"],
+            },
+            self._route_signature(app),
+        )
+
+    def test_create_mcp_transport_app_exposes_sse_routes(self) -> None:
+        app, lifespan = create_mcp_transport_app(self._base_config(), transport="sse")
+        self.assertTrue(callable(lifespan))
+        signature = self._route_signature(app)
+        self.assertIn(
+            {
+                "type": "Route",
+                "path": "/",
+                "name": "sse_endpoint",
+                "methods": ["GET", "HEAD"],
+            },
+            signature,
+        )
+        self.assertIn(
+            {
+                "type": "Mount",
+                "path": "/messages",
+                "name": None,
+            },
+            signature,
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

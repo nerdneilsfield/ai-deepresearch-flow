@@ -1,24 +1,28 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
+import httpx
 from starlette.applications import Starlette
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
-from deepresearch_flow.paper.web.handlers.api import (
-    _apply_query,
-    _build_keyword_doc_ids,
-    _embed_query,
-    _ensure_under_roots,
-    _safe_read_text,
-    _paper_doc_id,
-    _paper_text_for_rerank,
+from deepresearch_flow.paper.config import (
+    DEFAULT_EXTRACT,
+    DEFAULT_RENDER,
+    EmbeddingConfig,
+    EmbeddingModelConfig,
+    EmbeddingProviderConfig,
+    PaperConfig,
+    RerankConfig,
+    RerankModelConfig,
+    RerankProviderConfig,
+    SearchConfig,
 )
-from deepresearch_flow.paper.web.query import Query, QueryTerm
+from deepresearch_flow.paper.vector_store import ChunkRow, INDEX_VERSION, open_store, save_index_meta, write_chunks
+from deepresearch_flow.paper.web.handlers.api import api_markdown, api_papers, api_papers_semantic, api_pdf, api_stats
 from deepresearch_flow.paper.web.static_assets import StaticAssetConfig
 
 
@@ -35,6 +39,7 @@ class _DummyIndex:
     by_month: dict[str, set[int]]
     by_year: dict[str, set[int]]
     stats: dict
+    id_by_hash: dict[str, int]
 
 
 def _build_index(tmp_path: Path) -> _DummyIndex:
@@ -120,6 +125,7 @@ def _build_index(tmp_path: Path) -> _DummyIndex:
         by_month={"03": {0}, "11": {1}, "01": {2}},
         by_year={"2024": {0}, "2023": {1}, "2022": {2}},
         stats={"total": 3},
+        id_by_hash={"hash-1": 0, "hash-2": 1, "hash-3": 2},
     )
 
 
@@ -134,9 +140,7 @@ def _asset_config() -> StaticAssetConfig:
     )
 
 
-def _build_client(index: _DummyIndex, *, static_mode: str = "dev", export_dir: Path | None = None) -> TestClient:
-    from deepresearch_flow.paper.web.handlers.api import api_markdown, api_papers, api_pdf, api_stats
-
+def _build_papers_client(tmp_path: Path, *, static_mode: str = "dev", export_dir: Path | None = None) -> TestClient:
     app = Starlette(
         routes=[
             Route("/api/papers", api_papers),
@@ -145,83 +149,120 @@ def _build_client(index: _DummyIndex, *, static_mode: str = "dev", export_dir: P
             Route("/api/dev/markdown/{source_hash}", api_markdown),
         ]
     )
-    app.state.index = index
+    app.state.index = _build_index(tmp_path)
     app.state.asset_config = _asset_config()
     app.state.static_mode = static_mode
     app.state.static_export_dir = export_dir
-    app.state.pdf_roots = [export_dir] if export_dir else [Path(index.pdf_path_by_hash["hash-1"]).parent]
+    app.state.pdf_roots = [export_dir] if export_dir else [Path(app.state.index.pdf_path_by_hash["hash-1"]).parent]
     return TestClient(app)
 
 
-def test_api_handler_helpers_apply_query_and_doc_ids(tmp_path: Path, monkeypatch) -> None:
-    index = _build_index(tmp_path)
-    paper = index.papers[0]
-
-    assert _paper_text_for_rerank(paper) == "Graph Networks\n<b>Attention</b> paper\nACL\nAlice"
-    assert _ensure_under_roots(index.pdf_path_by_hash["hash-1"], [tmp_path]) is True
-    assert _ensure_under_roots(index.pdf_path_by_hash["hash-1"], [tmp_path / "other"]) is False
-    assert _paper_doc_id(paper) is not None
-
-    doc_ids = _build_keyword_doc_ids(index, "graph", year=2024, venue="acl", limit=5)
-    assert len(doc_ids) == 1
-    assert _build_keyword_doc_ids(index, "graph", year=2023, venue="acl", limit=5) == []
-    limited_ids = _build_keyword_doc_ids(index, "", year=None, venue=None, limit=1)
-    assert len(limited_ids) == 1
-
-    monkeypatch.setattr(
-        "deepresearch_flow.paper.web.handlers.api.build_paper_key_candidates",
-        lambda _: (_ for _ in ()).throw(RuntimeError("boom")),
-    )
-    assert _paper_doc_id(paper) is None
-    monkeypatch.setattr("deepresearch_flow.paper.web.handlers.api.build_paper_key_candidates", lambda _: [])
-    assert _paper_doc_id(paper) is None
-
-    query = Query(
-        groups=[
-            [
-                QueryTerm(field="title", value="graph", negated=False),
-                QueryTerm(field="venue", value="workshop", negated=True),
+def _semantic_config() -> PaperConfig:
+    return PaperConfig(
+        extract=DEFAULT_EXTRACT,
+        render=DEFAULT_RENDER,
+        providers=[],
+        main_model=[],
+        embedding=EmbeddingConfig(
+            default_model="bge-m3",
+            default_provider="ollama",
+            dimensions=1024,
+            normalized=True,
+            batch_size=2,
+            chunk_max_tokens=512,
+            chunk_overlap_tokens=64,
+            providers=[
+                EmbeddingProviderConfig(
+                    name="ollama",
+                    type="openai_compatible",
+                    base_url="http://localhost:11434/v1",
+                    api_key="embedding-api-key",
+                    models=[EmbeddingModelConfig(model_name="bge-m3", dimensions=1024, max_context=8192)],
+                )
             ],
-            [
-                QueryTerm(field="tag", value="nlp", negated=False),
-                QueryTerm(field=None, value="language", negated=False),
+        ),
+        rerank=RerankConfig(
+            enabled=True,
+            default_model="bge-reranker-v2-m3",
+            default_provider="siliconflow",
+            top_n=10,
+            providers=[
+                RerankProviderConfig(
+                    name="siliconflow",
+                    type="openai_compatible",
+                    base_url="https://api.siliconflow.cn/v1",
+                    api_key="rerank-api-key",
+                    models=[
+                        RerankModelConfig(
+                            model_name="bge-reranker-v2-m3",
+                            max_context=2048,
+                            max_chunks_per_doc=64,
+                            instruction="Rank by relevance",
+                        )
+                    ],
+                )
             ],
-        ]
+        ),
+        search=SearchConfig(vector_dir="paper_vectors", vector_top_k=50, keyword_top_k=30, hybrid=True),
     )
-    assert _apply_query(index, query) == {0, 1}
-
-    range_query = Query(groups=[[QueryTerm(field="year", value="2023..2024", negated=False)]])
-    assert _apply_query(index, range_query) == {0, 1}
-    assert _apply_query(index, Query(groups=[[QueryTerm(field="tag", value="zzz", negated=False)]])) == set()
-    assert _apply_query(index, Query(groups=[[QueryTerm(field="author", value="alice", negated=False)]])) == {0}
-    assert _apply_query(index, Query(groups=[[QueryTerm(field="author", value="ali", negated=False)]])) == {0}
-    assert _apply_query(index, Query(groups=[[QueryTerm(field="month", value="03", negated=False)]])) == {0}
-    assert _apply_query(index, Query(groups=[[QueryTerm(field="month", value="3", negated=False)]])) == set()
-    assert _apply_query(index, Query(groups=[[QueryTerm(field="year", value="2024", negated=False)]])) == {0}
-    assert _apply_query(index, Query(groups=[[QueryTerm(field="year", value="202", negated=False)]])) == {0, 1, 2}
-    assert _apply_query(index, Query(groups=[[QueryTerm(field="other", value="x", negated=False)]])) == set()
-
-    latin1 = tmp_path / "latin1.txt"
-    latin1.write_bytes("caf\xe9".encode("latin-1"))
-    assert _safe_read_text(latin1) == "café"
 
 
-def test_embed_query_requires_embedding_config() -> None:
-    try:
-        asyncio.run(_embed_query("graph", None, object()))
-    except ValueError as exc:
-        assert str(exc) == "Semantic search embedding config is unavailable"
-    else:
-        raise AssertionError("expected ValueError")
+def _create_semantic_db(tmp_path: Path, *, dimensions: int = 1024) -> Path:
+    embed_dir = tmp_path / "embed_vectors"
+    embed_dir.mkdir()
+    db = open_store(embed_dir)
+    rows = [
+        ChunkRow(
+            id="hash-1__shared_title_0",
+            doc_id="hash-1",
+            source_path="paper-1.md",
+            template_tag="",
+            chunk_type="title",
+            chunk_index=0,
+            field_name="title",
+            lang="",
+            text="Attention Is All You Need",
+            content_hash="abc",
+            vector=[0.1] * dimensions,
+            title="Attention Is All You Need",
+            year=2017,
+            authors="Vaswani",
+            venue="NeurIPS",
+            tags="transformer",
+        ),
+    ]
+    write_chunks(db, rows, dimensions=dimensions)
+    save_index_meta(
+        embed_dir,
+        {
+            "model": "bge-m3",
+            "dimensions": 1024,
+            "normalized": True,
+            "provider": "test",
+            "index_version": INDEX_VERSION,
+        },
+    )
+    return embed_dir
 
 
-def test_api_stats_and_papers_routes(tmp_path: Path) -> None:
-    index = _build_index(tmp_path)
-    client = _build_client(index)
+def test_api_routes_return_expected_payloads(tmp_path: Path) -> None:
+    client = _build_papers_client(tmp_path)
 
     stats_response = client.get("/api/stats")
     assert stats_response.status_code == 200
     assert stats_response.json() == {"total": 3}
+
+    paged = client.get("/api/papers?page=1&page_size=2")
+    assert paged.status_code == 200
+    paged_data = paged.json()
+    assert paged_data["page"] == 1
+    assert paged_data["page_size"] == 2
+    assert paged_data["has_more"] is True
+    assert [item["title"] for item in paged_data["items"]] == ["Graph Networks", "Language Models"]
+
+    desc_sorted = client.get("/api/papers?page=1&page_size=1&sort_by=title&sort_dir=desc")
+    assert desc_sorted.status_code == 200
+    assert desc_sorted.json()["items"][0]["title"] == "Language Models"
 
     response = client.get("/api/papers?q=graph&fq=pdf:with&template=simple&sort_by=title&sort_dir=asc")
     assert response.status_code == 200
@@ -232,33 +273,20 @@ def test_api_stats_and_papers_routes(tmp_path: Path) -> None:
     assert data["items"][0]["title"] == "Graph Networks"
     assert data["items"][0]["pdf_url"] == "/api/pdf/hash-1"
     assert data["items"][0]["md_url"] == "/api/dev/markdown/hash-1"
+    assert data["stats"]["filtered"]["total"] == 1
 
     second_page = client.get("/api/papers?page=2&page_size=1")
     assert second_page.status_code == 200
     assert second_page.json()["stats"] is None
 
+    translated = client.get("/api/papers?template=deep_read&translated=with")
+    assert translated.status_code == 200
+    translated_data = translated.json()
+    assert translated_data["total"] == 1
+    assert translated_data["items"][0]["title"] == "Language Models"
+    assert translated_data["items"][0]["has_translation"] is True
+    assert translated_data["items"][0]["md_translated_url"] == {"zh": "/api/dev/markdown/hash-2?lang=zh"}
 
-def test_api_papers_filters_can_exclude_on_each_presence_dimension(tmp_path: Path) -> None:
-    index = _build_index(tmp_path)
-    index.papers.append(
-        {
-            "source_hash": "hash-4",
-            "paper_title": "No Source",
-            "_authors": ["Dana"],
-            "_venue": "ICML",
-            "_year": "2021",
-            "_month": "07",
-            "_tags": [],
-            "_template_tags": [],
-            "_template_tags_lc": [],
-            "_search_lc": "no source",
-            "_title_lc": "no source",
-            "_has_summary": False,
-        }
-    )
-    index.ordered_ids.append(3)
-
-    client = _build_client(index)
     assert client.get("/api/papers?q=no&pdf=with").json()["total"] == 0
     assert client.get("/api/papers?q=no&source=with").json()["total"] == 0
     assert client.get("/api/papers?q=language&summary=with").json()["total"] == 0
@@ -266,9 +294,14 @@ def test_api_papers_filters_can_exclude_on_each_presence_dimension(tmp_path: Pat
     assert client.get("/api/papers?q=language&template=simple").json()["total"] == 0
 
 
-def test_api_pdf_route_handles_missing_forbidden_and_success(tmp_path: Path) -> None:
-    index = _build_index(tmp_path)
-    client = _build_client(index, export_dir=tmp_path)
+def test_api_pdf_and_markdown_routes_handle_export_and_fallbacks(tmp_path: Path) -> None:
+    export_dir = tmp_path / "static"
+    (export_dir / "md").mkdir(parents=True)
+    (export_dir / "md_translate" / "zh").mkdir(parents=True)
+    (export_dir / "md" / "one.md").write_text("exported raw markdown", encoding="utf-8")
+    (export_dir / "md_translate" / "zh" / "two.md").write_text("exported translated markdown", encoding="utf-8")
+
+    client = _build_papers_client(tmp_path, export_dir=export_dir)
 
     missing = client.get("/api/pdf/missing")
     assert missing.status_code == 404
@@ -282,18 +315,7 @@ def test_api_pdf_route_handles_missing_forbidden_and_success(tmp_path: Path) -> 
     assert ok.status_code == 200
     assert ok.content == b"%PDF-1.7 one"
 
-
-def test_api_markdown_route_handles_modes_export_and_fallbacks(tmp_path: Path, monkeypatch) -> None:
-    index = _build_index(tmp_path)
-    export_dir = tmp_path / "static"
-    (export_dir / "md").mkdir(parents=True)
-    (export_dir / "md_translate" / "zh").mkdir(parents=True)
-    (export_dir / "md" / "one.md").write_text("exported raw markdown", encoding="utf-8")
-    (export_dir / "md_translate" / "zh" / "two.md").write_text("exported translated markdown", encoding="utf-8")
-
-    client = _build_client(index, export_dir=export_dir)
-
-    not_dev = _build_client(index, static_mode="prod")
+    not_dev = _build_papers_client(tmp_path, static_mode="prod")
     assert not_dev.get("/api/dev/markdown/hash-1").status_code == 404
 
     exported = client.get("/api/dev/markdown/hash-1")
@@ -306,10 +328,6 @@ def test_api_markdown_route_handles_modes_export_and_fallbacks(tmp_path: Path, m
 
     client.app.state.static_export_dir = None
     client.app.state.asset_config = None
-    monkeypatch.setattr(
-        "deepresearch_flow.paper.web.handlers.api.normalize_markdown_images",
-        lambda text: f"normalized::{text}",
-    )
 
     fallback = client.get("/api/dev/markdown/hash-1")
     assert fallback.status_code == 200
@@ -317,36 +335,53 @@ def test_api_markdown_route_handles_modes_export_and_fallbacks(tmp_path: Path, m
 
     translated_fallback = client.get("/api/dev/markdown/hash-2?lang=zh")
     assert translated_fallback.status_code == 200
-    assert translated_fallback.text == "normalized::translated markdown"
+    assert translated_fallback.text == "translated markdown"
 
-    missing = client.get("/api/dev/markdown/missing")
-    assert missing.status_code == 404
+    missing_md = client.get("/api/dev/markdown/missing")
+    assert missing_md.status_code == 404
 
 
-def test_api_papers_semantic_item_payload_uses_asset_urls(tmp_path: Path, monkeypatch) -> None:
-    from deepresearch_flow.paper.web.handlers.api import api_papers_semantic
-
-    index = _build_index(tmp_path)
+def test_api_semantic_routes_enforce_contracts_and_return_results(tmp_path: Path, monkeypatch) -> None:
+    embed_dir = _create_semantic_db(tmp_path, dimensions=1024)
     app = Starlette(routes=[Route("/api/papers/semantic", api_papers_semantic)])
-    app.state.search_access_token = None
-    app.state.embed_db = object()
-    app.state.index = index
+    app.state.embed_db = open_store(embed_dir)
+    app.state.search_access_token = "secret-token"
+    app.state.paper_config = _semantic_config()
+    app.state.index = _build_index(tmp_path)
     app.state.asset_config = _asset_config()
     app.state.static_mode = "dev"
-    app.state.paper_config = SimpleNamespace(
-        embedding=None,
-        rerank=SimpleNamespace(enabled=False),
-        search=SimpleNamespace(vector_top_k=20, keyword_top_k=10, hybrid=True),
-    )
     client = TestClient(app)
 
-    async def fake_embed_query(text, config, client_obj):  # noqa: ANN001, ARG001
-        return [0.1, 0.2]
+    response = client.get("/api/papers/semantic?q=attention&top_n=5")
+    assert response.status_code == 403
+
+    response = client.get(
+        "/api/papers/semantic?q=attention&top_n=5",
+        headers={"Authorization": "Bearer wrong-token"},
+    )
+    assert response.status_code == 403
+
+    async def boom_embed_query(text, config, client_obj):  # noqa: ANN001, ARG001
+        raise AssertionError("embedding should not run for probe requests")
+
+    monkeypatch.setattr("deepresearch_flow.paper.embedding.call_embedding", boom_embed_query)
+    probe = client.get("/api/papers/semantic?probe=1", headers={"Authorization": "Bearer secret-token"})
+    assert probe.status_code == 200
+    assert probe.json() == {"ok": True}
+
+    app.state.search_access_token = None
+    client = TestClient(app)
+    assert client.get("/api/papers/semantic").status_code == 400
+
+    async def fake_call_embedding(base_url, api_key, model, texts, *, dimensions=None, client=None):  # noqa: ANN001
+        return type("EmbeddingResult", (), {"vectors": [[0.1] * 1024]})()
+
+    monkeypatch.setattr("deepresearch_flow.paper.embedding.call_embedding", fake_call_embedding)
 
     async def fake_hybrid_search(**kwargs):  # noqa: ANN001
         return [
             SimpleNamespace(
-                doc_id=_paper_doc_id(index.papers[0]),
+                doc_id="hash-1",
                 score=0.9,
                 score_type="hybrid",
                 matched_chunk="graph",
@@ -357,55 +392,26 @@ def test_api_papers_semantic_item_payload_uses_asset_urls(tmp_path: Path, monkey
             )
         ]
 
-    monkeypatch.setattr("deepresearch_flow.paper.web.handlers.api._embed_query", fake_embed_query)
-    monkeypatch.setattr("deepresearch_flow.paper.search.hybrid_search", fake_hybrid_search)
-
-    response = client.get("/api/papers/semantic?q=graph&top_n=5")
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["total"] == 1
-    assert payload["items"][0]["source_hash"] == "hash-1"
-    assert payload["items"][0]["pdf_url"] == "/api/pdf/hash-1"
-
-
-def test_api_papers_semantic_returns_503_and_400_and_builds_where(tmp_path: Path, monkeypatch) -> None:
-    from deepresearch_flow.paper.web.handlers.api import api_papers_semantic
-
-    unavailable = Starlette(routes=[Route("/api/papers/semantic", api_papers_semantic)])
-    unavailable.state.search_access_token = None
-    unavailable.state.embed_db = None
-    unavailable_client = TestClient(unavailable)
-    response = unavailable_client.get("/api/papers/semantic?q=graph")
-    assert response.status_code == 503
-
-    app = Starlette(routes=[Route("/api/papers/semantic", api_papers_semantic)])
-    app.state.search_access_token = None
-    app.state.embed_db = object()
-    app.state.index = _build_index(tmp_path)
-    app.state.asset_config = _asset_config()
-    app.state.static_mode = "dev"
-    app.state.paper_config = SimpleNamespace(
-        embedding=None,
-        rerank=SimpleNamespace(enabled=False),
-        search=SimpleNamespace(vector_top_k=20, keyword_top_k=10, hybrid=True),
-    )
-    client = TestClient(app)
-
-    missing_query = client.get("/api/papers/semantic")
-    assert missing_query.status_code == 400
-
-    seen: dict[str, object] = {}
-
-    async def fake_embed_query(text, config, client_obj):  # noqa: ANN001, ARG001
-        return [0.1, 0.2]
-
-    async def fake_hybrid_search(**kwargs):  # noqa: ANN001
-        seen["where"] = kwargs["where"]
-        return []
-
-    monkeypatch.setattr("deepresearch_flow.paper.web.handlers.api._embed_query", fake_embed_query)
     monkeypatch.setattr("deepresearch_flow.paper.search.hybrid_search", fake_hybrid_search)
 
     ok = client.get("/api/papers/semantic?q=graph&year=2024&venue=acl")
     assert ok.status_code == 200
-    assert seen["where"] == 'year = 2024 AND venue = "acl"'
+    payload = ok.json()
+    assert payload["total"] == 1
+    assert payload["items"][0]["doc_id"] == "hash-1"
+    assert payload["items"][0]["score_type"] == "hybrid"
+
+    limited = client.get("/api/papers/semantic?q=attention&top_n=1", headers={"Authorization": "Bearer secret-token"})
+    assert limited.status_code == 200
+    assert limited.json()["total"] == 1
+
+    invalid = client.get("/api/papers/semantic?q=attention&venue=NeurIPS' OR 1=1")
+    assert invalid.status_code == 400
+
+    async def failing_call_embedding(base_url, api_key, model, texts, *, dimensions=None, client=None):  # noqa: ANN001
+        raise httpx.ReadTimeout("timeout")
+
+    monkeypatch.setattr("deepresearch_flow.paper.embedding.call_embedding", failing_call_embedding)
+    failed = client.get("/api/papers/semantic?q=attention&top_n=5")
+    assert failed.status_code == 502
+    assert failed.json()["error"] == "Semantic search query embedding failed"

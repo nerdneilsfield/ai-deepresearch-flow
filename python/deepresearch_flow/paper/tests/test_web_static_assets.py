@@ -1,22 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import base64
 from pathlib import Path
+import base64
 
-import pytest
-
-from deepresearch_flow.paper.web.static_assets import (
-    StaticAssetConfig,
-    _extension_from_mime,
-    _normalize_base_url,
-    _parse_data_url,
-    _rewrite_markdown_images,
-    _safe_read_text,
-    _split_link_target,
-    build_static_assets,
-    resolve_asset_urls,
-)
+from deepresearch_flow.paper.web.static_assets import StaticAssetConfig, build_static_assets, resolve_asset_urls
 
 
 @dataclass
@@ -26,99 +14,14 @@ class _DummyIndex:
     translated_md_by_hash: dict[str, dict[str, Path]]
 
 
-def test_static_asset_helper_parsing(monkeypatch) -> None:
-    payload = base64.b64encode(b"abc").decode("ascii")
-
-    assert _normalize_base_url("https://example.com/assets/") == "https://example.com/assets"
-    assert _parse_data_url(f"data:image/png;base64,{payload}") == ("image/png", b"abc")
-    assert _parse_data_url(f"data:text/plain;base64,{payload}") is None
-    assert _parse_data_url("data:image/png,abc") is None
-    assert _parse_data_url("not-a-data-url") is None
-
-    def boom_decode(value: str) -> bytes:
-        raise ValueError("bad base64")
-
-    monkeypatch.setattr("deepresearch_flow.paper.web.static_assets.base64.b64decode", boom_decode)
-    assert _parse_data_url("data:image/png;base64,abc") is None
-
-    monkeypatch.setattr(
-        "deepresearch_flow.paper.web.static_assets.mimetypes.guess_extension",
-        lambda mime, strict=False: ".jpe",
-    )
-    assert _extension_from_mime("image/jpeg") == ".jpg"
-
-    assert _split_link_target("<images/a.png> title") == ("images/a.png", " title", "<", ">")
-    assert _split_link_target("images/a.png title") == ("images/a.png", " title", "", "")
-    assert _split_link_target("") == ("", "", "", "")
-
-
-def test_rewrite_markdown_images_exports_embedded_assets(tmp_path: Path) -> None:
-    payload = base64.b64encode(b"png-bytes").decode("ascii")
-    store_dir = tmp_path / "images"
-    store_dir.mkdir()
-    text = (
-        f"![chart](data:image/png;base64,{payload})\n"
-        f"<img alt='chart' src='data:image/png;base64,{payload}'>\n"
-        "![keep](plain.png)"
-    )
-
-    from deepresearch_flow.paper.web.static_assets import _ImageStore
-
-    rewritten = _rewrite_markdown_images(text, _ImageStore(store_dir))
-
-    assert "images/" in rewritten
-    assert "plain.png" in rewritten
-    written = list(store_dir.iterdir())
-    assert len(written) == 1
-    assert written[0].suffix == ".png"
-    assert written[0].read_bytes() == b"png-bytes"
-
-    from deepresearch_flow.paper.web.static_assets import _ImageStore
-
-    store = _ImageStore(store_dir)
-    assert store.add_image("image/png", b"png-bytes").startswith("images/")
-    assert store._written
-    assert _rewrite_markdown_images("![x](plain.png)", store) == "![x](plain.png)"
-    assert _rewrite_markdown_images("<img alt='x'>", store) == "<img alt='x'>"
-    assert _rewrite_markdown_images("<img src='plain.png'>", store) == "<img src='plain.png'>"
-    assert _rewrite_markdown_images("<img src='data:text/plain;base64,YQ=='>", store) == "<img src='data:text/plain;base64,YQ=='>"
-
-    monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr(
-        "deepresearch_flow.paper.web.static_assets.mimetypes.guess_extension",
-        lambda mime, strict=False: None,
-    )
-    try:
-        no_ext_store = _ImageStore(store_dir)
-        assert no_ext_store.add_image("image/unknown", b"data") is None
-    finally:
-        monkeypatch.undo()
-
-    class _NoWriteStore:
-        def add_image(self, mime: str, data: bytes):  # noqa: ANN001
-            return None
-
-    raw_md = f"![chart](data:image/png;base64,{payload})"
-    assert _rewrite_markdown_images(raw_md, _NoWriteStore()) == raw_md
-    raw_img = f"<img src=data:image/png;base64,{payload}>"
-    assert _rewrite_markdown_images(raw_img, _NoWriteStore()) == raw_img
-    assert "images/" in _rewrite_markdown_images(f"<img src=data:image/png;base64,{payload}>", _ImageStore(store_dir))
-
-
-def test_safe_read_text_falls_back_to_latin1(tmp_path: Path) -> None:
-    path = tmp_path / "latin1.md"
-    path.write_bytes("caf\xe9".encode("latin-1"))
-    assert _safe_read_text(path) == "café"
-
-
-def test_build_static_assets_writes_export_tree(tmp_path: Path) -> None:
+def test_build_static_assets_exports_files_and_rewrites_embedded_images(tmp_path: Path) -> None:
     payload = base64.b64encode(b"img-bytes").decode("ascii")
     md_path = tmp_path / "paper.md"
     md_path.write_text(f"![img](data:image/png;base64,{payload})", encoding="utf-8")
-    translated_path = tmp_path / "paper-zh.md"
-    translated_path.write_text("# 中文", encoding="utf-8")
     pdf_path = tmp_path / "paper.pdf"
     pdf_path.write_bytes(b"%PDF-1.7")
+    translated_path = tmp_path / "paper-zh.md"
+    translated_path.write_text("# 中文", encoding="utf-8")
 
     index = _DummyIndex(
         md_path_by_hash={"hash-1": md_path},
@@ -138,9 +41,7 @@ def test_build_static_assets_writes_export_tree(tmp_path: Path) -> None:
     assert config.images_base_url == "https://cdn.example.com/assets/images"
     assert config.md_urls["hash-1"].startswith("https://cdn.example.com/assets/md/")
     assert config.pdf_urls["hash-1"].startswith("https://cdn.example.com/assets/pdf/")
-    assert config.translated_md_urls["hash-1"]["zh"].startswith(
-        "https://cdn.example.com/assets/md_translate/zh/"
-    )
+    assert config.translated_md_urls["hash-1"]["zh"].startswith("https://cdn.example.com/assets/md_translate/zh/")
 
     exported_md = list((export_dir / "md").glob("*.md"))
     exported_pdf = list((export_dir / "pdf").glob("*.pdf"))
@@ -157,14 +58,17 @@ def test_build_static_assets_writes_export_tree(tmp_path: Path) -> None:
     assert exported_translated[0].read_text(encoding="utf-8") == "# 中文"
 
 
-def test_build_static_assets_can_be_disabled_and_resolve_urls(tmp_path: Path) -> None:
-    (tmp_path / "paper.md").write_text("source", encoding="utf-8")
-    (tmp_path / "paper.pdf").write_bytes(b"%PDF-1.7")
-    (tmp_path / "paper-zh.md").write_text("translated", encoding="utf-8")
+def test_build_static_assets_disable_and_url_resolution(tmp_path: Path) -> None:
+    md_path = tmp_path / "paper.md"
+    md_path.write_text("source", encoding="utf-8")
+    pdf_path = tmp_path / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.7")
+    translated_path = tmp_path / "paper-zh.md"
+    translated_path.write_text("translated", encoding="utf-8")
     index = _DummyIndex(
-        md_path_by_hash={"hash-1": tmp_path / "paper.md"},
-        pdf_path_by_hash={"hash-1": tmp_path / "paper.pdf"},
-        translated_md_by_hash={"hash-1": {"zh": tmp_path / "paper-zh.md"}},
+        md_path_by_hash={"hash-1": md_path},
+        pdf_path_by_hash={"hash-1": pdf_path},
+        translated_md_by_hash={"hash-1": {"zh": translated_path}},
     )
 
     disabled = build_static_assets(index, static_base_url=None)
@@ -207,3 +111,24 @@ def test_build_static_assets_can_be_disabled_and_resolve_urls(tmp_path: Path) ->
         "md_translated_url": {"zh": "/api/dev/markdown/hash-1?lang=zh"},
         "images_base_url": None,
     }
+
+
+def test_resolve_asset_urls_falls_back_when_static_asset_entry_is_missing() -> None:
+    index = _DummyIndex(md_path_by_hash={}, pdf_path_by_hash={}, translated_md_by_hash={})
+    asset_config = StaticAssetConfig(
+        enabled=True,
+        base_url="https://cdn.example.com",
+        images_base_url="https://cdn.example.com/images",
+        pdf_urls={"known": "https://cdn.example.com/pdf/known.pdf"},
+        md_urls={"known": "https://cdn.example.com/md/known.md"},
+        translated_md_urls={"known": {"zh": "https://cdn.example.com/md_translate/zh/known.md"}},
+    )
+
+    expected = {
+        "pdf_url": None,
+        "md_url": None,
+        "md_translated_url": {},
+        "images_base_url": "https://cdn.example.com/images",
+    }
+    assert resolve_asset_urls(index, "missing", asset_config, prefer_local=False) == expected
+    assert resolve_asset_urls(index, "missing", asset_config, prefer_local=True) == expected

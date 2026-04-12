@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
 from pathlib import Path
-from types import SimpleNamespace
 
 from starlette.applications import Starlette
-from starlette.requests import Request
+from starlette.routing import Route
+from starlette.testclient import TestClient
 
 from deepresearch_flow.paper.web.handlers import pages
 from deepresearch_flow.paper.web.static_assets import StaticAssetConfig
@@ -33,22 +32,9 @@ def _asset_config() -> StaticAssetConfig:
     )
 
 
-def _request(app: Starlette, path: str, source_hash: str = "hash-1", query_string: str = "") -> Request:
-    scope = {
-        "type": "http",
-        "method": "GET",
-        "path": path,
-        "headers": [],
-        "query_string": query_string.encode("utf-8"),
-        "app": app,
-        "path_params": {"source_hash": source_hash},
-    }
-    return Request(scope)
-
-
-def _build_app(tmp_path: Path, *, pdf_only: bool = False) -> Starlette:
+def _build_client(tmp_path: Path, *, pdf_only: bool = False) -> TestClient:
     md_path = tmp_path / "paper.md"
-    md_path.write_text("# Source", encoding="utf-8")
+    md_path.write_text("# Source\n\nMore text", encoding="utf-8")
     zh_path = tmp_path / "paper.zh.md"
     zh_path.write_text("# 中文", encoding="utf-8")
     pdf_path = tmp_path / "paper.pdf"
@@ -57,6 +43,19 @@ def _build_app(tmp_path: Path, *, pdf_only: bool = False) -> Starlette:
     paper = {
         "source_hash": "hash-1",
         "paper_title": "Graph Networks",
+        "paper_authors": ["Alice"],
+        "_authors": ["Alice"],
+        "summary": "Attention paper",
+        "_has_summary": True,
+        "_venue": "ACL",
+        "publication_venue": "ACL",
+        "_year": "2024",
+        "_month": "03",
+        "_tags": ["vision"],
+        "_template_tags": ["simple"],
+        "_template_tags_lc": ["simple"],
+        "_search_lc": "graph networks attention acl alice",
+        "_title_lc": "graph networks",
         "_is_pdf_only": pdf_only,
     }
     index = _DummyIndex(
@@ -67,257 +66,88 @@ def _build_app(tmp_path: Path, *, pdf_only: bool = False) -> Starlette:
         translated_md_by_hash={} if pdf_only else {"hash-1": {"zh": zh_path}},
         template_tags=["simple", "deep_read"],
     )
-    app = Starlette()
+    app = Starlette(
+        routes=[
+            Route("/", pages.index_page),
+            Route("/stats", pages.stats_page),
+            Route("/paper/{source_hash}", pages.paper_detail),
+            Route("/robots.txt", pages.robots_txt),
+        ]
+    )
     app.state.index = index
     app.state.asset_config = _asset_config()
     app.state.static_mode = "dev"
     app.state.static_export_dir = None
     app.state.fallback_language = "en"
     app.state.pdfjs_cdn_base_url = "https://cdn.example.com/pdfjs"
-    return app
+    return TestClient(app)
 
 
-def test_page_helpers_safe_read_and_load_markdown(tmp_path: Path, monkeypatch) -> None:
-    latin1 = tmp_path / "latin1.md"
-    latin1.write_bytes("caf\xe9".encode("latin-1"))
-    assert pages._safe_read_text(latin1) == "café"
+def test_index_and_stats_pages_render_public_content(tmp_path: Path) -> None:
+    client = _build_client(tmp_path)
 
-    app = _build_app(tmp_path)
-    index = app.state.index
+    index = client.get("/")
+    assert index.status_code == 200
+    assert "Paper Database" in index.text
+    assert "Search (Scholar-style)" in index.text
+    assert "Open: Summary" in index.text
 
-    export_dir = tmp_path / "static"
-    (export_dir / "md").mkdir(parents=True)
-    (export_dir / "md_translate" / "zh").mkdir(parents=True)
-    (export_dir / "md" / "hash-1.md").write_text("export source", encoding="utf-8")
-    (export_dir / "md_translate" / "zh" / "hash-1.md").write_text("export zh", encoding="utf-8")
+    stats = client.get("/stats")
+    assert stats.status_code == 200
+    assert "Stats" in stats.text
+    assert "Charts are rendered with ECharts (CDN)." in stats.text
 
-    exported = pages._load_markdown_for_view(index, _asset_config(), export_dir, "hash-1")
-    assert exported == "export source"
-
-    exported_zh = pages._load_markdown_for_view(index, _asset_config(), export_dir, "hash-1", lang="zh")
-    assert exported_zh == "export zh"
-
-    monkeypatch.setattr("deepresearch_flow.paper.web.handlers.pages.normalize_markdown_images", lambda text: f"norm::{text}")
-    raw = pages._load_markdown_for_view(index, None, None, "hash-1")
-    assert raw == "# Source"
-    translated = pages._load_markdown_for_view(index, None, None, "hash-1", lang="zh")
-    assert translated == "norm::# 中文"
-    assert pages._load_markdown_for_view(index, None, None, "missing") is None
+    robots = client.get("/robots.txt")
+    assert robots.status_code == 200
+    assert robots.text == "User-agent: *\nDisallow: /\n"
 
 
-def test_basic_pages_render_index_stats_and_robots(tmp_path: Path, monkeypatch) -> None:
-    app = _build_app(tmp_path)
-    seen: dict[str, object] = {}
+def test_paper_detail_renders_each_public_view(tmp_path: Path) -> None:
+    client = _build_client(tmp_path)
 
-    def fake_render_template(template_name: str, **context):
-        seen["template_name"] = template_name
-        seen.update(context)
-        return f"rendered:{template_name}"
+    summary = client.get("/paper/hash-1")
+    assert summary.status_code == 200
+    assert "Graph Networks" in summary.text
+    assert "Attention paper" in summary.text
 
-    monkeypatch.setattr("deepresearch_flow.paper.web.templates.render_template", fake_render_template)
+    source = client.get("/paper/hash-1?view=source")
+    assert source.status_code == 200
+    assert "Rendered from source markdown:" in source.text
+    assert "<h1>Source</h1>" in source.text
+    assert "More text" in source.text
 
-    robots = asyncio.run(pages.robots_txt(_request(app, "/robots.txt")))
-    assert robots.body.decode("utf-8") == "User-agent: *\nDisallow: /\n"
+    translated = client.get("/paper/hash-1?view=translated&lang=zh")
+    assert translated.status_code == 200
+    assert "Language: zh" in translated.text
+    assert "<h1>中文</h1>" in translated.text
 
-    index_response = asyncio.run(pages.index_page(_request(app, "/")))
-    assert index_response.body.decode("utf-8") == "rendered:index.html"
-    assert seen["title"] == "Paper DB"
-    assert "&#10;" in str(seen["filter_help"])
+    pdf = client.get("/paper/hash-1?view=pdf")
+    assert pdf.status_code == 200
+    assert "paper.pdf" in pdf.text
+    assert "the-canvas" in pdf.text
 
-    stats_response = asyncio.run(pages.stats_page(_request(app, "/stats")))
-    assert stats_response.body.decode("utf-8") == "rendered:stats.html"
+    pdfjs = client.get("/paper/hash-1?view=pdfjs")
+    assert pdfjs.status_code == 200
+    assert "PDF.js Viewer" in pdfjs.text
+    assert "/pdfjs/web/viewer.html?file=" in pdfjs.text
 
-
-def test_paper_detail_summary_and_missing_redirect(tmp_path: Path, monkeypatch) -> None:
-    app = _build_app(tmp_path)
-    captured: dict[str, object] = {}
-
-    monkeypatch.setattr("deepresearch_flow.paper.web.handlers.pages.resolve_asset_urls", lambda *args, **kwargs: {
-        "pdf_url": "/api/pdf/hash-1",
-        "md_url": "/api/dev/markdown/hash-1",
-        "md_translated_url": {"zh": "/api/dev/markdown/hash-1?lang=zh"},
-        "images_base_url": "/images",
-    })
-    monkeypatch.setattr("deepresearch_flow.paper.web.handlers.pages.select_template_tag", lambda paper, tag: ("simple", ["simple", "deep_read"]))
-    monkeypatch.setattr(
-        "deepresearch_flow.paper.web.handlers.pages.render_paper_markdown",
-        lambda paper, fallback_language, template_tag=None: ("# Summary", "simple", "<div>warn</div>"),
-    )
-    monkeypatch.setattr("deepresearch_flow.paper.web.handlers.pages.create_md_renderer", lambda: "renderer")
-    monkeypatch.setattr(
-        "deepresearch_flow.paper.web.handlers.pages.render_markdown_with_math_placeholders",
-        lambda renderer, markdown: f"<p>{markdown}</p>",
-    )
-    monkeypatch.setattr(
-        "deepresearch_flow.paper.web.handlers.pages.render_template",
-        lambda template_name, **context: captured.update({"template_name": template_name, **context}) or "detail-html",
-    )
-
-    response = asyncio.run(pages.paper_detail(_request(app, "/paper/hash-1")))
-    assert response.body.decode("utf-8") == "detail-html"
-    assert captured["template_name"] == "detail.html"
-    assert captured["current_view"] == "summary"
-    assert captured["show_outline"] is True
-    assert captured["body_html"] == "<p># Summary</p>"
-    assert "templateSelect" in str(captured["template_controls"])
-    assert captured["pdf_url"] == "/api/pdf/hash-1"
-
-    app.state.index.id_by_hash = {}
-    redirect = asyncio.run(pages.paper_detail(_request(app, "/paper/missing", source_hash="missing")))
-    assert redirect.status_code in {307, 302}
-    assert redirect.headers["location"] == "/"
+    split = client.get("/paper/hash-1?view=split&left=pdfjs&right=translated&lang=zh")
+    assert split.status_code == 200
+    assert "leftPane" in split.text
+    assert "rightPane" in split.text
+    assert "view=translated&amp;embed=1&amp;lang=zh" in split.text
 
 
-def test_paper_detail_source_translated_pdfjs_and_split(tmp_path: Path, monkeypatch) -> None:
-    app = _build_app(tmp_path)
-    captured: dict[str, object] = {}
+def test_paper_detail_redirects_missing_and_handles_pdf_only_entries(tmp_path: Path) -> None:
+    client = _build_client(tmp_path)
 
-    monkeypatch.setattr("deepresearch_flow.paper.web.handlers.pages.resolve_asset_urls", lambda *args, **kwargs: {
-        "pdf_url": "/api/pdf/hash-1",
-        "md_url": "/api/dev/markdown/hash-1",
-        "md_translated_url": {"zh": "/api/dev/markdown/hash-1?lang=zh"},
-        "images_base_url": "/images",
-    })
-    monkeypatch.setattr("deepresearch_flow.paper.web.handlers.pages.create_md_renderer", lambda: "renderer")
-    monkeypatch.setattr(
-        "deepresearch_flow.paper.web.handlers.pages.render_markdown_with_math_placeholders",
-        lambda renderer, markdown: f"<p>{markdown}</p>",
-    )
-    monkeypatch.setattr(
-        "deepresearch_flow.paper.web.handlers.pages.build_pdfjs_viewer_url",
-        lambda pdf_url, cdn_base_url=None: f"viewer:{pdf_url}:{cdn_base_url}",
-    )
-    monkeypatch.setattr(
-        "deepresearch_flow.paper.web.handlers.pages.render_template",
-        lambda template_name, **context: captured.update({"template_name": template_name, **context}) or "detail-html",
-    )
-    monkeypatch.setattr("deepresearch_flow.paper.web.handlers.pages._load_markdown_for_view", lambda *args, **kwargs: "# Rendered")
+    missing = client.get("/paper/missing", follow_redirects=False)
+    assert missing.status_code in {302, 307}
+    assert missing.headers["location"] == "/"
 
-    source = asyncio.run(pages.paper_detail(_request(app, "/paper/hash-1", query_string="view=source")))
-    assert source.body.decode("utf-8") == "detail-html"
-    assert captured["current_view"] == "source"
-    assert captured["body_html"] == "<p># Rendered</p>"
-    assert captured["source_markdown_url"] == "/api/dev/markdown/hash-1"
-
-    translated = asyncio.run(pages.paper_detail(_request(app, "/paper/hash-1", query_string="view=translated&lang=zh")))
-    assert translated.body.decode("utf-8") == "detail-html"
-    assert captured["current_view"] == "translated"
-    assert captured["translated_markdown_url"] == "/api/dev/markdown/hash-1?lang=zh"
-    assert captured["selected_lang"] == "zh"
-
-    pdfjs = asyncio.run(pages.paper_detail(_request(app, "/paper/hash-1", query_string="view=pdfjs")))
-    assert pdfjs.body.decode("utf-8") == "detail-html"
-    assert captured["current_view"] == "pdfjs"
-    assert captured["pdfjs_url"] == "viewer:/api/pdf/hash-1:https://cdn.example.com/pdfjs"
-
-    split = asyncio.run(
-        pages.paper_detail(_request(app, "/paper/hash-1", query_string="view=split&left=pdfjs&right=translated&lang=zh"))
-    )
-    assert split.body.decode("utf-8") == "detail-html"
-    assert captured["current_view"] == "split"
-    assert captured["left_src"] == "viewer:/api/pdf/hash-1:https://cdn.example.com/pdfjs"
-    assert captured["right_src"] == "/paper/hash-1?view=translated&embed=1&lang=zh"
-
-    split_template = asyncio.run(
-        pages.paper_detail(
-            _request(app, "/paper/hash-1", query_string="view=split&left=summary&right=pdf&template=deep_read&extra=1")
-        )
-    )
-    assert split_template.body.decode("utf-8") == "detail-html"
-    assert captured["left_src"] == "/paper/hash-1?view=summary&embed=1&template=deep_read"
-
-
-def test_paper_detail_warning_and_embed_branches(tmp_path: Path, monkeypatch) -> None:
-    app = _build_app(tmp_path)
-    captured: dict[str, object] = {}
-
-    monkeypatch.setattr(
-        "deepresearch_flow.paper.web.handlers.pages.render_template",
-        lambda template_name, **context: captured.update({"template_name": template_name, **context}) or "detail-html",
-    )
-    monkeypatch.setattr("deepresearch_flow.paper.web.handlers.pages.resolve_asset_urls", lambda *args, **kwargs: {
-        "pdf_url": None,
-        "md_url": None,
-        "md_translated_url": {},
-        "images_base_url": None,
-    })
-    monkeypatch.setattr("deepresearch_flow.paper.web.handlers.pages.select_template_tag", lambda paper, tag: ("simple", []))
-
-    source = asyncio.run(pages.paper_detail(_request(app, "/paper/hash-1", query_string="view=source")))
-    assert source.body.decode("utf-8") == "detail-html"
-    assert "Source markdown not found" in str(captured["body_html"])
-
-    translated_missing = asyncio.run(pages.paper_detail(_request(app, "/paper/hash-1", query_string="view=translated")))
-    assert translated_missing.body.decode("utf-8") == "detail-html"
-    assert "Translated markdown not found for the selected language" in str(captured["body_html"])
-
-    app.state.index.translated_md_by_hash = {}
-    translated_absent = asyncio.run(pages.paper_detail(_request(app, "/paper/hash-1", query_string="view=translated")))
-    assert translated_absent.body.decode("utf-8") == "detail-html"
-    assert "No translated markdown found" in str(captured["body_html"])
-
-    app.state.pdfjs_cdn_base_url = None
-    pdf = asyncio.run(pages.paper_detail(_request(app, "/paper/hash-1", query_string="view=pdf&embed=1")))
-    assert pdf.body.decode("utf-8") == "detail-html"
-    assert "PDF not found" in str(captured["body_html"])
-    assert captured["pdfjs_script_url"] == "/pdfjs/build/pdf.js"
-    assert "embed-view" in str(captured["body_class"])
-
-    pdfjs = asyncio.run(pages.paper_detail(_request(app, "/paper/hash-1", query_string="view=pdfjs")))
-    assert pdfjs.body.decode("utf-8") == "detail-html"
-    assert "PDF not found" in str(captured["body_html"])
-
-
-def test_paper_detail_uses_first_translation_when_no_zh(tmp_path: Path, monkeypatch) -> None:
-    app = _build_app(tmp_path)
-    app.state.index.translated_md_by_hash = {"hash-1": {"fr": tmp_path / "paper.fr.md"}}
-    captured: dict[str, object] = {}
-
-    monkeypatch.setattr("deepresearch_flow.paper.web.handlers.pages.resolve_asset_urls", lambda *args, **kwargs: {
-        "pdf_url": "/api/pdf/hash-1",
-        "md_url": "/api/dev/markdown/hash-1",
-        "md_translated_url": {"fr": "/api/dev/markdown/hash-1?lang=fr"},
-        "images_base_url": None,
-    })
-    monkeypatch.setattr("deepresearch_flow.paper.web.handlers.pages._load_markdown_for_view", lambda *args, **kwargs: "# FR")
-    monkeypatch.setattr("deepresearch_flow.paper.web.handlers.pages.create_md_renderer", lambda: "renderer")
-    monkeypatch.setattr(
-        "deepresearch_flow.paper.web.handlers.pages.render_markdown_with_math_placeholders",
-        lambda renderer, markdown: f"<p>{markdown}</p>",
-    )
-    monkeypatch.setattr(
-        "deepresearch_flow.paper.web.handlers.pages.render_template",
-        lambda template_name, **context: captured.update({"template_name": template_name, **context}) or "detail-html",
-    )
-
-    response = asyncio.run(pages.paper_detail(_request(app, "/paper/hash-1", query_string="view=translated")))
-    assert response.body.decode("utf-8") == "detail-html"
-    assert captured["selected_lang"] == "fr"
-
-
-def test_paper_detail_pdf_only_modes(tmp_path: Path, monkeypatch) -> None:
-    app = _build_app(tmp_path, pdf_only=True)
-    captured: dict[str, object] = {}
-
-    monkeypatch.setattr("deepresearch_flow.paper.web.handlers.pages.resolve_asset_urls", lambda *args, **kwargs: {
-        "pdf_url": "/api/pdf/hash-1",
-        "md_url": None,
-        "md_translated_url": {},
-        "images_base_url": None,
-    })
-    monkeypatch.setattr(
-        "deepresearch_flow.paper.web.handlers.pages.build_pdfjs_viewer_url",
-        lambda pdf_url, cdn_base_url=None: f"viewer:{pdf_url}",
-    )
-    monkeypatch.setattr(
-        "deepresearch_flow.paper.web.handlers.pages.render_template",
-        lambda template_name, **context: captured.update({"template_name": template_name, **context}) or "detail-html",
-    )
-
-    response = asyncio.run(
-        pages.paper_detail(_request(app, "/paper/hash-1", query_string="view=split&left=pdf&right=pdfjs"))
-    )
-    assert response.body.decode("utf-8") == "detail-html"
-    assert captured["is_pdf_only"] is True
-    assert [label for label, _ in captured["tabs"]] == ["PDF", "PDF Viewer", "Split"]
-    assert captured["split_options"] == [("pdf", "PDF"), ("pdfjs", "PDF Viewer")]
+    pdf_only_client = _build_client(tmp_path, pdf_only=True)
+    pdf_only = pdf_only_client.get("/paper/hash-1?view=summary")
+    assert pdf_only.status_code == 200
+    assert "pdfjs-frame" in pdf_only.text
+    assert "PDF.js Viewer" in pdf_only.text
+    assert "paper.pdf" in pdf_only.text

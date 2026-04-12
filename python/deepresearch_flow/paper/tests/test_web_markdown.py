@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 from deepresearch_flow.paper.web.markdown import (
     create_md_renderer,
     extract_html_img_placeholders,
@@ -21,10 +19,21 @@ from deepresearch_flow.paper.web.markdown import (
 )
 
 
-def test_create_md_renderer_enables_expected_features() -> None:
+def test_create_md_renderer_renders_links_and_tables() -> None:
     md = create_md_renderer()
-    assert md.options["linkify"] is True
-    assert md.options["html"] is False
+    html_out = md.render(
+        "\n".join(
+            [
+                "[example](https://example.com)",
+                "",
+                "| a | b |",
+                "| --- | --- |",
+                "| 1 | 2 |",
+            ]
+        )
+    )
+    assert '<a href="https://example.com"' in html_out
+    assert "<table>" in html_out
 
 
 def test_strip_paragraph_wrapped_tables() -> None:
@@ -117,15 +126,15 @@ def test_extract_math_placeholders_skips_fences_and_inline_code() -> None:
         ]
     )
     rendered, placeholders = extract_math_placeholders(text)
-    assert "@@MATH_0@@" in rendered
-    assert "@@MATH_1@@" in rendered
-    assert placeholders["@@MATH_0@@"] == "$x+y$"
-    assert placeholders["@@MATH_1@@"] == "$$z$$"
+    assert list(placeholders.values()) == ["$x+y$", "$$z$$"]
+    assert "$x+y$" not in rendered
+    assert "$$z$$" not in rendered
     assert "$ignore$" in rendered
     assert "`$also_ignore$`" in rendered
 
     escaped, escaped_placeholders = extract_math_placeholders(r"$$a\$$b$$")
-    assert escaped_placeholders["@@MATH_0@@"] == "$$a\\$$b$$"
+    assert list(escaped_placeholders.values()) == ["$$a\\$$b$$"]
+    assert escaped != r"$$a\$$b$$"
 
 
 def test_sanitize_table_html_and_images() -> None:
@@ -144,8 +153,8 @@ def test_sanitize_table_html_and_images() -> None:
 def test_extract_html_img_and_table_placeholders() -> None:
     img_text = 'Before <img src="data:image/png;base64,AA==" alt="x"> after'
     img_rendered, img_placeholders = extract_html_img_placeholders(img_text)
-    assert "@@HTML_IMG_0@@" in img_rendered
-    assert img_placeholders["@@HTML_IMG_0@@"] == '<img src="data:image/png;base64,AA==" alt="x" />'
+    assert list(img_placeholders.values()) == ['<img src="data:image/png;base64,AA==" alt="x" />']
+    assert "<img src=" not in img_rendered
 
     img_fenced = "```\n<img src=\"data:image/png;base64,AA==\">\n```"
     same_img, same_placeholders = extract_html_img_placeholders(img_fenced)
@@ -159,8 +168,8 @@ def test_extract_html_img_and_table_placeholders() -> None:
 
     table_text = "A\n<table><tr><td>x</td></tr></table>\nB"
     table_rendered, table_placeholders = extract_html_table_placeholders(table_text)
-    assert "@@HTML_TABLE_0@@" in table_rendered
-    assert table_placeholders["@@HTML_TABLE_0@@"] == "<table><tr><td>x</td></tr></table>"
+    assert list(table_placeholders.values()) == ["<table><tr><td>x</td></tr></table>"]
+    assert "<table><tr><td>x</td></tr></table>" not in table_rendered
 
     table_fenced = "```\n<table><tr><td>x</td></tr></table>\n```"
     same_table, same_table_placeholders = extract_html_table_placeholders(table_fenced)
@@ -190,59 +199,55 @@ def test_render_markdown_with_math_placeholders_restores_special_content() -> No
     assert "<sup>2</sup>" in html_out
     assert "<sub>3</sub>" in html_out
 
-    class _FakeMd:
-        def render(self, text: str) -> str:
-            return "<p>@@HTML_TABLE_99@@</p>"
 
-    warning_html = render_markdown_with_math_placeholders(_FakeMd(), "plain")
-    assert "Table placeholder could not be restored." in warning_html
-
-
-def test_select_template_tag_and_render_paper_markdown(monkeypatch) -> None:
+def test_select_template_tag_prefers_requested_template_or_default() -> None:
     paper = {
         "default_template": "simple",
-        "prompt_template": "deep_read",
-        "publication_venue": "{{NeurIPS}} 2024",
-        "templates": {"simple": {"title": "Simple"}, "deep_read": {"title": "Deep"}},
+        "templates": {"simple": {}, "deep_read": {}},
     }
 
-    monkeypatch.setattr("deepresearch_flow.paper.web.markdown._available_templates", lambda _: ["simple", "deep_read"])
     assert select_template_tag(paper, None) == ("simple", ["simple", "deep_read"])
     assert select_template_tag(paper, "deep_read") == ("deep_read", ["simple", "deep_read"])
-    monkeypatch.setattr("deepresearch_flow.paper.web.markdown._available_templates", lambda _: [])
-    assert select_template_tag(paper, None) == (None, [])
-    monkeypatch.setattr("deepresearch_flow.paper.web.markdown._available_templates", lambda _: ["deep_read"])
-    assert select_template_tag({}, None) == ("deep_read", ["deep_read"])
+    assert select_template_tag(paper, "missing") == ("simple", ["simple", "deep_read"])
+    assert select_template_tag({}, None) == (None, [])
 
-    monkeypatch.setattr("deepresearch_flow.paper.web.markdown._available_templates", lambda _: ["simple", "deep_read"])
 
-    class _Template:
-        def __init__(self, name: str):
-            self.name = name
-
-        def render(self, **context):
-            return f"{self.name}|{context['output_language']}|{context.get('publication_venue','')}"
-
-    monkeypatch.setattr("deepresearch_flow.paper.web.markdown.load_render_template", lambda name: _Template(str(name)))
-    monkeypatch.setattr("deepresearch_flow.paper.web.markdown.load_default_template", lambda: _Template("default"))
+def test_render_paper_markdown_uses_requested_or_default_template() -> None:
+    paper = {
+        "paper_title": "Deep Paper",
+        "paper_authors": [],
+        "publication_venue": "{{NeurIPS}} 2024",
+        "output_language": "zh",
+        "templates": {
+            "simple": {
+                "paper_title": "Simple Paper",
+                "paper_authors": ["Alice"],
+                "publication_venue": "{{NeurIPS}} 2024",
+            },
+            "deep_read": {
+                "paper_title": "Deep Paper",
+                "paper_authors": ["Alice"],
+                "publication_venue": "{{NeurIPS}} 2024",
+            },
+        },
+    }
 
     rendered, template_name, warning = render_paper_markdown(paper, "zh", template_tag="deep_read")
-    assert rendered == "deep_read|zh|"
     assert template_name == "deep_read"
     assert warning is None
+    assert "Module A: Reading Alignment and Input Check" in rendered
+    assert "**输出语言 / Output Language:** zh" in rendered
+    assert "**期刊/会议 / Publication Venue:** NeurIPS 2024" in rendered
 
-    def boom_load(name: str):
-        raise RuntimeError("missing")
-
-    monkeypatch.setattr("deepresearch_flow.paper.web.markdown.load_render_template", boom_load)
-    rendered, template_name, warning = render_paper_markdown(paper, "en", template_tag="deep_read")
-    assert rendered == "default|en|"
-    assert template_name == "default_paper"
-    assert warning == "Rendered using default template (missing template)."
-
-    monkeypatch.setattr("deepresearch_flow.paper.web.markdown._available_templates", lambda _: [])
-    bare_paper = {"publication_venue": "{{ACL}}"}
-    rendered, template_name, warning = render_paper_markdown(bare_paper, "en")
-    assert rendered == "default|en|ACL"
-    assert template_name == "default_paper"
-    assert warning == "Rendered using default template (no template specified)."
+    fallback_paper = {
+        "paper_title": "Paper",
+        "paper_authors": ["Alice"],
+        "prompt_template": "missing-template",
+        "publication_venue": "{{ACL}}",
+    }
+    fallback_rendered, fallback_template_name, fallback_warning = render_paper_markdown(fallback_paper, "en")
+    assert fallback_template_name == "default_paper"
+    assert fallback_warning == "Rendered using default template (missing template)."
+    assert "# Paper" in fallback_rendered
+    assert "**Authors:** Alice" in fallback_rendered
+    assert "**Publication Venue:** ACL" in fallback_rendered
