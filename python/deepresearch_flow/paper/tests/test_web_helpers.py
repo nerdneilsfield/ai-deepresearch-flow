@@ -61,6 +61,7 @@ def test_filter_tokenization_and_presence_helpers() -> None:
     assert merge_filter_set(None, {"without"}) == {"without"}
     assert matches_presence({"with"}, True) is True
     assert matches_presence({"with"}, False) is False
+    assert matches_presence({"without"}, False) is True
 
 
 def test_parse_filter_query_and_request_filters() -> None:
@@ -70,6 +71,14 @@ def test_parse_filter_query_and_request_filters() -> None:
     assert parsed["translated"] == {"without"}
     assert parsed["summary"] == {"with"}
     assert parsed["source"] == {"without"}
+    malformed = parse_filter_query('pdf: template: has:unknown no: weird summary:maybe')
+    assert malformed == {
+        "pdf": set(),
+        "source": set(),
+        "summary": set(),
+        "translated": set(),
+        "template": set(),
+    }
 
     request = _request(
         "page=0&page_size=999&q= attention &fq=pdf:with&pdf=yes&source=no&summary=with"
@@ -152,6 +161,7 @@ def test_compute_counts_template_map_and_sorted_ids() -> None:
     assert sorted_ids(index, {1, 2}, "year", "desc") == [1, 2]
     assert sorted_ids(index, {1, 2}, "venue", "asc") == [1, 2]
     assert sorted_ids(index, {1, 2}, "author", "desc") == [2, 1]
+    assert sorted_ids(index, {1, 2}, "unknown", "asc") == [1, 2]
 
 
 def test_query_parser_handles_or_fields_and_negation() -> None:
@@ -170,13 +180,17 @@ def test_query_parser_handles_or_fields_and_negation() -> None:
     )
     assert parse_query("") == Query(groups=[[]])
     assert parse_query("OR OR") == Query(groups=[[]])
+    assert parse_query("-   ") == Query(groups=[[]])
 
 
 def test_web_text_helpers_normalize_and_extract_snippets() -> None:
     title = normalize_title("A <inline-formula><tex-math>x^2</tex-math></inline-formula> &amp; <b>Title</b>")
     assert title == "A x^2 & Title"
+    assert normalize_title("") == ""
+    assert normalize_title("<inline-formula>ignored</inline-formula>") == ""
 
     assert normalize_venue("{{NeurIPS}} 2024") == "NeurIPS 2024"
+    assert normalize_venue("") == ""
 
     paper = {
         "templates": {
@@ -189,3 +203,4 @@ def test_web_text_helpers_normalize_and_extract_snippets() -> None:
     long_paper = {"summary": "x" * 20}
     assert extract_summary_snippet(long_paper, max_len=10) == ("x" * 9) + "…"
     assert extract_summary_snippet({}, max_len=10) == ""
+    assert extract_summary_snippet({"templates": {"simple": "bad"}}, max_len=10) == ""
