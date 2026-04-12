@@ -49,7 +49,7 @@ class TestFixNestedMailto:
 class TestPreProtectSafety:
     def test_reference_markers_inside_math_and_code_unchanged(self):
         text = (
-            r"Math \(see [1]\) and code ` [2] `\n"
+            "Math \\(see [1]\\) and code ` [2] `\n"
             "```\n"
             "[3]\n"
             "```"
@@ -58,7 +58,7 @@ class TestPreProtectSafety:
 
     def test_urls_emails_phones_inside_protected_looking_content_unchanged(self):
         text = (
-            r"Math \(see https://example.com, foo@bar.com, 555-123-4567\)\n"
+            "Math \\(see https://example.com, foo@bar.com, 555-123-4567\\)\n"
             "```\n"
             "https://example.com foo@bar.com 555-123-4567\n"
             "```"

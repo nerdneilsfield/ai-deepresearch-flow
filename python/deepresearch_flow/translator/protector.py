@@ -286,6 +286,9 @@ class MarkdownProtector:
 
         s = re.sub(r"^\s*\[[^\]]+\]:\s*\S+.*$", repl_link_def, s, flags=re.MULTILINE)
 
+        inline_code_pattern = re.compile(r"(?<!`)(`+)([^`\n]+?)\1(?!`)")
+        s = inline_code_pattern.sub(lambda m: store.add("CODE", m.group(0)), s)
+
         s = MarkdownProtector._freeze_paren_math(s, store)
 
         img_pattern = re.compile(r"!\[(?:[^\]\\]|\\.)*?\]\((?:[^()\\]|\\.)*?\)")
@@ -332,9 +335,6 @@ class MarkdownProtector:
 
         block_math_bracket_pattern = re.compile(r"\\\[[\s\S]+?\\\]")
         s = block_math_bracket_pattern.sub(lambda m: store.add("MATHBLOCK", m.group(0)), s)
-
-        inline_code_pattern = re.compile(r"(?<!`)(`+)([^`\n]+?)\1(?!`)")
-        s = inline_code_pattern.sub(lambda m: store.add("CODE", m.group(0)), s)
 
         inline_math_pattern = re.compile(r"\$(?!\s)([^$\n]+?)\$(?!\$)")
         s = inline_math_pattern.sub(lambda m: store.add("MATH", m.group(0)), s)

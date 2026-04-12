@@ -103,7 +103,6 @@ def test_strict_placeholder_check_rejects_residual_placeholder_tokens(
     monkeypatch.setattr(
         MarkdownTranslator, "_fix_placeholder_typos", lambda self, text, valid: text
     )
-    monkeypatch.setattr(translator.protector, "unprotect", lambda text, store: text)
 
     with pytest.raises(ValueError, match="unresolved placeholder"):
         asyncio.run(_run_translate(translator, text))

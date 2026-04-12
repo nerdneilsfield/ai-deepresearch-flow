@@ -32,6 +32,20 @@ def test_paren_math_scanner_handles_double_backslash_before_close() -> None:
     assert protector.unprotect(protected, store) == text
 
 
+def test_inline_code_is_frozen_before_other_inline_protectors() -> None:
+    protector = MarkdownProtector()
+    store = PlaceHolderStore()
+    cfg = TranslateConfig()
+    text = r"Before `\(x+y\)` and `https://example.com` after"
+
+    protected = protector.protect(text, cfg, store)
+
+    assert store.kind_counts().get("CODE") == 2
+    assert store.kind_counts().get("MATH") is None
+    assert store.kind_counts().get("URL") is None
+    assert protector.unprotect(protected, store) == text
+
+
 def test_embedded_fence_like_line_keeps_entire_code_fence_together() -> None:
     protector = MarkdownProtector()
     store = PlaceHolderStore()
@@ -82,3 +96,12 @@ def test_unprotect_raises_on_real_unresolved_placeholder_residuals() -> None:
 
     with pytest.raises(ValueError, match="unresolved placeholder"):
         protector.unprotect(tampered, store)
+
+
+def test_restore_checked_rejects_known_placeholder_residuals() -> None:
+    store = PlaceHolderStore()
+    math_placeholder = store.add("MATH", r"\(x+y\)")
+    code_placeholder = store.add("CODE", f"`{math_placeholder}`")
+
+    with pytest.raises(ValueError, match="unresolved placeholder"):
+        store.restore_all_checked(code_placeholder)

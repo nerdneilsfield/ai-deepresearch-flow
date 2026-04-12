@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
-from typing import Iterable, Optional
+from typing import Optional
 
 
 class ReferenceProcessor:
@@ -765,11 +765,10 @@ def fix_markdown(text: str, level: str) -> str:
     try:
         from deepresearch_flow.paper.web.markdown import (
             normalize_fenced_code_blocks,
-            normalize_footnote_definitions,
             normalize_mermaid_blocks,
             normalize_unbalanced_fences,
         )
-    except Exception:
+    except ImportError:
         return text
 
     text = normalize_fenced_code_blocks(text)

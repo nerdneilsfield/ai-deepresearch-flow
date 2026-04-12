@@ -86,13 +86,16 @@ class PlaceHolderStore:
 
     def restore_all_checked(self, text: str, *, ignore_source_literals: bool = True) -> str:
         restored = self.restore_all(text)
-        unresolved = self.find_unresolved_placeholder_tokens(
-            restored, ignore_source_literals=ignore_source_literals
-        )
-        if unresolved:
+        source_literals = self._source_placeholder_likes if ignore_source_literals else set()
+        residual = [
+            token
+            for token in self.find_placeholder_like_tokens(restored)
+            if token not in source_literals
+        ]
+        if residual:
             raise ValueError(
                 "unresolved placeholder token(s) remain after restore: "
-                + ", ".join(unresolved)
+                + ", ".join(residual)
             )
         return restored
 
