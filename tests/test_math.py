@@ -15,6 +15,15 @@ class MathSpanSeed:
     seed_id: str
 
 
+@dataclass(frozen=True)
+class MathCleanupRejectSeed:
+    repaired: str
+    delimiter: str
+    cleaned: str
+    error: str
+    seed_id: str
+
+
 MATH_SPAN_SEEDS = [
     MathSpanSeed(
         kind="pass",
@@ -102,6 +111,23 @@ CLEANUP_FORMULA_REPAIR_SEEDS = [
     ),
 ]
 
+MATH_CLEANUP_REJECT_SEEDS = [
+    MathCleanupRejectSeed(
+        repaired="$$broken$$",
+        delimiter="$$",
+        cleaned="still_broken",
+        error="cleaned error",
+        seed_id="still-invalid-after-cleanup",
+    ),
+]
+
+
+def assert_math_cleanup_idempotent(original: str) -> None:
+    once = math.cleanup_formula(original)
+    twice = math.cleanup_formula(once)
+    assert once == original
+    assert twice == once
+
 
 @pytest.mark.parametrize("original", CLEANUP_FORMULA_PASS_SEEDS)
 def test_cleanup_formula_pass_seeds_are_unchanged(original: str) -> None:
@@ -185,11 +211,7 @@ def test_cleanup_formula_does_not_treat_line_breaks_as_control_commands() -> Non
     ],
 )
 def test_cleanup_formula_is_idempotent_for_valid_inputs(original: str) -> None:
-    once = math.cleanup_formula(original)
-    twice = math.cleanup_formula(once)
-
-    assert once == original
-    assert twice == once
+    assert_math_cleanup_idempotent(original)
 
 
 def test_strip_wrapping_delimiters_rejects_empty_payload() -> None:
@@ -214,6 +236,26 @@ def test_finalize_repaired_formula_keeps_errors_aligned_with_returned_formula(
 
     assert repaired == "cleaned"
     assert errors == ["cleaned error"]
+
+
+@pytest.mark.parametrize(
+    "seed",
+    [pytest.param(seed, id=f"reject:{seed.seed_id}") for seed in MATH_CLEANUP_REJECT_SEEDS],
+)
+def test_finalize_repaired_formula_rejects_still_invalid_cleanup(
+    monkeypatch, seed: MathCleanupRejectSeed
+) -> None:
+    monkeypatch.setattr(
+        math,
+        "validate_formula",
+        lambda text, _display_mode: [seed.error] if text == seed.cleaned else ["parse error"],
+    )
+    monkeypatch.setattr(math, "cleanup_formula", lambda _text: seed.cleaned)
+
+    repaired, errors = math._finalize_repaired_formula(seed.repaired, seed.delimiter)
+
+    assert repaired == seed.cleaned
+    assert errors == [seed.error]
 
 
 def test_fix_math_text_handles_cancelled_error_results(monkeypatch) -> None:

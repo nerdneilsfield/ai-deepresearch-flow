@@ -13,6 +13,14 @@ class MermaidCleanupSeed:
     seed_id: str
 
 
+@dataclass(frozen=True)
+class MermaidRejectSeed:
+    original: str
+    repaired: str
+    expected_error: str
+    seed_id: str
+
+
 MERMAID_CLEANUP_SEEDS = [
     MermaidCleanupSeed(
         kind="pass",
@@ -99,6 +107,27 @@ MERMAID_IDEMPOTENT_REPAIR_INPUTS = [
     'flowchart LR\nA["a<br>b"]B --> C["ok"]\n',
 ]
 
+MERMAID_REJECT_SEEDS = [
+    MermaidRejectSeed(
+        original='flowchart LR\nA["x"]"] --> C["y"]\n',
+        repaired='flowchart LR\nA["x"]"] --> C["y"]\n',
+        expected_error="still invalid",
+        seed_id="invalid-quoted-close",
+    ),
+    MermaidRejectSeed(
+        original='flowchart LR\nA["x"]B --> C["y"]\n',
+        repaired='flowchart LR\nA["x"]"] --> C["y"]\n',
+        expected_error="still invalid",
+        seed_id="repair-introduces-invalid-close",
+    ),
+]
+
+
+def assert_mermaid_cleanup_idempotent(original: str) -> None:
+    once = mermaid.cleanup_mermaid(original)
+    twice = mermaid.cleanup_mermaid(once)
+    assert twice == once
+
 
 @pytest.mark.parametrize(
     "seed",
@@ -184,22 +213,24 @@ def test_cleanup_mermaid_preserves_html_break_label_variants(break_tag: str) -> 
 
 @pytest.mark.parametrize("original", MERMAID_IDEMPOTENT_REPAIR_INPUTS)
 def test_cleanup_mermaid_is_idempotent_across_seed_repairs(original: str) -> None:
-    once = mermaid.cleanup_mermaid(original)
-    twice = mermaid.cleanup_mermaid(once)
-
-    assert twice == once
+    assert_mermaid_cleanup_idempotent(original)
 
 
-def test_fix_mermaid_text_rejects_still_invalid_repair(monkeypatch) -> None:
-    original = 'flowchart LR\nA["x"]"] --> C["y"]\n'
-    repaired = 'flowchart LR\nA["x"]"] --> C["y"]\n'
-
+@pytest.mark.parametrize(
+    "seed",
+    [pytest.param(seed, id=f"reject:{seed.seed_id}") for seed in MERMAID_REJECT_SEEDS],
+)
+def test_fix_mermaid_text_rejects_invalid_repairs(
+    monkeypatch, seed: MermaidRejectSeed
+) -> None:
     async def fake_repair_batch(*_args, **_kwargs):
-        return {"abc:0": repaired}, None
+        return {"abc:0": seed.repaired}, None
 
     def fake_validate_mermaid(text: str) -> str | None:
-        if text.rstrip("\n") == original.rstrip("\n"):
-            return "still invalid"
+        if text.rstrip("\n") == seed.repaired.rstrip("\n"):
+            return seed.expected_error
+        if text.rstrip("\n") == seed.original.rstrip("\n"):
+            return "parse error"
         return None
 
     monkeypatch.setattr(mermaid, "repair_batch", fake_repair_batch)
@@ -210,15 +241,15 @@ def test_fix_mermaid_text_rejects_still_invalid_repair(monkeypatch) -> None:
     stats = mermaid.MermaidFixStats()
     span = mermaid.MermaidSpan(
         start=0,
-        end=len(original),
-        content=original,
+        end=len(seed.original),
+        content=seed.original,
         line=1,
         context="",
     )
 
     updated, errors = asyncio.run(
         mermaid.fix_mermaid_text(
-            text=original,
+            text=seed.original,
             file_path="demo.md",
             line_offset=1,
             field_path=None,
@@ -234,7 +265,7 @@ def test_fix_mermaid_text_rejects_still_invalid_repair(monkeypatch) -> None:
         )
     )
 
-    assert updated == original
+    assert updated == seed.original
     assert len(errors) == 1
-    assert errors[0]["errors"][-1] == "still invalid"
+    assert errors[0]["errors"][-1] == seed.expected_error
     assert stats.diagrams_failed == 1
