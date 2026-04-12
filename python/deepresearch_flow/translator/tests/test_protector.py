@@ -7,6 +7,26 @@ from deepresearch_flow.translator.placeholder import PlaceHolderStore
 from deepresearch_flow.translator.protector import MarkdownProtector
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Before $x+y$ after",
+        "Before\n$$\na+b\n$$\nAfter",
+        r"Before \[x+y\] after",
+        r"Before \(x+y\) after",
+        "Mix $x+y$ and\n$$\na+b\n$$\nand text",
+    ],
+)
+def test_protect_unprotect_roundtrip_is_lossless_for_math_variants(text: str) -> None:
+    protector = MarkdownProtector()
+    store = PlaceHolderStore()
+    cfg = TranslateConfig()
+
+    protected = protector.protect(text, cfg, store)
+
+    assert protector.unprotect(protected, store) == text
+
+
 def test_paren_math_is_frozen_and_restored_unchanged() -> None:
     protector = MarkdownProtector()
     store = PlaceHolderStore()

@@ -97,6 +97,15 @@ def test_cleanup_mermaid_preserves_quoted_special_character_labels(
     assert cleaned.rstrip("\n") == original.rstrip("\n")
 
 
+@pytest.mark.parametrize("break_tag", ["<br>", "<br/>", "<br />"])
+def test_cleanup_mermaid_preserves_html_break_label_variants(break_tag: str) -> None:
+    original = f'flowchart LR\nA["a{break_tag}b"] --> B["ok"]\n'
+
+    cleaned = mermaid.cleanup_mermaid(original)
+
+    assert cleaned.rstrip("\n") == original.rstrip("\n")
+
+
 def test_cleanup_mermaid_repairs_compacted_statement_boundary() -> None:
     original = 'flowchart LR\nA["x"]B --> C["y"]\n'
 
