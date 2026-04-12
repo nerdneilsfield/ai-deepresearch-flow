@@ -70,4 +70,75 @@ include-package-data = true
 [dependency-groups]
 dev = [
     "pytest>=9.0.2",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.13.1",
+    "ty>=0.0.27",
 ]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = [
+    ".codex",
+    "dist",
+    "node_modules",
+    "paper_stage_outputs",
+    "python/deepresearch_flow/paper/web/pdfjs",
+]
+
+[tool.ruff.lint]
+select = ["E9", "F811", "F821", "F822", "F823"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["F811"]
+"python/**/tests/**" = ["F811"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+
+[tool.ty.environment]
+python-version = "3.12"
+
+[tool.ty.rules]
+all = "warn"
+
+[tool.ty.src]
+include = ["python/deepresearch_flow"]
+exclude = [
+    "python/deepresearch_flow/paper/templates",
+    "python/deepresearch_flow/paper/prompt_templates",
+    "python/deepresearch_flow/paper/web/pdfjs",
+]
+
+[[tool.ty.overrides]]
+include = ["tests/**", "python/**/tests/**"]
+
+[tool.ty.overrides.rules]
+all = "warn"
+
+[tool.ty.terminal]
+output-format = "concise"
+
+[tool.pytest.ini_options]
+testpaths = [
+    "tests",
+    "python/deepresearch_flow/ocr/tests",
+    "python/deepresearch_flow/paper/tests",
+    "python/deepresearch_flow/paper/snapshot/tests",
+    "python/deepresearch_flow/storage/tests",
+    "python/deepresearch_flow/translator/tests",
+]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v -s"
+
+[tool.coverage.run]
+source = ["deepresearch_flow"]
+omit = ["*/tests/*", "*/__pycache__/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
