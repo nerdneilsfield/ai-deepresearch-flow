@@ -109,7 +109,9 @@ class LinkProcessor:
 class PseudocodeProcessor:
     def __init__(self) -> None:
         self._header_pattern = re.compile(
-            r"^\s*\*?\*?\s*(Algorithm|算法)\s+([A-Za-z0-9.-]+)?\*?\*?\s*(.*)$",
+            r"^\s*\*?\*?\s*(Algorithm|算法)"
+            r"(?:\s+(\d+(?:\.\d+)*|[IVX]+|[A-Z]))"
+            r"\*?\*?(?:\s*[:.)-]\s*|\s+)(.*)$",
             re.IGNORECASE,
         )
 
@@ -283,6 +285,56 @@ class TitleProcessor:
                 new_lines.append(line)
 
         return "\n".join(new_lines)
+
+
+_HEADING_RE = re.compile(r"^(\s{0,3})(#{1,6})(\s+)(.*)$")
+
+
+def preserve_heading_levels(original: str, formatted: str) -> str:
+    original_lines = original.split("\n")
+    formatted_lines = formatted.split("\n")
+
+    def collect_hashes(lines: list[str]) -> list[str]:
+        hashes: list[str] = []
+        in_fence = False
+        for line in lines:
+            stripped = line.lstrip()
+            if stripped.startswith(("```", "~~~")):
+                in_fence = not in_fence
+                continue
+            if in_fence:
+                continue
+            match = _HEADING_RE.match(line)
+            if match:
+                hashes.append(match.group(2))
+        return hashes
+
+    original_hashes = collect_hashes(original_lines)
+    if not original_hashes:
+        return formatted
+
+    out: list[str] = []
+    in_fence = False
+    heading_idx = 0
+    for line in formatted_lines:
+        stripped = line.lstrip()
+        if stripped.startswith(("```", "~~~")):
+            in_fence = not in_fence
+            out.append(line)
+            continue
+        if in_fence:
+            out.append(line)
+            continue
+        match = _HEADING_RE.match(line)
+        if match and heading_idx < len(original_hashes):
+            out.append(f"{match.group(1)}{original_hashes[heading_idx]}{match.group(3)}{match.group(4)}")
+            heading_idx += 1
+            continue
+        if match:
+            heading_idx += 1
+        out.append(line)
+
+    return "\n".join(out)
 
 
 @dataclass

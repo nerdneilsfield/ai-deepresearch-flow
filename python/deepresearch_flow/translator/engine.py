@@ -19,7 +19,7 @@ from deepresearch_flow.paper.llm import call_provider, backoff_delay
 from deepresearch_flow.paper.providers.base import ProviderError
 from deepresearch_flow.paper.routing import RoutePool
 from deepresearch_flow.translator.config import TranslateConfig
-from deepresearch_flow.translator.fixers import fix_markdown
+from deepresearch_flow.translator.fixers import fix_markdown, preserve_heading_levels
 from deepresearch_flow.translator.placeholder import PlaceHolderStore
 from deepresearch_flow.translator.prompts import build_translation_messages
 from deepresearch_flow.translator.protector import MarkdownProtector
@@ -1121,7 +1121,10 @@ class MarkdownTranslator:
 
         merged_text = reassemble_segments(segments, translated_nodes)
         if format_enabled:
-            merged_text = await self._format_markdown(merged_text, "post")
+            formatted = await self._format_markdown(merged_text, "post")
+            merged_text = preserve_heading_levels(text, formatted)
+        else:
+            merged_text = preserve_heading_levels(text, merged_text)
         merged_text = self._normalize_markdown_blocks(merged_text)
         restored = self._restore_protected_text(merged_text, store)
 

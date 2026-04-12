@@ -9,7 +9,7 @@ import subprocess
 from pathlib import Path
 from typing import Iterable
 
-from deepresearch_flow.translator.fixers import fix_markdown
+from deepresearch_flow.translator.fixers import fix_markdown, preserve_heading_levels
 
 from deepresearch_flow.recognize.markdown import (
     NameRegistry,
@@ -60,6 +60,11 @@ async def _format_markdown(text: str) -> str:
     return await asyncio.to_thread(run_formatter)
 
 
+async def _format_with_preserved_headings(original: str, text: str) -> str:
+    formatted = await _format_markdown(text)
+    return preserve_heading_levels(original, formatted)
+
+
 def _apply_fix(text: str, fix_level: str) -> str:
     if fix_level == "off":
         return text
@@ -73,7 +78,7 @@ async def fix_markdown_text(
 ) -> str:
     text = _apply_fix(text, fix_level)
     if format_enabled:
-        text = await _format_markdown(text)
+        text = await _format_with_preserved_headings(text, text)
     return text
 
 
@@ -160,13 +165,13 @@ async def organize_mineru_dir(
 
         updated = await rewrite_markdown_images(content, replace_simple)
         if format_enabled:
-            updated = await _format_markdown(updated)
+            updated = await _format_with_preserved_headings(content, updated)
         output_path = output_simple / output_filename
         await asyncio.to_thread(output_path.write_text, updated, encoding="utf-8")
 
     if output_base64 is not None:
         updated = await embed_markdown_images(content, md_path, False, None)
         if format_enabled:
-            updated = await _format_markdown(updated)
+            updated = await _format_with_preserved_headings(content, updated)
         output_path = output_base64 / output_filename
         await asyncio.to_thread(output_path.write_text, updated, encoding="utf-8")

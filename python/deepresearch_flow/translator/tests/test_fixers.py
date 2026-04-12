@@ -8,6 +8,7 @@ from deepresearch_flow.translator.fixers import (
     LinkProcessor,
     ReferenceProcessor,
     fix_markdown,
+    preserve_heading_levels,
     fix_html_table_math_spaces,
     fix_math_delimiter_spaces,
     fix_nested_mailto,
@@ -85,6 +86,28 @@ class TestPreProtectSafety:
         result = fix_markdown(text, "aggressive")
         assert "## 1. Intro" in result
         assert "```\n# 2. Inside code\n```" in result
+
+    def test_fix_markdown_does_not_wrap_algorithm_parameters_paragraph_as_pseudocode(self):
+        text = (
+            "Algorithm parameters are tuned on Traverse 1, Part 1 and the same values are used elsewhere.\n"
+        )
+        result = fix_markdown(text, "moderate")
+        assert "```pseudo" not in result
+        assert "Algorithm parameters are tuned" in result
+
+    def test_fix_markdown_still_wraps_numbered_algorithm_blocks(self):
+        text = "Algorithm 1 Main loop\nInput: x\n"
+        result = fix_markdown(text, "moderate")
+        assert "```pseudo" in result
+        assert "// Algorithm 1: Main loop" in result
+
+
+class TestHeadingLevelPreservation:
+    def test_preserve_heading_levels_restores_original_hash_depth(self):
+        original = "# Title\n### I. INTRODUCTION\n### II. RELATED WORK\n### A. Detail\n"
+        formatted = "# Title\n## I. INTRODUCTION\n### II. RELATED WORK\n### A. Detail\n"
+        restored = preserve_heading_levels(original, formatted)
+        assert restored == original
 
 
 # ---------------------------------------------------------------------------

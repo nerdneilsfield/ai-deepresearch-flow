@@ -143,3 +143,27 @@ def test_failed_nodes_fall_back_to_origin_without_post_processing_mutation(
 
     assert result.translated_text == text
     assert result.stats.failed_nodes == 1
+
+
+def test_translated_headings_keep_original_levels_after_post_format(monkeypatch) -> None:
+    translator = _make_translator()
+    text = "# Title\n### I. INTRODUCTION\n### II. RELATED WORK\n"
+
+    async def fake_translate_group(self, group_text, *args, **kwargs):
+        return (
+            "<NODE_START_0000>\n# 标题\n</NODE_END_0000>"
+            "<NODE_START_0001>\n## I. 引言\n</NODE_END_0001>"
+            "<NODE_START_0002>\n## II. 相关工作\n</NODE_END_0002>"
+        )
+
+    async def fake_format(self, content, stage):
+        return content
+
+    monkeypatch.setattr(MarkdownTranslator, "_translate_group", fake_translate_group)
+    monkeypatch.setattr(MarkdownTranslator, "_format_markdown", fake_format)
+
+    result = asyncio.run(_run_translate(translator, text))
+
+    assert "# 标题" in result.translated_text
+    assert "### I. 引言" in result.translated_text
+    assert "### II. 相关工作" in result.translated_text
