@@ -81,11 +81,11 @@ def test_fix_mermaid_text_accepts_valid_repair_without_recleanup(monkeypatch) ->
 @pytest.mark.parametrize(
     ("label", "expected_fragment"),
     [
-        ("区间[-π, π)", 'A["区间[-π, π)"] --> B["ok"]'),
-        ("中括号[abc]", 'A["中括号[abc]"] --> B["ok"]'),
-        ("a|b|c", 'A["a|b|c"] --> B["ok"]'),
-        ('He said "hi"', 'A["He said \'hi\'"] --> B["ok"]'),
-        ("路径/斜杠\\反斜杠", 'A["路径/斜杠\\反斜杠"] --> B["ok"]'),
+        pytest.param("区间[-π, π)", 'A["区间[-π, π)"] --> B["ok"]', id="pass:quoted-brackets"),
+        pytest.param("中括号[abc]", 'A["中括号[abc]"] --> B["ok"]', id="pass:quoted-square-brackets"),
+        pytest.param("a|b|c", 'A["a|b|c"] --> B["ok"]', id="pass:pipes"),
+        pytest.param('He said "hi"', 'A["He said \'hi\'"] --> B["ok"]', id="repair:inner-double-quotes"),
+        pytest.param("路径/斜杠\\反斜杠", 'A["路径/斜杠\\反斜杠"] --> B["ok"]', id="pass:slashes"),
     ],
 )
 def test_cleanup_mermaid_preserves_quoted_special_character_labels(
@@ -128,13 +128,15 @@ def test_cleanup_mermaid_repairs_unquoted_labels_with_nested_brackets() -> None:
 @pytest.mark.parametrize(
     "original,expected",
     [
-        (
+        pytest.param(
             "flowchart LR\nA[区间[-π, π)] --> B[ok]\n",
             'flowchart LR\nA["区间[-π, π)]"] --> B[ok]',
+            id="repair:interval-brackets",
         ),
-        (
+        pytest.param(
             "flowchart LR\nA[中括号[abc]] --> B[ok]\n",
             'flowchart LR\nA["中括号[abc]"] --> B[ok]',
+            id="repair:nested-square-brackets",
         ),
     ],
 )
@@ -144,6 +146,21 @@ def test_cleanup_mermaid_repairs_unquoted_nested_bracket_labels_parametrically(
     cleaned = mermaid.cleanup_mermaid(original)
 
     assert cleaned == expected
+
+
+@pytest.mark.parametrize(
+    "original",
+    [
+        pytest.param('flowchart LR\nA["x"]B --> C["y"]\n', id="repair:compacted-statement"),
+        pytest.param("flowchart LR\nA[中括号[abc]] --> B[ok]\n", id="repair:nested-bracket-label"),
+        pytest.param('flowchart LR\nA["He said "hi""] --> B["ok"]\n', id="repair:inner-quotes"),
+    ],
+)
+def test_cleanup_mermaid_is_idempotent_across_seed_repairs(original: str) -> None:
+    once = mermaid.cleanup_mermaid(original)
+    twice = mermaid.cleanup_mermaid(once)
+
+    assert twice == once
 
 
 def test_cleanup_mermaid_is_idempotent_for_compacted_and_bracketed_labels() -> None:

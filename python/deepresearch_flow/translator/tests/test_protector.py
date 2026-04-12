@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import hashlib
+
 import pytest
 
+from deepresearch_flow.recognize import math as recognize_math
 from deepresearch_flow.translator.config import TranslateConfig
 from deepresearch_flow.translator.placeholder import PlaceHolderStore
 from deepresearch_flow.translator.protector import MarkdownProtector
@@ -25,6 +28,29 @@ def test_protect_unprotect_roundtrip_is_lossless_for_math_variants(text: str) ->
     protected = protector.protect(text, cfg, store)
 
     assert protector.unprotect(protected, store) == text
+
+
+def test_protect_unprotect_preserves_math_span_fingerprints() -> None:
+    protector = MarkdownProtector()
+    store = PlaceHolderStore()
+    cfg = TranslateConfig()
+    text = "Mix $x+y$ and\n$$\na+b\n$$\nand also \\[c+d\\] with \\(e+f\\)."
+
+    def fingerprints(value: str) -> list[tuple[str, str]]:
+        spans = recognize_math.extract_math_spans(value, 0)
+        return [
+            (
+                span.delimiter,
+                hashlib.sha256(span.content.encode("utf-8")).hexdigest(),
+            )
+            for span in spans
+        ]
+
+    protected = protector.protect(text, cfg, store)
+    restored = protector.unprotect(protected, store)
+
+    assert restored == text
+    assert fingerprints(restored) == fingerprints(text)
 
 
 def test_paren_math_is_frozen_and_restored_unchanged() -> None:
