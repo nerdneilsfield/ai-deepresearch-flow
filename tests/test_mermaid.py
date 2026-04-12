@@ -123,3 +123,53 @@ def test_cleanup_mermaid_is_idempotent_for_compacted_and_bracketed_labels() -> N
     twice = mermaid.cleanup_mermaid(once)
 
     assert twice == once
+
+
+def test_fix_mermaid_text_rejects_still_invalid_repair(monkeypatch) -> None:
+    original = 'flowchart LR\nA["x"]"] --> C["y"]\n'
+    repaired = 'flowchart LR\nA["x"]"] --> C["y"]\n'
+
+    async def fake_repair_batch(*_args, **_kwargs):
+        return {"abc:0": repaired}, None
+
+    def fake_validate_mermaid(text: str) -> str | None:
+        if text.rstrip("\n") == original.rstrip("\n"):
+            return "still invalid"
+        return None
+
+    monkeypatch.setattr(mermaid, "repair_batch", fake_repair_batch)
+    monkeypatch.setattr(mermaid, "short_hash", lambda _path: "abc")
+    monkeypatch.setattr(mermaid, "validate_mermaid", fake_validate_mermaid)
+    monkeypatch.setattr(mermaid, "cleanup_mermaid", lambda text: text)
+
+    stats = mermaid.MermaidFixStats()
+    span = mermaid.MermaidSpan(
+        start=0,
+        end=len(original),
+        content=original,
+        line=1,
+        context="",
+    )
+
+    updated, errors = asyncio.run(
+        mermaid.fix_mermaid_text(
+            text=original,
+            file_path="demo.md",
+            line_offset=1,
+            field_path=None,
+            item_index=None,
+            route_pool=None,  # type: ignore[arg-type]
+            timeout=1.0,
+            max_retries=0,
+            batch_size=1,
+            context_chars=0,
+            client=None,  # type: ignore[arg-type]
+            stats=stats,
+            spans=[span],
+        )
+    )
+
+    assert updated == original
+    assert len(errors) == 1
+    assert errors[0]["errors"][-1] == "still invalid"
+    assert stats.diagrams_failed == 1

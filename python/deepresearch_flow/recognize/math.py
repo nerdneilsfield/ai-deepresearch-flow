@@ -28,6 +28,7 @@ except ImportError:  # pragma: no cover - dependency guard
     LatexWalkerError = Exception
 
 logger = logging.getLogger(__name__)
+_PLACEHOLDER_LIKE_RE = re.compile(r"__PH_[A-Z0-9_]+__")
 
 @dataclass(frozen=True)
 class FormulaSpan:
@@ -85,8 +86,12 @@ def _mask_code(text: str) -> str:
 def extract_math_spans(text: str, context_chars: int) -> list[FormulaSpan]:
     masked = _mask_code(text)
     spans: list[FormulaSpan] = []
+    raw_block_ranges: list[tuple[int, int]] = []
     for match in re.finditer(r"(?<!\\)\$\$([\s\S]+?)(?<!\\)\$\$", masked):
+        raw_block_ranges.append((match.start(), match.end()))
         content = text[match.start() + 2 : match.end() - 2]
+        if not _looks_like_display_math(content):
+            continue
         line = text.count("\n", 0, match.start()) + 1
         context = text[max(0, match.start() - context_chars) : match.end() + context_chars]
         spans.append(
@@ -101,18 +106,36 @@ def extract_math_spans(text: str, context_chars: int) -> list[FormulaSpan]:
         )
 
     block_ranges = [(span.start, span.end) for span in spans]
-    spans.extend(_extract_inline_math_spans(text, masked, context_chars, block_ranges))
+    spans.extend(_extract_inline_math_spans(text, masked, context_chars, block_ranges, raw_block_ranges))
 
     return sorted(spans, key=lambda span: span.start)
 
 
 def _looks_like_inline_math(content: str) -> bool:
     stripped = content.strip()
-    if not stripped or "`" in stripped:
+    if not stripped or "`" in stripped or _PLACEHOLDER_LIKE_RE.search(stripped):
         return False
     if any(token in stripped for token in ("\\", "^", "_", "{", "}", "=", "+", "-", "*", "/", "(", ")", "[", "]")):
         return True
     if re.fullmatch(r"[A-Za-z](?:[A-Za-z0-9]|_[A-Za-z0-9]+)*", stripped):
+        return True
+    return False
+
+
+def _looks_like_display_math(content: str) -> bool:
+    stripped = content.strip()
+    if not stripped or _PLACEHOLDER_LIKE_RE.search(stripped):
+        return False
+    if re.search(r"(?m)^\s{0,3}#{1,6}\s", stripped):
+        return False
+    math_markers = ("\\", "^", "_", "{", "}", "=", "+", "&")
+    if any(marker in stripped for marker in math_markers):
+        plain = re.sub(r"\\[A-Za-z]+", " ", stripped)
+        words = re.findall(r"[A-Za-z]{3,}", plain)
+        if len(words) >= 8:
+            return False
+        return True
+    if re.fullmatch(r"[\d\s.,;:()\-+*/\[\]]+", stripped):
         return True
     return False
 
@@ -122,6 +145,7 @@ def _extract_inline_math_spans(
     masked: str,
     context_chars: int,
     block_ranges: list[tuple[int, int]],
+    raw_block_ranges: list[tuple[int, int]],
 ) -> list[FormulaSpan]:
     spans: list[FormulaSpan] = []
     idx = 0
@@ -136,6 +160,9 @@ def _extract_inline_math_spans(
             idx = start + 1
             continue
         if any(block_start <= start < block_end for block_start, block_end in block_ranges):
+            idx = start + 1
+            continue
+        if any(block_start <= start < block_end for block_start, block_end in raw_block_ranges):
             idx = start + 1
             continue
 

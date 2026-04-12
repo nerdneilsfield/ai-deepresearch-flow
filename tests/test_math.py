@@ -31,6 +31,31 @@ def test_extract_math_spans_skips_currency_and_code_like_dollar_sequences() -> N
     ]
 
 
+def test_extract_math_spans_skips_placeholder_polluted_math() -> None:
+    text = (
+        r"This is $\underline{\text{__PH_AUTOLINK_000106__}}$ end"
+        "\n$$\n\\underline{\\text{__PH_AUTOLINK_000106__}}\n$$\n"
+    )
+
+    spans = math.extract_math_spans(text, 0)
+
+    assert spans == []
+
+
+def test_extract_math_spans_reclassifies_prose_like_display_blocks() -> None:
+    text = (
+        "$$\n"
+        "Downloaded on March 30, 2026 at 20:06:42 UTC from IEEE Xplore. Restrictions apply.\n"
+        "## 5 IMPLEMENTING THE INDEX ON A GPU\n"
+        "The cost is $x+y$ in the text.\n"
+        "$$\n"
+    )
+
+    spans = math.extract_math_spans(text, 0)
+
+    assert spans == []
+
+
 def test_cleanup_formula_preserves_latex_commands_with_n_and_right() -> None:
     original = (
         r"f_{c}(c_{1},c_{2})=\begin{cases}"
