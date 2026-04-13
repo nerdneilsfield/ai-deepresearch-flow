@@ -97,6 +97,20 @@ Breaking change：旧的 `api_keys`、`model_list`、`structured_mode` 字段已
 
 缺失的 `env:VAR_NAME` 现在会在加载配置时直接报错。
 
+翻译器调度相关的默认值也可以放在 `[translator_config]`：
+
+```toml
+[translator_config]
+document_window = 8
+initial_workers = 4
+retry_workers = 2
+fallback_workers = 2
+fallback_2_workers = 2
+main_concurrency = 4
+fallback_concurrency = 2
+fallback_2_concurrency = 2
+```
+
 单个 key 的配额信息仍然挂在 key 对象上：
 
 ```toml
@@ -1107,14 +1121,20 @@ uv run deepresearch-flow paper db snapshot build ...
 - 结构保护：自动冻结代码块、LaTeX（`$$...$$`）、HTML 表格与图片。
 - OCR 修复：`--fix-level` 支持断段合并与引用修复（`[1]` -> `[^1]`）。
 - 失败恢复：支持失败重试与后备模型。
-- 分组并发：使用 `--group-concurrency` 在单个文档内并行翻译多个分组。
+- 多文档调度：文档首轮、重试、fallback 现在分开走独立队列。
+- 并发控制：使用 `--document-window`、`--initial-workers`、`--retry-workers`，以及 `--main-concurrency` / fallback 并发参数。
+- 配置默认值：可以把同一套并发默认值写到 `config.toml` 的 `[translator_config]` 里。
+- 兼容提示：`--group-concurrency` 已废弃，会映射到 `--initial-workers`。
 
 ```bash
 uv run deepresearch-flow translator translate \
-  --input ./paper.md \
+  --input ./papers \
   --target-lang ja \
   --fix-level aggressive \
-  --group-concurrency 4 \
+  --document-window 8 \
+  --initial-workers 4 \
+  --retry-workers 2 \
+  --main-concurrency 4 \
   --model claude/claude-3-5-sonnet-20240620
 ```
 

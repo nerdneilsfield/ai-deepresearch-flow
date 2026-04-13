@@ -24,6 +24,17 @@ stage_dag = false
 # If omitted, the built-in markdown template is used.
 # template_path = "templates/paper.md.j2"
 
+[translator_config]
+# Optional defaults for translator scheduler / CLI concurrency knobs.
+document_window = 8
+initial_workers = 4
+retry_workers = 2
+fallback_workers = 2
+fallback_2_workers = 2
+main_concurrency = 4
+fallback_concurrency = 2
+fallback_2_concurrency = 2
+
 [[providers]]
 name = "openai"
 type = "openai_compatible"

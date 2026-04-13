@@ -36,9 +36,25 @@ from deepresearch_flow.translator.engine import DumpSnapshot, MarkdownTranslator
 logger = logging.getLogger(__name__)
 
 
+_QUIET_LOGGERS = (
+    "httpx",
+    "httpx._client",
+    "httpx._transports",
+    "httpcore",
+    "httpcore.connection",
+    "httpcore.http11",
+    "httpcore.http2",
+    "httpcore.proxy",
+)
+
+
 def configure_logging(verbose: bool) -> None:
     level = "DEBUG" if verbose else "INFO"
     coloredlogs.install(level=level, fmt="%(asctime)s %(levelname)s %(message)s")
+    # httpx/httpcore DEBUG logs overwhelm translator progress output and
+    # duplicate request timing that we already report ourselves.
+    for name in _QUIET_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)
 
 
 def _format_duration(seconds: float) -> str:
@@ -141,10 +157,67 @@ def translator() -> None:
 @click.option(
     "--group-concurrency",
     "group_concurrency",
-    default=1,
+    default=None,
+    type=int,
+    help="[DEPRECATED: use --initial-workers] Concurrent translation groups per document",
+)
+@click.option(
+    "--document-window",
+    "document_window",
+    default=None,
+    type=int,
+    help="Max documents simultaneously in-flight (default: all)",
+)
+@click.option(
+    "--initial-workers",
+    "initial_workers",
+    default=None,
+    type=int,
+    help="Worker count for initial translation queue",
+)
+@click.option(
+    "--retry-workers",
+    "retry_workers",
+    default=None,
+    type=int,
+    help="Worker count for retry queue",
+)
+@click.option(
+    "--fallback-workers",
+    "fallback_workers",
+    default=2,
     show_default=True,
     type=int,
-    help="Concurrent translation groups per document",
+    help="Worker count for fallback queue",
+)
+@click.option(
+    "--fallback-2-workers",
+    "fallback_2_workers",
+    default=2,
+    show_default=True,
+    type=int,
+    help="Worker count for fallback_2 queue",
+)
+@click.option(
+    "--main-concurrency",
+    "main_concurrency",
+    default=None,
+    type=int,
+    help="Provider-level concurrency for main model",
+)
+@click.option(
+    "--fallback-concurrency",
+    "fallback_concurrency_val",
+    default=None,
+    type=int,
+    help="Provider-level concurrency for fallback model",
+)
+@click.option(
+    "--fallback-2-concurrency",
+    "fallback_2_concurrency_val",
+    default=None,
+    type=int,
+    help="Provider-level concurrency for fallback_2 model",
 )
 @click.option("--timeout", "timeout", default=120.0, show_default=True, type=float)
 @click.option("--retry-times", "retry_times", default=3, show_default=True, type=int)
@@ -198,7 +271,15 @@ def translate(
     fix_level: str,
     max_chunk_chars: int,
     max_concurrency: int,
-    group_concurrency: int,
+    group_concurrency: int | None,
+    document_window: int | None,
+    initial_workers: int | None,
+    retry_workers: int | None,
+    fallback_workers: int,
+    fallback_2_workers: int,
+    main_concurrency: int | None,
+    fallback_concurrency_val: int | None,
+    fallback_2_concurrency_val: int | None,
     timeout: float,
     retry_times: int,
     fallback_model_ref: str | None,
@@ -244,6 +325,36 @@ def translate(
         raise click.ClickException("At least one --input or --input-list is required")
 
     config = load_config(config_path)
+    translator_defaults = config.translator_config
+    if group_concurrency is not None:
+        if initial_workers is None:
+            click.echo(
+                "Warning: --group-concurrency is deprecated, use --initial-workers",
+                err=True,
+            )
+            initial_workers = group_concurrency
+        else:
+            click.echo(
+                "Warning: --group-concurrency ignored because --initial-workers is set",
+                err=True,
+            )
+    if translator_defaults is not None:
+        if document_window is None:
+            document_window = translator_defaults.document_window
+        if initial_workers is None:
+            initial_workers = translator_defaults.initial_workers
+        if retry_workers is None:
+            retry_workers = translator_defaults.retry_workers
+        if main_concurrency is None:
+            main_concurrency = translator_defaults.main_concurrency
+        if fallback_concurrency_val is None:
+            fallback_concurrency_val = translator_defaults.fallback_concurrency
+        if fallback_2_concurrency_val is None:
+            fallback_2_concurrency_val = translator_defaults.fallback_2_concurrency
+        if fallback_workers == 2 and translator_defaults.fallback_workers is not None:
+            fallback_workers = translator_defaults.fallback_workers
+        if fallback_2_workers == 2 and translator_defaults.fallback_2_workers is not None:
+            fallback_2_workers = translator_defaults.fallback_2_workers
     try:
         selector = parse_model_selector(model_ref, config)
     except ValueError as exc:
@@ -330,8 +441,26 @@ def translate(
         raise click.ClickException("--max-chunk-chars must be positive")
     if max_concurrency <= 0:
         raise click.ClickException("--max-concurrency must be positive")
-    if group_concurrency <= 0:
-        raise click.ClickException("--group-concurrency must be positive")
+    if initial_workers is None:
+        initial_workers = 1
+    if retry_workers is None:
+        retry_workers = max(initial_workers // 4, 1)
+    if initial_workers <= 0:
+        raise click.ClickException("--initial-workers must be positive")
+    if retry_workers <= 0:
+        raise click.ClickException("--retry-workers must be positive")
+    if fallback_workers <= 0:
+        raise click.ClickException("--fallback-workers must be positive")
+    if fallback_2_workers <= 0:
+        raise click.ClickException("--fallback-2-workers must be positive")
+    if document_window is not None and document_window <= 0:
+        raise click.ClickException("--document-window must be positive")
+    if main_concurrency is not None and main_concurrency <= 0:
+        raise click.ClickException("--main-concurrency must be positive")
+    if fallback_concurrency_val is not None and fallback_concurrency_val <= 0:
+        raise click.ClickException("--fallback-concurrency must be positive")
+    if fallback_2_concurrency_val is not None and fallback_2_concurrency_val <= 0:
+        raise click.ClickException("--fallback-2-concurrency must be positive")
     if timeout <= 0:
         raise click.ClickException("--timeout must be positive")
     if retry_times <= 0:
@@ -448,6 +577,14 @@ def translate(
         else None
     )
     failed_files: list[Path] = []
+    use_compat_debug_path = any(
+        (
+            dump_protected,
+            dump_placeholders,
+            dump_nodes,
+        )
+    )
+    compat_group_concurrency = group_concurrency or initial_workers or 1
 
     async def process_one(
         path: Path,
@@ -515,7 +652,7 @@ def translate(
             format_enabled=not no_format,
             request_log=request_log if dump_requests_log else None,
             dump_callback=write_dump if debug_root is not None else None,
-            group_concurrency=group_concurrency,
+            group_concurrency=compat_group_concurrency,
             route_pool=route_pool,
             fallback_route_pool=fallback_route_pool,
             fallback_route_pool_2=fallback_route_pool_2,
@@ -550,7 +687,7 @@ def translate(
             )
         await progress.advance_docs(1)
 
-    async def run() -> None:
+    async def run_compat() -> None:
         progress = ProgressTracker(len(to_process))
         try:
             async with httpx.AsyncClient() as client:
@@ -566,7 +703,95 @@ def translate(
         finally:
             await progress.close()
 
-    asyncio.run(run())
+    async def run_scheduler() -> None:
+        from deepresearch_flow.translator.progress import ProgressReporter
+        from deepresearch_flow.translator.scheduler import DocStage, QueueConfig, Scheduler
+
+        nonlocal_document_window = document_window if document_window is not None else len(to_process)
+        global_sem = asyncio.Semaphore(max_concurrency)
+        main_sem = asyncio.Semaphore(main_concurrency or max_concurrency)
+        fb_sem = asyncio.Semaphore(fallback_concurrency_val or max_concurrency)
+        fb2_sem = asyncio.Semaphore(fallback_2_concurrency_val or max_concurrency)
+
+        queue_configs: list[QueueConfig] = [
+            QueueConfig(
+                stage=DocStage.TRANSLATING,
+                workers=initial_workers,
+                provider_semaphore=main_sem,
+                route_pool=route_pool,
+                provider=provider,
+                model=model_name,
+                api_keys=provider.api_keys,
+                max_tokens=max_tokens,
+                retry_limit=max(retry_times, 1),
+            ),
+            QueueConfig(
+                stage=DocStage.RETRYING,
+                workers=retry_workers,
+                provider_semaphore=main_sem,
+                route_pool=route_pool,
+                provider=provider,
+                model=model_name,
+                api_keys=provider.api_keys,
+                max_tokens=max_tokens,
+                retry_limit=max(retry_times, 1),
+            ),
+        ]
+        if fallback_provider and fallback_model_name:
+            queue_configs.append(
+                QueueConfig(
+                    stage=DocStage.FALLBACK_1,
+                    workers=fallback_workers,
+                    provider_semaphore=fb_sem,
+                    route_pool=fallback_route_pool,
+                    provider=fallback_provider,
+                    model=fallback_model_name,
+                    api_keys=fallback_provider.api_keys,
+                    max_tokens=fallback_max_tokens,
+                    retry_limit=fallback_retry_times or max(retry_times, 1),
+                )
+            )
+        if fallback_provider_2 and fallback_model_name_2:
+            queue_configs.append(
+                QueueConfig(
+                    stage=DocStage.FALLBACK_2,
+                    workers=fallback_2_workers,
+                    provider_semaphore=fb2_sem,
+                    route_pool=fallback_route_pool_2,
+                    provider=fallback_provider_2,
+                    model=fallback_model_name_2,
+                    api_keys=fallback_provider_2.api_keys,
+                    max_tokens=fallback_max_tokens_2,
+                    retry_limit=fallback_retry_times_2 or max(retry_times, 1),
+                )
+            )
+
+        progress = ProgressReporter(len(to_process), [qc.stage.value for qc in queue_configs])
+        try:
+            async with httpx.AsyncClient() as client:
+                scheduler = Scheduler(
+                    translator=translator,
+                    document_window=nonlocal_document_window,
+                    global_semaphore=global_sem,
+                    queue_configs=queue_configs,
+                    progress=progress,
+                    client=client,
+                    throttle=throttle,
+                    timeout=timeout,
+                )
+                failed_files[:] = await scheduler.run(
+                    paths=to_process,
+                    output_map=output_map,
+                    fix_level=fix_level,
+                    format_enabled=not no_format,
+                    request_log_enabled=dump_requests_log,
+                )
+        finally:
+            await progress.close()
+        for path in failed_files:
+            click.echo(f"Failed {path}", err=True)
+
+    asyncio.run(run_compat() if use_compat_debug_path else run_scheduler())
 
     duration = time.monotonic() - start_time
     table = Table(

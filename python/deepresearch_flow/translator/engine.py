@@ -17,7 +17,7 @@ import httpx
 from deepresearch_flow.paper.config import ProviderConfig, resolve_api_keys
 from deepresearch_flow.paper.llm import call_provider, backoff_delay
 from deepresearch_flow.paper.providers.base import ProviderError
-from deepresearch_flow.paper.routing import RoutePool
+from deepresearch_flow.paper.routing import RoutePool, RuntimeRoute
 from deepresearch_flow.translator.config import TranslateConfig
 from deepresearch_flow.translator.fixers import fix_markdown, preserve_heading_levels
 from deepresearch_flow.translator.placeholder import PlaceHolderStore
@@ -69,6 +69,23 @@ class TranslationStats:
     retry_rounds: int
 
 
+@dataclass
+class PreprocessResult:
+    reference_text: str
+    protected_text: str
+    placeholder_store: PlaceHolderStore
+    segments: list[Any]
+    nodes: dict[int, Node]
+    total_nodes: int
+    skip_count: int
+    initial_groups: list[str]
+
+
+def _quiet_http_debug_logs() -> None:
+    logging.getLogger("httpx").setLevel(logging.INFO)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+
 class KeyRotator:
     def __init__(self, keys: list[str]) -> None:
         self._keys = keys
@@ -107,6 +124,7 @@ class MarkdownTranslator:
         self._rumdl_path = shutil.which("rumdl")
         self._rumdl_warned = False
         self._rumdl_timeout_seconds = 120.0
+        _quiet_http_debug_logs()
 
         self._rx_preserve = re.compile(
             r"@@PRESERVE_(\d+)@@[\s\S]*?@@/PRESERVE_\1@@", re.DOTALL
@@ -477,6 +495,75 @@ class MarkdownTranslator:
             return store.restore_all_checked(text)
         return store.restore_all(text)
 
+    async def preprocess_document(
+        self,
+        text: str,
+        fix_level: str,
+        format_enabled: bool,
+        dump_callback: Callable[[DumpSnapshot], None] | None = None,
+        request_log: list[dict[str, Any]] | None = None,
+    ) -> PreprocessResult:
+        if fix_level != "off":
+            text = fix_markdown(text, fix_level)
+        if format_enabled:
+            text = await self._format_markdown(text, "pre")
+
+        store = PlaceHolderStore()
+        protected = self.protector.protect(text, self.cfg, store)
+        if dump_callback is not None:
+            dump_callback(
+                DumpSnapshot(
+                    stage="protected",
+                    protected_text=protected,
+                    placeholder_store=store,
+                    request_log=request_log,
+                )
+            )
+        segments, nodes = split_to_segments(protected, self.cfg.max_chunk_chars)
+        total_nodes = len(nodes)
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("Segments: %d", len(segments))
+            logger.debug("Nodes: %d", len(nodes))
+
+        skip_count = 0
+        for node in nodes.values():
+            if self._is_placeholder_only(node.origin_text):
+                node.translated_text = node.origin_text
+                skip_count += 1
+        if skip_count:
+            logger.debug("Skipped %d placeholder-only nodes", skip_count)
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("Placeholder counts: %s", store.kind_counts())
+
+        initial_groups = self._group_nodes(nodes)
+        return PreprocessResult(
+            reference_text=text,
+            protected_text=protected,
+            placeholder_store=store,
+            segments=segments,
+            nodes=nodes,
+            total_nodes=total_nodes,
+            skip_count=skip_count,
+            initial_groups=initial_groups,
+        )
+
+    async def finalize_document(
+        self,
+        reference_text: str,
+        segments: list[Any],
+        translated_nodes: dict[int, Node],
+        store: PlaceHolderStore,
+        format_enabled: bool,
+    ) -> str:
+        merged_text = reassemble_segments(segments, translated_nodes)
+        if format_enabled:
+            formatted = await self._format_markdown(merged_text, "post")
+            merged_text = preserve_heading_levels(reference_text, formatted)
+        else:
+            merged_text = preserve_heading_levels(reference_text, merged_text)
+        merged_text = self._normalize_markdown_blocks(merged_text)
+        return self._restore_protected_text(merged_text, store)
+
     async def _format_markdown(self, text: str, stage: str) -> str:
         if not text.strip():
             return text
@@ -680,7 +767,6 @@ class MarkdownTranslator:
         client: httpx.AsyncClient,
         api_key: str | None,
         timeout: float,
-        semaphore: asyncio.Semaphore,
         throttle: RequestThrottle | None,
         max_tokens: int | None,
         max_retries: int,
@@ -688,7 +774,7 @@ class MarkdownTranslator:
         stage: str,
         group_index: int,
         dump_callback: Callable[[DumpSnapshot], None] | None,
-        route_pool: RoutePool | None = None,
+        route: RuntimeRoute | None = None,
     ) -> str:
         attempts = 0
         while True:
@@ -698,8 +784,7 @@ class MarkdownTranslator:
             current_provider = provider
             current_model = model
             current_api_key = api_key
-            if route_pool is not None:
-                route = await route_pool.get()
+            if route is not None:
                 current_provider = route.provider
                 current_model = route.model.model_name
                 current_api_key = route.key.value
@@ -708,18 +793,17 @@ class MarkdownTranslator:
             )
             start_time = time.time()
             try:
-                async with semaphore:
-                    response = await call_provider(
-                        current_provider,
-                        current_model,
-                        messages,
-                        {},
-                        current_api_key,
-                        timeout,
-                        "none",
-                        client,
-                        max_tokens=max_tokens,
-                    )
+                response = await call_provider(
+                    current_provider,
+                    current_model,
+                    messages,
+                    {},
+                    current_api_key,
+                    timeout,
+                    "none",
+                    client,
+                    max_tokens=max_tokens,
+                )
                 elapsed_ms = int((time.time() - start_time) * 1000)
                 if request_log is not None:
                     request_log.append(
@@ -774,12 +858,6 @@ class MarkdownTranslator:
                         elapsed_ms,
                         exc,
                     )
-                if route_pool is not None:
-                    quota_hit = await route_pool.mark_quota_exceeded(route, str(exc), exc.status_code)
-                    if quota_hit:
-                        continue
-                    if exc.retryable:
-                        await route_pool.mark_error(route)
                 if exc.retryable and attempts < max_retries:
                     await asyncio.sleep(backoff_delay(1.0, attempts, 20.0))
                     continue
@@ -814,37 +892,20 @@ class MarkdownTranslator:
         fallback_route_pool: RoutePool | None = None,
         fallback_route_pool_2: RoutePool | None = None,
     ) -> TranslationResult:
-        if fix_level != "off":
-            text = fix_markdown(text, fix_level)
-        if format_enabled:
-            text = await self._format_markdown(text, "pre")
-
-        store = PlaceHolderStore()
-        protected = self.protector.protect(text, self.cfg, store)
-        if dump_callback is not None:
-            dump_callback(
-                DumpSnapshot(
-                    stage="protected",
-                    protected_text=protected,
-                    placeholder_store=store,
-                    request_log=request_log,
-                )
-            )
-        segments, nodes = split_to_segments(protected, self.cfg.max_chunk_chars)
-        total_nodes = len(nodes)
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug("Segments: %d", len(segments))
-            logger.debug("Nodes: %d", len(nodes))
-
-        skip_count = 0
-        for node in nodes.values():
-            if self._is_placeholder_only(node.origin_text):
-                node.translated_text = node.origin_text
-                skip_count += 1
-        if skip_count:
-            logger.debug("Skipped %d placeholder-only nodes", skip_count)
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug("Placeholder counts: %s", store.kind_counts())
+        prep = await self.preprocess_document(
+            text,
+            fix_level=fix_level,
+            format_enabled=format_enabled,
+            dump_callback=dump_callback,
+            request_log=request_log,
+        )
+        text = prep.reference_text
+        protected = prep.protected_text
+        store = prep.placeholder_store
+        segments = prep.segments
+        nodes = prep.nodes
+        total_nodes = prep.total_nodes
+        skip_count = prep.skip_count
 
         rotator = KeyRotator(resolve_api_keys(api_keys))
         max_retries = max(self.cfg.retry_times, 1)
@@ -875,26 +936,44 @@ class MarkdownTranslator:
             outputs: list[str] = [""] * len(groups)
 
             async def run_one(idx: int, group_text: str) -> tuple[int, str]:
-                api_key = None if route_pool_value is not None else await rotator.next_key()
+                route: RuntimeRoute | None = None
+                api_key = None
+                if route_pool_value is not None:
+                    route = await route_pool_value.get()
+                else:
+                    api_key = await rotator.next_key()
                 try:
-                    response = await self._translate_group(
-                        group_text,
-                        provider_value,
-                        model_value,
-                        client,
-                        api_key,
-                        timeout,
-                        semaphore,
-                        throttle,
-                        max_tokens_value,
-                        retry_limit_value,
-                        request_log,
-                        stage,
-                        idx,
-                        dump_callback,
-                        route_pool=route_pool_value,
-                    )
-                    return idx, response
+                    while True:
+                        try:
+                            async with semaphore:
+                                response = await self._translate_group(
+                                    group_text,
+                                    provider_value,
+                                    model_value,
+                                    client,
+                                    api_key,
+                                    timeout,
+                                    throttle,
+                                    max_tokens_value,
+                                    retry_limit_value,
+                                    request_log,
+                                    stage,
+                                    idx,
+                                    dump_callback,
+                                    route=route,
+                                )
+                            return idx, response
+                        except ProviderError as exc:
+                            if route_pool_value is not None and route is not None:
+                                quota_hit = await route_pool_value.mark_quota_exceeded(
+                                    route, str(exc), exc.status_code
+                                )
+                                if quota_hit:
+                                    route = await route_pool_value.get()
+                                    continue
+                                if exc.retryable:
+                                    await route_pool_value.mark_error(route)
+                            raise
                 except ProviderError:
                     # Keep the group empty so failed nodes are detected and can
                     # be retried by the fallback model chain instead of aborting
@@ -947,7 +1026,7 @@ class MarkdownTranslator:
 
             return outputs
 
-        groups = self._group_nodes(nodes)
+        groups = prep.initial_groups
         initial_groups = len(groups)
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug("Groups: %d", len(groups))
@@ -1248,14 +1327,13 @@ class MarkdownTranslator:
             for nid in failed_nodes:
                 translated_nodes[nid].translated_text = translated_nodes[nid].origin_text
 
-        merged_text = reassemble_segments(segments, translated_nodes)
-        if format_enabled:
-            formatted = await self._format_markdown(merged_text, "post")
-            merged_text = preserve_heading_levels(text, formatted)
-        else:
-            merged_text = preserve_heading_levels(text, merged_text)
-        merged_text = self._normalize_markdown_blocks(merged_text)
-        restored = self._restore_protected_text(merged_text, store)
+        restored = await self.finalize_document(
+            reference_text=text,
+            segments=segments,
+            translated_nodes=translated_nodes,
+            store=store,
+            format_enabled=format_enabled,
+        )
 
         return TranslationResult(
             translated_text=restored,

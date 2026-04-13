@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from types import SimpleNamespace
 import re
 import subprocess
@@ -206,6 +207,43 @@ def test_engine_format_markdown_returns_original_on_rumdl_timeout(monkeypatch) -
     monkeypatch.setattr("deepresearch_flow.translator.engine.subprocess.run", lambda *a, **k: fake_run())
 
     assert asyncio.run(translator._format_markdown("# Title\n", "post")) == "# Title\n"
+
+
+def test_markdown_translator_quiets_httpx_debug_logging() -> None:
+    httpx_logger = logging.getLogger("httpx")
+    httpcore_logger = logging.getLogger("httpcore")
+    old_httpx = httpx_logger.level
+    old_httpcore = httpcore_logger.level
+    try:
+        httpx_logger.setLevel(logging.NOTSET)
+        httpcore_logger.setLevel(logging.NOTSET)
+
+        _make_translator()
+
+        assert httpx_logger.level == logging.INFO
+        assert httpcore_logger.level == logging.WARNING
+    finally:
+        httpx_logger.setLevel(old_httpx)
+        httpcore_logger.setLevel(old_httpcore)
+
+
+def test_preprocess_document_returns_expected_document_state() -> None:
+    translator = _make_translator()
+    text = "__PH_LINK_000001__\n"
+
+    result = asyncio.run(
+        translator.preprocess_document(
+            text,
+            fix_level="off",
+            format_enabled=False,
+        )
+    )
+
+    assert result.reference_text == text
+    assert result.total_nodes == 1
+    assert result.skip_count == 1
+    assert result.initial_groups == []
+    assert result.nodes[0].translated_text == text
 
 
 def test_email_group_address_is_not_marked_failed_when_left_unchanged(monkeypatch) -> None:

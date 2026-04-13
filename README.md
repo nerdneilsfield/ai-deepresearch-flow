@@ -98,6 +98,20 @@ The new config uses:
 
 Missing `env:VAR_NAME` references now fail explicitly during config load.
 
+Optional translator scheduler defaults can live under `[translator_config]`:
+
+```toml
+[translator_config]
+document_window = 8
+initial_workers = 4
+retry_workers = 2
+fallback_workers = 2
+fallback_2_workers = 2
+main_concurrency = 4
+fallback_concurrency = 2
+fallback_2_concurrency = 2
+```
+
 Per-key quota metadata still lives on the key object:
 
 ```toml
@@ -1133,15 +1147,21 @@ The translator module is built for scientific documents. It uses a node-based ar
 - Structure Protection: automatically detects and "freezes" code blocks, LaTeX (`$$...$$`), HTML tables, and images before sending text to the LLM.
 - OCR Repair: use `--fix-level` to merge broken paragraphs and convert text references (`[1]`) to clickable Markdown footnotes (`[^1]`).
 - Context-Aware: supports retries for failed chunks and falls back gracefully.
-- Group Concurrency: use `--group-concurrency` to run multiple translation groups in parallel per document.
+- Multi-document Scheduler: documents, retries, and fallback stages now run through separate worker queues.
+- Concurrency Controls: use `--document-window`, `--initial-workers`, `--retry-workers`, and provider-level `--main-concurrency` / fallback concurrency flags.
+- Config Defaults: put the same scheduler defaults in `[translator_config]` inside `config.toml`.
+- Backward Compatibility: `--group-concurrency` is deprecated and maps to `--initial-workers`.
 
 ```bash
-# Translate with structure protection and OCR repairs
+# Translate with structure protection, OCR repairs, and concurrent scheduling
 uv run deepresearch-flow translator translate \
-  --input ./paper.md \
+  --input ./papers \
   --target-lang ja \
   --fix-level aggressive \
-  --group-concurrency 4 \
+  --document-window 8 \
+  --initial-workers 4 \
+  --retry-workers 2 \
+  --main-concurrency 4 \
   --model claude/claude-3-5-sonnet-20240620
 ```
 

@@ -14,6 +14,7 @@
 
 This plan covers:
 
+- `python/deepresearch_flow/paper/config.py`
 - `python/deepresearch_flow/translator/engine.py`
 - `python/deepresearch_flow/translator/scheduler.py` (new)
 - `python/deepresearch_flow/translator/progress.py` (new)
@@ -23,10 +24,11 @@ This plan covers:
 
 This plan does not cover:
 
-- `protector.py`, `placeholder.py`, `segment.py`, `fixers.py`, `prompts.py`, `config.py`
+- `protector.py`, `placeholder.py`, `segment.py`, `fixers.py`, `prompts.py`
 - `paper/routing.py`, `paper/llm.py`, `paper/providers/*`
 - Translation quality, prompt engineering, or content policy
 - Per-attempt `dump_callback` in scheduler workers (intentional scope cut; `request_log` is preserved, staged debug dumps are deferred to a future iteration)
+- Any cross-document shared `request_log`; each `DocumentContext` owns its own request_log list and workers must only append to the list belonging to `task.doc_id`
 
 ---
 
@@ -34,6 +36,7 @@ This plan does not cover:
 
 | File | Action | Responsibility |
 |------|--------|----------------|
+| `python/deepresearch_flow/paper/config.py` | Modify | Parse optional `[translator_config]` defaults for scheduler/CLI concurrency knobs |
 | `python/deepresearch_flow/translator/engine.py` | Modify | Extract `preprocess_document()`, `finalize_document()`, update `_translate_group()` signature; retain `translate()` as compat wrapper |
 | `python/deepresearch_flow/translator/scheduler.py` | Create | `DocStage`, `TRANSITIONS`, `StateError`, `DocumentContext`, `GroupTask`, `CompletionEvent`, `QueueConfig`, `DocumentActor`, `Scheduler` |
 | `python/deepresearch_flow/translator/progress.py` | Create | `ProgressReporter` with per-stage tqdm bars |
@@ -226,6 +229,8 @@ if route is not None:
 
 Remove the `async with semaphore:` wrapper around the `call_provider` call (the caller now acquires semaphores). Remove the `route_pool.mark_quota_exceeded()` and `route_pool.mark_error()` calls from the except block (the caller now handles route lifecycle).
 
+Compatibility note: preserve today's quota/cooldown behavior when lifting route ownership into workers. A temporary quota hit must stay inside the worker: call `mark_quota_exceeded(...)`, reacquire a route after cooldown, and retry the same `GroupTask` without emitting a failed `CompletionEvent`. Only non-quota failures should be surfaced back to the actor as task failures.
+
 - [ ] **Step 4: Rewrite `translate()` to call extracted methods**
 
 Replace the inline code in `translate()` with calls to `preprocess_document()` and `finalize_document()`. The middle section (run_groups + retry/fallback loops) stays as-is for now — it's the compatibility wrapper. Update the `run_groups` inner function to handle the new `_translate_group()` signature: acquire route before semaphore, handle route error marking.
@@ -416,6 +421,7 @@ class DocumentContext:
     total_nodes: int = 0
     skip_count: int = 0
     initial_groups_count: int = 0
+    initial_groups: list[str] = field(default_factory=list)
 
     # Translation state (written only by DocumentActor)
     translated_nodes: dict[int, Node] = field(default_factory=dict)
@@ -1096,6 +1102,9 @@ class Scheduler:
         # Wait for all documents to complete
         while self._done_count < self._total_docs:
             await asyncio.sleep(0.05)
+        # Implementation note: replace this polling loop with an
+        # asyncio.Event before landing the production patch so the
+        # scheduler does not busy-wait once completion signaling exists.
 
         # Shutdown workers
         for stage, queue in self._queues.items():
@@ -1138,15 +1147,15 @@ class Scheduler:
             total_nodes=result.total_nodes,
             skip_count=result.skip_count,
             initial_groups_count=len(result.initial_groups),
+            initial_groups=result.initial_groups,
             request_log=request_log,
         )
 
     def _build_group_tasks(
         self, ctx: DocumentContext, stage: DocStage,
     ) -> list[GroupTask]:
-        # Use existing _group_nodes to get group text strings
-        # Then pair with node IDs
-        groups = self._translator._group_nodes(ctx.nodes)
+        # Reuse the initial grouping emitted by preprocess_document()
+        groups = ctx.initial_groups
         tasks: list[GroupTask] = []
         # _group_nodes returns list of group text strings
         # We need to figure out which nodes are in each group
@@ -1234,48 +1243,61 @@ class Scheduler:
                 queue.task_done()
                 break
             try:
-                # 1. Acquire route (may wait on cooldown — no permits held)
-                route: RuntimeRoute | None = None
-                api_key: str | None = None
-                if config.route_pool is not None:
-                    route = await config.route_pool.get()
-                elif rotator is not None:
-                    api_key = await rotator.next_key()
+                while True:
+                    # 1. Acquire route (may wait on cooldown — no permits held)
+                    route: RuntimeRoute | None = None
+                    api_key: str | None = None
+                    if config.route_pool is not None:
+                        route = await config.route_pool.get()
+                    elif rotator is not None:
+                        api_key = await rotator.next_key()
 
-                # 2. Acquire permits, then call LLM.
-                #    Throttle ownership stays inside _translate_group()
-                #    (it already calls throttle.tick() before each attempt).
-                #    Do NOT tick here — that would double-throttle.
-                async with config.provider_semaphore:
-                    async with self._global_sem:
-                        # Thread request_log from DocumentContext for debug output
-                        ctx = self._actors.get(task.doc_id)
-                        req_log = ctx._ctx.request_log if ctx else None
-                        response = await self._translator._translate_group(
-                            task.group_text,
-                            config.provider,
-                            config.model,
-                            self._client,
-                            api_key,
-                            self._timeout,
-                            self._throttle,
-                            config.max_tokens,
-                            config.retry_limit,
-                            req_log,
-                            task.stage.value,
-                            task.group_index,
-                            # dump_callback: scheduler v1 does NOT wire
-                            # per-attempt dump_callback into workers. The
-                            # --dump-nodes / --dump-protected / --dump-placeholders
-                            # debug outputs are written once at finalize time
-                            # (via the compat wrapper or a future scheduler hook),
-                            # not per-group. request_log IS preserved above.
-                            # This is an intentional scope cut — per-attempt
-                            # staged dumps can be added later without changing
-                            # the scheduler's core interfaces.
-                            None,
-                            route=route,
-                        )
+                    # 2. Acquire permits, then call LLM.
+                    #    Throttle ownership stays inside _translate_group()
+                    #    (it already calls throttle.tick() before each attempt).
+                    #    Do NOT tick here — that would double-throttle.
+                    try:
+                        async with config.provider_semaphore:
+                            async with self._global_sem:
+                                # Thread request_log from DocumentContext for debug output
+                                ctx = self._actors.get(task.doc_id)
+                                req_log = ctx._ctx.request_log if ctx else None
+                                response = await self._translator._translate_group(
+                                    task.group_text,
+                                    config.provider,
+                                    config.model,
+                                    self._client,
+                                    api_key,
+                                    self._timeout,
+                                    self._throttle,
+                                    config.max_tokens,
+                                    config.retry_limit,
+                                    req_log,
+                                    task.stage.value,
+                                    task.group_index,
+                                    # dump_callback: scheduler v1 does NOT wire
+                                    # per-attempt dump_callback into workers. The
+                                    # --dump-nodes / --dump-protected / --dump-placeholders
+                                    # debug outputs are written once at finalize time
+                                    # (via the compat wrapper or a future scheduler hook),
+                                    # not per-group. request_log IS preserved above.
+                                    # This is an intentional scope cut — per-attempt
+                                    # staged dumps can be added later without changing
+                                    # the scheduler's core interfaces.
+                                    None,
+                                    route=route,
+                                )
+                        break
+                    except ProviderError as exc:
+                        if route is not None and config.route_pool is not None:
+                            quota_hit = await config.route_pool.mark_quota_exceeded(
+                                route, str(exc), exc.status_code,
+                            )
+                            if quota_hit:
+                                continue
+                            if exc.retryable:
+                                await config.route_pool.mark_error(route)
+                        raise
                 await self._result_queue.put(CompletionEvent(
                     doc_id=task.doc_id,
                     stage=task.stage,
@@ -1285,12 +1307,6 @@ class Scheduler:
                     response=response,
                 ))
             except ProviderError as exc:
-                if route is not None and config.route_pool is not None:
-                    quota_hit = await config.route_pool.mark_quota_exceeded(
-                        route, str(exc), exc.status_code,
-                    )
-                    if not quota_hit and exc.retryable:
-                        await config.route_pool.mark_error(route)
                 await self._result_queue.put(CompletionEvent(
                     doc_id=task.doc_id,
                     stage=task.stage,
@@ -1600,6 +1616,20 @@ Add parameter resolution logic at the start of the `translate()` function body, 
     # document_window default is set later, after to_process is computed
     # if document_window is None:
     #     document_window = len(to_process)
+```
+
+Also parse optional defaults from `[translator_config]` in `config.toml` via `paper/config.py`. CLI values still win over config-file defaults. The first implementation only needs scheduler/concurrency knobs there:
+
+```toml
+[translator_config]
+document_window = 8
+initial_workers = 4
+retry_workers = 2
+fallback_workers = 2
+fallback_2_workers = 2
+main_concurrency = 4
+fallback_concurrency = 2
+fallback_2_concurrency = 2
 ```
 
 - [ ] **Step 3: Build QueueConfigs and Scheduler**

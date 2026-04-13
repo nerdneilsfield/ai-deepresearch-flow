@@ -254,6 +254,18 @@ class SearchConfig:
 
 
 @dataclass(frozen=True)
+class TranslatorConfig:
+    document_window: int | None = None
+    initial_workers: int | None = None
+    retry_workers: int | None = None
+    fallback_workers: int | None = None
+    fallback_2_workers: int | None = None
+    main_concurrency: int | None = None
+    fallback_concurrency: int | None = None
+    fallback_2_concurrency: int | None = None
+
+
+@dataclass(frozen=True)
 class ProviderConfig:
     name: str
     type: str
@@ -295,6 +307,7 @@ class PaperConfig:
     embedding: EmbeddingConfig | None = None
     rerank: RerankConfig | None = None
     search: SearchConfig | None = None
+    translator_config: TranslatorConfig | None = None
 
 
 DEFAULT_EXTRACT = ExtractConfig(
@@ -673,6 +686,33 @@ def _parse_search_config(value: Any) -> SearchConfig | None:
     )
 
 
+def _parse_translator_config(value: Any) -> TranslatorConfig | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("Config [translator_config] must be an object")
+
+    def opt_int(name: str) -> int | None:
+        raw = value.get(name)
+        if raw is None:
+            return None
+        parsed = int(raw)
+        if parsed <= 0:
+            raise ValueError(f"Config [translator_config].{name} must be positive")
+        return parsed
+
+    return TranslatorConfig(
+        document_window=opt_int("document_window"),
+        initial_workers=opt_int("initial_workers"),
+        retry_workers=opt_int("retry_workers"),
+        fallback_workers=opt_int("fallback_workers"),
+        fallback_2_workers=opt_int("fallback_2_workers"),
+        main_concurrency=opt_int("main_concurrency"),
+        fallback_concurrency=opt_int("fallback_concurrency"),
+        fallback_2_concurrency=opt_int("fallback_2_concurrency"),
+    )
+
+
 def load_config(path: str) -> PaperConfig:
     config_path = Path(path)
     if not config_path.exists():
@@ -769,7 +809,7 @@ def load_config(path: str) -> PaperConfig:
     embedding = _parse_embedding_config(data.get("embedding"))
     rerank = _parse_rerank_config(data.get("rerank"))
     search = _parse_search_config(data.get("search"))
-
+    translator_config = _parse_translator_config(data.get("translator_config"))
     main_model = _parse_main_model(data.get("main_model"))
     for item in main_model:
         if not _model_declared(providers, item.model):
@@ -785,6 +825,7 @@ def load_config(path: str) -> PaperConfig:
         embedding=embedding,
         rerank=rerank,
         search=search,
+        translator_config=translator_config,
     )
 
 
