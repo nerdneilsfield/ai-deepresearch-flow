@@ -255,6 +255,9 @@ class SearchConfig:
 
 @dataclass(frozen=True)
 class TranslatorConfig:
+    model: str | None = None
+    fallback_model: str | None = None
+    fallback_model_2: str | None = None
     document_window: int | None = None
     initial_workers: int | None = None
     retry_workers: int | None = None
@@ -702,6 +705,9 @@ def _parse_translator_config(value: Any) -> TranslatorConfig | None:
         return parsed
 
     return TranslatorConfig(
+        model=_as_str(value.get("model"), None),
+        fallback_model=_as_str(value.get("fallback_model"), None),
+        fallback_model_2=_as_str(value.get("fallback_model_2"), None),
         document_window=opt_int("document_window"),
         initial_workers=opt_int("initial_workers"),
         retry_workers=opt_int("retry_workers"),

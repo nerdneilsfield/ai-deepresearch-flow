@@ -98,10 +98,13 @@ The new config uses:
 
 Missing `env:VAR_NAME` references now fail explicitly during config load.
 
-Optional translator scheduler defaults can live under `[translator_config]`:
+Optional translator CLI and scheduler defaults can live under `[translator_config]`:
 
 ```toml
 [translator_config]
+model = "openai/gpt-4o-mini"
+fallback_model = "claude/claude-sonnet-4-5-20250929"
+# fallback_model_2 = "ollama/llama3.1"
 document_window = 8
 initial_workers = 4
 retry_workers = 2
@@ -1149,7 +1152,7 @@ The translator module is built for scientific documents. It uses a node-based ar
 - Context-Aware: supports retries for failed chunks and falls back gracefully.
 - Multi-document Scheduler: documents, retries, and fallback stages now run through separate worker queues.
 - Concurrency Controls: use `--document-window`, `--initial-workers`, `--retry-workers`, and provider-level `--main-concurrency` / fallback concurrency flags.
-- Config Defaults: put the same scheduler defaults in `[translator_config]` inside `config.toml`.
+- Config Defaults: put `model` / `fallback_model` / `fallback_model_2` and the same scheduler defaults in `[translator_config]` inside `config.toml`.
 - Backward Compatibility: `--group-concurrency` is deprecated and maps to `--initial-workers`.
 
 ```bash

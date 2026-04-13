@@ -190,6 +190,7 @@ def test_translate_uses_translator_config_defaults_for_scheduler(tmp_path: Path,
         tmp_path,
         extra="""
         [translator_config]
+        model = "openai/gpt-4.1"
         document_window = 5
         initial_workers = 3
         retry_workers = 2
@@ -219,8 +220,6 @@ def test_translate_uses_translator_config_defaults_for_scheduler(tmp_path: Path,
             str(input_dir),
             "--output-dir",
             str(output_dir),
-            "--model",
-            "openai/gpt-4.1",
         ],
     )
 
@@ -271,6 +270,78 @@ def test_group_concurrency_maps_to_initial_workers(tmp_path: Path, monkeypatch) 
     assert result.exit_code == 0, result.output
     assert "deprecated" in result.output.lower()
     assert seen == {"initial_workers": 4}
+
+
+def test_translate_uses_model_defaults_from_translator_config(tmp_path: Path, monkeypatch) -> None:
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    source_path = input_dir / "doc.md"
+    source_path.write_text("source content", encoding="utf-8")
+    config_path = _write_config(
+        tmp_path,
+        extra="""
+        [translator_config]
+        model = "openai/gpt-4.1"
+        fallback_model = "openai/gpt-4.1-fallback"
+        """,
+    )
+    seen: dict[str, str] = {}
+
+    async def fake_run(self, *, paths, output_map, **kwargs):
+        _ = (paths, output_map, kwargs)
+        seen["model"] = self._configs[DocStage.TRANSLATING].model
+        seen["fallback"] = self._configs[DocStage.FALLBACK_1].model
+        return []
+
+    monkeypatch.setattr("deepresearch_flow.translator.scheduler.Scheduler.run", fake_run)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "translator",
+            "translate",
+            "--config",
+            str(config_path),
+            "--input",
+            str(input_dir),
+            "--output-dir",
+            str(output_dir),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert seen == {
+        "model": "gpt-4.1",
+        "fallback": "gpt-4.1-fallback",
+    }
+
+
+def test_translate_requires_model_when_not_in_cli_or_config(tmp_path: Path) -> None:
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    (input_dir / "doc.md").write_text("source content", encoding="utf-8")
+    config_path = _write_config(tmp_path)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "translator",
+            "translate",
+            "--config",
+            str(config_path),
+            "--input",
+            str(input_dir),
+            "--output-dir",
+            str(output_dir),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "--model is required" in result.output
 
 
 def test_dump_requests_log_stays_on_scheduler_path(tmp_path: Path, monkeypatch) -> None:

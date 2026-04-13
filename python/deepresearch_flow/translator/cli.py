@@ -147,7 +147,7 @@ def translator() -> None:
 )
 @click.option("--count", "count_limit", default=None, type=int, help="Translate up to N files")
 @click.option("-g", "--glob", "glob_pattern", default=None, help="Glob filter when input is a directory")
-@click.option("-m", "--model", "model_ref", required=True, help="provider/model")
+@click.option("-m", "--model", "model_ref", required=False, help="provider/model")
 @click.option("--source-lang", "source_lang", default=None, help="Source language hint")
 @click.option("--target-lang", "target_lang", default="zh", show_default=True, help="Target language")
 @click.option("--output-dir", "output_dir", default=None, help="Directory for translated markdown outputs")
@@ -326,6 +326,12 @@ def translate(
 
     config = load_config(config_path)
     translator_defaults = config.translator_config
+    if model_ref is None and translator_defaults is not None:
+        model_ref = translator_defaults.model
+    if fallback_model_ref is None and translator_defaults is not None:
+        fallback_model_ref = translator_defaults.fallback_model
+    if fallback_model_ref_2 is None and translator_defaults is not None:
+        fallback_model_ref_2 = translator_defaults.fallback_model_2
     if group_concurrency is not None:
         if initial_workers is None:
             click.echo(
@@ -355,6 +361,8 @@ def translate(
             fallback_workers = translator_defaults.fallback_workers
         if fallback_2_workers == 2 and translator_defaults.fallback_2_workers is not None:
             fallback_2_workers = translator_defaults.fallback_2_workers
+    if not model_ref:
+        raise click.ClickException("--model is required unless [translator_config].model is set")
     try:
         selector = parse_model_selector(model_ref, config)
     except ValueError as exc:

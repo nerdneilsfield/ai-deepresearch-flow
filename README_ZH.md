@@ -97,10 +97,13 @@ Breaking change：旧的 `api_keys`、`model_list`、`structured_mode` 字段已
 
 缺失的 `env:VAR_NAME` 现在会在加载配置时直接报错。
 
-翻译器调度相关的默认值也可以放在 `[translator_config]`：
+翻译器的模型默认值和调度默认值也可以放在 `[translator_config]`：
 
 ```toml
 [translator_config]
+model = "openai/gpt-4o-mini"
+fallback_model = "claude/claude-sonnet-4-5-20250929"
+# fallback_model_2 = "ollama/llama3.1"
 document_window = 8
 initial_workers = 4
 retry_workers = 2
@@ -1123,7 +1126,7 @@ uv run deepresearch-flow paper db snapshot build ...
 - 失败恢复：支持失败重试与后备模型。
 - 多文档调度：文档首轮、重试、fallback 现在分开走独立队列。
 - 并发控制：使用 `--document-window`、`--initial-workers`、`--retry-workers`，以及 `--main-concurrency` / fallback 并发参数。
-- 配置默认值：可以把同一套并发默认值写到 `config.toml` 的 `[translator_config]` 里。
+- 配置默认值：可以把 `model` / `fallback_model` / `fallback_model_2` 以及同一套并发默认值写到 `config.toml` 的 `[translator_config]` 里。
 - 兼容提示：`--group-concurrency` 已废弃，会映射到 `--initial-workers`。
 
 ```bash

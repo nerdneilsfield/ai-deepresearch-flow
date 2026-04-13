@@ -25,7 +25,10 @@ stage_dag = false
 # template_path = "templates/paper.md.j2"
 
 [translator_config]
-# Optional defaults for translator scheduler / CLI concurrency knobs.
+# Optional defaults for translator CLI and scheduler knobs.
+model = "openai/gpt-4o-mini"
+fallback_model = "claude/claude-sonnet-4-5-20250929"
+# fallback_model_2 = "ollama/llama3.1"
 document_window = 8
 initial_workers = 4
 retry_workers = 2
