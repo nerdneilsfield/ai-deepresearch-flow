@@ -29,6 +29,11 @@ except ImportError:  # pragma: no cover - dependency guard
 
 logger = logging.getLogger(__name__)
 _PLACEHOLDER_LIKE_RE = re.compile(r"__PH_[A-Z0-9_]+__")
+_CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
+_INLINE_PROSE_PUNCT_RE = re.compile(r"[，。；：！？]")
+_MAX_INLINE_MATH_CHARS = 80
+_MAX_INLINE_PROSE_WORDS = 6
+_MAX_INLINE_CJK_CHARS = 6
 
 @dataclass(frozen=True)
 class FormulaSpan:
@@ -113,7 +118,29 @@ def extract_math_spans(text: str, context_chars: int) -> list[FormulaSpan]:
 
 def _looks_like_inline_math(content: str) -> bool:
     stripped = content.strip()
-    if not stripped or "`" in stripped or _PLACEHOLDER_LIKE_RE.search(stripped):
+    if (
+        not stripped
+        or "`" in stripped
+        or "$" in stripped
+        or "\n" in stripped
+        or _PLACEHOLDER_LIKE_RE.search(stripped)
+        or len(stripped) > _MAX_INLINE_MATH_CHARS
+    ):
+        return False
+    plain = re.sub(r"\\[A-Za-z]+", " ", stripped)
+    plain = re.sub(r"[_^{}()\[\]=+\-*/|&,.:;<>]", " ", plain)
+    prose_words = re.findall(r"[A-Za-z]{3,}", plain)
+    cjk_count = len(_CJK_RE.findall(plain))
+    if len(prose_words) >= _MAX_INLINE_PROSE_WORDS:
+        return False
+    if cjk_count >= _MAX_INLINE_CJK_CHARS:
+        return False
+    if _INLINE_PROSE_PUNCT_RE.search(stripped) and (prose_words or cjk_count >= 2):
+        return False
+    tail = plain.rstrip()
+    if re.search(r"[\u3400-\u4dbf\u4e00-\u9fff]{2,}\s*$", tail):
+        return False
+    if len(prose_words) >= 3 and re.search(r"[A-Za-z]{3,}\s*$", tail):
         return False
     if any(token in stripped for token in ("\\", "^", "_", "{", "}", "=", "+", "-", "*", "/", "(", ")", "[", "]")):
         return True
@@ -124,7 +151,7 @@ def _looks_like_inline_math(content: str) -> bool:
 
 def _looks_like_display_math(content: str) -> bool:
     stripped = content.strip()
-    if not stripped or _PLACEHOLDER_LIKE_RE.search(stripped):
+    if not stripped or "$" in stripped or _PLACEHOLDER_LIKE_RE.search(stripped):
         return False
     if re.search(r"(?m)^\s{0,3}#{1,6}\s", stripped):
         return False
@@ -200,6 +227,33 @@ def _extract_inline_math_spans(
             idx = start + 1
 
     return spans
+
+
+def _review_formula_span(span: FormulaSpan) -> str | None:
+    content = span.content.strip()
+    if not content:
+        return "span_review: empty_formula"
+    if "$" in content:
+        return "span_review: embedded_dollar"
+    if _PLACEHOLDER_LIKE_RE.search(content):
+        return "span_review: placeholder_pollution"
+    if span.delimiter == "$$":
+        if re.search(r"(?m)^\s{0,3}#{1,6}\s", content):
+            return "span_review: display_reclassified"
+        if _INLINE_PROSE_PUNCT_RE.search(content) and len(_CJK_RE.findall(content)) >= 4:
+            return "span_review: display_reclassified"
+        return None
+    if len(content) > _MAX_INLINE_MATH_CHARS:
+        return "span_review: inline_reclassified"
+    plain = re.sub(r"\\[A-Za-z]+", " ", content)
+    plain = re.sub(r"[_^{}()\[\]=+\-*/|&,.:;<>]", " ", plain)
+    prose_words = re.findall(r"[A-Za-z]{3,}", plain)
+    cjk_count = len(_CJK_RE.findall(plain))
+    if len(prose_words) >= _MAX_INLINE_PROSE_WORDS or cjk_count >= _MAX_INLINE_CJK_CHARS:
+        return "span_review: inline_reclassified"
+    if _INLINE_PROSE_PUNCT_RE.search(content) and (prose_words or cjk_count >= 2):
+        return "span_review: inline_reclassified"
+    return None
 
 
 def _repair_spaced_command(match: re.Match[str]) -> str:
@@ -868,6 +922,7 @@ async def fix_math_text(
 ) -> tuple[str, list[dict[str, Any]]]:
     replacements: list[tuple[int, int, str]] = []
     issues: list[FormulaIssue] = []
+    error_records: list[dict[str, Any]] = []
     if spans is None:
         spans = extract_math_spans(text, context_chars)
     if allowed_keys:
@@ -882,6 +937,24 @@ async def fix_math_text(
     stats.formulas_total += len(spans)
     file_id = short_hash(file_path)
     for idx, span in enumerate(spans):
+        review_error = _review_formula_span(span)
+        if review_error:
+            stats.formulas_failed += 1
+            error_records.append(
+                {
+                    "path": file_path,
+                    "line": line_offset + span.line - 1,
+                    "delimiter": span.delimiter,
+                    "latex": span.content,
+                    "errors": [review_error],
+                    "field_path": field_path,
+                    "item_index": item_index,
+                }
+            )
+            if progress_cb:
+                progress_cb()
+            continue
+
         display_mode = span.delimiter == "$$"
         original = span.content
         errors = validate_formula(original, display_mode)
@@ -915,7 +988,6 @@ async def fix_math_text(
         if progress_cb:
             progress_cb()
 
-    error_records: list[dict[str, Any]] = []
     if issues and repair_enabled:
         # Convert to list for parallel processing
         batches = list(iter_batches(issues, batch_size, max_batch_chars))

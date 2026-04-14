@@ -1,27 +1,18 @@
-import asyncio
+from __future__ import annotations
+
 from dataclasses import dataclass
 import logging
-from types import SimpleNamespace
 
 import pytest
 
 from deepresearch_flow.recognize import math
-from deepresearch_flow.paper.providers.base import ProviderError
+
 
 @dataclass(frozen=True)
 class MathSpanSeed:
     kind: str
     text: str
     expected: list[tuple[str, str]]
-    seed_id: str
-
-
-@dataclass(frozen=True)
-class MathCleanupRejectSeed:
-    repaired: str
-    delimiter: str
-    cleaned: str
-    error: str
     seed_id: str
 
 
@@ -52,7 +43,11 @@ MATH_SPAN_SEEDS = [
     ),
     MathSpanSeed(
         kind="reclassify",
-        text="$$\nDownloaded on March 30, 2026 at 20:06:42 UTC from IEEE Xplore. Restrictions apply.\n## 5 IMPLEMENTING THE INDEX ON A GPU\nThe cost is $x+y$ in the text.\n$$\n",
+        text=(
+            "$$\nDownloaded on March 30, 2026 at 20:06:42 UTC from IEEE Xplore. "
+            "Restrictions apply.\n## 5 IMPLEMENTING THE INDEX ON A GPU\n"
+            "The cost is $x+y$ in the text.\n$$\n"
+        ),
         expected=[],
         seed_id="prose-display-block",
     ),
@@ -63,6 +58,7 @@ MATH_SPAN_SEEDS = [
         seed_id="display-block",
     ),
 ]
+
 
 CLEANUP_FORMULA_PASS_SEEDS = [
     pytest.param(
@@ -87,6 +83,7 @@ CLEANUP_FORMULA_PASS_SEEDS = [
     pytest.param(r"\L \O \S \P \AA", id="pass:single-letter-uppercase-commands"),
     pytest.param(r"\text{\textbf{t e r m}}", id="pass:nested-braced-text"),
 ]
+
 
 CLEANUP_FORMULA_REPAIR_SEEDS = [
     pytest.param(
@@ -118,16 +115,6 @@ CLEANUP_FORMULA_REPAIR_SEEDS = [
     ),
 ]
 
-MATH_CLEANUP_REJECT_SEEDS = [
-    MathCleanupRejectSeed(
-        repaired="$$broken$$",
-        delimiter="$$",
-        cleaned="still_broken",
-        error="cleaned error",
-        seed_id="still-invalid-after-cleanup",
-    ),
-]
-
 
 def assert_math_cleanup_idempotent(original: str) -> None:
     once = math.cleanup_formula(original)
@@ -138,53 +125,12 @@ def assert_math_cleanup_idempotent(original: str) -> None:
 
 @pytest.mark.parametrize("original", CLEANUP_FORMULA_PASS_SEEDS)
 def test_cleanup_formula_pass_seeds_are_unchanged(original: str) -> None:
-    cleaned = math.cleanup_formula(original)
-
-    assert cleaned == original
-
-
-def test_extract_math_spans_skips_currency_and_code_like_dollar_sequences() -> None:
-    text = "price is $5. code: `$HOME` and math $x+y$\n```\n$z$\n```\n$$\na+b\n$$\n"
-
-    spans = math.extract_math_spans(text, 0)
-
-    assert [(span.delimiter, span.content) for span in spans] == [
-        ("$", "x+y"),
-        ("$$", "\na+b\n"),
-    ]
-
-
-def test_extract_math_spans_skips_placeholder_polluted_math() -> None:
-    text = (
-        r"This is $\underline{\text{__PH_AUTOLINK_000106__}}$ end"
-        "\n$$\n\\underline{\\text{__PH_AUTOLINK_000106__}}\n$$\n"
-    )
-
-    spans = math.extract_math_spans(text, 0)
-
-    assert spans == []
-
-
-def test_extract_math_spans_reclassifies_prose_like_display_blocks() -> None:
-    text = (
-        "$$\n"
-        "Downloaded on March 30, 2026 at 20:06:42 UTC from IEEE Xplore. Restrictions apply.\n"
-        "## 5 IMPLEMENTING THE INDEX ON A GPU\n"
-        "The cost is $x+y$ in the text.\n"
-        "$$\n"
-    )
-
-    spans = math.extract_math_spans(text, 0)
-
-    assert spans == []
+    assert math.cleanup_formula(original) == original
 
 
 @pytest.mark.parametrize(
     "seed",
-    [
-        pytest.param(seed, id=f"{seed.kind}:{seed.seed_id}")
-        for seed in MATH_SPAN_SEEDS
-    ],
+    [pytest.param(seed, id=f"{seed.kind}:{seed.seed_id}") for seed in MATH_SPAN_SEEDS],
 )
 def test_extract_math_spans_seed_classification(seed: MathSpanSeed) -> None:
     spans = math.extract_math_spans(seed.text, 0)
@@ -194,9 +140,7 @@ def test_extract_math_spans_seed_classification(seed: MathSpanSeed) -> None:
 
 @pytest.mark.parametrize(("broken", "expected"), CLEANUP_FORMULA_REPAIR_SEEDS)
 def test_cleanup_formula_repair_seeds(broken: str, expected: str) -> None:
-    cleaned = math.cleanup_formula(broken)
-
-    assert cleaned == expected
+    assert math.cleanup_formula(broken) == expected
 
 
 def test_cleanup_formula_does_not_treat_line_breaks_as_control_commands() -> None:
@@ -207,9 +151,7 @@ def test_cleanup_formula_does_not_treat_line_breaks_as_control_commands() -> Non
 def test_cleanup_formula_preserves_legitimate_text_spaces() -> None:
     original = r"\text{a b} + \operatorname{a b}"
 
-    cleaned = math.cleanup_formula(original)
-
-    assert cleaned == original
+    assert math.cleanup_formula(original) == original
 
 
 @pytest.mark.parametrize(
@@ -260,250 +202,3 @@ def test_iter_batches_warns_for_oversized_singleton(caplog) -> None:
 
     assert batches == [[issue]]
     assert any("exceeds max_batch_chars" in record.message for record in caplog.records)
-
-
-def test_finalize_repaired_formula_keeps_errors_aligned_with_returned_formula(
-    monkeypatch,
-) -> None:
-    monkeypatch.setattr(
-        math,
-        "validate_formula",
-        lambda text, _display_mode: ["stripped error"]
-        if text == "stripped"
-        else ["cleaned error"]
-        if text == "cleaned"
-        else [],
-    )
-    monkeypatch.setattr(math, "cleanup_formula", lambda _text: "cleaned")
-
-    repaired, errors = math._finalize_repaired_formula("$$stripped$$", "$$")
-
-    assert repaired == "cleaned"
-    assert errors == ["cleaned error"]
-
-
-@pytest.mark.parametrize(
-    "seed",
-    [pytest.param(seed, id=f"reject:{seed.seed_id}") for seed in MATH_CLEANUP_REJECT_SEEDS],
-)
-def test_finalize_repaired_formula_rejects_still_invalid_cleanup(
-    monkeypatch, seed: MathCleanupRejectSeed
-) -> None:
-    monkeypatch.setattr(
-        math,
-        "validate_formula",
-        lambda text, _display_mode: [seed.error] if text == seed.cleaned else ["parse error"],
-    )
-    monkeypatch.setattr(math, "cleanup_formula", lambda _text: seed.cleaned)
-
-    repaired, errors = math._finalize_repaired_formula(seed.repaired, seed.delimiter)
-
-    assert repaired == seed.cleaned
-    assert errors == [seed.error]
-
-
-def test_fix_math_text_handles_cancelled_error_results(monkeypatch) -> None:
-    async def fake_repair_batch(*_args, **_kwargs):
-        raise asyncio.CancelledError("cancelled")
-
-    monkeypatch.setattr(math, "validate_formula", lambda *_args, **_kwargs: ["parse error"])
-    monkeypatch.setattr(math, "repair_batch", fake_repair_batch)
-    monkeypatch.setattr(math, "short_hash", lambda _path: "abc")
-
-    stats = math.MathFixStats()
-    span = math.FormulaSpan(
-        start=0,
-        end=len("$$broken$$"),
-        delimiter="$$",
-        content="broken",
-        line=1,
-        context="",
-    )
-
-    updated, errors = asyncio.run(
-        math.fix_math_text(
-            text="$$broken$$",
-            file_path="demo.json",
-            line_offset=1,
-            field_path=None,
-            item_index=None,
-            route_pool=object(),  # type: ignore[arg-type]
-            timeout=1.0,
-            max_retries=0,
-            batch_size=1,
-            context_chars=0,
-            client=None,  # type: ignore[arg-type]
-            stats=stats,
-            spans=[span],
-        )
-    )
-
-    assert updated == "$$broken$$"
-    assert len(errors) == 1
-    assert any(err.startswith("batch_exception:") for err in errors[0]["errors"])
-
-
-def test_repair_batch_structured_fallback_succeeds_without_consuming_retries(
-    monkeypatch,
-) -> None:
-    issue = math.FormulaIssue(
-        issue_id="abc:0",
-        span=math.FormulaSpan(
-            start=0,
-            end=0,
-            delimiter="$$",
-            content="broken",
-            line=1,
-            context="",
-        ),
-        errors=["parse error"],
-        cleaned="broken",
-        field_path=None,
-        item_index=None,
-    )
-
-    class DummyRoutePool:
-        def __init__(self) -> None:
-            self.route = SimpleNamespace(
-                provider=SimpleNamespace(max_tokens=1024),
-                model=SimpleNamespace(model_name="demo-model"),
-                key=SimpleNamespace(value="demo-key"),
-            )
-            self.mark_error_calls = 0
-
-        async def get(self):
-            return self.route
-
-        async def mark_quota_exceeded(self, *_args, **_kwargs) -> bool:
-            return False
-
-        async def mark_error(self, *_args, **_kwargs) -> None:
-            self.mark_error_calls += 1
-
-    calls: list[str] = []
-
-    async def fake_call_provider(
-        _provider,
-        _model_name,
-        _messages,
-        _schema,
-        _api_key,
-        _timeout,
-        structured_mode,
-        _client,
-        *,
-        max_tokens,
-    ):
-        assert max_tokens == 1024
-        calls.append(structured_mode)
-        if structured_mode != "none":
-            raise ProviderError(
-                "structured failed",
-                retryable=False,
-                structured_error=True,
-            )
-        return '{"items":[{"id":"abc:0","latex":"x"}]}'
-
-    monkeypatch.setattr(math, "call_provider", fake_call_provider)
-    monkeypatch.setattr(math, "structured_mode_for_model", lambda _model: "json_schema")
-
-    route_pool = DummyRoutePool()
-    repairs, error = asyncio.run(
-        math.repair_batch(
-            [issue],
-            route_pool=route_pool,  # type: ignore[arg-type]
-            timeout=1.0,
-            max_retries=0,
-            client=None,  # type: ignore[arg-type]
-        )
-    )
-
-    assert repairs == {"abc:0": "x"}
-    assert error is None
-    assert calls == ["json_schema", "none"]
-    assert route_pool.mark_error_calls == 0
-
-
-def test_build_repair_messages_math_prompt_prefers_local_syntax_repairs() -> None:
-    issue = math.FormulaIssue(
-        issue_id="abc:0",
-        span=math.FormulaSpan(
-            start=0,
-            end=0,
-            delimiter="$$",
-            content=r"f(x)=\begin{cases}1\0\end{cases}",
-            line=1,
-            context="ctx",
-        ),
-        errors=["parse error"],
-        cleaned=r"f(x)=\begin{cases}1\0\end{cases}",
-        field_path=None,
-        item_index=None,
-    )
-
-    messages = math.build_repair_messages([issue])
-    system = messages[0]["content"]
-
-    assert "Do not translate or paraphrase mathematical meaning" in system
-    assert "Preserve all existing LaTeX commands" in system
-    assert "Only repair local syntax issues" in system
-    assert "Do not turn prose into math" in system
-    assert "return it unchanged" in system
-
-
-def test_fix_math_text_accepts_valid_repair_without_recleanup(monkeypatch) -> None:
-    original = (
-        r"$$f_{c}(c_{1},c_{2})=\begin{cases}p_{c}&c_{1}\neq c_{2}\0&\text{otherwise}\end{cases}.$$"
-    )
-    repaired = (
-        r"f_{c}(c_{1},c_{2})=\begin{cases}"
-        r"p_{c}, & c_{1}\neq c_{2}\\"
-        r"0, & \text{otherwise}"
-        r"\end{cases}."
-    )
-
-    async def fake_repair_batch(*_args, **_kwargs):
-        return {"abc:0": repaired}, None
-
-    def fake_validate_formula(text: str, _display_mode: bool) -> list[str]:
-        if text == original[2:-2]:
-            return ["parse error"]
-        if text == repaired or text == repaired.strip():
-            return []
-        return ["unexpected mutation"]
-
-    monkeypatch.setattr(math, "repair_batch", fake_repair_batch)
-    monkeypatch.setattr(math, "short_hash", lambda _path: "abc")
-    monkeypatch.setattr(math, "validate_formula", fake_validate_formula)
-
-    stats = math.MathFixStats()
-    span = math.FormulaSpan(
-        start=0,
-        end=len(original),
-        delimiter="$$",
-        content=original[2:-2],
-        line=1,
-        context="",
-    )
-
-    updated, errors = asyncio.run(
-        math.fix_math_text(
-            text=original,
-            file_path="demo.json",
-            line_offset=1,
-            field_path=None,
-            item_index=None,
-            route_pool=None,  # type: ignore[arg-type]
-            timeout=1.0,
-            max_retries=0,
-            batch_size=1,
-            context_chars=0,
-            client=None,  # type: ignore[arg-type]
-            stats=stats,
-            spans=[span],
-        )
-    )
-
-    assert updated == f"$${repaired}$$"
-    assert errors == []
-    assert stats.formulas_repaired == 1

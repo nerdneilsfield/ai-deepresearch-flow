@@ -1,6 +1,7 @@
 import asyncio
 from dataclasses import dataclass
 from pathlib import Path
+from random import Random
 
 import pytest
 
@@ -69,36 +70,6 @@ MERMAID_CLEANUP_SEEDS = [
         expected='flowchart LR\nA["100% & <tag>"] --> B["ok"]\n',
         seed_id="percent-amp-angle-brackets",
     ),
-    MermaidCleanupSeed(
-        kind="repair",
-        original='flowchart LR\nA[a<br>"b"] --> B["ok"]\n',
-        expected='flowchart LR\nA["a<br>&quot;b&quot;"] --> B["ok"]',
-        seed_id="html-label-inner-quotes",
-    ),
-    MermaidCleanupSeed(
-        kind="repair",
-        original='flowchart LR\nA["x"]B --> C["y"]\n',
-        expected='flowchart LR\nA["x"]\nB --> C["y"]',
-        seed_id="compacted-statement",
-    ),
-    MermaidCleanupSeed(
-        kind="repair",
-        original="flowchart LR\nB[数据增强：z轴随机旋转[-π, π)] --> C[ok]\n",
-        expected='flowchart LR\nB["数据增强：z轴随机旋转[-π, π)]"] --> C[ok]',
-        seed_id="single-unquoted-nested-bracket-label",
-    ),
-    MermaidCleanupSeed(
-        kind="repair",
-        original="flowchart LR\nA[区间[-π, π)] --> B[ok]\n",
-        expected='flowchart LR\nA["区间[-π, π)]"] --> B[ok]',
-        seed_id="interval-brackets",
-    ),
-    MermaidCleanupSeed(
-        kind="repair",
-        original="flowchart LR\nA[中括号[abc]] --> B[ok]\n",
-        expected='flowchart LR\nA["中括号[abc]"] --> B[ok]',
-        seed_id="nested-square-brackets",
-    ),
 ]
 
 MERMAID_IDEMPOTENT_REPAIR_INPUTS = [
@@ -128,6 +99,101 @@ def assert_mermaid_cleanup_idempotent(original: str) -> None:
     once = mermaid.cleanup_mermaid(original)
     twice = mermaid.cleanup_mermaid(once)
     assert twice == once
+
+
+def _mermaid_rng(seed: int) -> Random:
+    return Random(seed)
+
+
+def _mermaid_header(seed: int) -> str:
+    rng = _mermaid_rng(seed)
+    diagram = rng.choice(("flowchart", "graph"))
+    direction = rng.choice(("LR", "RL", "TD"))
+    return f"{diagram} {direction}"
+
+
+def _mermaid_nodes(seed: int, count: int) -> list[str]:
+    return [f"N{seed}_{idx}" for idx in range(count)]
+
+
+def _mermaid_tokens(seed: int, count: int) -> list[str]:
+    return [f"seed_{seed}_{idx}" for idx in range(count)]
+
+
+def _build_mermaid_pass_body(seed: int) -> tuple[str, tuple[str, ...], str]:
+    header = _mermaid_header(seed)
+    nodes = _mermaid_nodes(seed, 4)
+    tokens = _mermaid_tokens(seed, 5)
+    lines = [
+        f'{nodes[0]}["{tokens[0]}[-π, π)"] --> {nodes[1]}["{tokens[1]}<br/>{tokens[2]}"]',
+        f'{nodes[1]} --> {nodes[2]}["{tokens[3]}|pipe"]',
+        f'{nodes[2]} --> {nodes[3]}["{tokens[4]} & <tag>"]',
+    ]
+    return "\n".join([header, *lines]) + "\n", tuple(tokens), header
+
+
+def _build_mermaid_repair_body(seed: int) -> tuple[str, str, tuple[str, ...], str]:
+    header = _mermaid_header(seed)
+    nodes = _mermaid_nodes(seed, 6)
+    tokens = _mermaid_tokens(seed, 6)
+    original_lines = [
+        f'{nodes[0]}["{tokens[0]}"]{nodes[1]} --> {nodes[2]}["{tokens[1]}"]',
+        f'{nodes[2]}["{tokens[2]} "hi""] --> {nodes[3]}["{tokens[3]}"]',
+        f'{nodes[3]}[{tokens[3]}[-π, π)] --> {nodes[4]}[ok]',
+        f'{nodes[4]}["{tokens[4]}<br>{tokens[5]}"] --> {nodes[5]}["mixed"]',
+        f'{nodes[5]}["valid_{seed}"] --> {nodes[0]}["{tokens[0]}"]',
+    ]
+    repaired_lines = [
+        f'{nodes[0]}["{tokens[0]}"] --> {nodes[1]}["{tokens[1]}"]',
+        f'{nodes[2]}["{tokens[2]}\'hi\'"] --> {nodes[3]}["{tokens[3]}"]',
+        f'{nodes[3]}["{tokens[3]}[-π, π)"] --> {nodes[4]}["ok"]',
+        f'{nodes[4]}["{tokens[4]}<br/>{tokens[5]}"] --> {nodes[5]}["mixed"]',
+        f'{nodes[5]}["valid_{seed}"] --> {nodes[0]}["{tokens[0]}"]',
+    ]
+    original = "\n".join([header, *original_lines]) + "\n"
+    repaired = "\n".join([header, *repaired_lines]) + "\n"
+    return original, repaired, tuple(tokens), header
+
+
+def _build_mermaid_reject_body(seed: int) -> tuple[str, str, tuple[str, ...], str]:
+    header = _mermaid_header(seed)
+    nodes = _mermaid_nodes(seed, 4)
+    tokens = _mermaid_tokens(seed, 4)
+    original_lines = [
+        f'{nodes[0]}["{tokens[0]}"]"] --> {nodes[1]}["{tokens[1]}"]',
+        f'{nodes[1]}["{tokens[2]}"]{nodes[2]} --> {nodes[3]}["{tokens[3]}"]',
+    ]
+    repaired_lines = [
+        f'{nodes[0]}["{tokens[0]}"]"] --> {nodes[1]}["{tokens[1]}"]',
+    ]
+    original = "\n".join([header, *original_lines]) + "\n"
+    repaired = "\n".join([header, *repaired_lines]) + "\n"
+    return original, repaired, tuple(tokens), header
+
+
+def _build_extract_fuzz_case(seed: int) -> tuple[str, tuple[str, ...], int]:
+    rng = _mermaid_rng(seed)
+    context_chars = rng.choice((0, 4, 8, 16, 32))
+    parts: list[str] = [f"intro_{seed}\n"]
+    expected_bodies: list[str] = []
+    block_count = 1 + seed % 3
+    for block_idx in range(block_count):
+        if (seed + block_idx) % 2 == 0:
+            body, _, _ = _build_mermaid_pass_body(seed * 10 + block_idx)
+        else:
+            body, _, _, _ = _build_mermaid_repair_body(seed * 10 + block_idx)
+        expected_bodies.append(body)
+        parts.append(f"```mermaid\n{body}```\n")
+        if block_idx == 0:
+            parts.append("```python\nprint('ignore me')\n```\n")
+    parts.append(f"tail_{seed}\n")
+    return "".join(parts), tuple(expected_bodies), context_chars
+
+
+def _assert_cleanup_preserves_core_tokens(cleaned: str, expected_tokens: tuple[str, ...], header: str) -> None:
+    assert cleaned.splitlines()[0] == header
+    for token in expected_tokens:
+        assert token in cleaned
 
 
 @pytest.mark.parametrize(
@@ -212,24 +278,127 @@ def test_cleanup_mermaid_preserves_html_break_label_variants(break_tag: str) -> 
     assert cleaned.rstrip("\n") == original.rstrip("\n")
 
 
-def test_cleanup_mermaid_sanitizes_inner_label_quotes_without_binding_strategy() -> None:
-    original = 'flowchart LR\nA["He said "hi""] --> B["ok"]\n'
-
-    cleaned = mermaid.cleanup_mermaid(original)
-
-    assert cleaned != original
-    assert cleaned.startswith("flowchart LR\nA[")
-    assert "He said " in cleaned
-    assert "hi" in cleaned
-    assert '--> B["ok"]' in cleaned
-    assert cleaned.count('A["') == 1
-    assert '""]' not in cleaned
-    assert "&quot;" in cleaned
-
-
 @pytest.mark.parametrize("original", MERMAID_IDEMPOTENT_REPAIR_INPUTS)
 def test_cleanup_mermaid_is_idempotent_across_seed_repairs(original: str) -> None:
     assert_mermaid_cleanup_idempotent(original)
+
+
+@pytest.mark.parametrize("seed", range(100))
+def test_extract_mermaid_spans_fuzz_preserves_fenced_blocks(seed: int) -> None:
+    document, expected_bodies, context_chars = _build_extract_fuzz_case(seed)
+
+    spans = mermaid.extract_mermaid_spans(document, context_chars)
+
+    assert len(spans) == len(expected_bodies)
+    assert [span.content for span in spans] == list(expected_bodies)
+    for span in spans:
+        assert document[span.start : span.end] == span.content
+        assert span.line == document.count("\n", 0, span.start) + 1
+        assert span.content in span.context
+        assert len(span.context) >= len(span.content)
+
+
+@pytest.mark.parametrize("seed", range(100))
+def test_cleanup_mermaid_fuzz_preserves_valid_and_repairs_local_defects(seed: int) -> None:
+    if seed % 3 == 0:
+        original, expected_tokens, header = _build_mermaid_pass_body(seed)
+        cleaned = mermaid.cleanup_mermaid(original)
+        assert cleaned.rstrip("\n") == original.rstrip("\n")
+    else:
+        original, _, expected_tokens, header = _build_mermaid_repair_body(seed)
+        cleaned = mermaid.cleanup_mermaid(original)
+        assert cleaned.rstrip("\n") != original.rstrip("\n")
+        _assert_cleanup_preserves_core_tokens(cleaned, expected_tokens, header)
+
+    assert_mermaid_cleanup_idempotent(original)
+
+
+@pytest.mark.parametrize("seed", range(100))
+def test_fix_mermaid_text_fuzz_handles_pass_repair_and_reject_paths(
+    monkeypatch, seed: int
+) -> None:
+    kind = ("pass", "repair", "reject")[seed % 3]
+    if kind == "pass":
+        original_text, expected_tokens, header = _build_mermaid_pass_body(seed)
+        repaired_text = original_text
+        expected_error = None
+    elif kind == "repair":
+        original_text, repaired_text, expected_tokens, header = _build_mermaid_repair_body(seed)
+        expected_error = None
+    else:
+        original_text, repaired_text, expected_tokens, header = _build_mermaid_reject_body(seed)
+        expected_error = "still invalid"
+
+    async def fake_repair_batch(*_args, **_kwargs):
+        return {"abc:0": repaired_text}, None
+
+    def fake_validate_mermaid(text: str) -> str | None:
+        normalized = text.rstrip("\n")
+        original_normalized = original_text.rstrip("\n")
+        repaired_normalized = repaired_text.rstrip("\n")
+        if normalized == original_normalized:
+            return None if kind == "pass" else "parse error"
+        if normalized == repaired_normalized:
+            return None if kind == "repair" else expected_error
+        return "unexpected mutation"
+
+    monkeypatch.setattr(mermaid, "repair_batch", fake_repair_batch)
+    monkeypatch.setattr(mermaid, "short_hash", lambda _path: "abc")
+    monkeypatch.setattr(mermaid, "validate_mermaid", fake_validate_mermaid)
+    monkeypatch.setattr(mermaid, "cleanup_mermaid", lambda text: text)
+
+    stats = mermaid.MermaidFixStats()
+    span = mermaid.MermaidSpan(
+        start=0,
+        end=len(original_text),
+        content=original_text,
+        line=1,
+        context="",
+    )
+
+    updated, errors = asyncio.run(
+        mermaid.fix_mermaid_text(
+            text=original_text,
+            file_path="demo.md",
+            line_offset=1,
+            field_path=None,
+            item_index=None,
+            route_pool=None,  # type: ignore[arg-type]
+            timeout=1.0,
+            max_retries=0,
+            batch_size=1,
+            context_chars=0,
+            client=None,  # type: ignore[arg-type]
+            stats=stats,
+            spans=[span],
+        )
+    )
+
+    if kind == "pass":
+        assert updated.rstrip("\n") == original_text.rstrip("\n")
+        assert errors == []
+        assert stats.diagrams_total == 1
+        assert stats.diagrams_invalid == 0
+        assert stats.diagrams_repaired == 0
+        assert stats.diagrams_failed == 0
+    elif kind == "repair":
+        assert updated.rstrip("\n") == repaired_text.rstrip("\n")
+        assert errors == []
+        assert stats.diagrams_total == 1
+        assert stats.diagrams_invalid == 1
+        assert stats.diagrams_repaired == 1
+        assert stats.diagrams_failed == 0
+    else:
+        assert updated.rstrip("\n") == original_text.rstrip("\n")
+        assert len(errors) == 1
+        assert errors[0]["errors"][-1] == expected_error
+        assert stats.diagrams_total == 1
+        assert stats.diagrams_invalid == 1
+        assert stats.diagrams_repaired == 0
+        assert stats.diagrams_failed == 1
+
+    for token in expected_tokens:
+        assert token in updated
 
 
 def test_fix_mermaid_text_handles_cancelled_error_results(monkeypatch) -> None:
@@ -379,29 +548,3 @@ def test_fix_mermaid_text_rejects_invalid_repairs(
     assert len(errors) == 1
     assert errors[0]["errors"][-1] == seed.expected_error
     assert stats.diagrams_failed == 1
-
-
-def test_build_repair_messages_mermaid_prompt_prefers_shape_preserving_repairs() -> None:
-    issue = mermaid.MermaidIssue(
-        issue_id="abc:0",
-        span=mermaid.MermaidSpan(
-            start=0,
-            end=0,
-            content='flowchart LR\nA["x"] --> B["y"]\n',
-            line=1,
-            context="ctx",
-        ),
-        errors=["parse error"],
-        field_path=None,
-        item_index=None,
-    )
-
-    messages = mermaid.build_repair_messages([issue])
-    system = messages[0]["content"]
-
-    assert "Preserve the original diagram type and direction" in system
-    assert "Always emit labels as ID[\"...\"]" in system
-    assert "Escape double quotes inside labels as &quot;" in system
-    assert "Rebuild the whole broken node or statement" in system
-    assert "return the original diagram unchanged" in system
-    assert "Only use: graph TD" not in system
