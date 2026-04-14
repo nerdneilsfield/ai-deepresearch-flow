@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import enum
+import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -14,6 +15,7 @@ import httpx
 from deepresearch_flow.paper.config import ProviderConfig
 from deepresearch_flow.paper.providers.base import ProviderError
 from deepresearch_flow.paper.routing import RoutePool, RuntimeRoute
+from deepresearch_flow.paper.utils import short_hash
 from deepresearch_flow.translator.engine import KeyRotator, MarkdownTranslator, RequestThrottle
 from deepresearch_flow.translator.placeholder import PlaceHolderStore
 from deepresearch_flow.translator.progress import ProgressReporter
@@ -312,6 +314,11 @@ class Scheduler:
         fix_level: str,
         format_enabled: bool,
         request_log_enabled: bool = False,
+        debug_root: Path | None = None,
+        dump_protected: bool = False,
+        dump_placeholders: bool = False,
+        dump_nodes: bool = False,
+        dump_requests_log: bool = False,
     ) -> list[Path]:
         self._total_docs = len(paths)
         if self._total_docs == 0:
@@ -353,7 +360,14 @@ class Scheduler:
                     max_inflight_per_doc=self._configs[DocStage.TRANSLATING].workers * 2,
                     translator=self._translator,
                     group_builder=self._make_group_builder(),
-                    finalize_fn=self._make_finalize_fn(format_enabled),
+                    finalize_fn=self._make_finalize_fn(
+                        format_enabled=format_enabled,
+                        debug_root=debug_root,
+                        dump_protected=dump_protected,
+                        dump_placeholders=dump_placeholders,
+                        dump_nodes=dump_nodes,
+                        dump_requests_log=dump_requests_log,
+                    ),
                     on_done=self._make_done_callback(window_sem),
                     progress=self._progress,
                 )
@@ -476,7 +490,16 @@ class Scheduler:
             return tasks
         return build
 
-    def _make_finalize_fn(self, format_enabled: bool) -> FinalizeFn:
+    def _make_finalize_fn(
+        self,
+        *,
+        format_enabled: bool,
+        debug_root: Path | None,
+        dump_protected: bool,
+        dump_placeholders: bool,
+        dump_nodes: bool,
+        dump_requests_log: bool,
+    ) -> FinalizeFn:
         async def finalize(ctx: DocumentContext) -> None:
             for nid, node in ctx.translated_nodes.items():
                 if nid in ctx.nodes:
@@ -490,6 +513,32 @@ class Scheduler:
             )
             ctx.output_path.parent.mkdir(parents=True, exist_ok=True)
             ctx.output_path.write_text(result, encoding="utf-8")
+            if debug_root is not None:
+                debug_tag = f"{ctx.source_path.stem}.{short_hash(str(ctx.source_path))}"
+                if dump_protected:
+                    (debug_root / f"{debug_tag}.protected.md").write_text(
+                        ctx.protected_text,
+                        encoding="utf-8",
+                    )
+                if dump_placeholders:
+                    ctx.store.save(str(debug_root / f"{debug_tag}.placeholders.json"))
+                if dump_nodes:
+                    node_payload = {
+                        str(node_id): {
+                            "origin_text": node.origin_text,
+                            "translated_text": node.translated_text,
+                        }
+                        for node_id, node in ctx.nodes.items()
+                    }
+                    (debug_root / f"{debug_tag}.nodes.json").write_text(
+                        json.dumps(node_payload, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                if dump_requests_log:
+                    (debug_root / f"{debug_tag}.requests.json").write_text(
+                        json.dumps(ctx.request_log, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
             failed = self._translator._collect_failed_nodes(ctx.translated_nodes)
             retry_groups = sum(
                 count for stage, count in ctx.stage_group_counts.items()

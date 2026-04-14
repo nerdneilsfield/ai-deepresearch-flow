@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
-import json
 import logging
 from pathlib import Path
 import time
@@ -13,7 +12,6 @@ from typing import Any
 import click
 import coloredlogs
 import httpx
-from tqdm import tqdm
 from rich.console import Console
 from rich.table import Table
 
@@ -30,7 +28,7 @@ from deepresearch_flow.paper.utils import (
     short_hash,
 )
 from deepresearch_flow.translator.config import TranslateConfig
-from deepresearch_flow.translator.engine import DumpSnapshot, MarkdownTranslator, RequestThrottle
+from deepresearch_flow.translator.engine import MarkdownTranslator, RequestThrottle
 
 
 logger = logging.getLogger(__name__)
@@ -86,42 +84,6 @@ def _unique_output_name(path: Path, suffix: str, used: set[str]) -> str:
     filename = f"{base}.{suffix}.{suffix_hash}.md"
     used.add(filename)
     return filename
-
-
-class ProgressTracker:
-    def __init__(self, doc_total: int) -> None:
-        self.doc_bar = tqdm(total=doc_total, desc="documents", unit="doc", position=0)
-        self.group_bar = tqdm(total=0, desc="groups", unit="group", position=1, leave=False)
-        self.lock = asyncio.Lock()
-
-    async def add_groups(self, count: int) -> None:
-        if count <= 0:
-            return
-        async with self.lock:
-            self.group_bar.total = (self.group_bar.total or 0) + count
-            self.group_bar.refresh()
-
-    async def advance_groups(self, count: int) -> None:
-        if count <= 0:
-            return
-        async with self.lock:
-            self.group_bar.update(count)
-
-    async def advance_docs(self, count: int = 1) -> None:
-        if count <= 0:
-            return
-        async with self.lock:
-            self.doc_bar.update(count)
-
-    async def set_group_status(self, text: str) -> None:
-        async with self.lock:
-            self.group_bar.set_postfix_str(text)
-            self.group_bar.refresh()
-
-    async def close(self) -> None:
-        async with self.lock:
-            self.group_bar.close()
-            self.doc_bar.close()
 
 
 @click.group()
@@ -567,7 +529,6 @@ def translate(
         retry_times=retry_times,
     )
     translator = MarkdownTranslator(cfg)
-    semaphore = asyncio.Semaphore(max_concurrency)
 
     throttle = None
     if sleep_every is not None or sleep_time is not None:
@@ -585,131 +546,6 @@ def translate(
         else None
     )
     failed_files: list[Path] = []
-    use_compat_debug_path = any(
-        (
-            dump_protected,
-            dump_placeholders,
-            dump_nodes,
-        )
-    )
-    compat_group_concurrency = group_concurrency or initial_workers or 1
-
-    async def process_one(
-        path: Path,
-        client: httpx.AsyncClient,
-        progress: ProgressTracker,
-    ) -> None:
-        content = read_text(path)
-        request_log: list[dict[str, Any]] = []
-        debug_tag = None
-        protected_path = None
-        placeholders_path = None
-        nodes_path = None
-        requests_path = None
-        if debug_root is not None:
-            debug_tag = f"{path.stem}.{short_hash(str(path))}"
-            protected_path = debug_root / f"{debug_tag}.protected.md"
-            placeholders_path = debug_root / f"{debug_tag}.placeholders.json"
-            nodes_path = debug_root / f"{debug_tag}.nodes.json"
-            requests_path = debug_root / f"{debug_tag}.requests.json"
-
-        def write_dump(snapshot: DumpSnapshot) -> None:
-            if debug_root is None or debug_tag is None:
-                return
-            if dump_protected and snapshot.protected_text is not None and protected_path:
-                protected_path.write_text(snapshot.protected_text, encoding="utf-8")
-            if dump_placeholders and snapshot.placeholder_store is not None and placeholders_path:
-                snapshot.placeholder_store.save(str(placeholders_path))
-            if dump_nodes and snapshot.nodes is not None and nodes_path:
-                node_payload = {
-                    str(node_id): {
-                        "origin_text": node.origin_text,
-                        "translated_text": node.translated_text,
-                    }
-                    for node_id, node in snapshot.nodes.items()
-                }
-                nodes_path.write_text(
-                    json.dumps(node_payload, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
-            if dump_requests_log and snapshot.request_log is not None and requests_path:
-                requests_path.write_text(
-                    json.dumps(snapshot.request_log, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
-        result = await translator.translate(
-            content,
-            provider,
-            model_name,
-            client,
-            provider.api_keys,
-            timeout,
-            semaphore,
-            throttle,
-            max_tokens,
-            fix_level,
-            progress=progress,
-            fallback_provider=fallback_provider,
-            fallback_model=fallback_model_name,
-            fallback_max_tokens=fallback_max_tokens,
-            fallback_provider_2=fallback_provider_2,
-            fallback_model_2=fallback_model_name_2,
-            fallback_max_tokens_2=fallback_max_tokens_2,
-            fallback_retry_times=fallback_retry_times,
-            fallback_retry_times_2=fallback_retry_times_2,
-            format_enabled=not no_format,
-            request_log=request_log if dump_requests_log else None,
-            dump_callback=write_dump if debug_root is not None else None,
-            group_concurrency=compat_group_concurrency,
-            route_pool=route_pool,
-            fallback_route_pool=fallback_route_pool,
-            fallback_route_pool_2=fallback_route_pool_2,
-        )
-        output_path = output_map[path]
-        output_path.write_text(result.translated_text, encoding="utf-8")
-        stats = result.stats
-        logger.info(
-            "Translated %s | nodes=%d ok=%d fail=%d skip=%d groups=%d retries=%d",
-            path.name,
-            stats.total_nodes,
-            stats.success_nodes,
-            stats.failed_nodes,
-            stats.skipped_nodes,
-            stats.initial_groups,
-            stats.retry_groups,
-        )
-        await progress.set_group_status(
-            f"nodes {stats.total_nodes} ok {stats.success_nodes} "
-            f"fail {stats.failed_nodes} skip {stats.skipped_nodes}"
-        )
-
-        if debug_root is not None:
-            write_dump(
-                DumpSnapshot(
-                    stage="final",
-                    nodes=result.nodes,
-                    protected_text=result.protected_text,
-                    placeholder_store=result.placeholder_store,
-                    request_log=request_log if dump_requests_log else None,
-                )
-            )
-        await progress.advance_docs(1)
-
-    async def run_compat() -> None:
-        progress = ProgressTracker(len(to_process))
-        try:
-            async with httpx.AsyncClient() as client:
-                for path in to_process:
-                    try:
-                        await process_one(path, client, progress)
-                    except Exception as exc:
-                        failed_files.append(path)
-                        logger.error("Failed %s: %s", path, exc)
-                        click.echo(f"Failed {path}", err=True)
-                        click.echo(str(exc), err=True)
-                        await progress.advance_docs(1)
-        finally:
-            await progress.close()
 
     async def run_scheduler() -> None:
         from deepresearch_flow.translator.progress import ProgressReporter
@@ -793,13 +629,18 @@ def translate(
                     fix_level=fix_level,
                     format_enabled=not no_format,
                     request_log_enabled=dump_requests_log,
+                    debug_root=debug_root,
+                    dump_protected=dump_protected,
+                    dump_placeholders=dump_placeholders,
+                    dump_nodes=dump_nodes,
+                    dump_requests_log=dump_requests_log,
                 )
         finally:
             await progress.close()
         for path in failed_files:
             click.echo(f"Failed {path}", err=True)
 
-    asyncio.run(run_compat() if use_compat_debug_path else run_scheduler())
+    asyncio.run(run_scheduler())
 
     duration = time.monotonic() - start_time
     table = Table(
