@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, dataclass
 from pathlib import Path
 import re
 from types import SimpleNamespace
@@ -336,6 +336,320 @@ class _DummyTranslator:
         return outputs.pop(0) if outputs else ""
 
 
+class _ScriptedTranslator(_DummyTranslator):
+    def __init__(self, stage_scripts: dict[str, dict[str, list[tuple[float, str]]]]) -> None:
+        super().__init__({})
+        self._stage_scripts = {
+            doc_key: {stage: list(actions) for stage, actions in scripts.items()}
+            for doc_key, scripts in stage_scripts.items()
+        }
+        self.active_docs = 0
+        self.max_active_docs = 0
+        self.call_log: list[tuple[str, str]] = []
+        self._active_lock = asyncio.Lock()
+
+    def _doc_key(self, group_text: str) -> str:
+        match = self._rx.search(group_text)
+        if match is None:
+            return group_text
+        return match.group(2)
+
+    async def _translate_group(
+        self,
+        group_text: str,
+        provider,
+        model,
+        client,
+        api_key,
+        timeout,
+        throttle: RequestThrottle | None,
+        max_tokens,
+        max_retries,
+        request_log,
+        stage: str,
+        group_index: int,
+        dump_callback,
+        route=None,
+    ) -> str:
+        _ = (
+            provider,
+            model,
+            client,
+            api_key,
+            timeout,
+            max_tokens,
+            max_retries,
+            request_log,
+            group_index,
+            dump_callback,
+            route,
+        )
+        doc_key = self._doc_key(group_text)
+        async with self._active_lock:
+            self.active_docs += 1
+            self.max_active_docs = max(self.max_active_docs, self.active_docs)
+        try:
+            self.call_log.append((doc_key, stage))
+            actions = self._stage_scripts.get(doc_key, {}).get(stage, [])
+            if actions:
+                delay, output = actions.pop(0)
+                if throttle is not None:
+                    await throttle.tick()
+                if delay:
+                    await asyncio.sleep(delay)
+                return output
+            if throttle is not None:
+                await throttle.tick()
+            return ""
+        finally:
+            async with self._active_lock:
+                self.active_docs -= 1
+
+
+@dataclass(frozen=True)
+class _FuzzDocPlan:
+    stem: str
+    source_text: str
+    expected_output: str | None
+    stage_scripts: dict[str, list[tuple[float, str]]]
+
+
+@dataclass(frozen=True)
+class _SchedulerFuzzCase:
+    name: str
+    document_window: int
+    docs: tuple[_FuzzDocPlan, ...]
+
+
+_FUZZ_MODES = ("direct", "retry", "fallback_1", "fallback_2", "fail")
+_FUZZ_QUEUE_STAGES = (
+    DocStage.TRANSLATING,
+    DocStage.RETRYING,
+    DocStage.FALLBACK_1,
+    DocStage.FALLBACK_2,
+)
+
+
+def _node_response(payload: str) -> str:
+    return f"<NODE_START_0000>\n{payload}\n</NODE_END_0000>\n"
+
+
+def _deterministic_delay(case_index: int, doc_index: int, slot: int) -> float:
+    step = (case_index * 7 + doc_index * 11 + slot * 13) % 5
+    return round(0.002 + step * 0.004, 3)
+
+
+def _build_doc_plan(case_index: int, doc_index: int, mode: str, prefix: str) -> _FuzzDocPlan:
+    stem = f"{prefix}-{case_index:02d}-doc-{doc_index}"
+    source_text = f"{stem} input"
+    expected_output = f"{stem} {mode} output"
+    direct_delay = _deterministic_delay(case_index, doc_index, 0)
+    retry_delay = _deterministic_delay(case_index, doc_index, 1)
+    fallback_1_delay = _deterministic_delay(case_index, doc_index, 2)
+    fallback_2_delay = _deterministic_delay(case_index, doc_index, 3)
+
+    if mode == "direct":
+        stage_scripts = {
+            "translating": [(direct_delay, _node_response(expected_output))],
+        }
+        return _FuzzDocPlan(stem, source_text, expected_output, stage_scripts)
+
+    if mode == "retry":
+        stage_scripts = {
+            "translating": [(round(direct_delay + 0.012, 3), "")],
+            "retrying": [(retry_delay, _node_response(expected_output))],
+        }
+        return _FuzzDocPlan(stem, source_text, expected_output, stage_scripts)
+
+    if mode == "fallback_1":
+        stage_scripts = {
+            "translating": [(round(direct_delay + 0.012, 3), "")],
+            "retrying": [(round(retry_delay + 0.008, 3), "")],
+            "fallback_1": [(fallback_1_delay, _node_response(expected_output))],
+        }
+        return _FuzzDocPlan(stem, source_text, expected_output, stage_scripts)
+
+    if mode == "fallback_2":
+        stage_scripts = {
+            "translating": [(round(direct_delay + 0.012, 3), "")],
+            "retrying": [(round(retry_delay + 0.008, 3), "")],
+            "fallback_1": [(round(fallback_1_delay + 0.006, 3), "")],
+            "fallback_2": [(fallback_2_delay, _node_response(expected_output))],
+        }
+        return _FuzzDocPlan(stem, source_text, expected_output, stage_scripts)
+
+    stage_scripts = {
+        "translating": [(round(direct_delay + 0.012, 3), "")],
+        "retrying": [(round(retry_delay + 0.008, 3), "")],
+        "fallback_1": [(round(fallback_1_delay + 0.006, 3), "")],
+        "fallback_2": [(fallback_2_delay, "")],
+    }
+    return _FuzzDocPlan(stem, source_text, None, stage_scripts)
+
+
+def _build_fuzz_case_set(
+    *,
+    prefix: str,
+    case_count: int,
+    document_count_fn,
+    document_window_fn,
+    mode_offset_fn,
+) -> list[_SchedulerFuzzCase]:
+    cases: list[_SchedulerFuzzCase] = []
+    for case_index in range(case_count):
+        docs = tuple(
+            _build_doc_plan(
+                case_index=case_index,
+                doc_index=doc_index,
+                mode=_FUZZ_MODES[(mode_offset_fn(case_index) + doc_index) % len(_FUZZ_MODES)],
+                prefix=prefix,
+            )
+            for doc_index in range(document_count_fn(case_index))
+        )
+        cases.append(
+            _SchedulerFuzzCase(
+                name=f"{prefix}-{case_index:02d}",
+                document_window=document_window_fn(case_index),
+                docs=docs,
+            )
+        )
+    return cases
+
+
+_TIMING_FUZZ_CASES = _build_fuzz_case_set(
+    prefix="timing",
+    case_count=12,
+    document_count_fn=lambda _case_index: 3,
+    document_window_fn=lambda case_index: 2 + (case_index % 2),
+    mode_offset_fn=lambda case_index: case_index,
+)
+
+_WINDOW_FUZZ_CASES = _build_fuzz_case_set(
+    prefix="window",
+    case_count=14,
+    document_count_fn=lambda case_index: 5 + (case_index % 3),
+    document_window_fn=lambda case_index: 1 + (case_index % 4),
+    mode_offset_fn=lambda case_index: case_index * 2,
+)
+
+_DESTRUCTIVE_MODES = (
+    "direct_fast",
+    "direct_slow",
+    "retry_fast",
+    "retry_slow",
+    "fallback_1_fast",
+    "fallback_1_slow",
+    "fallback_2_fast",
+    "fallback_2_slow",
+)
+
+
+def _destructive_delay(case_index: int, doc_index: int, slot: int) -> float:
+    step = (case_index * 11 + doc_index * 7 + slot * 5) % 9
+    return round(0.001 + step * 0.004, 3)
+
+
+def _build_destructive_doc_plan(case_index: int, doc_index: int, mode: str, prefix: str) -> _FuzzDocPlan:
+    stem = f"{prefix}-{case_index:02d}-doc-{doc_index}"
+    source_text = f"{stem} input"
+    expected_output = f"{stem} {mode} output"
+    translate_fast = _destructive_delay(case_index, doc_index, 0)
+    translate_slow = round(translate_fast + 0.028, 3)
+    retry_fast = _destructive_delay(case_index, doc_index, 1)
+    retry_slow = round(retry_fast + 0.022, 3)
+    fallback_1_fast = _destructive_delay(case_index, doc_index, 2)
+    fallback_1_slow = round(fallback_1_fast + 0.018, 3)
+    fallback_2_fast = _destructive_delay(case_index, doc_index, 3)
+    fallback_2_slow = round(fallback_2_fast + 0.024, 3)
+
+    if mode == "direct_fast":
+        stage_scripts = {
+            "translating": [(translate_fast, _node_response(expected_output))],
+        }
+        return _FuzzDocPlan(stem, source_text, expected_output, stage_scripts)
+
+    if mode == "direct_slow":
+        stage_scripts = {
+            "translating": [(translate_slow, _node_response(expected_output))],
+        }
+        return _FuzzDocPlan(stem, source_text, expected_output, stage_scripts)
+
+    if mode == "retry_fast":
+        stage_scripts = {
+            "translating": [(translate_slow, "")],
+            "retrying": [(retry_fast, _node_response(expected_output))],
+        }
+        return _FuzzDocPlan(stem, source_text, expected_output, stage_scripts)
+
+    if mode == "retry_slow":
+        stage_scripts = {
+            "translating": [(translate_fast, "")],
+            "retrying": [(retry_slow, _node_response(expected_output))],
+        }
+        return _FuzzDocPlan(stem, source_text, expected_output, stage_scripts)
+
+    if mode == "fallback_1_fast":
+        stage_scripts = {
+            "translating": [(translate_slow, "")],
+            "retrying": [(retry_fast, "")],
+            "fallback_1": [(fallback_1_fast, _node_response(expected_output))],
+        }
+        return _FuzzDocPlan(stem, source_text, expected_output, stage_scripts)
+
+    if mode == "fallback_1_slow":
+        stage_scripts = {
+            "translating": [(translate_fast, "")],
+            "retrying": [(retry_slow, "")],
+            "fallback_1": [(fallback_1_slow, _node_response(expected_output))],
+        }
+        return _FuzzDocPlan(stem, source_text, expected_output, stage_scripts)
+
+    if mode == "fallback_2_fast":
+        stage_scripts = {
+            "translating": [(translate_slow, "")],
+            "retrying": [(retry_fast, "")],
+            "fallback_1": [(fallback_1_fast, "")],
+            "fallback_2": [(fallback_2_fast, _node_response(expected_output))],
+        }
+        return _FuzzDocPlan(stem, source_text, expected_output, stage_scripts)
+
+    stage_scripts = {
+        "translating": [(translate_fast, "")],
+        "retrying": [(retry_slow, "")],
+        "fallback_1": [(fallback_1_slow, "")],
+        "fallback_2": [(fallback_2_slow, _node_response(expected_output))],
+    }
+    return _FuzzDocPlan(stem, source_text, expected_output, stage_scripts)
+
+
+def _build_destructive_case_set(prefix: str, case_count: int) -> list[_SchedulerFuzzCase]:
+    cases: list[_SchedulerFuzzCase] = []
+    for case_index in range(case_count):
+        window = 1 + (case_index % 3)
+        document_count = 6 + (case_index % 4) + (case_index // 10)
+        mode_offset = case_index * 3
+        docs = tuple(
+            _build_destructive_doc_plan(
+                case_index=case_index,
+                doc_index=doc_index,
+                mode=_DESTRUCTIVE_MODES[(mode_offset + doc_index) % len(_DESTRUCTIVE_MODES)],
+                prefix=prefix,
+            )
+            for doc_index in range(document_count)
+        )
+        cases.append(
+            _SchedulerFuzzCase(
+                name=f"{prefix}-{case_index:02d}",
+                document_window=window,
+                docs=docs,
+            )
+        )
+    return cases
+
+
+_DESTRUCTIVE_FUZZ_CASES = _build_destructive_case_set(prefix="destructive", case_count=30)
+
+
 def _make_queue_config(stage: DocStage) -> QueueConfig:
     return QueueConfig(
         stage=stage,
@@ -348,6 +662,170 @@ def _make_queue_config(stage: DocStage) -> QueueConfig:
         max_tokens=None,
         retry_limit=1,
     )
+
+
+def _make_fuzz_queue_configs() -> list[QueueConfig]:
+    return [
+        QueueConfig(
+            stage=stage,
+            workers=4,
+            provider_semaphore=asyncio.Semaphore(4),
+            route_pool=None,
+            provider=object(),  # type: ignore[arg-type]
+            model="dummy",
+            api_keys=[],
+            max_tokens=None,
+            retry_limit=4,
+        )
+        for stage in _FUZZ_QUEUE_STAGES
+    ]
+
+
+async def _run_scheduler_fuzz_case(tmp_path: Path, case: _SchedulerFuzzCase) -> tuple[list[Path], int]:
+    sources: dict[Path, Path] = {}
+    expected_outputs: dict[Path, str] = {}
+    expected_empty_outputs: set[Path] = set()
+    stage_scripts: dict[str, dict[str, list[tuple[float, str]]]] = {}
+
+    for doc in case.docs:
+        source = tmp_path / f"{doc.stem}.md"
+        output = tmp_path / f"{doc.stem}.zh.md"
+        source.write_text(doc.source_text, encoding="utf-8")
+        sources[source] = output
+        if doc.expected_output is not None:
+            expected_outputs[output] = doc.expected_output
+        else:
+            expected_empty_outputs.add(output)
+        stage_scripts[doc.source_text] = {
+            stage: list(actions) for stage, actions in doc.stage_scripts.items()
+        }
+
+    translator = _ScriptedTranslator(stage_scripts)
+    scheduler = Scheduler(
+        translator=translator,  # type: ignore[arg-type]
+        document_window=case.document_window,
+        global_semaphore=asyncio.Semaphore(100),
+        queue_configs=_make_fuzz_queue_configs(),
+        progress=None,
+        client=httpx.AsyncClient(),
+        throttle=None,
+        timeout=10.0,
+    )
+    try:
+        failed = await asyncio.wait_for(
+            scheduler.run(
+                paths=list(sources),
+                output_map=sources,
+                fix_level="off",
+                format_enabled=False,
+                request_log_enabled=False,
+            ),
+            timeout=10.0,
+        )
+    finally:
+        await scheduler._client.aclose()
+
+    assert failed == []
+    assert translator.max_active_docs <= case.document_window
+    for output_path, expected_text in expected_outputs.items():
+        assert output_path.read_text(encoding="utf-8") == expected_text
+    observed_empty_outputs = {
+        output_path
+        for output_path in sources.values()
+        if not output_path.exists() or output_path.read_text(encoding="utf-8") == ""
+    }
+    assert observed_empty_outputs == expected_empty_outputs
+    return [], translator.max_active_docs
+
+
+async def _run_scheduler_fuzz_case_twice(
+    tmp_path: Path, case: _SchedulerFuzzCase
+) -> tuple[dict[str, str], dict[str, str], list[Path], list[Path], int, int]:
+    async def run_once(run_root: Path) -> tuple[dict[str, str], list[Path], int]:
+        run_root.mkdir(parents=True, exist_ok=True)
+        sources: dict[Path, Path] = {}
+        expected_outputs: dict[Path, str] = {}
+        stage_scripts: dict[str, dict[str, list[tuple[float, str]]]] = {}
+
+        for doc in case.docs:
+            source = run_root / f"{doc.stem}.md"
+            output = run_root / f"{doc.stem}.zh.md"
+            source.write_text(doc.source_text, encoding="utf-8")
+            sources[source] = output
+            expected_outputs[output] = doc.expected_output or ""
+            stage_scripts[doc.source_text] = {
+                stage: list(actions) for stage, actions in doc.stage_scripts.items()
+            }
+
+        translator = _ScriptedTranslator(stage_scripts)
+        scheduler = Scheduler(
+            translator=translator,  # type: ignore[arg-type]
+            document_window=case.document_window,
+            global_semaphore=asyncio.Semaphore(100),
+            queue_configs=_make_fuzz_queue_configs(),
+            progress=None,
+            client=httpx.AsyncClient(),
+            throttle=None,
+            timeout=10.0,
+        )
+        try:
+            failed = await asyncio.wait_for(
+                scheduler.run(
+                    paths=list(sources),
+                    output_map=sources,
+                    fix_level="off",
+                    format_enabled=False,
+                    request_log_enabled=False,
+                ),
+                timeout=10.0,
+            )
+        finally:
+            await scheduler._client.aclose()
+
+        observed_outputs = {
+            output_path.name: output_path.read_text(encoding="utf-8")
+            for output_path in sources.values()
+        }
+        assert failed == []
+        assert translator.max_active_docs <= case.document_window
+        assert observed_outputs == {path.name: text for path, text in expected_outputs.items()}
+        return observed_outputs, failed, translator.max_active_docs
+
+    first_outputs, first_failed, first_max_active_docs = await run_once(tmp_path / "first")
+    second_outputs, second_failed, second_max_active_docs = await run_once(tmp_path / "second")
+    return (
+        first_outputs,
+        second_outputs,
+        first_failed,
+        second_failed,
+        first_max_active_docs,
+        second_max_active_docs,
+    )
+
+
+@pytest.mark.parametrize("case", _TIMING_FUZZ_CASES, ids=lambda case: case.name)
+def test_scheduler_timing_fuzz(tmp_path: Path, case: _SchedulerFuzzCase) -> None:
+    asyncio.run(_run_scheduler_fuzz_case(tmp_path, case))
+
+
+@pytest.mark.parametrize("case", _WINDOW_FUZZ_CASES, ids=lambda case: case.name)
+def test_scheduler_document_window_fuzz(tmp_path: Path, case: _SchedulerFuzzCase) -> None:
+    asyncio.run(_run_scheduler_fuzz_case(tmp_path, case))
+
+
+@pytest.mark.parametrize("case", _DESTRUCTIVE_FUZZ_CASES, ids=lambda case: case.name)
+def test_scheduler_destructive_window_timing_fuzz(tmp_path: Path, case: _SchedulerFuzzCase) -> None:
+    async def run() -> None:
+        first_outputs, second_outputs, first_failed, second_failed, first_max_active_docs, second_max_active_docs = (
+            await _run_scheduler_fuzz_case_twice(tmp_path, case)
+        )
+        assert first_outputs == second_outputs
+        assert first_failed == []
+        assert second_failed == []
+        assert first_max_active_docs <= case.document_window
+        assert second_max_active_docs <= case.document_window
+
+    asyncio.run(run())
 
 
 def test_scheduler_writes_output_for_single_document(tmp_path: Path) -> None:
