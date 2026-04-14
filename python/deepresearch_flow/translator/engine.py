@@ -81,11 +81,6 @@ class PreprocessResult:
     initial_groups: list[str]
 
 
-def _quiet_http_debug_logs() -> None:
-    logging.getLogger("httpx").setLevel(logging.INFO)
-    logging.getLogger("httpcore").setLevel(logging.WARNING)
-
-
 class KeyRotator:
     def __init__(self, keys: list[str]) -> None:
         self._keys = keys
@@ -124,12 +119,11 @@ class MarkdownTranslator:
         self._rumdl_path = shutil.which("rumdl")
         self._rumdl_warned = False
         self._rumdl_timeout_seconds = 120.0
-        _quiet_http_debug_logs()
 
         self._rx_preserve = re.compile(
             r"@@PRESERVE_(\d+)@@[\s\S]*?@@/PRESERVE_\1@@", re.DOTALL
         )
-        self._rx_placeholder = re.compile(r"__PH_[A-Z0-9_]+__")
+        self._rx_placeholder = re.compile(r"__PH_[A-Z0-9_]+?_\d+__")
         self._rx_placeholder_fuzzy = re.compile(
             r"__PH[^A-Za-z0-9]*([A-Za-z0-9]+)[^0-9]*([0-9]{6})__"
         )
@@ -234,7 +228,7 @@ class MarkdownTranslator:
         text = s.strip().strip(",;")
         if not text or "@" not in text:
             return False
-        normalized = re.sub(r"__PH_[A-Z0-9_]+__", "PH", text)
+        normalized = re.sub(r"__PH_[A-Z0-9_]+?_\d+__", "PH", text)
         normalized = normalized.replace("<", "").replace(">", "")
         normalized = re.sub(r"\}\s*@\s*", "}@", normalized)
         normalized = re.sub(r"([A-Za-z0-9._%+\-])\s*@\s*", r"\1@", normalized)
@@ -285,7 +279,7 @@ class MarkdownTranslator:
         text = re.sub(r"^#{1,6}\s+[A-Z]\.\s*", "", text)
         text = re.sub(r"^#{1,6}\s*", "", text)
         text = re.sub(r"^[•\-\*]\s*", "", text)
-        text = re.sub(r"__PH_[A-Z0-9_]+__", "", text)
+        text = re.sub(r"__PH_[A-Z0-9_]+?_\d+__", "", text)
         text = text.strip().strip(".,;:")
         if not text:
             return False
@@ -328,7 +322,7 @@ class MarkdownTranslator:
         text = s.strip()
         if not text:
             return False
-        if re.fullmatch(r"(?:__PH_[A-Z0-9_]+__\s*)+", text):
+        if re.fullmatch(r"(?:__PH_[A-Z0-9_]+?_\d+__\s*)+", text):
             return True
         return any(
             (
@@ -446,11 +440,8 @@ class MarkdownTranslator:
         trans_phs = self._rx_placeholder.findall(trans)
         if not orig_phs and not trans_phs:
             return trans
-        if not orig_phs:
-            return self._rx_placeholder.sub("", trans)
-        if not trans_phs:
-            joiner = " " if trans and not trans.endswith((" ", "\n")) else ""
-            return f"{trans}{joiner}{' '.join(orig_phs)}"
+        if sorted(orig_phs) != sorted(trans_phs):
+            return trans
         parts = self._rx_placeholder.split(trans)
         out = parts[0]
         used = 0

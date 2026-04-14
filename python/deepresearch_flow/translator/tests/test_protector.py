@@ -227,13 +227,40 @@ def test_unprotect_raises_on_real_unresolved_placeholder_residuals() -> None:
         protector.unprotect(tampered, store)
 
 
-def test_restore_checked_rejects_known_placeholder_residuals() -> None:
+def test_restore_checked_recovers_known_nested_placeholder_residuals() -> None:
     store = PlaceHolderStore()
     math_placeholder = store.add("MATH", r"\(x+y\)")
     code_placeholder = store.add("CODE", f"`{math_placeholder}`")
 
-    with pytest.raises(ValueError):
-        store.restore_all_checked(code_placeholder)
+    assert store.restore_all_checked(code_placeholder) == r"`\(x+y\)`"
+
+
+def test_restore_checked_recovers_nested_placeholders_reachable_from_outer_token() -> None:
+    store = PlaceHolderStore()
+    code_placeholder = store.add("CODE", "`open`")
+    outer_placeholder = store.add(
+        "HTMLINLINE",
+        f"<p>Command: {code_placeholder}</p>",
+    )
+
+    assert store.restore_all_checked(outer_placeholder) == "<p>Command: `open`</p>"
+
+
+def test_protect_unprotect_restores_html_inline_with_nested_math_image_and_footrefs() -> None:
+    protector = MarkdownProtector()
+    store = PlaceHolderStore()
+    cfg = TranslateConfig()
+    text = (
+        '<submit data-note="x">Good translation $^{1}$. '
+        'See![Image](data:image/png;base64,AAAA)[^4][^5]</submit>\n\n'
+        "[^4]: Footnote four.\n\n"
+        "[^5]: Footnote five.\n"
+    )
+
+    protected = protector.protect(text, cfg, store)
+
+    assert "__PH_HTMLINLINE_" in protected
+    assert protector.unprotect(protected, store) == text
 
 
 @pytest.mark.parametrize(

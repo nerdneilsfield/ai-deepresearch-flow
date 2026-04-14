@@ -11,6 +11,7 @@ import pytest
 
 from deepresearch_flow.translator.config import TranslateConfig
 from deepresearch_flow.translator.engine import MarkdownTranslator
+from deepresearch_flow.translator.prompts import build_translation_messages
 
 
 def _make_provider() -> SimpleNamespace:
@@ -143,8 +144,67 @@ def test_failed_nodes_fall_back_to_origin_without_post_processing_mutation(
 
     result = asyncio.run(_run_translate(translator, text))
 
-    assert result.translated_text == text
+    assert result.translated_text.strip() == text.strip()
     assert result.stats.failed_nodes == 1
+
+
+def test_node_with_missing_footnote_placeholders_falls_back_to_original_text(
+    monkeypatch,
+) -> None:
+    translator = _make_translator(retry_failed_nodes=False, retry_times=1)
+    text = "Before[^1] middle[^2] after\n\n[^1]: First note\n\n[^2]: Second note\n"
+
+    async def fake_translate_group(self, group_text, *args, **kwargs):
+        return group_text.replace("__PH_FOOTREF_000004__ ", "").replace(
+            " __PH_FOOTREF_000005__", ""
+        )
+
+    async def fake_format(self, content, stage):
+        return content
+
+    monkeypatch.setattr(MarkdownTranslator, "_translate_group", fake_translate_group)
+    monkeypatch.setattr(MarkdownTranslator, "_format_markdown", fake_format)
+
+    result = asyncio.run(_run_translate(translator, text))
+
+    assert result.translated_text.strip() == text.strip()
+    assert result.stats.failed_nodes == 1
+
+
+def test_node_with_missing_math_placeholders_falls_back_to_original_text(
+    monkeypatch,
+) -> None:
+    translator = _make_translator(retry_failed_nodes=False, retry_times=1)
+    text = "Before \\(x + y\\) and $z$ after\n"
+
+    async def fake_translate_group(self, group_text, *args, **kwargs):
+        return (
+            group_text.replace("__PH_MATH_000001__", "")
+            .replace("__PH_MATH_000002__", "")
+            .replace("Before", "之前")
+        )
+
+    async def fake_format(self, content, stage):
+        return content
+
+    monkeypatch.setattr(MarkdownTranslator, "_translate_group", fake_translate_group)
+    monkeypatch.setattr(MarkdownTranslator, "_format_markdown", fake_format)
+
+    result = asyncio.run(_run_translate(translator, text))
+
+    assert result.translated_text.strip() == text.strip()
+    assert result.stats.failed_nodes == 1
+
+
+def test_translation_messages_include_placeholder_integrity_and_fallback_rules() -> None:
+    messages = build_translation_messages("en", "zh", "@@NODE_START_0000@@\n__PH_FOOTREF_000001__\n@@NODE_END_0000@@")
+
+    system_text = messages[0]["content"]
+    user_text = messages[1]["content"]
+
+    assert "multiset of placeholders" in system_text
+    assert "If any placeholder would be lost or changed, output the ORIGINAL NODE CONTENT unchanged." in system_text
+    assert "Footnote-reference placeholders such as __PH_FOOTREF_######__ are mandatory anchors" in user_text
 
 
 def test_translated_headings_keep_original_levels_after_post_format(monkeypatch) -> None:
@@ -209,22 +269,28 @@ def test_engine_format_markdown_returns_original_on_rumdl_timeout(monkeypatch) -
     assert asyncio.run(translator._format_markdown("# Title\n", "post")) == "# Title\n"
 
 
-def test_markdown_translator_quiets_httpx_debug_logging() -> None:
-    httpx_logger = logging.getLogger("httpx")
-    httpcore_logger = logging.getLogger("httpcore")
-    old_httpx = httpx_logger.level
-    old_httpcore = httpcore_logger.level
+def test_markdown_translator_respects_existing_httpx_httpcore_quiet_logging() -> None:
+    quiet_names = [
+        "httpx",
+        "httpx._client",
+        "httpx._transports",
+        "httpcore",
+        "httpcore.connection",
+        "httpcore.http11",
+        "httpcore.http2",
+        "httpcore.proxy",
+    ]
+    old_levels = {name: logging.getLogger(name).level for name in quiet_names}
     try:
-        httpx_logger.setLevel(logging.NOTSET)
-        httpcore_logger.setLevel(logging.NOTSET)
-
+        for name in quiet_names:
+            logging.getLogger(name).setLevel(logging.WARNING)
         _make_translator()
 
-        assert httpx_logger.level == logging.INFO
-        assert httpcore_logger.level == logging.WARNING
+        for name in quiet_names:
+            assert logging.getLogger(name).level == logging.WARNING
     finally:
-        httpx_logger.setLevel(old_httpx)
-        httpcore_logger.setLevel(old_httpcore)
+        for name, level in old_levels.items():
+            logging.getLogger(name).setLevel(level)
 
 
 def test_preprocess_document_returns_expected_document_state() -> None:

@@ -8,7 +8,7 @@ from typing import Dict, List
 
 
 class PlaceHolderStore:
-    _placeholder_like = re.compile(r"__PH_[A-Z0-9_]+__")
+    _placeholder_like = re.compile(r"__PH_[A-Z0-9_]+?_\d+__")
 
     def __init__(self) -> None:
         self._map: dict[tuple[str, str], str] = {}
@@ -63,7 +63,7 @@ class PlaceHolderStore:
             legacy_map = payload.get("map", {})
             self._map = {}
             for text, placeholder in legacy_map.items():
-                match = re.match(r"__PH_([A-Z0-9]+)_\d+__", str(placeholder))
+                match = re.match(r"__PH_([A-Z0-9_]+?)_\d+__", str(placeholder))
                 kind = match.group(1) if match else "LEGACY"
                 self._map[(str(kind), str(text))] = str(placeholder)
         self._rev = payload.get("rev", {})
@@ -77,11 +77,35 @@ class PlaceHolderStore:
     def source_placeholder_like_tokens(self) -> set[str]:
         return set(self._source_placeholder_likes)
 
+    def _referenced_placeholders(self) -> set[str]:
+        referenced: set[str] = set()
+        for raw in self._rev.values():
+            referenced.update(
+                token
+                for token in self.find_placeholder_like_tokens(raw)
+                if token in self._rev
+            )
+        return referenced
+
+    def root_placeholders(self) -> set[str]:
+        return set(self._rev) - self._referenced_placeholders()
+
     def restore_all(self, text: str) -> str:
-        for placeholder, raw in sorted(self._rev.items(), key=lambda item: -len(item[0])):
-            if raw.endswith("\n"):
-                text = text.replace(f"{placeholder}\n", raw)
-            text = text.replace(placeholder, raw)
+        max_rounds = max(len(self._rev), 1)
+        for _ in range(max_rounds):
+            visible = {
+                token for token in self.find_placeholder_like_tokens(text) if token in self._rev
+            }
+            if not visible:
+                break
+            previous = text
+            for placeholder in sorted(visible, key=len, reverse=True):
+                raw = self._rev[placeholder]
+                if raw.endswith("\n"):
+                    text = text.replace(f"{placeholder}\n", raw)
+                text = text.replace(placeholder, raw)
+            if text == previous:
+                break
         return text
 
     def find_placeholder_like_tokens(self, text: str) -> List[str]:
@@ -128,10 +152,10 @@ class PlaceHolderStore:
         return restored
 
     def contains_all(self, text: str) -> bool:
-        return all(placeholder in text for placeholder in self._map.values())
+        return all(placeholder in text for placeholder in self.root_placeholders())
 
     def diff_missing(self, text: str) -> List[str]:
-        return [ph for ph in self._map.values() if ph not in text]
+        return [ph for ph in sorted(self.root_placeholders()) if ph not in text]
 
     def snapshot(self) -> Dict[str, str]:
         return {

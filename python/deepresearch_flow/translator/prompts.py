@@ -20,7 +20,10 @@ You are a professional translation engine. Follow these invariant rules:
 - Handle NODE styles: @@NODE_START_{n}@@/@@NODE_END_{n}@@ and <NODE_START_{n}></NODE_END_{n}>.
 - Respect PRESERVE spans: @@PRESERVE_{n}@@ ... @@/PRESERVE_{n}@@ (leave markers and enclosed text unchanged).
 - Placeholders like __PH_[A-Z0-9_]+__ must remain unchanged.
+- For each NODE, the multiset of placeholders matching __PH_[A-Z0-9_]+__ in output MUST be identical to input.
+- NEVER delete, merge, reorder, translate, paraphrase, or relocate any placeholder token.
 - Output ONLY the NODE blocks in original order; no extra commentary.
+- If any placeholder would be lost or changed, output the ORIGINAL NODE CONTENT unchanged.
 - If markers malformed: reproduce original block verbatim and append <!-- VIOLATION: reason --> once.
 """
 )
@@ -77,6 +80,9 @@ TRANSLATE_XML_TEMPLATE = Template(
     <placeholders>
       <pattern>__PH_[A-Z0-9_]+__</pattern>
       <instruction>All placeholders matching this regex MUST be left unchanged.</instruction>
+      <instruction>The multiset of placeholders in each NODE output MUST match the input exactly 1:1.</instruction>
+      <instruction>NEVER delete, merge, reorder, translate, paraphrase, or relocate any placeholder token.</instruction>
+      <instruction>Footnote-reference placeholders such as __PH_FOOTREF_######__ are mandatory anchors and MUST remain in the same node.</instruction>
     </placeholders>
   </markers>
 
@@ -89,12 +95,14 @@ TRANSLATE_XML_TEMPLATE = Template(
   <quality_checks visibility="internal">
     <check>Count of START and END NODE markers is identical to input; indices {n} match 1:1.</check>
     <check>No PRESERVE spans were altered; byte-for-byte identical.</check>
+    <check>Placeholder multiset per NODE matches input exactly; no placeholder token was deleted, added, or moved.</check>
     <check>No LaTeX/HTML/code tokens changed; only prose translated.</check>
     <check>Paragraph breaks and intra-block whitespace unchanged.</check>
   </quality_checks>
 
   <fallback visibility="internal">
     <strategy>If a block violates constraints or markers are malformed, do NOT guess. Reproduce the original block unchanged and append a single-line comment &lt;!-- VIOLATION: reason --&gt; after the block.</strategy>
+    <strategy>If any placeholder would be lost or changed, output the ORIGINAL NODE CONTENT unchanged.</strategy>
   </fallback>
 
   <io>
