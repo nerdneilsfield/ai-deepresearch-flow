@@ -23,7 +23,7 @@ from deepresearch_flow.paper.snapshot.bibtex_utils import (
     extract_canonical_doi,
     extract_current_bibtex_payload,
 )
-from deepresearch_flow.paper.snapshot.common import _open_rw_conn
+from deepresearch_flow.paper.snapshot.common import _open_ro_conn, _open_rw_conn
 from deepresearch_flow.paper.snapshot.identity import (
     build_paper_key_candidates,
     choose_preferred_key,
@@ -53,12 +53,15 @@ from deepresearch_flow.paper.snapshot.update import (
 logger = logging.getLogger(__name__)
 
 MAX_BATCH_SIZE = 200
+_MAX_SEMANTIC_PAYLOAD_BYTES = 32 * 1024 * 1024
 
 
 @dataclass(frozen=True)
 class AdminConfig:
     snapshot_db: Path
     admin_token: str
+    embed_db: Path | None = None
+    embed_dimensions: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -422,17 +425,290 @@ async def _admin_delete_paper(request: Request) -> JSONResponse:
     return JSONResponse({"deleted": True, "paper_id": paper_id})
 
 
+
+
+def _staging_table_exists(conn: sqlite3.Connection) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'semantic_staging' LIMIT 1"
+    ).fetchone()
+    return row is not None
+
+
+def _ensure_staging_table(cfg: AdminConfig) -> None:
+    conn = _open_rw_conn(cfg.snapshot_db)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS semantic_staging (
+              staging_id INTEGER PRIMARY KEY AUTOINCREMENT,
+              doc_id TEXT NOT NULL,
+              template_tag TEXT NOT NULL,
+              group_hash TEXT NOT NULL,
+              part_index INTEGER NOT NULL,
+              part_count INTEGER NOT NULL,
+              chunk_data TEXT NOT NULL,
+              created_at TEXT NOT NULL DEFAULT (datetime('now')),
+              UNIQUE(doc_id, template_tag, group_hash, part_index)
+            )
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _stage_part(
+    cfg: AdminConfig,
+    doc_id: str,
+    template_tag: str,
+    group_hash: str,
+    part_index: int,
+    part_count: int,
+    chunks: list[dict[str, Any]],
+) -> None:
+    conn = _open_rw_conn(cfg.snapshot_db)
+    try:
+        existing = conn.execute(
+            "SELECT group_hash, part_count FROM semantic_staging WHERE doc_id = ? AND template_tag = ? LIMIT 1",
+            (doc_id, template_tag),
+        ).fetchone()
+        if existing and (str(existing["group_hash"]) != group_hash or int(existing["part_count"]) != part_count):
+            conn.execute(
+                "DELETE FROM semantic_staging WHERE doc_id = ? AND template_tag = ?",
+                (doc_id, template_tag),
+            )
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO semantic_staging
+            (doc_id, template_tag, group_hash, part_index, part_count, chunk_data)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (doc_id, template_tag, group_hash, part_index, part_count, json.dumps(chunks, ensure_ascii=False)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _count_staged_parts(cfg: AdminConfig, doc_id: str, template_tag: str, group_hash: str) -> int:
+    conn = _open_ro_conn(cfg.snapshot_db)
+    try:
+        if not _staging_table_exists(conn):
+            return 0
+        row = conn.execute(
+            "SELECT COUNT(*) AS count FROM semantic_staging WHERE doc_id = ? AND template_tag = ? AND group_hash = ?",
+            (doc_id, template_tag, group_hash),
+        ).fetchone()
+        return int(row["count"]) if row else 0
+    finally:
+        conn.close()
+
+
+def _collect_staged_parts(cfg: AdminConfig, doc_id: str, template_tag: str, group_hash: str) -> list[dict[str, Any]]:
+    conn = _open_ro_conn(cfg.snapshot_db)
+    try:
+        if not _staging_table_exists(conn):
+            return []
+        rows = conn.execute(
+            "SELECT chunk_data FROM semantic_staging WHERE doc_id = ? AND template_tag = ? AND group_hash = ? ORDER BY part_index",
+            (doc_id, template_tag, group_hash),
+        ).fetchall()
+    finally:
+        conn.close()
+    chunks: list[dict[str, Any]] = []
+    for row in rows:
+        chunks.extend(json.loads(str(row["chunk_data"])))
+    return chunks
+
+
+def _clear_staged_parts(cfg: AdminConfig, doc_id: str, template_tag: str, group_hash: str) -> None:
+    conn = _open_rw_conn(cfg.snapshot_db)
+    try:
+        if not _staging_table_exists(conn):
+            return
+        conn.execute(
+            "DELETE FROM semantic_staging WHERE doc_id = ? AND template_tag = ? AND group_hash = ?",
+            (doc_id, template_tag, group_hash),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+async def _admin_ingest_semantic_chunks(request: Request) -> JSONResponse:
+    if not _check_auth(request):
+        return _AUTH_ERROR
+
+    cfg: AdminConfig = request.app.state.admin_cfg
+    if cfg.embed_db is None:
+        return JSONResponse({"error": "semantic_storage_unavailable"}, status_code=503)
+
+    content_length = int(request.headers.get("content-length", "0") or 0)
+    if content_length > _MAX_SEMANTIC_PAYLOAD_BYTES:
+        return JSONResponse({"error": "Payload Too Large"}, status_code=413)
+
+    raw_body = await request.body()
+    if len(raw_body) > _MAX_SEMANTIC_PAYLOAD_BYTES:
+        return JSONResponse({"error": "Payload Too Large"}, status_code=413)
+
+    try:
+        body = json.loads(raw_body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return JSONResponse({"error": "bad_request", "detail": "invalid JSON body"}, status_code=400)
+
+    index_meta = body.get("index_meta") if isinstance(body, dict) else None
+    group = body.get("group") if isinstance(body, dict) else None
+    chunks = body.get("chunks") if isinstance(body, dict) else None
+    if not isinstance(index_meta, dict) or not isinstance(group, dict) or not isinstance(chunks, list):
+        return JSONResponse({"error": "bad_request", "detail": "body must include index_meta, group, and chunks"}, status_code=400)
+
+    dimensions = int(index_meta.get("dimensions") or 0)
+    if cfg.embed_dimensions is not None and dimensions != cfg.embed_dimensions:
+        return JSONResponse({"error": f"Dimension mismatch: server expects {cfg.embed_dimensions}, got {dimensions}"}, status_code=400)
+
+    doc_id = str(group.get("doc_id") or "")
+    template_tag = str(group.get("template_tag") or "")
+    group_hash = str(group.get("group_hash") or "")
+    part_index = int(group.get("part_index") or 0)
+    part_count = int(group.get("part_count") or 0)
+    if not doc_id or not group_hash or part_count < 1:
+        return JSONResponse({"error": "bad_request", "detail": "invalid group metadata"}, status_code=400)
+
+    if part_count > 1:
+        _stage_part(cfg, doc_id, template_tag, group_hash, part_index, part_count, chunks)
+        if _count_staged_parts(cfg, doc_id, template_tag, group_hash) < part_count:
+            return JSONResponse({"received": len(chunks), "inserted": 0, "updated": 0, "skipped": 0, "deleted": 0})
+        all_chunks = _collect_staged_parts(cfg, doc_id, template_tag, group_hash)
+    else:
+        all_chunks = chunks
+
+    from deepresearch_flow.paper.vector_store import (
+        ChunkRow,
+        compute_group_hash,
+        decode_vector_b64,
+        delete_groups,
+        open_store,
+        read_all_chunks,
+        save_index_meta,
+        update_index_meta_stats,
+        validate_index_meta,
+        write_chunks,
+    )
+
+    expected_group_hash = compute_group_hash([str(chunk.get("content_hash") or "") for chunk in all_chunks])
+    if expected_group_hash != group_hash:
+        return JSONResponse(
+            {"error": "bad_request", "detail": "group_hash does not match chunk content_hash values"},
+            status_code=400,
+        )
+
+    meta_path = cfg.embed_db / "index_meta.json"
+    if meta_path.exists():
+        validate_index_meta(
+            cfg.embed_db,
+            model=str(index_meta.get("model") or ""),
+            dimensions=dimensions,
+            normalized=bool(index_meta.get("normalized")),
+            provider=str(index_meta.get("provider") or ""),
+        )
+    else:
+        save_index_meta(
+            cfg.embed_db,
+            {
+                "model": str(index_meta.get("model") or ""),
+                "dimensions": cfg.embed_dimensions if cfg.embed_dimensions is not None else dimensions,
+                "normalized": bool(index_meta.get("normalized")),
+                "provider": str(index_meta.get("provider") or ""),
+                "index_version": int(index_meta.get("index_version") or 1),
+                "doc_count": 0,
+                "template_count": 0,
+                "chunk_count": 0,
+                "last_updated": None,
+            },
+        )
+
+    db = open_store(cfg.embed_db)
+    existing_rows = [row for row in read_all_chunks(db) if str(row.get("doc_id")) == doc_id and str(row.get("template_tag") or "") == template_tag]
+    existing_by_id = {str(row["id"]): str(row.get("content_hash") or "") for row in existing_rows}
+
+    inserted = 0
+    updated = 0
+    skipped = 0
+    incoming_ids: set[str] = set()
+    current_rows: list[ChunkRow] = []
+    for chunk in all_chunks:
+        chunk_id = str(chunk.get("id") or "")
+        incoming_ids.add(chunk_id)
+        content_hash = str(chunk.get("content_hash") or "")
+        if chunk_id in existing_by_id:
+            if existing_by_id[chunk_id] == content_hash:
+                skipped += 1
+            else:
+                updated += 1
+        else:
+            inserted += 1
+        try:
+            vector = decode_vector_b64(
+                str(chunk.get("vector_b64") or ""),
+                int(chunk.get("vector_dim") or dimensions),
+            )
+        except (TypeError, ValueError) as exc:
+            return JSONResponse(
+                {"error": "bad_request", "detail": f"invalid vector payload for chunk {chunk_id}: {exc}"},
+                status_code=400,
+            )
+        current_rows.append(
+            ChunkRow(
+                id=chunk_id,
+                doc_id=str(chunk.get("doc_id") or doc_id),
+                source_path=str(chunk.get("source_path") or ""),
+                template_tag=str(chunk.get("template_tag") or template_tag),
+                chunk_type=str(chunk.get("chunk_type") or ""),
+                chunk_index=int(chunk.get("chunk_index") or 0),
+                field_name=str(chunk.get("field_name") or ""),
+                lang=str(chunk.get("lang") or ""),
+                text=str(chunk.get("text") or ""),
+                content_hash=content_hash,
+                vector=vector,
+                title=str(chunk.get("title") or ""),
+                year=int(chunk.get("year") or 0),
+                authors=str(chunk.get("authors") or ""),
+                venue=str(chunk.get("venue") or ""),
+                tags=str(chunk.get("tags") or ""),
+            )
+        )
+
+    deleted = len(set(existing_by_id) - incoming_ids)
+    delete_groups(db, [(doc_id, template_tag if template_tag else "_shared")])
+    if current_rows:
+        write_chunks(db, current_rows, dimensions=dimensions)
+    update_index_meta_stats(cfg.embed_db, db)
+    if part_count > 1:
+        _clear_staged_parts(cfg, doc_id, template_tag, group_hash)
+
+    return JSONResponse({
+        "received": len(all_chunks),
+        "inserted": inserted,
+        "updated": updated,
+        "skipped": skipped,
+        "deleted": deleted,
+    })
+
+
 # ---------------------------------------------------------------------------
 # Sub-application factory
 # ---------------------------------------------------------------------------
 
-def create_admin_app(*, snapshot_db: Path, admin_token: str) -> Starlette:
+def create_admin_app(*, snapshot_db: Path, admin_token: str, embed_db: Path | None = None, embed_dimensions: int | None = None) -> Starlette:
     """Create the admin sub-application mounted at ``/api/v1/admin``."""
-    cfg = AdminConfig(snapshot_db=snapshot_db, admin_token=admin_token)
+    cfg = AdminConfig(snapshot_db=snapshot_db, admin_token=admin_token, embed_db=embed_db, embed_dimensions=embed_dimensions)
+    if embed_db is not None:
+        _ensure_staging_table(cfg)
 
     routes = [
         Route("/papers", _admin_add_papers, methods=["POST"]),
         Route("/papers/{paper_id:str}", _admin_delete_paper, methods=["DELETE"]),
+        Route("/semantic/chunks/batch", _admin_ingest_semantic_chunks, methods=["POST"]),
     ]
 
     app = Starlette(routes=routes)

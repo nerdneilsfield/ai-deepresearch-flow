@@ -55,6 +55,18 @@ def init_snapshot_db(conn: sqlite3.Connection) -> None:
           FOREIGN KEY (paper_id) REFERENCES paper(paper_id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS semantic_staging (
+          staging_id INTEGER PRIMARY KEY AUTOINCREMENT,
+          doc_id TEXT NOT NULL,
+          template_tag TEXT NOT NULL,
+          group_hash TEXT NOT NULL,
+          part_index INTEGER NOT NULL,
+          part_count INTEGER NOT NULL,
+          chunk_data TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          UNIQUE(doc_id, template_tag, group_hash, part_index)
+        );
+
         CREATE TABLE IF NOT EXISTS paper_bibtex (
           paper_id TEXT PRIMARY KEY,
           bibtex_raw TEXT NOT NULL,

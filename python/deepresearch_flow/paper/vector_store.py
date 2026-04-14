@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
+import struct
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,6 +18,10 @@ INDEX_VERSION = 1
 _SHARED_KEY = "_shared"
 _META_FILE = "index_meta.json"
 _CHUNKS_TABLE = "paper_chunks"
+
+
+def _quote_filter_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
 
 
 def _table_names(db: lancedb.DBConnection) -> list[str]:
@@ -53,6 +59,24 @@ def build_chunk_id(doc_id: str, template_tag: str, chunk_type: str, chunk_index:
 def compute_group_hash(content_hashes: list[str]) -> str:
     payload = "\n".join(sorted(content_hashes))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def encode_vector_b64(vector: list[float]) -> str:
+    """Encode a vector to base64 little-endian float32 bytes."""
+    packed = struct.pack(f"<{len(vector)}f", *vector)
+    return base64.b64encode(packed).decode("ascii")
+
+
+def decode_vector_b64(b64: str, dimensions: int) -> list[float]:
+    """Decode base64 little-endian float32 bytes into a vector."""
+    raw = base64.b64decode(b64)
+    expected_bytes = dimensions * 4
+    if len(raw) != expected_bytes:
+        raise ValueError(
+            f"Vector dimension mismatch: expected {dimensions} floats "
+            f"({expected_bytes} bytes), got {len(raw)} bytes"
+        )
+    return list(struct.unpack(f"<{dimensions}f", raw))
 
 
 def save_index_meta(vector_dir: Path, meta: dict[str, Any]) -> None:
@@ -176,7 +200,9 @@ def delete_groups(db: lancedb.DBConnection, groups: list[tuple[str, str]]) -> No
     table = db.open_table(_CHUNKS_TABLE)
     for doc_id, template_key in groups:
         tag = "" if template_key == _SHARED_KEY else template_key
-        table.delete(f'doc_id = "{doc_id}" AND template_tag = "{tag}"')
+        table.delete(
+            f"doc_id = {_quote_filter_literal(doc_id)} AND template_tag = {_quote_filter_literal(tag)}"
+        )
 
 
 def read_group_hashes(db: lancedb.DBConnection) -> dict[tuple[str, str], str]:
@@ -191,11 +217,15 @@ def read_group_hashes(db: lancedb.DBConnection) -> dict[tuple[str, str], str]:
     return {key: compute_group_hash(values) for key, values in grouped.items()}
 
 
-def scan_rows(db: lancedb.DBConnection) -> list[dict[str, Any]]:
+def read_all_chunks(db: lancedb.DBConnection) -> list[dict[str, Any]]:
     if _CHUNKS_TABLE not in _table_names(db):
         return []
     table = db.open_table(_CHUNKS_TABLE)
     return table.to_arrow().to_pylist()
+
+
+def scan_rows(db: lancedb.DBConnection) -> list[dict[str, Any]]:
+    return read_all_chunks(db)
 
 
 def update_index_meta_stats(vector_dir: Path, db: lancedb.DBConnection) -> None:

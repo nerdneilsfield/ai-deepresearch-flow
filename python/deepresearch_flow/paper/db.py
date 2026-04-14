@@ -988,6 +988,13 @@ def register_db_commands(db_group: click.Group) -> None:
     @click.option("--only-storage", is_flag=True, default=False, help="Push only static storage; skip admin API")
     @click.option("--only-api", is_flag=True, default=False, help="Push only admin API; skip static storage")
     @click.option(
+        "--embed-db",
+        "embed_db",
+        default=None,
+        type=click.Path(path_type=str),
+        help="Path to local semantic LanceDB directory for optional vector sync",
+    )
+    @click.option(
         "--storage-concurrency",
         "storage_concurrency",
         type=int,
@@ -1004,6 +1011,7 @@ def register_db_commands(db_group: click.Group) -> None:
         only_storage: bool,
         only_api: bool,
         storage_concurrency: int,
+        embed_db: str | None,
     ) -> None:
         """Push papers from a local snapshot DB to a remote admin API."""
         from rich.console import Console
@@ -1034,6 +1042,10 @@ def register_db_commands(db_group: click.Group) -> None:
             raise click.ClickException("--only-api and --only-storage are mutually exclusive")
         if only_storage and dry_run:
             raise click.ClickException("--dry-run cannot be used with --only-storage")
+        if embed_db and only_storage:
+            raise click.ClickException("--embed-db cannot be combined with --only-storage")
+        if embed_db and dry_run:
+            embed_db = None
         if storage_concurrency < 1:
             raise click.ClickException("--storage-concurrency must be at least 1")
         if only_api and retry_failed_path:
@@ -1208,6 +1220,41 @@ def register_db_commands(db_group: click.Group) -> None:
                 raise click.ClickException(
                     f"{len(static_stats.failed_files)} static file(s) failed to upload"
                 )
+
+
+        if embed_db:
+            from deepresearch_flow.paper.snapshot.push_semantic import push_semantic_chunks
+            from deepresearch_flow.paper.vector_store import load_index_meta, open_store, read_all_chunks
+
+            embed_path = Path(embed_db)
+            if not embed_path.exists():
+                raise click.ClickException(f"Embed DB not found: {embed_path}")
+
+            index_meta = load_index_meta(embed_path)
+            embed_store = open_store(embed_path)
+            all_chunks = read_all_chunks(embed_store)
+            if all_chunks:
+                console.print(f"[cyan]Pushing {len(all_chunks)} semantic chunks...[/cyan]")
+                try:
+                    semantic_stats = push_semantic_chunks(
+                        all_chunks,
+                        index_meta,
+                        config,
+                        on_batch=lambda idx, count, data: console.print(
+                            f"  semantic request {idx + 1}: {count} chunks -> "
+                            f"ins={data.get('inserted', 0)} upd={data.get('updated', 0)} "
+                            f"skip={data.get('skipped', 0)} del={data.get('deleted', 0)}"
+                        ),
+                    )
+                except Exception as exc:
+                    raise click.ClickException(f"Semantic push failed: {exc}") from exc
+                console.print(
+                    f"[green]Semantic:[/green] requests={semantic_stats.batches_sent} "
+                    f"ins={semantic_stats.inserted} upd={semantic_stats.updated} "
+                    f"skip={semantic_stats.skipped} del={semantic_stats.deleted}"
+                )
+            else:
+                console.print("[yellow]No semantic chunks to push.[/yellow]")
 
     @db_group.command("append-bibtex")
     @click.option("-i", "--input", "input_path", required=True, help="Input JSON file path")
