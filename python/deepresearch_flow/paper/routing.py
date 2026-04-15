@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from random import Random
-from typing import Literal, TypeVar
+from typing import Generic, Literal, Protocol, TypeVar, cast
 import json
 import logging
 import math
@@ -27,6 +27,8 @@ from deepresearch_flow.paper.config import (
 
 T = TypeVar("T")
 logger = logging.getLogger(__name__)
+ProviderT = TypeVar("ProviderT", bound="_RouteableProvider")
+ModelT = TypeVar("ModelT", bound="_RouteableModel")
 
 
 @dataclass(frozen=True)
@@ -36,23 +38,40 @@ class ParsedModelSelector:
     pool: list[MainModelConfig]
 
 
+class _RouteableModel(Protocol):
+    model_name: str
+    is_support_json_schema: bool
+    is_support_json_object: bool
+
+
+class _RouteableProvider(Protocol):
+    name: str
+    type: str
+    base: list[BaseConfig]
+    models: list[object]
+
+
 @dataclass(frozen=True)
-class RuntimeRoute:
-    provider: ProviderConfig
+class RuntimeRoute(Generic[ProviderT, ModelT]):
+    provider: ProviderT
     base: BaseConfig
     key: KeyConfig
-    model: ModelCapability
+    model: ModelT
     structured_mode: str
     route_id: str
 
 
 @dataclass(frozen=True)
-class _RouteCandidate:
-    route: RuntimeRoute
+class _RouteCandidate(Generic[ProviderT, ModelT]):
+    route: RuntimeRoute[ProviderT, ModelT]
     weight: int
 
 
-def structured_mode_for_model(model: ModelCapability) -> str:
+class _SupportsActiveRouteConfig(Protocol[ProviderT, ModelT]):
+    def resolve_active(self) -> tuple[ProviderT, ModelT]: ...
+
+
+def structured_mode_for_model(model: _RouteableModel) -> str:
     if model.is_support_json_schema:
         return "json_schema"
     if model.is_support_json_object:
@@ -195,10 +214,40 @@ def _compute_next_reset_epoch(meta: KeyConfig) -> float | None:
     return base_utc.timestamp() + cycles * duration
 
 
-class RoutePool:
+def _build_route_candidates(
+    provider: ProviderT,
+    model: ModelT,
+    *,
+    weight: int,
+) -> list[_RouteCandidate[ProviderT, ModelT]]:
+    candidates: list[_RouteCandidate[ProviderT, ModelT]] = []
+    for base in provider.base:
+        resolved_keys = resolve_api_key_configs(base.key)
+        for key in resolved_keys:
+            routed_base = BaseConfig(url=base.url, weight=base.weight, key=[key])
+            routed_provider = cast(ProviderT, replace(provider, base=[routed_base], models=[model]))
+            route_id = f"{provider.name}|{model.model_name}|{base.url}|{key.value}"
+            route = RuntimeRoute(
+                provider=routed_provider,
+                base=routed_base,
+                key=key,
+                model=model,
+                structured_mode=structured_mode_for_model(model),
+                route_id=route_id,
+            )
+            candidates.append(
+                _RouteCandidate(
+                    route=route,
+                    weight=weight * base.weight * key.weight,
+                )
+            )
+    return candidates
+
+
+class RoutePool(Generic[ProviderT, ModelT]):
     def __init__(
         self,
-        candidates: list[_RouteCandidate],
+        candidates: list[_RouteCandidate[ProviderT, ModelT]],
         *,
         cooldown_seconds: float = 1.0,
         verbose: bool = False,
@@ -218,6 +267,10 @@ class RoutePool:
         self._last_key_quota_until: dict[str, float] = {candidate.route.route_id: 0.0 for candidate in candidates}
         self._key_meta: dict[str, KeyConfig] = {candidate.route.route_id: candidate.route.key for candidate in candidates}
 
+    @property
+    def candidate_count(self) -> int:
+        return len(self._candidates)
+
     @classmethod
     def from_selector(
         cls,
@@ -227,8 +280,8 @@ class RoutePool:
         cooldown_seconds: float = 1.0,
         verbose: bool = False,
         rng: Random | None = None,
-    ) -> RoutePool:
-        candidates: list[_RouteCandidate] = []
+    ) -> "RoutePool[ProviderConfig, ModelCapability]":
+        candidates: list[_RouteCandidate[ProviderConfig, ModelCapability]] = []
         if model_selector.kind == "single":
             assert model_selector.fixed_model is not None
             provider_name, model_name = model_selector.fixed_model.split("/", 1)
@@ -240,29 +293,61 @@ class RoutePool:
         for pool_item in pool_items:
             provider_name, model_name = pool_item.model.split("/", 1)
             provider, model = resolve_model_capability(provider_name, model_name, config.providers)
-            for base in provider.base:
-                resolved_keys = resolve_api_key_configs(base.key)
-                for key in resolved_keys:
-                    routed_base = BaseConfig(url=base.url, weight=base.weight, key=[key])
-                    routed_provider = replace(provider, base=[routed_base], models=[model])
-                    route_id = f"{provider.name}|{model.model_name}|{base.url}|{key.value}"
-                    route = RuntimeRoute(
-                        provider=routed_provider,
-                        base=routed_base,
-                        key=key,
-                        model=model,
-                        structured_mode=structured_mode_for_model(model),
-                        route_id=route_id,
-                    )
-                    candidates.append(
-                        _RouteCandidate(
-                            route=route,
-                            weight=pool_item.weight * base.weight * key.weight,
-                        )
-                    )
+            candidates.extend(
+                _build_route_candidates(
+                    provider,
+                    model,
+                    weight=pool_item.weight,
+                )
+            )
         return cls(candidates, cooldown_seconds=cooldown_seconds, verbose=verbose, rng=rng)
 
-    async def get(self) -> RuntimeRoute:
+    @classmethod
+    def _from_active_route_config(
+        cls,
+        config: _SupportsActiveRouteConfig[ProviderT, ModelT],
+        *,
+        cooldown_seconds: float = 1.0,
+        verbose: bool = False,
+        rng: Random | None = None,
+    ) -> "RoutePool[ProviderT, ModelT]":
+        provider, model = config.resolve_active()
+        candidates = _build_route_candidates(provider, model, weight=1)
+        return cls(candidates, cooldown_seconds=cooldown_seconds, verbose=verbose, rng=rng)
+
+    @classmethod
+    def from_embedding_provider(
+        cls,
+        config: _SupportsActiveRouteConfig[ProviderT, ModelT],
+        *,
+        cooldown_seconds: float = 1.0,
+        verbose: bool = False,
+        rng: Random | None = None,
+    ) -> "RoutePool[ProviderT, ModelT]":
+        return cls._from_active_route_config(
+            config,
+            cooldown_seconds=cooldown_seconds,
+            verbose=verbose,
+            rng=rng,
+        )
+
+    @classmethod
+    def from_rerank_provider(
+        cls,
+        config: _SupportsActiveRouteConfig[ProviderT, ModelT],
+        *,
+        cooldown_seconds: float = 1.0,
+        verbose: bool = False,
+        rng: Random | None = None,
+    ) -> "RoutePool[ProviderT, ModelT]":
+        return cls._from_active_route_config(
+            config,
+            cooldown_seconds=cooldown_seconds,
+            verbose=verbose,
+            rng=rng,
+        )
+
+    async def get(self) -> RuntimeRoute[ProviderT, ModelT]:
         while True:
             wait_for: float | None = None
             wait_until_epoch: float | None = None
@@ -326,7 +411,7 @@ class RoutePool:
                 logger.debug("All weighted routes cooling down; waiting %.2fs", wait_for)
             await asyncio.sleep(wait_for)
 
-    async def mark_error(self, route: RuntimeRoute) -> None:
+    async def mark_error(self, route: RuntimeRoute[ProviderT, ModelT]) -> None:
         route_id = route.route_id
         async with self._lock:
             now = time.monotonic()
@@ -344,7 +429,7 @@ class RoutePool:
 
     async def mark_quota_exceeded(
         self,
-        route: RuntimeRoute,
+        route: RuntimeRoute[ProviderT, ModelT],
         message: str,
         status_code: int | None,
     ) -> bool:

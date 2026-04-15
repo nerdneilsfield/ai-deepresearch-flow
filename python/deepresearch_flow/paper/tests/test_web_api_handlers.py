@@ -10,11 +10,13 @@ from starlette.routing import Route
 from starlette.testclient import TestClient
 
 from deepresearch_flow.paper.config import (
+    BaseConfig,
     DEFAULT_EXTRACT,
     DEFAULT_RENDER,
     EmbeddingConfig,
     EmbeddingModelConfig,
     EmbeddingProviderConfig,
+    KeyConfig,
     PaperConfig,
     RerankConfig,
     RerankModelConfig,
@@ -175,8 +177,7 @@ def _semantic_config() -> PaperConfig:
                 EmbeddingProviderConfig(
                     name="ollama",
                     type="openai_compatible",
-                    base_url="http://localhost:11434/v1",
-                    api_key="embedding-api-key",
+                    base=[BaseConfig(url="http://localhost:11434/v1", weight=1, key=[KeyConfig(value="embedding-api-key", weight=1)])],
                     models=[EmbeddingModelConfig(model_name="bge-m3", dimensions=1024, max_context=8192)],
                 )
             ],
@@ -190,8 +191,7 @@ def _semantic_config() -> PaperConfig:
                 RerankProviderConfig(
                     name="siliconflow",
                     type="openai_compatible",
-                    base_url="https://api.siliconflow.cn/v1",
-                    api_key="rerank-api-key",
+                    base=[BaseConfig(url="https://api.siliconflow.cn/v1", weight=1, key=[KeyConfig(value="rerank-api-key", weight=1)])],
                     models=[
                         RerankModelConfig(
                             model_name="bge-reranker-v2-m3",

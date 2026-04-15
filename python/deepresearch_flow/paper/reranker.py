@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
-from typing import Protocol
+from typing import Any, Protocol
 
 import httpx
+
+from deepresearch_flow.paper.routing import RoutePool
 
 try:
     import tiktoken
@@ -33,6 +35,13 @@ class RerankProvider(Protocol):
         top_n: int,
         client: httpx.AsyncClient,
     ) -> RerankResult: ...
+
+
+class _RerankRouteModel(Protocol):
+    model_name: str
+    max_context: int
+    max_chunks_per_doc: int | None
+    instruction: str | None
 
 
 def _parse_results(data: object) -> RerankResult:
@@ -139,3 +148,61 @@ class OpenAICompatibleReranker:
         )
         response.raise_for_status()
         return _parse_results(response.json())
+
+
+class RoutedReranker:
+    """Reranker that selects a concrete weighted route per request."""
+
+    def __init__(self, *, route_pool: RoutePool[Any, _RerankRouteModel]) -> None:
+        self._route_pool = route_pool
+
+    async def rerank(
+        self,
+        query: str,
+        documents: list[str],
+        *,
+        top_n: int,
+        client: httpx.AsyncClient,
+    ) -> RerankResult:
+        if not documents:
+            raise ValueError("Rerank documents cannot be empty")
+
+        last_error: Exception | None = None
+        max_attempts = max(self._route_pool.candidate_count * 2, 3)
+        for _ in range(max_attempts):
+            route = await self._route_pool.get()
+            model = route.model
+            reranker = OpenAICompatibleReranker(
+                base_url=route.base.url,
+                api_key=route.key.value,
+                model=model.model_name,
+                max_context=model.max_context,
+                max_chunks_per_doc=model.max_chunks_per_doc,
+                instruction=model.instruction,
+            )
+            try:
+                return await reranker.rerank(
+                    query=query,
+                    documents=documents,
+                    top_n=top_n,
+                    client=client,
+                )
+            except httpx.HTTPStatusError as exc:
+                last_error = exc
+                response = exc.response
+                body = response.text if response is not None else str(exc)
+                quota_hit = await self._route_pool.mark_quota_exceeded(
+                    route,
+                    body,
+                    response.status_code if response is not None else None,
+                )
+                if quota_hit:
+                    continue
+                await self._route_pool.mark_error(route)
+            except Exception as exc:  # pragma: no cover - exercised by callers via black-box tests
+                last_error = exc
+                await self._route_pool.mark_error(route)
+
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("Rerank route pool exhausted without producing a result")

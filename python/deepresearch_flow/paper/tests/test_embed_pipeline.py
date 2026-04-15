@@ -8,9 +8,11 @@ import pytest
 
 from deepresearch_flow.paper.embedding import EmbeddingResult
 from deepresearch_flow.paper.config import (
+    BaseConfig,
     EmbeddingConfig,
     EmbeddingModelConfig,
     EmbeddingProviderConfig,
+    KeyConfig,
     PaperConfig,
     DEFAULT_EXTRACT,
     DEFAULT_RENDER,
@@ -54,8 +56,7 @@ def _test_config(*, api_key: str = "ollama") -> PaperConfig:
                 EmbeddingProviderConfig(
                     name="ollama",
                     type="openai_compatible",
-                    base_url="http://localhost:11434/v1",
-                    api_key=api_key,
+                    base=[BaseConfig(url="http://localhost:11434/v1", weight=1, key=[KeyConfig(value=api_key, weight=1)])],
                     models=[EmbeddingModelConfig(model_name="bge-m3", dimensions=1024, max_context=8192)],
                 )
             ],
@@ -76,7 +77,7 @@ def test_pipeline_creates_index_meta(tmp_path: Path, monkeypatch) -> None:
             usage_tokens=len(texts),
         )
 
-    monkeypatch.setattr("deepresearch_flow.paper.embed_pipeline.call_embedding", fake_embed)
+    monkeypatch.setattr("deepresearch_flow.paper.embedding.call_embedding", fake_embed)
 
     asyncio.run(
         run_embed_pipeline(
@@ -103,7 +104,7 @@ def test_pipeline_incremental_skips_unchanged(tmp_path: Path, monkeypatch) -> No
             usage_tokens=len(texts),
         )
 
-    monkeypatch.setattr("deepresearch_flow.paper.embed_pipeline.call_embedding", counting_embed)
+    monkeypatch.setattr("deepresearch_flow.paper.embedding.call_embedding", counting_embed)
 
     asyncio.run(
         run_embed_pipeline(
@@ -136,7 +137,7 @@ def test_pipeline_keeps_existing_rows_when_reembed_fails(tmp_path: Path, monkeyp
             usage_tokens=len(texts),
         )
 
-    monkeypatch.setattr("deepresearch_flow.paper.embed_pipeline.call_embedding", ok_embed)
+    monkeypatch.setattr("deepresearch_flow.paper.embedding.call_embedding", ok_embed)
     asyncio.run(
         run_embed_pipeline(
             config=_test_config(),
@@ -161,7 +162,7 @@ def test_pipeline_keeps_existing_rows_when_reembed_fails(tmp_path: Path, monkeyp
     async def failing_embed(base_url, api_key, model, texts, *, dimensions=None, client=None):  # noqa: ARG001
         raise RuntimeError("embedding backend unavailable")
 
-    monkeypatch.setattr("deepresearch_flow.paper.embed_pipeline.call_embedding", failing_embed)
+    monkeypatch.setattr("deepresearch_flow.paper.embedding.call_embedding", failing_embed)
 
     with pytest.raises(RuntimeError, match="embedding backend unavailable"):
         asyncio.run(
@@ -187,7 +188,7 @@ def test_pipeline_reports_batch_size_mismatch(tmp_path: Path, monkeypatch) -> No
             usage_tokens=len(texts),
         )
 
-    monkeypatch.setattr("deepresearch_flow.paper.embed_pipeline.call_embedding", bad_embed)
+    monkeypatch.setattr("deepresearch_flow.paper.embedding.call_embedding", bad_embed)
 
     with pytest.raises(ValueError, match="returned 1 vectors for batch of 2 texts"):
         asyncio.run(
@@ -226,7 +227,7 @@ def test_pipeline_assigns_monotonic_chunk_index_per_template_and_type(tmp_path: 
             usage_tokens=len(texts),
         )
 
-    monkeypatch.setattr("deepresearch_flow.paper.embed_pipeline.call_embedding", ok_embed)
+    monkeypatch.setattr("deepresearch_flow.paper.embedding.call_embedding", ok_embed)
     asyncio.run(
         run_embed_pipeline(
             config=_test_config(),
@@ -252,7 +253,7 @@ def test_pipeline_updates_index_meta_stats(tmp_path: Path, monkeypatch) -> None:
             usage_tokens=len(texts),
         )
 
-    monkeypatch.setattr("deepresearch_flow.paper.embed_pipeline.call_embedding", ok_embed)
+    monkeypatch.setattr("deepresearch_flow.paper.embedding.call_embedding", ok_embed)
     asyncio.run(
         run_embed_pipeline(
             config=_test_config(),
@@ -268,17 +269,9 @@ def test_pipeline_updates_index_meta_stats(tmp_path: Path, monkeypatch) -> None:
     assert isinstance(meta["last_updated"], str) and meta["last_updated"]
 
 
-def test_pipeline_resolves_embedding_provider_without_runtime_route(tmp_path: Path, monkeypatch) -> None:
+def test_pipeline_embeds_using_active_weighted_route(tmp_path: Path, monkeypatch) -> None:
     json_path = _write_json(tmp_path)
     vector_dir = tmp_path / "vectors"
-    def boom_select_runtime_route(*args, **kwargs):  # noqa: ANN001, ARG001
-        raise AssertionError("select_runtime_route should not be used for embedding")
-
-    monkeypatch.setattr(
-        "deepresearch_flow.paper.embed_pipeline.select_runtime_route",
-        boom_select_runtime_route,
-        raising=False,
-    )
 
     seen: dict[str, object] = {}
 
@@ -298,7 +291,7 @@ def test_pipeline_resolves_embedding_provider_without_runtime_route(tmp_path: Pa
             usage_tokens=len(texts),
         )
 
-    monkeypatch.setattr("deepresearch_flow.paper.embed_pipeline.call_embedding", fake_embed)
+    monkeypatch.setattr("deepresearch_flow.paper.embedding.call_embedding", fake_embed)
 
     asyncio.run(
         run_embed_pipeline(

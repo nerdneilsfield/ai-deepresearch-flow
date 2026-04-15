@@ -116,8 +116,9 @@ chunk_overlap_tokens = 64
 [[embedding.providers]]
 name = "ollama"
 type = "openai_compatible"
-base_url = "http://localhost:11434/v1"
-api_key = "ollama"
+base = [
+  { url = "http://localhost:11434/v1", weight = 1, key = [{ value = "ollama", weight = 1 }] },
+]
 models = [
   { model_name = "Qwen3-Embedding-4B", dimensions = 1024, max_context = 32768 },
   { model_name = "bge-m3", dimensions = 1024, max_context = 8192 },
@@ -126,8 +127,9 @@ models = [
 [[embedding.providers]]
 name = "siliconflow"
 type = "openai_compatible"
-base_url = "https://api.siliconflow.cn/v1"
-api_key = "env:SF_KEY"
+base = [
+  { url = "https://api.siliconflow.cn/v1", weight = 1, key = [{ value = "env:SF_KEY", weight = 1 }] },
+]
 models = [
   { model_name = "Qwen/Qwen3-Embedding-4B", dimensions = 2560, max_context = 32768 },
 ]
@@ -141,8 +143,9 @@ top_n = 10
 [[rerank.providers]]
 name = "siliconflow"
 type = "openai_compatible"
-base_url = "https://api.siliconflow.cn/v1"
-api_key = "env:SF_KEY"
+base = [
+  { url = "https://api.siliconflow.cn/v1", weight = 1, key = [{ value = "env:SF_KEY", weight = 1 }] },
+]
 models = [
   { model_name = "BAAI/bge-reranker-v2-m3", max_context = 8192, max_chunks_per_doc = 1024 },
   { model_name = "Qwen/Qwen3-Reranker-8B", max_context = 32768, instruction = "Rerank by relevance" },

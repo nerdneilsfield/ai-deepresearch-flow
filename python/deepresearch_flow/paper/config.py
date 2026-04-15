@@ -88,13 +88,20 @@ class EmbeddingModelConfig:
     dimensions: int
     max_context: int
 
+    @property
+    def is_support_json_schema(self) -> bool:
+        return False
+
+    @property
+    def is_support_json_object(self) -> bool:
+        return False
+
 
 @dataclass(frozen=True)
 class EmbeddingProviderConfig:
     name: str
     type: str
-    base_url: str
-    api_key: str
+    base: list[BaseConfig]
     models: list[EmbeddingModelConfig]
 
 
@@ -179,13 +186,20 @@ class RerankModelConfig:
     max_chunks_per_doc: int | None = None
     instruction: str | None = None
 
+    @property
+    def is_support_json_schema(self) -> bool:
+        return False
+
+    @property
+    def is_support_json_object(self) -> bool:
+        return False
+
 
 @dataclass(frozen=True)
 class RerankProviderConfig:
     name: str
     type: str
-    base_url: str
-    api_key: str
+    base: list[BaseConfig]
     models: list[RerankModelConfig]
 
 
@@ -540,18 +554,12 @@ def _parse_embedding_provider_configs(value: Any, default_dimensions: int) -> li
         name = _as_str(item.get("name"))
         if not name:
             raise ValueError(f"{field_name} must include name")
-        base_url = _as_str(item.get("base_url"))
-        if not base_url:
-            raise ValueError(f"{field_name} must include base_url")
-        api_key = _as_str(item.get("api_key"))
-        if not api_key:
-            raise ValueError(f"{field_name} must include api_key")
+        _reject_legacy_provider_fields(item, name)
         parsed.append(
             EmbeddingProviderConfig(
                 name=name,
                 type=_as_str(item.get("type"), "openai_compatible") or "openai_compatible",
-                base_url=base_url,
-                api_key=resolve_key_value(api_key),
+                base=_parse_base_configs(item.get("base"), name),
                 models=_parse_embedding_model_configs(item.get("models"), name, default_dimensions),
             )
         )
@@ -627,18 +635,12 @@ def _parse_rerank_provider_configs(value: Any, *, required: bool) -> list[Rerank
         name = _as_str(item.get("name"))
         if not name:
             raise ValueError(f"{field_name} must include name")
-        base_url = _as_str(item.get("base_url"))
-        if not base_url:
-            raise ValueError(f"{field_name} must include base_url")
-        api_key = _as_str(item.get("api_key"))
-        if not api_key:
-            raise ValueError(f"{field_name} must include api_key")
+        _reject_legacy_provider_fields(item, name)
         parsed.append(
             RerankProviderConfig(
                 name=name,
                 type=_as_str(item.get("type"), "openai_compatible") or "openai_compatible",
-                base_url=base_url,
-                api_key=resolve_key_value(api_key),
+                base=_parse_base_configs(item.get("base"), name),
                 models=_parse_rerank_model_configs(item.get("models"), name),
             )
         )

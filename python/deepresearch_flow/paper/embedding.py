@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import httpx
+
+from deepresearch_flow.paper.routing import RoutePool
 
 
 @dataclass(frozen=True)
@@ -50,3 +53,46 @@ async def call_embedding(
         model=model,
         usage_tokens=usage.get("prompt_tokens", 0),
     )
+
+
+async def call_embedding_with_route_pool(
+    *,
+    route_pool: RoutePool[Any, Any],
+    texts: list[str],
+    dimensions: int | None = None,
+    client: httpx.AsyncClient,
+) -> EmbeddingResult:
+    """Select a concrete weighted route and execute one embedding request."""
+
+    last_error: Exception | None = None
+    max_attempts = max(route_pool.candidate_count * 2, 3)
+    for _ in range(max_attempts):
+        route = await route_pool.get()
+        try:
+            return await call_embedding(
+                base_url=route.base.url,
+                api_key=route.key.value,
+                model=route.model.model_name,
+                texts=texts,
+                dimensions=dimensions,
+                client=client,
+            )
+        except httpx.HTTPStatusError as exc:
+            last_error = exc
+            response = exc.response
+            body = response.text if response is not None else str(exc)
+            quota_hit = await route_pool.mark_quota_exceeded(
+                route,
+                body,
+                response.status_code if response is not None else None,
+            )
+            if quota_hit:
+                continue
+            await route_pool.mark_error(route)
+        except Exception as exc:
+            last_error = exc
+            await route_pool.mark_error(route)
+
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("Embedding route pool exhausted without producing vectors")

@@ -3,16 +3,26 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass, replace
 import json
 from pathlib import Path
+from typing import Any, Generic, TypeVar
 
 import click
 from rich.console import Console
 from rich.table import Table
 
-from deepresearch_flow.paper.config import load_config, resolve_api_keys
+from deepresearch_flow.paper.config import (
+    EmbeddingModelConfig,
+    EmbeddingProviderConfig,
+    RerankModelConfig,
+    RerankProviderConfig,
+    load_config,
+    resolve_api_keys,
+)
+from deepresearch_flow.paper.embedding import call_embedding_with_route_pool
 from deepresearch_flow.paper.extract import extract_documents, configure_logging
-from deepresearch_flow.paper.routing import ParsedModelSelector, parse_model_selector, resolve_model_capability
+from deepresearch_flow.paper.routing import ParsedModelSelector, RoutePool, parse_model_selector, resolve_model_capability
 from deepresearch_flow.paper.db import register_db_commands
 from deepresearch_flow.paper.schema import load_schema, validate_schema, SchemaError
 from deepresearch_flow.paper.template_registry import list_template_names, load_schema_for_template
@@ -21,6 +31,39 @@ from deepresearch_flow.paper.template_registry import list_template_names, load_
 @click.group()
 def paper() -> None:
     """Paper extraction and database commands."""
+
+
+ProviderT = TypeVar("ProviderT")
+ModelT = TypeVar("ModelT")
+
+
+@dataclass(frozen=True)
+class _ResolvedRouteConfig(Generic[ProviderT, ModelT]):
+    provider: ProviderT
+    model: ModelT
+
+    def resolve_active(self) -> tuple[ProviderT, ModelT]:
+        return self.provider, self.model
+
+
+def _resolve_provider_model_override(
+    providers: list[EmbeddingProviderConfig] | list[RerankProviderConfig],
+    model_ref: str,
+    *,
+    section_name: str,
+) -> tuple[EmbeddingProviderConfig | RerankProviderConfig, EmbeddingModelConfig | RerankModelConfig]:
+    if "/" not in model_ref:
+        raise click.ClickException(f"--{section_name} must be in provider/model format")
+    provider_name, model_name = model_ref.split("/", 1)
+    provider = next((item for item in providers if item.name == provider_name), None)
+    if provider is None:
+        raise click.ClickException(f"{section_name} provider '{provider_name}' not found")
+    model = next((item for item in provider.models if item.model_name == model_name), None)
+    if model is None:
+        raise click.ClickException(
+            f"Model '{model_name}' not found in {section_name} provider '{provider_name}'"
+        )
+    return provider, model
 
 
 async def _run_search(
@@ -33,18 +76,30 @@ async def _run_search(
     venue: str | None,
     no_rerank: bool,
     no_hybrid: bool,
+    verbose: bool = False,
+    embedding_override: str | None = None,
+    rerank_override: str | None = None,
 ) -> None:
     import httpx
 
-    from deepresearch_flow.paper.embedding import call_embedding
-    from deepresearch_flow.paper.reranker import OpenAICompatibleReranker
+    from deepresearch_flow.paper.reranker import RoutedReranker
     from deepresearch_flow.paper.search import hybrid_search, rank_keyword_rows, validate_venue_filter
     from deepresearch_flow.paper.vector_store import open_store, scan_rows
 
     if not config.embedding:
         raise click.ClickException("Config missing [embedding] section")
 
-    embedding_provider, embedding_model = config.embedding.resolve_active()
+    if embedding_override:
+        embedding_provider, embedding_model = _resolve_provider_model_override(
+            config.embedding.providers,
+            embedding_override,
+            section_name="embedding",
+        )
+        embedding_config = _ResolvedRouteConfig(provider=embedding_provider, model=embedding_model)
+    else:
+        embedding_provider, embedding_model = config.embedding.resolve_active()
+        embedding_config = config.embedding
+    embedding_route_pool = RoutePool.from_embedding_provider(embedding_config, verbose=verbose)
     db = open_store(vector_dir)
 
     where_parts: list[str] = []
@@ -90,21 +145,21 @@ async def _run_search(
 
     reranker = None
     if not no_rerank and config.rerank and config.rerank.enabled:
-        rerank_provider, rerank_model = config.rerank.resolve_active()
-        reranker = OpenAICompatibleReranker(
-            base_url=rerank_provider.base_url,
-            api_key=rerank_provider.api_key,
-            model=rerank_model.model_name,
-            max_context=rerank_model.max_context,
-            max_chunks_per_doc=rerank_model.max_chunks_per_doc,
-            instruction=rerank_model.instruction,
-        )
+        if rerank_override:
+            rerank_provider, rerank_model = _resolve_provider_model_override(
+                config.rerank.providers,
+                rerank_override,
+                section_name="rerank",
+            )
+            rerank_config = _ResolvedRouteConfig(provider=rerank_provider, model=rerank_model)
+        else:
+            rerank_provider, rerank_model = config.rerank.resolve_active()
+            rerank_config = config.rerank
+        reranker = RoutedReranker(route_pool=RoutePool.from_rerank_provider(rerank_config, verbose=verbose))
 
     async with httpx.AsyncClient() as client:
-        embedding = await call_embedding(
-            base_url=embedding_provider.base_url,
-            api_key=embedding_provider.api_key,
-            model=embedding_model.model_name,
+        embedding = await call_embedding_with_route_pool(
+            route_pool=embedding_route_pool,
             texts=[query_text],
             dimensions=config.embedding.dimensions,
             client=client,
@@ -529,6 +584,7 @@ def extract(
 @click.option("--md-root", "md_roots", multiple=True, help="Source markdown root directory")
 @click.option("--md-translated-root", "md_translated_roots", multiple=True, help="Translated markdown root directory")
 @click.option("--output-embed-db", "output_embed_db", default=None, help="LanceDB output directory")
+@click.option("--embedding", "embedding_override", default=None, help="Override embedding provider/model")
 @click.option("--template-tag", "template_tag", default=None, help="Override template tag for all JSON inputs")
 @click.option("--force", is_flag=True, help="Delete existing index and rebuild from scratch")
 @click.option("-v", "--verbose", is_flag=True, help="Verbose logging")
@@ -540,6 +596,7 @@ def embed(
     md_roots: tuple[str, ...],
     md_translated_roots: tuple[str, ...],
     output_embed_db: str | None,
+    embedding_override: str | None,
     template_tag: str | None,
     force: bool,
     verbose: bool,
@@ -557,6 +614,20 @@ def embed(
         raise click.ClickException("-i and --snapshot-db are mutually exclusive")
     if has_snapshot and not static_export_dir:
         raise click.ClickException("--snapshot-db requires --static-export-dir")
+    if embedding_override:
+        provider, model = _resolve_provider_model_override(
+            config.embedding.providers,
+            embedding_override,
+            section_name="embedding",
+        )
+        config = replace(
+            config,
+            embedding=replace(
+                config.embedding,
+                default_provider=provider.name,
+                default_model=model.model_name,
+            ),
+        )
 
     vector_dir = Path(output_embed_db or (config.search.vector_dir if config.search else "paper_vectors"))
     if force and vector_dir.exists():
@@ -586,6 +657,8 @@ def embed(
 @paper.command()
 @click.option("-c", "--config", "config_path", default="config.toml", help="Path to config.toml")
 @click.option("--embed-db", "embed_db", default=None, help="LanceDB directory to query")
+@click.option("--embedding", "embedding_override", default=None, help="Override embedding provider/model")
+@click.option("--rerank", "rerank_override", default=None, help="Override rerank provider/model")
 @click.option("-q", "--query", "query_text", required=True, help="Search query")
 @click.option("--top-n", "top_n", type=int, default=10, help="Number of results")
 @click.option("--year", "year", type=int, default=None, help="Filter by year")
@@ -596,6 +669,8 @@ def embed(
 def search(
     config_path: str,
     embed_db: str | None,
+    embedding_override: str | None,
+    rerank_override: str | None,
     query_text: str,
     top_n: int,
     year: int | None,
@@ -623,6 +698,9 @@ def search(
             venue=venue,
             no_rerank=no_rerank,
             no_hybrid=no_hybrid,
+            verbose=verbose,
+            embedding_override=embedding_override,
+            rerank_override=rerank_override,
         )
     )
 

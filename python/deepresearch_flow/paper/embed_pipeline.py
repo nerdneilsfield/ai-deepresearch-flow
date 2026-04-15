@@ -6,12 +6,11 @@ import hashlib
 import logging
 from pathlib import Path
 
-import httpx
-
 from deepresearch_flow.paper.chunker import Chunk, SearchableField, chunk_fields, extract_searchable_fields
 from deepresearch_flow.paper.config import PaperConfig
 from deepresearch_flow.paper.embed_source import EmbedDocument, load_from_json, load_from_snapshot
-from deepresearch_flow.paper.embedding import call_embedding
+from deepresearch_flow.paper.embedding import call_embedding_with_route_pool
+from deepresearch_flow.paper.routing import RoutePool
 from deepresearch_flow.paper.vector_store import (
     ChunkRow,
     build_chunk_id,
@@ -88,6 +87,7 @@ async def run_embed_pipeline(
         raise ValueError("No input source provided")
 
     provider_config, model_config = embedding_config.resolve_active()
+    route_pool = RoutePool.from_embedding_provider(config.embedding, verbose=verbose)
 
     validate_index_meta(
         vector_dir,
@@ -168,13 +168,13 @@ async def run_embed_pipeline(
 
     texts = [row.text for row in rows_to_write]
     vectors: list[list[float]] = []
+    import httpx
+
     async with httpx.AsyncClient() as client:
         for start in range(0, len(texts), embedding_config.batch_size):
             batch = texts[start : start + embedding_config.batch_size]
-            result = await call_embedding(
-                base_url=provider_config.base_url,
-                api_key=provider_config.api_key,
-                model=model_config.model_name,
+            result = await call_embedding_with_route_pool(
+                route_pool=route_pool,
                 texts=batch,
                 dimensions=embedding_config.dimensions,
                 client=client,

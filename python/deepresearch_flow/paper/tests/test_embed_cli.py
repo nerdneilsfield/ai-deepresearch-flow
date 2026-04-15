@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 
 from click.testing import CliRunner
 
 from deepresearch_flow.cli import cli
 from deepresearch_flow.paper.config import (
+    BaseConfig,
     DEFAULT_EXTRACT,
     DEFAULT_RENDER,
     EmbeddingConfig,
     EmbeddingModelConfig,
     EmbeddingProviderConfig,
+    KeyConfig,
     PaperConfig,
     RerankConfig,
     RerankModelConfig,
@@ -44,8 +47,7 @@ def _write_embed_config(tmp_path: Path) -> Path:
         [[embedding.providers]]
         name = "ollama"
         type = "openai_compatible"
-        base_url = "http://localhost:11434/v1"
-        api_key = "ollama"
+        base = [{ url = "http://localhost:11434/v1", weight = 1, key = [{ value = "ollama", weight = 1 }] }]
         models = [{ model_name = "bge-m3", dimensions = 1024, max_context = 8192 }]
 
         [search]
@@ -67,6 +69,7 @@ def test_paper_embed_help() -> None:
     assert "--snapshot-db" in result.output
     assert "--force" in result.output
     assert "--template-tag" in result.output
+    assert "--embedding" in result.output
 
 
 def test_paper_search_help() -> None:
@@ -76,6 +79,8 @@ def test_paper_search_help() -> None:
     assert "--embed-db" in result.output
     assert "--no-rerank" in result.output
     assert "--no-hybrid" in result.output
+    assert "--embedding" in result.output
+    assert "--rerank" in result.output
 
 
 def test_paper_embed_rejects_no_input(tmp_path: Path) -> None:
@@ -151,8 +156,7 @@ def _search_config(*, embedding_api_key: str = "ollama", rerank_api_key: str = "
                 EmbeddingProviderConfig(
                     name="ollama",
                     type="openai_compatible",
-                    base_url="http://localhost:11434/v1",
-                    api_key=embedding_api_key,
+                    base=[BaseConfig(url="http://localhost:11434/v1", weight=1, key=[KeyConfig(value=embedding_api_key, weight=1)])],
                     models=[EmbeddingModelConfig(model_name="bge-m3", dimensions=1024, max_context=8192)],
                 )
             ],
@@ -166,8 +170,7 @@ def _search_config(*, embedding_api_key: str = "ollama", rerank_api_key: str = "
                 RerankProviderConfig(
                     name="siliconflow",
                     type="openai_compatible",
-                    base_url="https://api.siliconflow.cn/v1",
-                    api_key=rerank_api_key,
+                    base=[BaseConfig(url="https://api.siliconflow.cn/v1", weight=1, key=[KeyConfig(value=rerank_api_key, weight=1)])],
                     models=[
                         RerankModelConfig(
                             model_name="bge-reranker-v2-m3",
@@ -186,11 +189,6 @@ def _search_config(*, embedding_api_key: str = "ollama", rerank_api_key: str = "
 def test_run_search_uses_embedding_and_rerank_resolve_active(monkeypatch, tmp_path: Path) -> None:
     from deepresearch_flow.paper.cli import _run_search
     from deepresearch_flow.paper.embedding import EmbeddingResult
-
-    def boom_select_runtime_route(*args, **kwargs):  # noqa: ANN001, ARG001
-        raise AssertionError("select_runtime_route should not be used in paper search")
-
-    monkeypatch.setattr("deepresearch_flow.paper.routing.select_runtime_route", boom_select_runtime_route)
     monkeypatch.setattr("deepresearch_flow.paper.vector_store.open_store", lambda _: object())
     monkeypatch.setattr("deepresearch_flow.paper.vector_store.scan_rows", lambda _: [{"doc_id": "doc-1", "title": "Attention Paper", "text": "body text", "authors": "Author A", "venue": "NeurIPS", "tags": "transformer"}])
     monkeypatch.setattr("rich.console.Console.print", lambda self, table: None)
@@ -210,30 +208,31 @@ def test_run_search_uses_embedding_and_rerank_resolve_active(monkeypatch, tmp_pa
         def __init__(
             self,
             *,
-            base_url: str,
-            api_key: str,
-            model: str,
-            max_context: int,
-            max_chunks_per_doc: int | None,
-            instruction: str | None,
+            route_pool,
         ) -> None:
+            seen["reranker_route_pool"] = route_pool
+
+        async def rerank(self, query, documents, *, top_n, client):  # noqa: ANN001
+            route = await seen["reranker_route_pool"].get()
             seen["reranker"] = {
-                "base_url": base_url,
-                "api_key": api_key,
-                "model": model,
-                "max_context": max_context,
-                "max_chunks_per_doc": max_chunks_per_doc,
-                "instruction": instruction,
+                "base_url": route.base.url,
+                "api_key": route.key.value,
+                "model": route.model.model_name,
+                "max_context": route.model.max_context,
+                "max_chunks_per_doc": route.model.max_chunks_per_doc,
+                "instruction": route.model.instruction,
             }
+            return type("RerankResult", (), {"indices": [0], "scores": [1.0]})()
 
     async def fake_hybrid_search(**kwargs):  # noqa: ANN003
         assert kwargs["reranker"] is not None
         assert kwargs["rerank_top_n"] == 5
         assert kwargs["document_text_resolver"]("doc-1").startswith("Attention Paper")
+        await kwargs["reranker"].rerank("attention", ["doc text"], top_n=1, client=None)
         return []
 
     monkeypatch.setattr("deepresearch_flow.paper.embedding.call_embedding", fake_embed)
-    monkeypatch.setattr("deepresearch_flow.paper.reranker.OpenAICompatibleReranker", FakeReranker)
+    monkeypatch.setattr("deepresearch_flow.paper.reranker.RoutedReranker", FakeReranker)
     monkeypatch.setattr("deepresearch_flow.paper.search.hybrid_search", fake_hybrid_search)
 
     asyncio.run(
@@ -262,4 +261,91 @@ def test_run_search_uses_embedding_and_rerank_resolve_active(monkeypatch, tmp_pa
         "max_context": 2048,
         "max_chunks_per_doc": 128,
         "instruction": "Rank by relevance",
+    }
+
+
+def test_run_search_applies_embedding_and_rerank_overrides(monkeypatch, tmp_path: Path) -> None:
+    from deepresearch_flow.paper.cli import _run_search
+    from deepresearch_flow.paper.embedding import EmbeddingResult
+
+    monkeypatch.setattr("deepresearch_flow.paper.vector_store.open_store", lambda _: object())
+    monkeypatch.setattr("deepresearch_flow.paper.vector_store.scan_rows", lambda _: [])
+    monkeypatch.setattr("rich.console.Console.print", lambda self, table: None)
+
+    config = _search_config()
+    config = replace(
+        config,
+        embedding=replace(
+            config.embedding,
+            providers=config.embedding.providers
+            + [
+                EmbeddingProviderConfig(
+                    name="backup",
+                    type="openai_compatible",
+                    base=[BaseConfig(url="http://localhost:2242/v1", weight=1, key=[KeyConfig(value="backup-key", weight=1)])],
+                    models=[EmbeddingModelConfig(model_name="embed-alt", dimensions=1024, max_context=8192)],
+                )
+            ],
+        ),
+        rerank=replace(
+            config.rerank,
+            providers=config.rerank.providers
+            + [
+                RerankProviderConfig(
+                    name="rerank-alt",
+                    type="openai_compatible",
+                    base=[BaseConfig(url="https://rerank-alt.example/v1", weight=1, key=[KeyConfig(value="rerank-alt-key", weight=1)])],
+                    models=[RerankModelConfig(model_name="rerank-alt-model", max_context=4096)],
+                )
+            ],
+        ),
+    )
+
+    seen: dict[str, object] = {}
+
+    async def fake_embed(base_url, api_key, model, texts, *, dimensions=None, client=None):  # noqa: ANN001
+        seen["embed"] = {"base_url": base_url, "api_key": api_key, "model": model}
+        return EmbeddingResult(vectors=[[0.1] * 1024], model=model, usage_tokens=1)
+
+    class FakeRoutedReranker:
+        def __init__(self, *, route_pool) -> None:  # noqa: ANN001
+            self._route_pool = route_pool
+
+        async def rerank(self, query, documents, *, top_n, client):  # noqa: ANN001
+            route = await self._route_pool.get()
+            seen["rerank"] = {"base_url": route.base.url, "api_key": route.key.value, "model": route.model.model_name}
+            return type("RerankResult", (), {"indices": [0], "scores": [1.0]})()
+
+    async def fake_hybrid_search(**kwargs):  # noqa: ANN003
+        await kwargs["reranker"].rerank("attention", ["doc text"], top_n=1, client=None)
+        return []
+
+    monkeypatch.setattr("deepresearch_flow.paper.embedding.call_embedding", fake_embed)
+    monkeypatch.setattr("deepresearch_flow.paper.reranker.RoutedReranker", FakeRoutedReranker)
+    monkeypatch.setattr("deepresearch_flow.paper.search.hybrid_search", fake_hybrid_search)
+
+    asyncio.run(
+        _run_search(
+            config=config,
+            vector_dir=tmp_path / "vectors",
+            query_text="attention",
+            top_n=5,
+            year=None,
+            venue=None,
+            no_rerank=False,
+            no_hybrid=False,
+            embedding_override="backup/embed-alt",
+            rerank_override="rerank-alt/rerank-alt-model",
+        )
+    )
+
+    assert seen["embed"] == {
+        "base_url": "http://localhost:2242/v1",
+        "api_key": "backup-key",
+        "model": "embed-alt",
+    }
+    assert seen["rerank"] == {
+        "base_url": "https://rerank-alt.example/v1",
+        "api_key": "rerank-alt-key",
+        "model": "rerank-alt-model",
     }

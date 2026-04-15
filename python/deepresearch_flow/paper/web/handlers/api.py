@@ -30,17 +30,21 @@ from deepresearch_flow.paper.web.query import Query, QueryTerm, parse_query
 from deepresearch_flow.paper.search import validate_venue_filter
 
 
-async def _embed_query(text: str, config: Any, client_obj: httpx.AsyncClient) -> list[float]:
-    from deepresearch_flow.paper.embedding import call_embedding
+async def _embed_query(
+    text: str,
+    config: Any,
+    client_obj: httpx.AsyncClient,
+    route_pool: Any | None = None,
+) -> list[float]:
+    from deepresearch_flow.paper.embedding import call_embedding_with_route_pool
+    from deepresearch_flow.paper.routing import RoutePool
 
     if config is None or config.embedding is None:
         raise ValueError("Semantic search embedding config is unavailable")
 
-    provider_config, model_config = config.embedding.resolve_active()
-    result = await call_embedding(
-        base_url=provider_config.base_url,
-        api_key=provider_config.api_key,
-        model=model_config.model_name,
+    route_pool = route_pool or RoutePool.from_embedding_provider(config.embedding)
+    result = await call_embedding_with_route_pool(
+        route_pool=route_pool,
         texts=[text],
         dimensions=config.embedding.dimensions,
         client=client_obj,
@@ -321,7 +325,8 @@ async def api_papers_semantic(request: Request) -> JSONResponse:
         where_parts.append(f"venue = {json.dumps(safe_venue)}")
     where = " AND ".join(where_parts) if where_parts else None
 
-    from deepresearch_flow.paper.reranker import OpenAICompatibleReranker
+    from deepresearch_flow.paper.reranker import RoutedReranker
+    from deepresearch_flow.paper.routing import RoutePool
     from deepresearch_flow.paper.search import hybrid_search
 
     paper_config = getattr(request.app.state, "paper_config", None)
@@ -345,19 +350,19 @@ async def api_papers_semantic(request: Request) -> JSONResponse:
 
     reranker = None
     if paper_config is not None and paper_config.rerank and paper_config.rerank.enabled:
-        rerank_provider, rerank_model = paper_config.rerank.resolve_active()
-        reranker = OpenAICompatibleReranker(
-            base_url=rerank_provider.base_url,
-            api_key=rerank_provider.api_key,
-            model=rerank_model.model_name,
-            max_context=rerank_model.max_context,
-            max_chunks_per_doc=rerank_model.max_chunks_per_doc,
-            instruction=rerank_model.instruction,
-        )
+        route_pool = getattr(request.app.state, "rerank_route_pool", None)
+        if route_pool is None:
+            route_pool = RoutePool.from_rerank_provider(paper_config.rerank)
+            request.app.state.rerank_route_pool = route_pool
+        reranker = RoutedReranker(route_pool=route_pool)
 
     async with httpx.AsyncClient() as client:
         try:
-            query_vector_val = await _embed_query(query_text, paper_config, client)
+            embedding_route_pool = getattr(request.app.state, "embedding_route_pool", None)
+            if embedding_route_pool is None and paper_config is not None and paper_config.embedding is not None:
+                embedding_route_pool = RoutePool.from_embedding_provider(paper_config.embedding)
+                request.app.state.embedding_route_pool = embedding_route_pool
+            query_vector_val = await _embed_query(query_text, paper_config, client, embedding_route_pool)
         except Exception:
             return JSONResponse({"error": "Semantic search query embedding failed"}, status_code=502)
         aggregated = await hybrid_search(
