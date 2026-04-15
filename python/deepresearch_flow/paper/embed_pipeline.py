@@ -94,6 +94,7 @@ async def run_embed_pipeline(
     validate_index_meta(
         vector_dir,
         model=model_config.model_name,
+        canonical_model=model_config.canonical_name,
         dimensions=embedding_config.dimensions,
         normalized=embedding_config.normalized,
         provider=provider_config.name,

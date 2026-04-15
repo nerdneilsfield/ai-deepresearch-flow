@@ -86,6 +86,28 @@ def test_validate_index_meta_mismatch_fails(tmp_path: Path) -> None:
         )
 
 
+def test_validate_index_meta_allows_same_canonical_model_with_different_provider_names(tmp_path: Path) -> None:
+    save_index_meta(
+        tmp_path,
+        {
+            "model": "Qwen3-Embedding-4B",
+            "canonical_model": "Qwen3-Embedding-4B",
+            "dimensions": 2560,
+            "normalized": True,
+            "provider": "siliconflow",
+            "index_version": INDEX_VERSION,
+        },
+    )
+    validate_index_meta(
+        tmp_path,
+        model="qwen3-embedding:4b",
+        canonical_model="Qwen3-Embedding-4B",
+        dimensions=2560,
+        normalized=True,
+        provider="ollama",
+    )
+
+
 def test_validate_index_meta_missing_creates(tmp_path: Path) -> None:
     validate_index_meta(
         tmp_path,

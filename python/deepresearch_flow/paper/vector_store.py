@@ -95,6 +95,7 @@ def validate_index_meta(
     vector_dir: Path,
     *,
     model: str,
+    canonical_model: str | None = None,
     dimensions: int,
     normalized: bool,
     provider: str = "",
@@ -105,6 +106,7 @@ def validate_index_meta(
             vector_dir,
             {
                 "model": model,
+                "canonical_model": canonical_model or model,
                 "dimensions": dimensions,
                 "normalized": normalized,
                 "provider": provider,
@@ -118,9 +120,11 @@ def validate_index_meta(
         return
 
     meta = load_index_meta(vector_dir)
-    if meta.get("model") != model:
+    expected_canonical_model = canonical_model or model
+    actual_canonical_model = meta.get("canonical_model") or meta.get("model")
+    if actual_canonical_model != expected_canonical_model:
         raise ValueError(
-            f"Index model mismatch: index has '{meta.get('model')}', config has '{model}'. Use --force to rebuild."
+            f"Index model mismatch: index has '{actual_canonical_model}', config has '{expected_canonical_model}'. Use --force to rebuild."
         )
     if meta.get("dimensions") != dimensions:
         raise ValueError(

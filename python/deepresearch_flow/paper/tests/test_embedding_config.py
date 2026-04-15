@@ -89,6 +89,7 @@ def test_loads_embedding_providers_with_bases_and_keys(tmp_path: Path, monkeypat
     assert ollama.models[0].model_name == "bge-m3"
     assert ollama.models[0].dimensions == 1024
     assert ollama.models[0].max_context == 8192
+    assert ollama.models[0].canonical_name == "bge-m3"
 
     siliconflow = config.embedding.providers[1]
     assert siliconflow.type == "openai_compatible"
@@ -234,6 +235,32 @@ def test_resolves_embedding_provider_and_model(tmp_path: Path, monkeypatch: pyte
     assert config.embedding.default_provider == provider.name
     assert config.embedding.default_model == model.model_name
     assert model.dimensions == 1024
+
+
+def test_embedding_model_canonical_name_defaults_to_model_name(tmp_path: Path) -> None:
+    config = _load_config(
+        tmp_path,
+        embedding_section="""
+        [[embedding.providers]]
+        name = "ollama"
+        base = [{ url = "http://localhost:11434", weight = 1, key = [{ value = "ollama", weight = 1 }] }]
+        models = [{ model_name = "qwen3-embedding:4b", dimensions = 2560, max_context = 32768 }]
+        """,
+    )
+    assert config.embedding.providers[0].models[0].canonical_name == "qwen3-embedding:4b"
+
+
+def test_embedding_model_accepts_explicit_canonical_name(tmp_path: Path) -> None:
+    config = _load_config(
+        tmp_path,
+        embedding_section="""
+        [[embedding.providers]]
+        name = "ollama"
+        base = [{ url = "http://localhost:11434", weight = 1, key = [{ value = "ollama", weight = 1 }] }]
+        models = [{ model_name = "qwen3-embedding:4b", canonical_name = "Qwen3-Embedding-4B", dimensions = 2560, max_context = 32768 }]
+        """,
+    )
+    assert config.embedding.providers[0].models[0].canonical_name == "Qwen3-Embedding-4B"
 
 
 def test_embedding_allows_requested_dimensions_below_model_max(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -85,8 +85,22 @@ class MainModelConfig:
 @dataclass(frozen=True)
 class EmbeddingModelConfig:
     model_name: str
+    canonical_name: str
     dimensions: int
     max_context: int
+
+    def __init__(
+        self,
+        model_name: str,
+        dimensions: int,
+        max_context: int,
+        canonical_name: str | None = None,
+        **_: Any,
+    ) -> None:
+        object.__setattr__(self, "model_name", model_name)
+        object.__setattr__(self, "canonical_name", (canonical_name or model_name).strip() or model_name)
+        object.__setattr__(self, "dimensions", dimensions)
+        object.__setattr__(self, "max_context", max_context)
 
     @property
     def is_support_json_schema(self) -> bool:
@@ -535,6 +549,7 @@ def _parse_embedding_model_configs(
         parsed.append(
             EmbeddingModelConfig(
                 model_name=model_name,
+                canonical_name=_as_str(item.get("canonical_name"), model_name) or model_name,
                 dimensions=_as_int(item.get("dimensions"), default_dimensions),
                 max_context=_as_int(item.get("max_context"), 8192),
             )
