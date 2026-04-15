@@ -20,6 +20,7 @@ except Exception:
 
 try:
     from pybtex.database import parse_file
+    from pybtex import errors as pybtex_errors
     PYBTEX_AVAILABLE = True
 except Exception:
     PYBTEX_AVAILABLE = False
@@ -1491,12 +1492,27 @@ def bibtex_entry_to_text(entry: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _parse_bibtex_file_lenient(bibtex_path: Path) -> Any:
+    """Parse BibTeX while tolerating duplicate entry keys.
+
+    pybtex treats repeated keys as hard errors in strict mode. For enrichment,
+    it is more useful to keep parsing and let pybtex retain the first entry
+    while surfacing a warning.
+    """
+    strict_before = getattr(pybtex_errors, "strict", True)
+    pybtex_errors.set_strict_mode(False)
+    try:
+        return parse_file(str(bibtex_path))
+    finally:
+        pybtex_errors.set_strict_mode(strict_before)
+
+
 def enrich_with_bibtex(papers: list[dict[str, Any]], bibtex_path: Path) -> None:
     """Enrich papers with bibtex metadata."""
     if not PYBTEX_AVAILABLE:
         raise RuntimeError("pybtex is required for --bibtex support")
 
-    bib_data = parse_file(str(bibtex_path))
+    bib_data = _parse_bibtex_file_lenient(bibtex_path)
     entries: list[dict[str, Any]] = []
     by_prefix: dict[str, list[int]] = {}
     for key, entry in bib_data.entries.items():
