@@ -195,12 +195,13 @@ def test_run_search_uses_embedding_and_rerank_resolve_active(monkeypatch, tmp_pa
 
     seen: dict[str, object] = {}
 
-    async def fake_embed(base_url, api_key, model, texts, *, dimensions=None, client=None):  # noqa: ANN001
+    async def fake_embed(base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None):  # noqa: ANN001
         seen["embed"] = {
             "base_url": base_url,
             "api_key": api_key,
             "model": model,
             "dimensions": dimensions,
+            "provider_type": provider_type,
         }
         return EmbeddingResult(vectors=[[0.1] * 1024], model=model, usage_tokens=1)
 
@@ -253,6 +254,7 @@ def test_run_search_uses_embedding_and_rerank_resolve_active(monkeypatch, tmp_pa
         "api_key": "resolved-embed-key",
         "model": "bge-m3",
         "dimensions": 1024,
+        "provider_type": "openai_compatible",
     }
     assert seen["reranker"] == {
         "base_url": "https://api.siliconflow.cn/v1",
@@ -303,8 +305,8 @@ def test_run_search_applies_embedding_and_rerank_overrides(monkeypatch, tmp_path
 
     seen: dict[str, object] = {}
 
-    async def fake_embed(base_url, api_key, model, texts, *, dimensions=None, client=None):  # noqa: ANN001
-        seen["embed"] = {"base_url": base_url, "api_key": api_key, "model": model}
+    async def fake_embed(base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None):  # noqa: ANN001
+        seen["embed"] = {"base_url": base_url, "api_key": api_key, "model": model, "provider_type": provider_type}
         return EmbeddingResult(vectors=[[0.1] * 1024], model=model, usage_tokens=1)
 
     class FakeRoutedReranker:
@@ -343,6 +345,7 @@ def test_run_search_applies_embedding_and_rerank_overrides(monkeypatch, tmp_path
         "base_url": "http://localhost:2242/v1",
         "api_key": "backup-key",
         "model": "embed-alt",
+        "provider_type": "openai_compatible",
     }
     assert seen["rerank"] == {
         "base_url": "https://rerank-alt.example/v1",

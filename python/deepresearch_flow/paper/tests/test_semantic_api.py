@@ -238,13 +238,14 @@ def test_embed_query_uses_embedding_resolve_active(monkeypatch) -> None:
 
     seen: dict[str, object] = {}
 
-    async def fake_call_embedding(base_url, api_key, model, texts, *, dimensions=None, client=None):  # noqa: ANN001
+    async def fake_call_embedding(base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None):  # noqa: ANN001
         seen.update(
             {
                 "base_url": base_url,
                 "api_key": api_key,
                 "model": model,
                 "dimensions": dimensions,
+                "provider_type": provider_type,
                 "texts": list(texts),
             }
         )
@@ -264,6 +265,7 @@ def test_embed_query_uses_embedding_resolve_active(monkeypatch) -> None:
         "api_key": "resolved-embed-key",
         "model": "bge-m3",
         "dimensions": 1024,
+        "provider_type": "openai_compatible",
         "texts": ["attention"],
     }
 

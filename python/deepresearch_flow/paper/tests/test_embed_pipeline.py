@@ -71,7 +71,7 @@ def test_pipeline_creates_index_meta(tmp_path: Path, monkeypatch) -> None:
     json_path = _write_json(tmp_path)
     vector_dir = tmp_path / "vectors"
 
-    async def fake_embed(base_url, api_key, model, texts, *, dimensions=None, client=None):
+    async def fake_embed(base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None):  # noqa: ANN001
         return EmbeddingResult(
             vectors=[[0.1] * 1024 for _ in texts],
             model=model,
@@ -96,7 +96,7 @@ def test_pipeline_incremental_skips_unchanged(tmp_path: Path, monkeypatch) -> No
     vector_dir = tmp_path / "vectors"
     call_count = 0
 
-    async def counting_embed(base_url, api_key, model, texts, *, dimensions=None, client=None):
+    async def counting_embed(base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None):  # noqa: ANN001
         nonlocal call_count
         call_count += len(texts)
         return EmbeddingResult(
@@ -131,7 +131,7 @@ def test_pipeline_keeps_existing_rows_when_reembed_fails(tmp_path: Path, monkeyp
     json_path = _write_json(tmp_path)
     vector_dir = tmp_path / "vectors"
 
-    async def ok_embed(base_url, api_key, model, texts, *, dimensions=None, client=None):  # noqa: ARG001
+    async def ok_embed(base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None):  # noqa: ARG001, ANN001
         return EmbeddingResult(
             vectors=[[0.1] * 1024 for _ in texts],
             model=model,
@@ -160,7 +160,7 @@ def test_pipeline_keeps_existing_rows_when_reembed_fails(tmp_path: Path, monkeyp
     ]
     json_path.write_text(json.dumps(updated), encoding="utf-8")
 
-    async def failing_embed(base_url, api_key, model, texts, *, dimensions=None, client=None):  # noqa: ARG001
+    async def failing_embed(base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None):  # noqa: ARG001, ANN001
         raise RuntimeError("embedding backend unavailable")
 
     monkeypatch.setattr("deepresearch_flow.paper.embedding.call_embedding", failing_embed)
@@ -182,7 +182,7 @@ def test_pipeline_reports_batch_size_mismatch(tmp_path: Path, monkeypatch) -> No
     json_path = _write_json(tmp_path)
     vector_dir = tmp_path / "vectors"
 
-    async def bad_embed(base_url, api_key, model, texts, *, dimensions=None, client=None):  # noqa: ARG001
+    async def bad_embed(base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None):  # noqa: ARG001, ANN001
         return EmbeddingResult(
             vectors=[[0.1] * 1024],
             model=model,
@@ -221,7 +221,7 @@ def test_pipeline_assigns_monotonic_chunk_index_per_template_and_type(tmp_path: 
     )
     vector_dir = tmp_path / "vectors"
 
-    async def ok_embed(base_url, api_key, model, texts, *, dimensions=None, client=None):  # noqa: ARG001
+    async def ok_embed(base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None):  # noqa: ARG001, ANN001
         return EmbeddingResult(
             vectors=[[0.1] * 1024 for _ in texts],
             model=model,
@@ -247,7 +247,7 @@ def test_pipeline_updates_index_meta_stats(tmp_path: Path, monkeypatch) -> None:
     json_path = _write_json(tmp_path)
     vector_dir = tmp_path / "vectors"
 
-    async def ok_embed(base_url, api_key, model, texts, *, dimensions=None, client=None):  # noqa: ARG001
+    async def ok_embed(base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None):  # noqa: ARG001, ANN001
         return EmbeddingResult(
             vectors=[[0.1] * 1024 for _ in texts],
             model=model,
@@ -276,13 +276,14 @@ def test_pipeline_embeds_using_active_weighted_route(tmp_path: Path, monkeypatch
 
     seen: dict[str, object] = {}
 
-    async def fake_embed(base_url, api_key, model, texts, *, dimensions=None, client=None):  # noqa: ANN001
+    async def fake_embed(base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None):  # noqa: ANN001
         seen.update(
             {
                 "base_url": base_url,
                 "api_key": api_key,
                 "model": model,
                 "dimensions": dimensions,
+                "provider_type": provider_type,
                 "texts": list(texts),
             }
         )
@@ -306,6 +307,7 @@ def test_pipeline_embeds_using_active_weighted_route(tmp_path: Path, monkeypatch
     assert seen["api_key"] == "resolved-embed-key"
     assert seen["model"] == "bge-m3"
     assert seen["dimensions"] == 1024
+    assert seen["provider_type"] == "openai_compatible"
 
 
 def test_pipeline_shows_tqdm_progress_for_embedding_batches(tmp_path: Path, monkeypatch) -> None:
@@ -336,7 +338,7 @@ def test_pipeline_shows_tqdm_progress_for_embedding_batches(tmp_path: Path, monk
         tqdm_calls.append(kwargs)
         return FakeProgress(str(kwargs.get("desc", "")))
 
-    async def ok_embed(base_url, api_key, model, texts, *, dimensions=None, client=None):  # noqa: ARG001
+    async def ok_embed(base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None):  # noqa: ARG001, ANN001
         return EmbeddingResult(
             vectors=[[0.1] * 1024 for _ in texts],
             model=model,

@@ -373,7 +373,7 @@ def test_api_semantic_routes_enforce_contracts_and_return_results(tmp_path: Path
     client = TestClient(app)
     assert client.get("/api/papers/semantic").status_code == 400
 
-    async def fake_call_embedding(base_url, api_key, model, texts, *, dimensions=None, client=None):  # noqa: ANN001
+    async def fake_call_embedding(base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None):  # noqa: ANN001, ARG001
         return type("EmbeddingResult", (), {"vectors": [[0.1] * 1024]})()
 
     monkeypatch.setattr("deepresearch_flow.paper.embedding.call_embedding", fake_call_embedding)
@@ -408,7 +408,7 @@ def test_api_semantic_routes_enforce_contracts_and_return_results(tmp_path: Path
     invalid = client.get("/api/papers/semantic?q=attention&venue=NeurIPS' OR 1=1")
     assert invalid.status_code == 400
 
-    async def failing_call_embedding(base_url, api_key, model, texts, *, dimensions=None, client=None):  # noqa: ANN001
+    async def failing_call_embedding(base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None):  # noqa: ANN001, ARG001
         raise httpx.ReadTimeout("timeout")
 
     monkeypatch.setattr("deepresearch_flow.paper.embedding.call_embedding", failing_call_embedding)
