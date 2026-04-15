@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import hashlib
 import logging
 from pathlib import Path
+import signal
 
 from tqdm import tqdm
 
@@ -19,7 +21,8 @@ from deepresearch_flow.paper.vector_store import (
     compute_group_hash,
     delete_groups,
     open_store,
-    read_group_hashes,
+    read_group_hashes_for_doc,
+    read_group_keys,
     update_index_meta_stats,
     validate_index_meta,
     write_chunks,
@@ -27,6 +30,7 @@ from deepresearch_flow.paper.vector_store import (
 
 logger = logging.getLogger(__name__)
 _SHARED_KEY = "_shared"
+_CHECKPOINT_FILE = "embed_resume_checkpoint.json"
 
 
 def _build_searchable_fields(doc: EmbedDocument) -> list[SearchableField]:
@@ -58,6 +62,129 @@ def _group_chunks_by_template_key(chunks: list[Chunk]) -> dict[str, list[Chunk]]
         template_key = chunk.template_tag if chunk.template_tag else _SHARED_KEY
         groups.setdefault(template_key, []).append(chunk)
     return groups
+
+
+def _build_group_rows(
+    *,
+    doc: EmbedDocument,
+    group_chunks: list[Chunk],
+    content_hashes: list[str],
+) -> list[ChunkRow]:
+    type_counters: dict[str, int] = {}
+    rows: list[ChunkRow] = []
+    for idx, chunk in enumerate(group_chunks):
+        chunk_type_label = (
+            f"{chunk.chunk_type}_{chunk.lang}"
+            if chunk.chunk_type == "translated_md" and chunk.lang
+            else chunk.chunk_type
+        )
+        group_chunk_index = type_counters.get(chunk_type_label, 0)
+        type_counters[chunk_type_label] = group_chunk_index + 1
+        rows.append(
+            ChunkRow(
+                id=build_chunk_id(
+                    doc.doc_id,
+                    chunk.template_tag,
+                    chunk_type_label,
+                    group_chunk_index,
+                ),
+                doc_id=doc.doc_id,
+                source_path=doc.metadata.source_path,
+                template_tag=chunk.template_tag,
+                chunk_type=chunk.chunk_type,
+                chunk_index=group_chunk_index,
+                field_name=chunk.field_name,
+                lang=chunk.lang,
+                text=chunk.text,
+                content_hash=content_hashes[idx],
+                vector=[],
+                title=doc.metadata.title,
+                year=doc.metadata.year,
+                authors=doc.metadata.authors,
+                venue=doc.metadata.venue,
+                tags=doc.metadata.tags,
+            )
+        )
+    return rows
+
+
+def _checkpoint_path(vector_dir: Path) -> Path:
+    return vector_dir / _CHECKPOINT_FILE
+
+
+def _serialize_chunk_row(row: ChunkRow) -> dict[str, object]:
+    return {
+        "id": row.id,
+        "doc_id": row.doc_id,
+        "source_path": row.source_path,
+        "template_tag": row.template_tag,
+        "chunk_type": row.chunk_type,
+        "chunk_index": row.chunk_index,
+        "field_name": row.field_name,
+        "lang": row.lang,
+        "text": row.text,
+        "content_hash": row.content_hash,
+        "vector": row.vector,
+        "title": row.title,
+        "year": row.year,
+        "authors": row.authors,
+        "venue": row.venue,
+        "tags": row.tags,
+    }
+
+
+def _deserialize_chunk_row(data: dict[str, object]) -> ChunkRow:
+    return ChunkRow(
+        id=str(data["id"]),
+        doc_id=str(data["doc_id"]),
+        source_path=str(data["source_path"]),
+        template_tag=str(data["template_tag"]),
+        chunk_type=str(data["chunk_type"]),
+        chunk_index=int(data["chunk_index"]),
+        field_name=str(data["field_name"]),
+        lang=str(data["lang"]),
+        text=str(data["text"]),
+        content_hash=str(data["content_hash"]),
+        vector=[float(v) for v in list(data["vector"])],
+        title=str(data["title"]),
+        year=int(data["year"]),
+        authors=str(data["authors"]),
+        venue=str(data["venue"]),
+        tags=str(data["tags"]),
+    )
+
+
+def _load_checkpoint(vector_dir: Path) -> dict[str, object] | None:
+    path = _checkpoint_path(vector_dir)
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _save_checkpoint(
+    vector_dir: Path,
+    *,
+    doc_id: str,
+    template_key: str,
+    group_hash: str,
+    next_offset: int,
+    staged_rows: list[ChunkRow],
+) -> None:
+    vector_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "doc_id": doc_id,
+        "template_key": template_key,
+        "group_hash": group_hash,
+        "next_offset": next_offset,
+        "staged_rows": [_serialize_chunk_row(row) for row in staged_rows],
+    }
+    _checkpoint_path(vector_dir).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _clear_checkpoint(vector_dir: Path) -> None:
+    path = _checkpoint_path(vector_dir)
+    if path.exists():
+        path.unlink()
 
 
 async def run_embed_pipeline(
@@ -101,123 +228,141 @@ async def run_embed_pipeline(
     )
 
     db = open_store(vector_dir)
-    existing_hashes = read_group_hashes(db)
-
-    rows_to_write: list[ChunkRow] = []
-    groups_to_delete: list[tuple[str, str]] = []
     source_group_keys: set[tuple[str, str]] = set()
-
-    with tqdm(total=len(docs), desc="prepare chunks", unit="doc") as progress:
-        for doc in docs:
-            fields = _build_searchable_fields(doc)
-            chunks = chunk_fields(
-                fields,
-                max_tokens=embedding_config.chunk_max_tokens,
-                overlap_tokens=embedding_config.chunk_overlap_tokens,
-            )
-            grouped = _group_chunks_by_template_key(chunks)
-            for template_key, group_chunks in grouped.items():
-                source_group_keys.add((doc.doc_id, template_key))
-                content_hashes = [
-                    hashlib.sha256(chunk.text.encode("utf-8")).hexdigest()
-                    for chunk in group_chunks
-                ]
-                group_hash = compute_group_hash(content_hashes)
-                if existing_hashes.get((doc.doc_id, template_key)) == group_hash:
-                    continue
-                if (doc.doc_id, template_key) in existing_hashes:
-                    groups_to_delete.append((doc.doc_id, template_key))
-
-                type_counters: dict[str, int] = {}
-                for idx, chunk in enumerate(group_chunks):
-                    chunk_type_label = (
-                        f"{chunk.chunk_type}_{chunk.lang}"
-                        if chunk.chunk_type == "translated_md" and chunk.lang
-                        else chunk.chunk_type
-                    )
-                    group_chunk_index = type_counters.get(chunk_type_label, 0)
-                    type_counters[chunk_type_label] = group_chunk_index + 1
-                    rows_to_write.append(
-                        ChunkRow(
-                            id=build_chunk_id(
-                                doc.doc_id,
-                                chunk.template_tag,
-                                chunk_type_label,
-                                group_chunk_index,
-                            ),
-                            doc_id=doc.doc_id,
-                            source_path=doc.metadata.source_path,
-                            template_tag=chunk.template_tag,
-                            chunk_type=chunk.chunk_type,
-                            chunk_index=group_chunk_index,
-                            field_name=chunk.field_name,
-                            lang=chunk.lang,
-                            text=chunk.text,
-                            content_hash=content_hashes[idx],
-                            vector=[],
-                            title=doc.metadata.title,
-                            year=doc.metadata.year,
-                            authors=doc.metadata.authors,
-                            venue=doc.metadata.venue,
-                            tags=doc.metadata.tags,
-                        )
-                    )
-            progress.update(1)
-
-    orphan_keys = set(existing_hashes) - source_group_keys
-
-    if not rows_to_write:
-        logger.info("No new chunks to embed.")
-        update_index_meta_stats(vector_dir, db)
-        return
-
-    texts = [row.text for row in rows_to_write]
-    vectors: list[list[float]] = []
     import httpx
+    written_chunk_count = 0
+    embed_progress = tqdm(total=0, desc="embed chunks", unit="chunk")
+    checkpoint = _load_checkpoint(vector_dir)
+    stop_requested = False
 
-    progress = tqdm(total=len(texts), desc="embed chunks", unit="chunk")
+    previous_sigint = signal.getsignal(signal.SIGINT)
+
+    def _handle_sigint(signum, frame):  # noqa: ANN001
+        nonlocal stop_requested
+        if stop_requested:
+            raise KeyboardInterrupt
+        stop_requested = True
+        logger.warning("Interrupt requested; finishing current batch and persisting progress.")
+
+    signal.signal(signal.SIGINT, _handle_sigint)
     async with httpx.AsyncClient() as client:
         try:
-            for start in range(0, len(texts), embedding_config.batch_size):
-                batch = texts[start : start + embedding_config.batch_size]
-                result = await call_embedding_with_route_pool(
-                    route_pool=route_pool,
-                    texts=batch,
-                    dimensions=embedding_config.dimensions,
-                    client=client,
-                )
-                if len(result.vectors) != len(batch):
-                    raise ValueError(
-                        f"Embedding provider returned {len(result.vectors)} vectors for batch of {len(batch)} texts "
-                        f"(starting at offset {start})"
+            with tqdm(total=len(docs), desc="prepare chunks", unit="doc") as progress:
+                for doc in docs:
+                    existing_hashes = read_group_hashes_for_doc(db, doc.doc_id)
+                    fields = _build_searchable_fields(doc)
+                    chunks = chunk_fields(
+                        fields,
+                        max_tokens=embedding_config.chunk_max_tokens,
+                        overlap_tokens=embedding_config.chunk_overlap_tokens,
                     )
-                vectors.extend(result.vectors)
-                progress.update(len(batch))
-        finally:
-            progress.close()
+                    grouped = _group_chunks_by_template_key(chunks)
+                    for template_key, group_chunks in grouped.items():
+                        source_group_keys.add((doc.doc_id, template_key))
+                        content_hashes = [
+                            hashlib.sha256(chunk.text.encode("utf-8")).hexdigest()
+                            for chunk in group_chunks
+                        ]
+                        group_hash = compute_group_hash(content_hashes)
+                        if existing_hashes.get(template_key) == group_hash:
+                            continue
 
-    final_rows = [
-        ChunkRow(
-            id=row.id,
-            doc_id=row.doc_id,
-            source_path=row.source_path,
-            template_tag=row.template_tag,
-            chunk_type=row.chunk_type,
-            chunk_index=row.chunk_index,
-            field_name=row.field_name,
-            lang=row.lang,
-            text=row.text,
-            content_hash=row.content_hash,
-            vector=vector,
-            title=row.title,
-            year=row.year,
-            authors=row.authors,
-            venue=row.venue,
-            tags=row.tags,
-        )
-        for row, vector in zip(rows_to_write, vectors, strict=True)
-    ]
-    delete_groups(db, groups_to_delete + list(orphan_keys))
-    write_chunks(db, final_rows, dimensions=embedding_config.dimensions)
+                        pending_rows = _build_group_rows(
+                            doc=doc,
+                            group_chunks=group_chunks,
+                            content_hashes=content_hashes,
+                        )
+                        embed_progress.total = (embed_progress.total or 0) + len(pending_rows)
+                        embed_progress.refresh()
+                        should_replace_existing = template_key in existing_hashes
+                        staged_rows: list[ChunkRow] = []
+                        start_offset = 0
+                        if (
+                            should_replace_existing
+                            and checkpoint is not None
+                            and checkpoint.get("doc_id") == doc.doc_id
+                            and checkpoint.get("template_key") == template_key
+                            and checkpoint.get("group_hash") == group_hash
+                        ):
+                            start_offset = int(checkpoint.get("next_offset") or 0)
+                            staged_rows = [
+                                _deserialize_chunk_row(item)
+                                for item in list(checkpoint.get("staged_rows") or [])
+                                if isinstance(item, dict)
+                            ]
+                        for start in range(start_offset, len(pending_rows), embedding_config.batch_size):
+                            batch_rows = pending_rows[start : start + embedding_config.batch_size]
+                            batch = [row.text for row in batch_rows]
+                            result = await call_embedding_with_route_pool(
+                                route_pool=route_pool,
+                                texts=batch,
+                                dimensions=embedding_config.dimensions,
+                                client=client,
+                            )
+                            if len(result.vectors) != len(batch):
+                                raise ValueError(
+                                    f"Embedding provider returned {len(result.vectors)} vectors for batch of {len(batch)} texts "
+                                    f"(starting at offset {start})"
+                                )
+                            embedded_batch_rows = [
+                                ChunkRow(
+                                    id=row.id,
+                                    doc_id=row.doc_id,
+                                    source_path=row.source_path,
+                                    template_tag=row.template_tag,
+                                    chunk_type=row.chunk_type,
+                                    chunk_index=row.chunk_index,
+                                    field_name=row.field_name,
+                                    lang=row.lang,
+                                    text=row.text,
+                                    content_hash=row.content_hash,
+                                    vector=vector,
+                                    title=row.title,
+                                    year=row.year,
+                                    authors=row.authors,
+                                    venue=row.venue,
+                                    tags=row.tags,
+                                )
+                                for row, vector in zip(batch_rows, result.vectors, strict=True)
+                            ]
+                            if should_replace_existing:
+                                staged_rows.extend(embedded_batch_rows)
+                                _save_checkpoint(
+                                    vector_dir,
+                                    doc_id=doc.doc_id,
+                                    template_key=template_key,
+                                    group_hash=group_hash,
+                                    next_offset=start + len(batch_rows),
+                                    staged_rows=staged_rows,
+                                )
+                            else:
+                                write_chunks(
+                                    db,
+                                    embedded_batch_rows,
+                                    dimensions=embedding_config.dimensions,
+                                )
+                                written_chunk_count += len(embedded_batch_rows)
+                            embed_progress.update(len(batch_rows))
+                            if stop_requested:
+                                raise KeyboardInterrupt
+
+                        if should_replace_existing:
+                            delete_groups(db, [(doc.doc_id, template_key)])
+                            write_chunks(db, staged_rows, dimensions=embedding_config.dimensions)
+                            written_chunk_count += len(staged_rows)
+                            _clear_checkpoint(vector_dir)
+                            checkpoint = None
+                    progress.update(1)
+        finally:
+            embed_progress.close()
+            signal.signal(signal.SIGINT, previous_sigint)
+
+    orphan_keys = read_group_keys(db) - source_group_keys
+    if orphan_keys:
+        delete_groups(db, list(orphan_keys))
+    _clear_checkpoint(vector_dir)
     update_index_meta_stats(vector_dir, db)
-    logger.info("Embedded %d chunks across %d documents", len(final_rows), len(docs))
+    if written_chunk_count == 0 and not orphan_keys:
+        logger.info("No new chunks to embed.")
+    else:
+        logger.info("Embedded %d chunks across %d documents", written_chunk_count, len(docs))

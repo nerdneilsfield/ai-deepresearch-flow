@@ -5,11 +5,13 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import shutil
 import struct
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import lancedb
 import pyarrow as pa
@@ -145,6 +147,44 @@ def open_store(vector_dir: Path) -> lancedb.DBConnection:
     return lancedb.connect(str(vector_dir))
 
 
+def preflight_vector_store(vector_dir: Path, *, dimensions: int) -> None:
+    parent = vector_dir.parent if vector_dir.parent != Path("") else Path(".")
+    temp_dir = parent / f".lance-preflight-{uuid4().hex}"
+    try:
+        db = open_store(temp_dir)
+        write_chunks(
+            db,
+            [
+                ChunkRow(
+                    id="preflight__shared_title_0",
+                    doc_id="preflight",
+                    source_path="",
+                    template_tag="",
+                    chunk_type="title",
+                    chunk_index=0,
+                    field_name="title",
+                    lang="",
+                    text="preflight",
+                    content_hash="preflight",
+                    vector=[0.0] * dimensions,
+                    title="preflight",
+                    year=0,
+                    authors="",
+                    venue="",
+                    tags="",
+                )
+            ],
+            dimensions=dimensions,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            f"Vector store preflight failed for {vector_dir}. "
+            "The target filesystem may not support LanceDB commit/rename operations."
+        ) from exc
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 def _chunks_schema(dimensions: int) -> pa.Schema:
     return pa.schema(
         [
@@ -219,6 +259,35 @@ def read_group_hashes(db: lancedb.DBConnection) -> dict[tuple[str, str], str]:
         template_key = row.get("template_tag") or _SHARED_KEY
         grouped.setdefault((row["doc_id"], template_key), []).append(row["content_hash"])
     return {key: compute_group_hash(values) for key, values in grouped.items()}
+
+
+def read_group_hashes_for_doc(db: lancedb.DBConnection, doc_id: str) -> dict[str, str]:
+    if _CHUNKS_TABLE not in _table_names(db):
+        return {}
+    table = db.open_table(_CHUNKS_TABLE)
+    rows = (
+        table.search()
+        .where(f"doc_id = {_quote_filter_literal(doc_id)}")
+        .select(["template_tag", "content_hash"])
+        .to_list()
+    )
+    grouped: dict[str, list[str]] = {}
+    for row in rows:
+        template_key = row.get("template_tag") or _SHARED_KEY
+        grouped.setdefault(str(template_key), []).append(str(row["content_hash"]))
+    return {key: compute_group_hash(values) for key, values in grouped.items()}
+
+
+def read_group_keys(db: lancedb.DBConnection) -> set[tuple[str, str]]:
+    if _CHUNKS_TABLE not in _table_names(db):
+        return set()
+    table = db.open_table(_CHUNKS_TABLE)
+    rows = table.search().select(["doc_id", "template_tag"]).to_list()
+    return {
+        (str(row["doc_id"]), str(row.get("template_tag") or _SHARED_KEY))
+        for row in rows
+        if str(row.get("doc_id") or "").strip()
+    }
 
 
 def read_all_chunks(db: lancedb.DBConnection) -> list[dict[str, Any]]:

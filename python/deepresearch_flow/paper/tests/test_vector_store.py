@@ -13,6 +13,8 @@ from deepresearch_flow.paper.vector_store import (
     load_index_meta,
     open_store,
     query_vector,
+    read_group_hashes_for_doc,
+    read_group_keys,
     save_index_meta,
     validate_index_meta,
     write_chunks,
@@ -151,3 +153,92 @@ def test_write_and_query_chunks(tmp_path: Path) -> None:
 def test_chunks_schema_uses_requested_dimensions() -> None:
     schema = _chunks_schema(2560)
     assert schema.field("vector").type.list_size == 2560
+
+
+def test_read_group_hashes_for_doc_returns_only_requested_doc(tmp_path: Path) -> None:
+    db = open_store(tmp_path)
+    rows = [
+        ChunkRow(
+            id="doc1_simple_title_0",
+            doc_id="doc1",
+            source_path="a.md",
+            template_tag="simple",
+            chunk_type="title",
+            chunk_index=0,
+            field_name="title",
+            lang="",
+            text="Doc 1",
+            content_hash="hash-a",
+            vector=[0.1] * 4,
+            title="Doc 1",
+            year=2024,
+            authors="A",
+            venue="ACL",
+            tags="x",
+        ),
+        ChunkRow(
+            id="doc2_simple_title_0",
+            doc_id="doc2",
+            source_path="b.md",
+            template_tag="simple",
+            chunk_type="title",
+            chunk_index=0,
+            field_name="title",
+            lang="",
+            text="Doc 2",
+            content_hash="hash-b",
+            vector=[0.2] * 4,
+            title="Doc 2",
+            year=2024,
+            authors="B",
+            venue="EMNLP",
+            tags="y",
+        ),
+    ]
+    write_chunks(db, rows, dimensions=4)
+    hashes = read_group_hashes_for_doc(db, "doc1")
+    assert set(hashes) == {"simple"}
+
+
+def test_read_group_keys_returns_unique_group_keys(tmp_path: Path) -> None:
+    db = open_store(tmp_path)
+    rows = [
+        ChunkRow(
+            id="doc1_simple_title_0",
+            doc_id="doc1",
+            source_path="a.md",
+            template_tag="simple",
+            chunk_type="title",
+            chunk_index=0,
+            field_name="title",
+            lang="",
+            text="Doc 1",
+            content_hash="hash-a",
+            vector=[0.1] * 4,
+            title="Doc 1",
+            year=2024,
+            authors="A",
+            venue="ACL",
+            tags="x",
+        ),
+        ChunkRow(
+            id="doc1_simple_abstract_0",
+            doc_id="doc1",
+            source_path="a.md",
+            template_tag="simple",
+            chunk_type="abstract",
+            chunk_index=0,
+            field_name="summary",
+            lang="",
+            text="Abstract",
+            content_hash="hash-b",
+            vector=[0.1] * 4,
+            title="Doc 1",
+            year=2024,
+            authors="A",
+            venue="ACL",
+            tags="x",
+        ),
+    ]
+    write_chunks(db, rows, dimensions=4)
+    assert read_group_keys(db) == {("doc1", "simple")}

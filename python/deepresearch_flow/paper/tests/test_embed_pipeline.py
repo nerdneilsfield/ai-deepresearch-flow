@@ -37,6 +37,28 @@ def _write_json(tmp_path: Path) -> Path:
     return path
 
 
+def _write_two_doc_json(tmp_path: Path) -> Path:
+    data = [
+        {
+            "paper_title": "Test Paper A",
+            "summary": "A summary of the first test paper.",
+            "source_path": "papers/a.md",
+            "prompt_template": "simple",
+            "paper_authors": ["Author A"],
+        },
+        {
+            "paper_title": "Test Paper B",
+            "summary": "A summary of the second test paper.",
+            "source_path": "papers/b.md",
+            "prompt_template": "simple",
+            "paper_authors": ["Author B"],
+        },
+    ]
+    path = tmp_path / "papers-two.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return path
+
+
 def _test_config(*, api_key: str = "ollama") -> PaperConfig:
     # These pipeline tests exercise embedding-only plumbing and intentionally bypass
     # chat provider/main_model validation by constructing PaperConfig directly.
@@ -125,6 +147,54 @@ def test_pipeline_incremental_skips_unchanged(tmp_path: Path, monkeypatch) -> No
     )
 
     assert call_count == first_count
+
+
+def test_pipeline_resumes_after_partial_failure(tmp_path: Path, monkeypatch) -> None:
+    json_path = _write_two_doc_json(tmp_path)
+    vector_dir = tmp_path / "vectors"
+    seen_texts: list[str] = []
+    should_fail = {"value": True}
+
+    async def flaky_embed(base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None):  # noqa: ANN001
+        seen_texts.extend(list(texts))
+        if should_fail["value"] and any("second test paper" in text.lower() for text in texts):
+            raise RuntimeError("embedding backend unavailable")
+        return EmbeddingResult(
+            vectors=[[0.1] * 1024 for _ in texts],
+            model=model,
+            usage_tokens=len(texts),
+        )
+
+    monkeypatch.setattr("deepresearch_flow.paper.embedding.call_embedding", flaky_embed)
+
+    with pytest.raises(RuntimeError, match="embedding backend unavailable"):
+        asyncio.run(
+            run_embed_pipeline(
+                config=_test_config(),
+                input_paths=[json_path],
+                vector_dir=vector_dir,
+            )
+        )
+
+    rows_after_failure = scan_rows(open_store(vector_dir))
+    assert rows_after_failure
+    assert "papers/a.md" in {row["source_path"] for row in rows_after_failure}
+
+    should_fail["value"] = False
+    first_run_count = len(seen_texts)
+    asyncio.run(
+        run_embed_pipeline(
+            config=_test_config(),
+            input_paths=[json_path],
+            vector_dir=vector_dir,
+        )
+    )
+
+    rows_after_resume = scan_rows(open_store(vector_dir))
+    assert {row["source_path"] for row in rows_after_resume} == {"papers/a.md", "papers/b.md"}
+    resumed_texts = seen_texts[first_run_count:]
+    assert resumed_texts
+    assert all("first test paper" not in text.lower() for text in resumed_texts)
 
 
 def test_pipeline_keeps_existing_rows_when_reembed_fails(tmp_path: Path, monkeypatch) -> None:
@@ -319,6 +389,7 @@ def test_pipeline_shows_tqdm_progress_for_embedding_batches(tmp_path: Path, monk
     class FakeProgress:
         def __init__(self, desc: str) -> None:
             self.desc = desc
+            self.total = 0
 
         def __enter__(self):
             progress_events.append((self.desc, "enter", None))
@@ -330,6 +401,9 @@ def test_pipeline_shows_tqdm_progress_for_embedding_batches(tmp_path: Path, monk
 
         def update(self, value: int) -> None:
             progress_events.append((self.desc, "update", value))
+
+        def refresh(self) -> None:
+            progress_events.append((self.desc, "refresh", self.total))
 
         def close(self) -> None:
             progress_events.append((self.desc, "close", None))
@@ -358,9 +432,10 @@ def test_pipeline_shows_tqdm_progress_for_embedding_batches(tmp_path: Path, monk
 
     assert tqdm_calls
     assert any(call.get("desc") == "prepare chunks" and int(call.get("total", 0)) > 0 for call in tqdm_calls)
-    assert any(call.get("desc") == "embed chunks" and int(call.get("total", 0)) > 0 for call in tqdm_calls)
+    assert any(call.get("desc") == "embed chunks" for call in tqdm_calls)
     assert ("prepare chunks", "enter", None) in progress_events
     assert ("prepare chunks", "update", 1) in progress_events
     assert ("prepare chunks", "exit", None) in progress_events
+    assert any(event[0] == "embed chunks" and event[1] == "refresh" and int(event[2] or 0) > 0 for event in progress_events)
     assert ("embed chunks", "update", 2) in progress_events
     assert ("embed chunks", "close", None) in progress_events

@@ -636,6 +636,12 @@ def embed(
         click.echo(f"Removing existing vector index at {vector_dir} (--force)")
         shutil.rmtree(vector_dir)
 
+    from deepresearch_flow.paper.vector_store import preflight_vector_store
+    try:
+        preflight_vector_store(vector_dir, dimensions=config.embedding.dimensions)
+    except RuntimeError as exc:
+        raise click.ClickException(str(exc)) from exc
+
     from deepresearch_flow.paper.embed_pipeline import run_embed_pipeline
 
     asyncio.run(

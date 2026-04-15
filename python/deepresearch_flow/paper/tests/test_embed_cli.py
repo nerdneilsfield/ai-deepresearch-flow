@@ -114,6 +114,39 @@ def test_paper_embed_rejects_mixed_sources(tmp_path: Path) -> None:
     assert result.exit_code != 0
 
 
+def test_paper_embed_fails_fast_when_vector_store_preflight_fails(tmp_path: Path, monkeypatch) -> None:
+    runner = CliRunner()
+    config_path = _write_embed_config(tmp_path)
+    json_path = tmp_path / "papers.json"
+    json_path.write_text("[]", encoding="utf-8")
+
+    def boom_preflight(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise RuntimeError("Vector store preflight failed for /mnt/d/vectors")
+
+    def should_not_run(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise AssertionError("run_embed_pipeline should not run when preflight fails")
+
+    monkeypatch.setattr("deepresearch_flow.paper.vector_store.preflight_vector_store", boom_preflight)
+    monkeypatch.setattr("deepresearch_flow.paper.embed_pipeline.run_embed_pipeline", should_not_run)
+
+    result = runner.invoke(
+        cli,
+        [
+            "paper",
+            "embed",
+            "-c",
+            str(config_path),
+            "-i",
+            str(json_path),
+            "--output-embed-db",
+            str(tmp_path / "vectors"),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "preflight failed" in result.output.lower()
+
+
 def test_paper_search_rejects_invalid_venue_filter(tmp_path: Path) -> None:
     runner = CliRunner()
     config_path = _write_embed_config(tmp_path)
