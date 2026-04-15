@@ -131,8 +131,22 @@ def _expand_escaped_newlines(text: str) -> str:
             depth += 1
         elif ch in "])}":
             depth = max(0, depth - 1)
-        if ch == "\\" and i + 1 < len(text) and text[i + 1] == "n":
-            out.append("<br/>" if depth > 0 else "\n")
+        if ch == "\\" and i + 1 < len(text) and text[i + 1] in {"n", "r", "t"}:
+            escape = text[i + 1]
+            j = i + 2
+            while j < len(text) and text[j].isalpha():
+                j += 1
+            # Preserve LaTeX-style commands such as \neq, \text, or \tau.
+            if j > i + 2:
+                out.append(text[i:j])
+                i = j
+                continue
+            if escape == "n":
+                out.append("<br/>" if depth > 0 else "\n")
+            elif escape == "t":
+                out.append(" ")
+            else:
+                out.append("\n")
             i += 2
             continue
         out.append(ch)
@@ -381,7 +395,7 @@ def _iter_square_blocks(text: str) -> Iterable[tuple[int, int]]:
                 elif ch == quote:
                     quote = None
             else:
-                if ch in "\"'":
+                if ch == "\"":
                     quote = ch
                 elif ch == "[":
                     depth += 1
@@ -406,7 +420,7 @@ def _count_structural_square_brackets(text: str) -> tuple[int, int]:
             elif ch == quote:
                 quote = None
             continue
-        if ch in "\"'":
+        if ch == "\"":
             quote = ch
         elif ch == "[":
             opens += 1

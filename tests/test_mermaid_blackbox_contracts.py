@@ -172,6 +172,33 @@ def test_cleanup_mermaid_repairs_nested_brackets_with_inner_quotes_without_fixat
     assert 'B[ok]' in cleaned
 
 
+def test_cleanup_mermaid_preserves_latex_primes_and_commands_inside_labels() -> None:
+    original = (
+        "flowchart TD\n"
+        "R1[查询改写：$u_t \\rightarrow u'_t$]\n"
+        "J2 -->|Refresh & $C_{err}\\neq\\emptyset$| Refresher\n"
+    )
+
+    cleaned = mermaid.cleanup_mermaid(original)
+
+    assert "u'_t" in cleaned
+    assert "J2 -->|Refresh & $C_{err}\\neq\\emptyset$| Refresher" in cleaned
+    assert "]]" not in cleaned
+    assert "R1[查询改写：$u_t \\rightarrow u'_t$]" in cleaned
+
+
+def test_cleanup_mermaid_quotes_unquoted_math_labels_with_nested_square_brackets() -> None:
+    original = (
+        "flowchart TD\n"
+        "R2[意图解析：生成 $\\mathbf{B}=[b_{fine},b_{abs},b_{event},b_{atomic}]$]\n"
+    )
+
+    cleaned = mermaid.cleanup_mermaid(original)
+
+    assert cleaned.startswith("flowchart TD\n")
+    assert 'R2["意图解析：生成 $\\mathbf{B}=[b_{fine},b_{abs},b_{event},b_{atomic}]$"]' in cleaned
+
+
 def test_fix_mermaid_text_accepts_valid_repair_and_preserves_unrelated_lines(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
