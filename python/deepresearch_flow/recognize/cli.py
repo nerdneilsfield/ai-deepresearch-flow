@@ -100,6 +100,14 @@ def _print_summary(title: str, rows: list[tuple[str, str]]) -> None:
     Console().print(table)
 
 
+async def _increase_progress_total(progress: tqdm | None, lock: asyncio.Lock | None, amount: int) -> None:
+    if progress is None or lock is None or amount <= 0:
+        return
+    async with lock:
+        progress.total = (progress.total or 0) + amount
+        progress.refresh()
+
+
 def _unique_output_filename(
     base: str,
     output_dirs: Iterable[Path],
@@ -1581,6 +1589,7 @@ def recognize_fix_mermaid(
             # Phase 1: Extract all diagrams from all files in parallel (flatten to 1D)
             progress_lock = asyncio.Lock()
             field_progress_lock = asyncio.Lock()
+            diagram_progress_lock = asyncio.Lock()
             
             async def extract_from_file(path: Path) -> list[DiagramTask]:
                 tasks: list[DiagramTask] = []
@@ -1683,7 +1692,13 @@ def recognize_fix_mermaid(
                                 loc = await field_queue.get()
                                 if loc is None:
                                     break
-                                out.extend(await extract_from_field(loc))
+                                extracted = await extract_from_field(loc)
+                                out.extend(extracted)
+                                await _increase_progress_total(
+                                    diagram_progress,
+                                    diagram_progress_lock,
+                                    len(extracted),
+                                )
                                 async with field_progress_lock:
                                     field_progress.update(1)
                             return out
@@ -1713,6 +1728,11 @@ def recognize_fix_mermaid(
                         ]
                     
                     tasks.extend(file_tasks)
+                    await _increase_progress_total(
+                        diagram_progress,
+                        diagram_progress_lock,
+                        len(file_tasks),
+                    )
                     logger.info("Extracted %d diagrams from %s", len(tasks), _relative_path(path))
                 
                 async with progress_lock:
@@ -1727,10 +1747,6 @@ def recognize_fix_mermaid(
             field_progress.close()
             nonlocal extract_duration, repair_start_time
             extract_duration = time.monotonic() - extract_start_time
-            
-            # Update diagram progress total
-            diagram_progress.total = len(all_tasks)
-            diagram_progress.refresh()
             
             if not all_tasks:
                 return stats_total
