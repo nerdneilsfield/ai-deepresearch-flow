@@ -240,7 +240,11 @@ def _review_formula_span(span: FormulaSpan) -> str | None:
     if span.delimiter == "$$":
         if re.search(r"(?m)^\s{0,3}#{1,6}\s", content):
             return "span_review: display_reclassified"
-        if _INLINE_PROSE_PUNCT_RE.search(content) and len(_CJK_RE.findall(content)) >= 4:
+        if (
+            _INLINE_PROSE_PUNCT_RE.search(content)
+            and len(_CJK_RE.findall(content)) >= 4
+            and not re.search(r"(\\[A-Za-z]+|[_^=+\-*/]|\d)", content)
+        ):
             return "span_review: display_reclassified"
         return None
     if len(content) > _MAX_INLINE_MATH_CHARS:

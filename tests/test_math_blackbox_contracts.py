@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 import random
 import re
 
 import pytest
 
+from deepresearch_flow.recognize import math as math_module
 from deepresearch_flow.recognize.math import (
     apply_replacements,
     cleanup_formula,
@@ -341,6 +343,55 @@ def test_cleanup_formula_preserves_valid_formula_and_repairs_local_damage(
     original: str, expected: str
 ) -> None:
     assert cleanup_formula(original) == expected
+
+
+def test_fix_math_text_keeps_valid_display_formula_with_cjk_punctuation(monkeypatch) -> None:
+    original = (
+        "$$"
+        r"\text{参数：} t_h=0.1 \ (\text{阈值})，p_h=0.05 \ (\text{惩罚值})，\text{语义惩罚} f_c"
+        "$$"
+    )
+
+    monkeypatch.setattr(
+        math_module,
+        "validate_formula",
+        lambda text, _display_mode: []
+        if text == original[2:-2]
+        else ["unexpected mutation"],
+    )
+    monkeypatch.setattr(math_module, "short_hash", lambda _path: "abc")
+
+    stats = math_module.MathFixStats()
+    updated, errors = asyncio.run(
+        math_module.fix_math_text(
+            text=original,
+            file_path="demo.md",
+            line_offset=1,
+            field_path=None,
+            item_index=None,
+            route_pool=object(),  # type: ignore[arg-type]
+            timeout=1.0,
+            max_retries=0,
+            batch_size=1,
+            context_chars=0,
+            client=None,  # type: ignore[arg-type]
+            stats=stats,
+            spans=[
+                math_module.FormulaSpan(
+                    start=0,
+                    end=len(original),
+                    delimiter="$$",
+                    content=original[2:-2],
+                    line=1,
+                    context="",
+                )
+            ],
+        )
+    )
+
+    assert updated == original
+    assert errors == []
+    assert stats.formulas_failed == 0
 
 
 def test_apply_replacements_rejects_overlapping_spans() -> None:
