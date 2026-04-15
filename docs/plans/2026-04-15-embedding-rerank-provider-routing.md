@@ -22,6 +22,7 @@ Add black-box tests covering:
 - embedding config accepts `base = [{ url, weight, key = [...] }]`
 - rerank config accepts the same nested route structure
 - legacy `base_url` / `api_key` config is rejected
+- existing old-shape tests are updated so prior scalar-field acceptance now fails fast
 
 **Step 2: Run tests to verify they fail**
 
@@ -47,7 +48,6 @@ Expected: PASS
 
 **Files:**
 - Modify: `python/deepresearch_flow/paper/routing.py`
-- Test: `python/deepresearch_flow/paper/tests/test_paper_cli_model_default.py`
 - Create or modify: `python/deepresearch_flow/paper/tests/test_embedding_routing.py`
 
 **Step 1: Write the failing tests**
@@ -70,7 +70,15 @@ Add reusable helpers that:
 - build runtime candidates exactly like the main route pool
 - expose identical cooldown/quota selection behavior
 
-Prefer reusing existing route-pool primitives rather than duplicating route logic.
+Implementation choice:
+- extract the existing candidate-expansion logic into a shared private helper
+- keep `RoutePool.from_selector()` on top of that helper for main models
+- add dedicated `RoutePool.from_embedding_provider(...)` / `RoutePool.from_rerank_provider(...)` entrypoints that call the same helper
+
+Pool lifecycle:
+- `paper embed`: one embedding pool for the full batch job
+- `paper search`: one embedding pool and one rerank pool per command invocation
+- web/API semantic search: app-scoped pools reused across requests
 
 **Step 4: Run tests to verify they pass**
 
@@ -82,7 +90,6 @@ Expected: PASS
 
 **Files:**
 - Modify: `python/deepresearch_flow/paper/embed_pipeline.py`
-- Modify: `python/deepresearch_flow/paper/embedding.py`
 - Test: `python/deepresearch_flow/paper/tests/test_embed_pipeline.py`
 
 **Step 1: Write the failing tests**
@@ -105,7 +112,7 @@ Refactor the embed pipeline to:
 - call `call_embedding()` with the selected concrete route
 - mark route cooldown/quota state on errors using the shared routing behavior
 
-Keep `call_embedding()` as a simple request helper that uses one concrete route at a time.
+`python/deepresearch_flow/paper/embedding.py` should stay unchanged unless a small signature cleanup is truly necessary; the current intent is to keep it as a simple concrete-route request helper.
 
 **Step 4: Run tests to verify they pass**
 
@@ -119,8 +126,8 @@ Expected: PASS
 - Modify: `python/deepresearch_flow/paper/cli.py`
 - Modify: `python/deepresearch_flow/paper/web/handlers/api.py`
 - Modify: `python/deepresearch_flow/paper/reranker.py`
-- Test: `python/deepresearch_flow/paper/tests/test_embed_cli.py`
-- Test: `python/deepresearch_flow/paper/tests/test_semantic_api.py`
+- Modify: `python/deepresearch_flow/paper/tests/test_embed_cli.py`
+- Modify: `python/deepresearch_flow/paper/tests/test_semantic_api.py`
 
 **Step 1: Write the failing tests**
 
@@ -142,6 +149,11 @@ Update CLI and web semantic search code to:
 - request concrete routes from the shared route runtime
 - call request helpers with concrete route parameters
 
+Reranker lifecycle choice:
+- route pools own cooldown/quota state
+- reranker instances must not own route state
+- for each concrete routed request, instantiate a lightweight reranker client for that concrete route
+
 **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest -q python/deepresearch_flow/paper/tests/test_embed_cli.py python/deepresearch_flow/paper/tests/test_semantic_api.py`
@@ -152,7 +164,10 @@ Expected: PASS
 
 **Files:**
 - Modify: `python/deepresearch_flow/paper/cli.py`
-- Test: `python/deepresearch_flow/paper/tests/test_embed_cli.py`
+- Modify: `python/deepresearch_flow/paper/tests/test_embed_cli.py`
+
+**Dependency note:**
+- Task 5 is sequentially after Task 4 because both change `cli.py` and `test_embed_cli.py`
 
 **Step 1: Write the failing tests**
 
@@ -191,6 +206,7 @@ Expected: PASS
 - Modify: `config.example.toml` (if present)
 - Modify: `README.md`
 - Modify: `README_ZH.md`
+- Inspect: `AGENTS.md` or other agent-facing docs if they mention embedding/rerank config fields
 
 **Step 1: Write the failing checks**
 
@@ -209,6 +225,7 @@ Update examples so `embedding` and `rerank` show only the new provider structure
 - identical routing semantics to main providers
 - CLI overrides with `provider/model`
 - explicit breaking change
+- `type` remains part of the user-facing config shape, with parser behavior unchanged aside from the route-structure migration
 
 **Step 4: Run checks to verify docs are aligned**
 
@@ -258,8 +275,8 @@ git commit -m "refactor(paper): align embedding and rerank provider config"
 git add python/deepresearch_flow/paper/routing.py python/deepresearch_flow/paper/tests/test_embedding_routing.py
 git commit -m "feat(paper): route embedding and rerank through weighted providers"
 
-git add python/deepresearch_flow/paper/embed_pipeline.py python/deepresearch_flow/paper/cli.py python/deepresearch_flow/paper/web/handlers/api.py python/deepresearch_flow/paper/tests/test_embed_pipeline.py python/deepresearch_flow/paper/tests/test_embed_cli.py python/deepresearch_flow/paper/tests/test_semantic_api.py
-git commit -m "feat(paper): add embedding and rerank cli overrides"
+git add python/deepresearch_flow/paper/embed_pipeline.py python/deepresearch_flow/paper/reranker.py python/deepresearch_flow/paper/cli.py python/deepresearch_flow/paper/web/handlers/api.py python/deepresearch_flow/paper/tests/test_embed_pipeline.py python/deepresearch_flow/paper/tests/test_embed_cli.py python/deepresearch_flow/paper/tests/test_semantic_api.py
+git commit -m "feat(paper): wire embedding and rerank through routed endpoints"
 
 git add README.md README_ZH.md config.example.toml
 git commit -m "docs(paper): document routed embedding and rerank config"

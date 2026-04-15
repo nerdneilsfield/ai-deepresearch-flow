@@ -67,7 +67,7 @@ models = [{ model_name = "Qwen3-Embedding-4B", dimensions = 1024, max_context = 
 name = "siliconflow"
 type = "openai_compatible"
 base = [
-  { url = "https://api.siliconflow.cn/v1", weight = 1, key = [{ value = "${env:SILICONFLOW_API_KEY}", weight = 1 }] }
+  { url = "https://api.siliconflow.cn/v1", weight = 1, key = [{ value = "env:SILICONFLOW_API_KEY", weight = 1 }] }
 ]
 models = [{ model_name = "BAAI/bge-reranker-v2-m3", max_context = 8192 }]
 ```
@@ -75,6 +75,7 @@ models = [{ model_name = "BAAI/bge-reranker-v2-m3", max_context = 8192 }]
 ### Validation Rules
 
 - `base_url` and `api_key` are invalid and must raise clear config errors.
+- `type` remains explicitly declared by the user, matching the main provider config shape.
 - `base` must be non-empty.
 - Each `base` entry must contain `url`, positive `weight`, and non-empty `key`.
 - Each `key` entry must contain `value` and positive `weight`.
@@ -104,6 +105,24 @@ Embedding and rerank runtime behavior must match the main provider routing stack
 
 The implementation should reuse the existing route-pool machinery instead of duplicating routing logic.
 
+### RoutePool Adaptation
+
+`RoutePool.from_selector()` cannot be reused directly because it expects top-level `ProviderConfig` objects and `ParsedModelSelector` / `MainModelConfig`. The adaptation strategy is:
+
+- extract the candidate-expansion logic in `routing.py` into a shared internal helper that accepts a provider-like object with `base[]`, one selected model, and a stable route-id prefix
+- keep `RoutePool.from_selector()` for the main model path, rewritten to call that shared helper
+- add explicit embedding/rerank entrypoints such as `RoutePool.from_embedding_provider(...)` and `RoutePool.from_rerank_provider(...)`, which call the same shared helper
+
+This keeps runtime semantics identical while avoiding a fake conversion into top-level `ProviderConfig`.
+
+### Pool Lifecycle
+
+Pool lifetime differs by command type:
+
+- `paper embed`: create one embedding route pool per command invocation and reuse it for the full batch job so cooldown/quota state survives across batches
+- `paper search`: create pools once per command invocation; this is sufficient because the command is single-shot, but the pool still spans the full embedding + rerank flow within that invocation
+- long-lived web/API semantic search: create embedding and rerank pools once during app startup (or first config load) and store them on app state so cooldown/quota state persists across requests
+
 ## CLI Surface
 
 CLI overrides use the same `provider/model` shape as `extract`:
@@ -117,7 +136,7 @@ Expected command coverage:
 
 - `paper embed --embedding provider/model`
 - `paper search --embedding provider/model --rerank provider/model`
-- Web or API entrypoints that already consume paper config should accept the same resolved semantics where applicable
+- long-lived web or API entrypoints that already consume paper config should use the same provider/model resolution and app-scoped route pools where applicable
 
 ## Code-Level Design
 
@@ -130,6 +149,7 @@ Modify the embedding/rerank config dataclasses so their providers use the same n
 - old scalar fields are removed
 
 `resolve_active()` should continue to resolve only provider/model. Route expansion belongs in runtime routing code, not in config parsing.
+The existing `type` behavior remains unchanged: it stays part of the user-facing config shape and examples, but this design does not introduce any new `type` validation beyond the current parser behavior.
 
 ### Runtime Layer
 
@@ -151,6 +171,10 @@ The embedding pipeline and semantic search paths should consume those runtime ro
 - one concrete model
 
 Route selection and retry/cooldown policy remain outside the request helpers.
+
+For rerank specifically, the current fixed-endpoint constructor pattern is no longer the right lifecycle boundary. The routed call path should select one concrete route per request (or retry attempt), then instantiate a lightweight reranker client for that concrete route.
+
+The important constraint is that reranker instances must no longer own global route state; route pools do.
 
 ## Testing Strategy
 
