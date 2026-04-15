@@ -166,10 +166,10 @@ class EmbeddingConfig:
             raise ValueError(
                 f"Model '{self.default_model}' not found in embedding provider '{self.default_provider}'"
             )
-        if active_model.dimensions != self.dimensions:
+        if self.dimensions > active_model.dimensions:
             raise ValueError(
-                f"Embedding dimensions mismatch: top-level={self.dimensions}, "
-                f"model {active_model.model_name}={active_model.dimensions}"
+                f"Requested embedding dimensions ({self.dimensions}) exceed "
+                f"model {active_model.model_name} max dimensions ({active_model.dimensions})"
             )
         if self.chunk_max_tokens > active_model.max_context:
             raise ValueError(

@@ -142,6 +142,57 @@ def test_load_from_json_applies_template_override_and_finds_later_roots(tmp_path
     assert doc.translations == {"ja": "translation from later root"}
 
 
+def test_load_from_json_shows_tqdm_progress(tmp_path: Path, monkeypatch) -> None:
+    json_path = tmp_path / "papers.json"
+    json_path.write_text(
+        json.dumps(
+            [
+                {
+                    "paper_title": "Paper A",
+                    "paper_authors": ["Alice"],
+                    "publication_venue": "ACL",
+                    "prompt_template": "simple",
+                },
+                {
+                    "paper_title": "Paper B",
+                    "paper_authors": ["Bob"],
+                    "publication_venue": "EMNLP",
+                    "prompt_template": "simple",
+                },
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    tqdm_calls: list[dict[str, object]] = []
+    progress_updates: list[int] = []
+    exits: list[bool] = []
+
+    class FakeProgress:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # noqa: ANN001
+            exits.append(True)
+            return False
+
+        def update(self, value: int) -> None:
+            progress_updates.append(value)
+
+    def fake_tqdm(*args, **kwargs):  # noqa: ANN002, ANN003
+        tqdm_calls.append(kwargs)
+        return FakeProgress()
+
+    monkeypatch.setattr("deepresearch_flow.paper.embed_source.tqdm", fake_tqdm)
+
+    docs = load_from_json([json_path])
+
+    assert len(docs) == 2
+    assert any(call.get("desc") == "load json" and int(call.get("total", 0)) == 2 for call in tqdm_calls)
+    assert progress_updates == [1, 1]
+    assert exits == [True]
+
+
 def test_load_from_snapshot_reads_source_and_translation(tmp_path: Path) -> None:
     snapshot_db = tmp_path / "snapshot.db"
     static_dir = tmp_path / "static"
@@ -345,3 +396,55 @@ def test_load_from_snapshot_keeps_documents_when_artifacts_are_missing(tmp_path:
     assert missing_files.template_records == {}
     assert missing_files.source_md is None
     assert missing_files.translations == {}
+
+
+def test_load_from_snapshot_tolerates_unknown_year(tmp_path: Path) -> None:
+    snapshot_db = tmp_path / "snapshot.db"
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+
+    conn = sqlite3.connect(snapshot_db)
+    conn.row_factory = sqlite3.Row
+    try:
+        init_snapshot_db(conn)
+        conn.execute(
+            """
+            INSERT INTO paper (
+              paper_id, paper_key, paper_key_type, doi, title, year, month, publication_date,
+              venue, preferred_summary_template, summary_preview, paper_index, source_hash,
+              output_language, provider, model, prompt_template, extracted_at,
+              pdf_content_hash, source_md_content_hash
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "paper-unknown-year",
+                "doi:10.1000/unknown-year",
+                "doi",
+                None,
+                "Unknown Year",
+                "unknown",
+                "",
+                "",
+                "ACL",
+                "simple",
+                "",
+                0,
+                None,
+                "en",
+                "provider",
+                "model",
+                None,
+                "2024-04-01T00:00:00Z",
+                None,
+                None,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    docs = load_from_snapshot(snapshot_db, static_dir)
+
+    assert len(docs) == 1
+    assert docs[0].metadata.title == "Unknown Year"
+    assert docs[0].metadata.year == 0

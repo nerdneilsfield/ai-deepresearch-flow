@@ -6,6 +6,8 @@ import hashlib
 import logging
 from pathlib import Path
 
+from tqdm import tqdm
+
 from deepresearch_flow.paper.chunker import Chunk, SearchableField, chunk_fields, extract_searchable_fields
 from deepresearch_flow.paper.config import PaperConfig
 from deepresearch_flow.paper.embed_source import EmbedDocument, load_from_json, load_from_snapshot
@@ -104,60 +106,62 @@ async def run_embed_pipeline(
     groups_to_delete: list[tuple[str, str]] = []
     source_group_keys: set[tuple[str, str]] = set()
 
-    for doc in docs:
-        fields = _build_searchable_fields(doc)
-        chunks = chunk_fields(
-            fields,
-            max_tokens=embedding_config.chunk_max_tokens,
-            overlap_tokens=embedding_config.chunk_overlap_tokens,
-        )
-        grouped = _group_chunks_by_template_key(chunks)
-        for template_key, group_chunks in grouped.items():
-            source_group_keys.add((doc.doc_id, template_key))
-            content_hashes = [
-                hashlib.sha256(chunk.text.encode("utf-8")).hexdigest()
-                for chunk in group_chunks
-            ]
-            group_hash = compute_group_hash(content_hashes)
-            if existing_hashes.get((doc.doc_id, template_key)) == group_hash:
-                continue
-            if (doc.doc_id, template_key) in existing_hashes:
-                groups_to_delete.append((doc.doc_id, template_key))
+    with tqdm(total=len(docs), desc="prepare chunks", unit="doc") as progress:
+        for doc in docs:
+            fields = _build_searchable_fields(doc)
+            chunks = chunk_fields(
+                fields,
+                max_tokens=embedding_config.chunk_max_tokens,
+                overlap_tokens=embedding_config.chunk_overlap_tokens,
+            )
+            grouped = _group_chunks_by_template_key(chunks)
+            for template_key, group_chunks in grouped.items():
+                source_group_keys.add((doc.doc_id, template_key))
+                content_hashes = [
+                    hashlib.sha256(chunk.text.encode("utf-8")).hexdigest()
+                    for chunk in group_chunks
+                ]
+                group_hash = compute_group_hash(content_hashes)
+                if existing_hashes.get((doc.doc_id, template_key)) == group_hash:
+                    continue
+                if (doc.doc_id, template_key) in existing_hashes:
+                    groups_to_delete.append((doc.doc_id, template_key))
 
-            type_counters: dict[str, int] = {}
-            for idx, chunk in enumerate(group_chunks):
-                chunk_type_label = (
-                    f"{chunk.chunk_type}_{chunk.lang}"
-                    if chunk.chunk_type == "translated_md" and chunk.lang
-                    else chunk.chunk_type
-                )
-                group_chunk_index = type_counters.get(chunk_type_label, 0)
-                type_counters[chunk_type_label] = group_chunk_index + 1
-                rows_to_write.append(
-                    ChunkRow(
-                        id=build_chunk_id(
-                            doc.doc_id,
-                            chunk.template_tag,
-                            chunk_type_label,
-                            group_chunk_index,
-                        ),
-                        doc_id=doc.doc_id,
-                        source_path=doc.metadata.source_path,
-                        template_tag=chunk.template_tag,
-                        chunk_type=chunk.chunk_type,
-                        chunk_index=group_chunk_index,
-                        field_name=chunk.field_name,
-                        lang=chunk.lang,
-                        text=chunk.text,
-                        content_hash=content_hashes[idx],
-                        vector=[],
-                        title=doc.metadata.title,
-                        year=doc.metadata.year,
-                        authors=doc.metadata.authors,
-                        venue=doc.metadata.venue,
-                        tags=doc.metadata.tags,
+                type_counters: dict[str, int] = {}
+                for idx, chunk in enumerate(group_chunks):
+                    chunk_type_label = (
+                        f"{chunk.chunk_type}_{chunk.lang}"
+                        if chunk.chunk_type == "translated_md" and chunk.lang
+                        else chunk.chunk_type
                     )
-                )
+                    group_chunk_index = type_counters.get(chunk_type_label, 0)
+                    type_counters[chunk_type_label] = group_chunk_index + 1
+                    rows_to_write.append(
+                        ChunkRow(
+                            id=build_chunk_id(
+                                doc.doc_id,
+                                chunk.template_tag,
+                                chunk_type_label,
+                                group_chunk_index,
+                            ),
+                            doc_id=doc.doc_id,
+                            source_path=doc.metadata.source_path,
+                            template_tag=chunk.template_tag,
+                            chunk_type=chunk.chunk_type,
+                            chunk_index=group_chunk_index,
+                            field_name=chunk.field_name,
+                            lang=chunk.lang,
+                            text=chunk.text,
+                            content_hash=content_hashes[idx],
+                            vector=[],
+                            title=doc.metadata.title,
+                            year=doc.metadata.year,
+                            authors=doc.metadata.authors,
+                            venue=doc.metadata.venue,
+                            tags=doc.metadata.tags,
+                        )
+                    )
+            progress.update(1)
 
     orphan_keys = set(existing_hashes) - source_group_keys
 
@@ -170,21 +174,26 @@ async def run_embed_pipeline(
     vectors: list[list[float]] = []
     import httpx
 
+    progress = tqdm(total=len(texts), desc="embed chunks", unit="chunk")
     async with httpx.AsyncClient() as client:
-        for start in range(0, len(texts), embedding_config.batch_size):
-            batch = texts[start : start + embedding_config.batch_size]
-            result = await call_embedding_with_route_pool(
-                route_pool=route_pool,
-                texts=batch,
-                dimensions=embedding_config.dimensions,
-                client=client,
-            )
-            if len(result.vectors) != len(batch):
-                raise ValueError(
-                    f"Embedding provider returned {len(result.vectors)} vectors for batch of {len(batch)} texts "
-                    f"(starting at offset {start})"
+        try:
+            for start in range(0, len(texts), embedding_config.batch_size):
+                batch = texts[start : start + embedding_config.batch_size]
+                result = await call_embedding_with_route_pool(
+                    route_pool=route_pool,
+                    texts=batch,
+                    dimensions=embedding_config.dimensions,
+                    client=client,
                 )
-            vectors.extend(result.vectors)
+                if len(result.vectors) != len(batch):
+                    raise ValueError(
+                        f"Embedding provider returned {len(result.vectors)} vectors for batch of {len(batch)} texts "
+                        f"(starting at offset {start})"
+                    )
+                vectors.extend(result.vectors)
+                progress.update(len(batch))
+        finally:
+            progress.close()
 
     final_rows = [
         ChunkRow(

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -305,3 +306,59 @@ def test_pipeline_embeds_using_active_weighted_route(tmp_path: Path, monkeypatch
     assert seen["api_key"] == "resolved-embed-key"
     assert seen["model"] == "bge-m3"
     assert seen["dimensions"] == 1024
+
+
+def test_pipeline_shows_tqdm_progress_for_embedding_batches(tmp_path: Path, monkeypatch) -> None:
+    json_path = _write_json(tmp_path)
+    vector_dir = tmp_path / "vectors"
+    tqdm_calls: list[dict[str, object]] = []
+    progress_events: list[tuple[str, str, int | None]] = []
+
+    class FakeProgress:
+        def __init__(self, desc: str) -> None:
+            self.desc = desc
+
+        def __enter__(self):
+            progress_events.append((self.desc, "enter", None))
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # noqa: ANN001
+            progress_events.append((self.desc, "exit", None))
+            return False
+
+        def update(self, value: int) -> None:
+            progress_events.append((self.desc, "update", value))
+
+        def close(self) -> None:
+            progress_events.append((self.desc, "close", None))
+
+    def fake_tqdm(*args, **kwargs):  # noqa: ANN002, ANN003
+        tqdm_calls.append(kwargs)
+        return FakeProgress(str(kwargs.get("desc", "")))
+
+    async def ok_embed(base_url, api_key, model, texts, *, dimensions=None, client=None):  # noqa: ARG001
+        return EmbeddingResult(
+            vectors=[[0.1] * 1024 for _ in texts],
+            model=model,
+            usage_tokens=len(texts),
+        )
+
+    monkeypatch.setattr("deepresearch_flow.paper.embed_pipeline.tqdm", fake_tqdm)
+    monkeypatch.setattr("deepresearch_flow.paper.embedding.call_embedding", ok_embed)
+
+    asyncio.run(
+        run_embed_pipeline(
+            config=_test_config(),
+            input_paths=[json_path],
+            vector_dir=vector_dir,
+        )
+    )
+
+    assert tqdm_calls
+    assert any(call.get("desc") == "prepare chunks" and int(call.get("total", 0)) > 0 for call in tqdm_calls)
+    assert any(call.get("desc") == "embed chunks" and int(call.get("total", 0)) > 0 for call in tqdm_calls)
+    assert ("prepare chunks", "enter", None) in progress_events
+    assert ("prepare chunks", "update", 1) in progress_events
+    assert ("prepare chunks", "exit", None) in progress_events
+    assert ("embed chunks", "update", 2) in progress_events
+    assert ("embed chunks", "close", None) in progress_events

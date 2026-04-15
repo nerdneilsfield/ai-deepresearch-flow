@@ -236,7 +236,7 @@ def test_resolves_embedding_provider_and_model(tmp_path: Path, monkeypatch: pyte
     assert model.dimensions == 1024
 
 
-def test_embedding_dimensions_mismatch_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_embedding_allows_requested_dimensions_below_model_max(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SF_KEY", "test-sf-key")
     config = _load_config(
         tmp_path,
@@ -259,7 +259,40 @@ def test_embedding_dimensions_mismatch_raises(tmp_path: Path, monkeypatch: pytes
         models = [{ model_name = "bge-reranker-v2-m3", max_context = 8192 }]
         """,
     )
-    with pytest.raises(ValueError, match="dimensions"):
+    provider, model = config.embedding.resolve_active()
+    assert provider.name == "ollama"
+    assert model.model_name == "bge-m3"
+
+
+def test_embedding_requested_dimensions_above_model_max_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SF_KEY", "test-sf-key")
+    config_path = _write_config(
+        tmp_path,
+        embedding_section="""
+        [[embedding.providers]]
+        name = "ollama"
+        base = [{ url = "http://localhost:11434/v1", weight = 1, key = [{ value = "ollama", weight = 1 }] }]
+        models = [{ model_name = "bge-m3", dimensions = 2560, max_context = 8192 }]
+        """,
+        rerank_section="""
+        [rerank]
+        enabled = true
+        default_model = "bge-reranker-v2-m3"
+        default_provider = "siliconflow"
+        top_n = 10
+
+        [[rerank.providers]]
+        name = "siliconflow"
+        base = [{ url = "https://api.siliconflow.cn/v1", weight = 1, key = [{ value = "rerank", weight = 1 }] }]
+        models = [{ model_name = "bge-reranker-v2-m3", max_context = 8192 }]
+        """,
+    )
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace("dimensions = 1024", "dimensions = 4096", 1),
+        encoding="utf-8",
+    )
+    config = load_config(str(config_path))
+    with pytest.raises(ValueError, match="exceed"):
         config.embedding.resolve_active()
 
 

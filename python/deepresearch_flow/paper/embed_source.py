@@ -4,15 +4,22 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
+import logging
 from pathlib import Path
+import re
 import sqlite3
 from typing import Any, Iterable
+
+from tqdm import tqdm
 
 from deepresearch_flow.paper.snapshot.identity import (
     build_paper_key_candidates,
     choose_preferred_key,
     paper_id_for_key,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -238,25 +245,29 @@ def load_from_json(
     title_ranks: dict[str, int] = {}
     source_roots = md_roots or []
     translated_roots = md_translated_roots or []
+    payloads = [(path, _read_json_payload(path)) for path in paths]
+    total_records = sum(len(records) for _, records in payloads)
 
-    for path in paths:
-        for record in _read_json_payload(path):
-            tag = resolve_template_tag(record, template_tag_override)
-            doc_id = _resolve_doc_id(record)
-            metadata, title_rank = _extract_metadata(record)
-            doc = docs_by_id.get(doc_id)
-            if doc is None:
-                doc = EmbedDocument(doc_id=doc_id, metadata=metadata)
-                docs_by_id[doc_id] = doc
-                title_ranks[doc_id] = title_rank
-            else:
-                _update_metadata_if_preferred(doc, metadata, title_rank=title_rank, title_ranks=title_ranks)
-            if source_roots and doc.source_md is None:
-                doc.source_md = _match_source_md(record, source_roots)
-            if translated_roots:
-                for lang, text in _match_translations(record, translated_roots).items():
-                    doc.translations.setdefault(lang, text)
-            doc.template_records.setdefault(tag, []).append(record)
+    with tqdm(total=total_records, desc="load json", unit="record") as progress:
+        for path, records in payloads:
+            for record in records:
+                tag = resolve_template_tag(record, template_tag_override)
+                doc_id = _resolve_doc_id(record)
+                metadata, title_rank = _extract_metadata(record)
+                doc = docs_by_id.get(doc_id)
+                if doc is None:
+                    doc = EmbedDocument(doc_id=doc_id, metadata=metadata)
+                    docs_by_id[doc_id] = doc
+                    title_ranks[doc_id] = title_rank
+                else:
+                    _update_metadata_if_preferred(doc, metadata, title_rank=title_rank, title_ranks=title_ranks)
+                if source_roots and doc.source_md is None:
+                    doc.source_md = _match_source_md(record, source_roots)
+                if translated_roots:
+                    for lang, text in _match_translations(record, translated_roots).items():
+                        doc.translations.setdefault(lang, text)
+                doc.template_records.setdefault(tag, []).append(record)
+                progress.update(1)
 
     return list(docs_by_id.values())
 
@@ -271,6 +282,21 @@ def _row_text(row: sqlite3.Row, *keys: str) -> str:
             if text:
                 return text
     return ""
+
+
+def _parse_snapshot_year(value: Any) -> int:
+    if value is None:
+        return 0
+    text = str(value).strip()
+    if not text:
+        return 0
+    match = re.search(r"\d{4}", text)
+    if match is None:
+        return 0
+    try:
+        return int(match.group(0))
+    except ValueError:
+        return 0
 
 
 def load_from_snapshot(
@@ -288,77 +314,86 @@ def load_from_snapshot(
             """
         ).fetchall()
         docs: list[EmbedDocument] = []
-        for row in rows:
-            paper_id = str(row["paper_id"])
-            title = _row_text(row, "paper_title", "title")
-            metadata = DocumentMetadata(
-                title=title,
-                year=int(str(row["year"])[:4]) if _row_text(row, "year") else 0,
-                authors=", ".join(
-                    str(author_row["value"]).strip()
-                    for author_row in conn.execute(
-                        """
-                        SELECT a.value
-                        FROM author a
-                        JOIN paper_author pa ON a.author_id = pa.author_id
-                        WHERE pa.paper_id = ?
-                        ORDER BY a.author_id
-                        """,
-                        (paper_id,),
-                    ).fetchall()
-                    if str(author_row["value"]).strip()
-                ),
-                venue=_row_text(row, "venue"),
-                tags=", ".join(
-                    str(tag_row["value"]).strip()
-                    for tag_row in conn.execute(
-                        """
-                        SELECT t.value
-                        FROM tag t
-                        JOIN paper_tag pt ON t.tag_id = pt.tag_id
-                        WHERE pt.paper_id = ?
-                        ORDER BY t.tag_id
-                        """,
-                        (paper_id,),
-                    ).fetchall()
-                    if str(tag_row["value"]).strip()
-                ),
-                source_path="",
-            )
-            doc = EmbedDocument(doc_id=paper_id, metadata=metadata)
+        with tqdm(total=len(rows), desc="load snapshot", unit="paper") as progress:
+            for row in rows:
+                paper_id = str(row["paper_id"])
+                year = _parse_snapshot_year(row["year"] if "year" in row.keys() else None)
+                if year == 0 and _row_text(row, "year"):
+                    logger.warning(
+                        "Snapshot paper %s has non-numeric year %r; using 0",
+                        paper_id,
+                        _row_text(row, "year"),
+                    )
+                title = _row_text(row, "paper_title", "title")
+                metadata = DocumentMetadata(
+                    title=title,
+                    year=year,
+                    authors=", ".join(
+                        str(author_row["value"]).strip()
+                        for author_row in conn.execute(
+                            """
+                            SELECT a.value
+                            FROM author a
+                            JOIN paper_author pa ON a.author_id = pa.author_id
+                            WHERE pa.paper_id = ?
+                            ORDER BY a.author_id
+                            """,
+                            (paper_id,),
+                        ).fetchall()
+                        if str(author_row["value"]).strip()
+                    ),
+                    venue=_row_text(row, "venue"),
+                    tags=", ".join(
+                        str(tag_row["value"]).strip()
+                        for tag_row in conn.execute(
+                            """
+                            SELECT t.value
+                            FROM tag t
+                            JOIN paper_tag pt ON t.tag_id = pt.tag_id
+                            WHERE pt.paper_id = ?
+                            ORDER BY t.tag_id
+                            """,
+                            (paper_id,),
+                        ).fetchall()
+                        if str(tag_row["value"]).strip()
+                    ),
+                    source_path="",
+                )
+                doc = EmbedDocument(doc_id=paper_id, metadata=metadata)
 
-            for tmpl_row in conn.execute(
-                "SELECT template_tag FROM paper_summary WHERE paper_id = ? ORDER BY template_tag",
-                (paper_id,),
-            ).fetchall():
-                tag = str(tmpl_row["template_tag"])
-                summary_path = static_export_dir / "summary" / paper_id / f"{tag}.json"
-                if not summary_path.exists():
-                    continue
-                summary_data = json.loads(summary_path.read_text(encoding="utf-8"))
-                if isinstance(summary_data, dict):
-                    summary_data["title"] = metadata.title
-                    doc.template_records.setdefault(tag, []).append(summary_data)
+                for tmpl_row in conn.execute(
+                    "SELECT template_tag FROM paper_summary WHERE paper_id = ? ORDER BY template_tag",
+                    (paper_id,),
+                ).fetchall():
+                    tag = str(tmpl_row["template_tag"])
+                    summary_path = static_export_dir / "summary" / paper_id / f"{tag}.json"
+                    if not summary_path.exists():
+                        continue
+                    summary_data = json.loads(summary_path.read_text(encoding="utf-8"))
+                    if isinstance(summary_data, dict):
+                        summary_data["title"] = metadata.title
+                        doc.template_records.setdefault(tag, []).append(summary_data)
 
-            source_hash = _row_text(row, "source_md_content_hash")
-            if source_hash:
-                source_path = static_export_dir / "md" / f"{source_hash}.md"
-                if source_path.exists():
-                    doc.source_md = source_path.read_text(encoding="utf-8")
+                source_hash = _row_text(row, "source_md_content_hash")
+                if source_hash:
+                    source_path = static_export_dir / "md" / f"{source_hash}.md"
+                    if source_path.exists():
+                        doc.source_md = source_path.read_text(encoding="utf-8")
 
-            for tr_row in conn.execute(
-                "SELECT lang, md_content_hash FROM paper_translation WHERE paper_id = ? ORDER BY lang",
-                (paper_id,),
-            ).fetchall():
-                lang = str(tr_row["lang"]).strip()
-                md_hash = str(tr_row["md_content_hash"]).strip()
-                if not lang or not md_hash:
-                    continue
-                trans_path = static_export_dir / "md_translate" / lang / f"{md_hash}.md"
-                if trans_path.exists():
-                    doc.translations[lang] = trans_path.read_text(encoding="utf-8")
+                for tr_row in conn.execute(
+                    "SELECT lang, md_content_hash FROM paper_translation WHERE paper_id = ? ORDER BY lang",
+                    (paper_id,),
+                ).fetchall():
+                    lang = str(tr_row["lang"]).strip()
+                    md_hash = str(tr_row["md_content_hash"]).strip()
+                    if not lang or not md_hash:
+                        continue
+                    trans_path = static_export_dir / "md_translate" / lang / f"{md_hash}.md"
+                    if trans_path.exists():
+                        doc.translations[lang] = trans_path.read_text(encoding="utf-8")
 
-            docs.append(doc)
+                docs.append(doc)
+                progress.update(1)
         return docs
     finally:
         conn.close()
