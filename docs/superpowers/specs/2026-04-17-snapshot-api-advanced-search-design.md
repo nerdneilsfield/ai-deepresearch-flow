@@ -103,6 +103,7 @@ No body.
 - `200 {"valid": true}` — token matches the configured `search_access_token`
 - `401 {"valid": false, "reason": "missing"}` — no `Authorization` header, or the prefix isn't `Bearer `
 - `401 {"valid": false, "reason": "invalid"}` — token does not match
+- `503 {"valid": false, "reason": "advanced_disabled"}` — defensive fallback if the route is somehow reached without `advanced_config`; in normal startup this is unreachable because the advanced routes are only mounted when advanced search is enabled
 
 Runs no retrieval, consumes no RoutePool quota. Comparison uses `hmac.compare_digest` for constant-time equality.
 
@@ -242,6 +243,9 @@ query
  │                            Sparse: paper_fts MATCH + bm25(...) + filter pushdown
  │                              → list of paper hits {paper_id, sparse_score}
  │                              (paper-level; one score per paper)
+ │                            Note: `paper_fts_trigram` is an optional companion table for
+ │                              zh/CJK fallback. If it is absent, sparse retrieval silently
+ │                              degrades to `paper_fts`-only behavior; no migration is required.
  │
  ├──▶ Stage 4   Fuse at       aggregate dense chunks to paper-level via max(dense_score)
  │              paper level   → paper_dense[paper_id] = max(dense_score of its chunks)
