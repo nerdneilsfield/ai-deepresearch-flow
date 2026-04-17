@@ -116,7 +116,9 @@ def sparse_retrieve(
             trigram_rows = []
         for row in trigram_rows:
             paper_id = str(row["paper_id"])
-            hits.setdefault(paper_id, float(row["rank"]))
+            trigram_rank = float(row["rank"])
+            current_rank = hits.get(paper_id)
+            hits[paper_id] = trigram_rank if current_rank is None else min(current_rank, trigram_rank)
 
     ranked = sorted(hits.items(), key=lambda item: (item[1], item[0]))
     max_rank = ranked[-1][1] if ranked else 0.0

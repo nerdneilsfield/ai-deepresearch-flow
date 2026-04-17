@@ -164,6 +164,7 @@ async def run_advanced_search(
         cosine_threshold=search_cfg.advanced_dedup_cosine_threshold,
     )
     latency_ms["dedup"] = _now_ms() - dedup_started
+    deduped_count = len(deduped)
 
     rerank_applied = False
     rerank_scores: list[float] = []
@@ -222,7 +223,7 @@ async def run_advanced_search(
         "sparse_papers": len(sparse_hits),
         "fused_papers": len(fused),
         "selected_chunks": len(selected),
-        "deduped": len(deduped),
+        "deduped": deduped_count,
         "reranked": len(deduped) if rerank_applied else 0,
         "returned": len(final_chunks),
     }
