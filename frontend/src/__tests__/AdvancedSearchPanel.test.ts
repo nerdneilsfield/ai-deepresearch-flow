@@ -94,6 +94,14 @@ describe('AdvancedSearchPanel', () => {
     expect((wrapper.find('[data-testid="advanced-search-button"]').element as HTMLButtonElement).disabled).toBe(true)
   })
 
+  it('verify button disabled for blank token input', async () => {
+    const { default: AdvancedSearchPanel } = await import('@/components/AdvancedSearchPanel.vue')
+    const wrapper = mount(AdvancedSearchPanel)
+    await flushPromises()
+    await wrapper.find('[data-testid="advanced-panel-toggle"]').trigger('click')
+    expect((wrapper.find('[data-testid="advanced-verify-button"]').element as HTMLButtonElement).disabled).toBe(true)
+  })
+
   it('auto-verifies a stored token on mount (hydrate wiring)', async () => {
     await tokenDb.setToken('stored-good')
     verifyTokenMock.mockResolvedValue({ valid: true })
