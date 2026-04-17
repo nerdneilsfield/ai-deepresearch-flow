@@ -279,6 +279,17 @@ class SearchConfig:
     keyword_top_k: int
     hybrid: bool
     access_token: str | None = None
+    advanced_enabled: bool = False
+    advanced_rrf_k: int = 60
+    advanced_dense_top_k: int = 50
+    advanced_sparse_top_k: int = 30
+    advanced_post_fusion_top_k: int = 50
+    advanced_dedup_cosine_threshold: float = 0.95
+    advanced_rerank_top_n: int = 20
+    advanced_mmr_lambda_default: float = 0.6
+    advanced_rerank_timeout_ms: int = 1500
+    advanced_top_n_max: int = 50
+    advanced_max_query_length: int = 500
 
 
 @dataclass(frozen=True)
@@ -689,12 +700,13 @@ def _parse_search_config(value: Any) -> SearchConfig | None:
     if not isinstance(value, dict):
         raise ValueError("Config [search] must be an object")
 
+    advanced_enabled = _as_bool(value.get("advanced_enabled"), False)
     vector_dir = _as_str(value.get("vector_dir"))
-    if not vector_dir:
+    if not vector_dir and not advanced_enabled:
         raise ValueError("Config [search] must include vector_dir")
 
     return SearchConfig(
-        vector_dir=vector_dir,
+        vector_dir=vector_dir or "",
         vector_top_k=_as_int(value.get("vector_top_k"), 0),
         keyword_top_k=_as_int(value.get("keyword_top_k"), 0),
         hybrid=_as_bool(value.get("hybrid"), False),
@@ -702,6 +714,27 @@ def _parse_search_config(value: Any) -> SearchConfig | None:
             resolve_key_value(raw_token)
             if (raw_token := _as_str(value.get("access_token"), None))
             else None
+        ),
+        advanced_enabled=advanced_enabled,
+        advanced_rrf_k=_as_int(value.get("advanced_rrf_k"), 60),
+        advanced_dense_top_k=_as_int(value.get("advanced_dense_top_k"), 50),
+        advanced_sparse_top_k=_as_int(value.get("advanced_sparse_top_k"), 30),
+        advanced_post_fusion_top_k=_as_int(
+            value.get("advanced_post_fusion_top_k"), 50
+        ),
+        advanced_dedup_cosine_threshold=_as_float(
+            value.get("advanced_dedup_cosine_threshold"), 0.95
+        ),
+        advanced_rerank_top_n=_as_int(value.get("advanced_rerank_top_n"), 20),
+        advanced_mmr_lambda_default=_as_float(
+            value.get("advanced_mmr_lambda_default"), 0.6
+        ),
+        advanced_rerank_timeout_ms=_as_int(
+            value.get("advanced_rerank_timeout_ms"), 1500
+        ),
+        advanced_top_n_max=_as_int(value.get("advanced_top_n_max"), 50),
+        advanced_max_query_length=_as_int(
+            value.get("advanced_max_query_length"), 500
         ),
     )
 

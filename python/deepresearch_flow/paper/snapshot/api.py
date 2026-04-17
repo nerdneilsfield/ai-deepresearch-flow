@@ -997,6 +997,7 @@ def create_app(
     cors_allowed_origins: list[str] | None = None,
     limits: ApiLimits | None = None,
     admin_token: str | None = None,
+    advanced_config: Any | None = None,
 ) -> Starlette:
     cfg = SnapshotApiConfig(
         snapshot_db=snapshot_db,
@@ -1044,6 +1045,11 @@ def create_app(
         admin_app = create_admin_app(snapshot_db=snapshot_db, admin_token=admin_token)
         routes.append(Mount("/api/v1/admin", app=admin_app))
 
+    if advanced_config is not None:
+        from deepresearch_flow.paper.snapshot.advanced import create_advanced_routes
+
+        routes.extend(create_advanced_routes(advanced_config))
+
     # Pass MCP lifespan to ensure session manager initializes properly
     # https://gofastmcp.com/deployment/http#mounting-in-starlette
     app = Starlette(
@@ -1058,4 +1064,6 @@ def create_app(
             allow_headers=["*"],
         )
     app.state.cfg = cfg
+    if advanced_config is not None:
+        app.state.advanced = advanced_config
     return app

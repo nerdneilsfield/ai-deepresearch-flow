@@ -905,6 +905,9 @@ def register_db_commands(db_group: click.Group) -> None:
     @click.option("--max-pagination-offset", "max_pagination_offset", type=int, default=10000, show_default=True)
     @click.option("--host", default="127.0.0.1", show_default=True, help="Bind host")
     @click.option("--port", default=8001, type=int, show_default=True, help="Bind port")
+    @click.option("--embed-db", "embed_db", default=None, help="LanceDB directory for semantic search")
+    @click.option("--search-access-token", "search_access_token_cli", default=None, envvar="SEARCH_ACCESS_TOKEN", help="Token to gate advanced search")
+    @click.option("-c", "--config", "config_path", default="config.toml", help="Path to config.toml")
     @click.option(
         "--admin-token",
         "admin_token",
@@ -921,6 +924,9 @@ def register_db_commands(db_group: click.Group) -> None:
         max_pagination_offset: int,
         host: str,
         port: int,
+        embed_db: str | None,
+        search_access_token_cli: str | None,
+        config_path: str,
         admin_token: str | None,
     ) -> None:
         """Serve the snapshot-backed JSON API."""
@@ -952,12 +958,71 @@ def register_db_commands(db_group: click.Group) -> None:
             max_page_size=max_page_size,
             max_pagination_offset=max_pagination_offset,
         )
+        advanced_ctx = None
+        paper_config = load_config(config_path)
+        if paper_config.search is not None and paper_config.search.advanced_enabled:
+            lance_dir = embed_db or paper_config.search.vector_dir
+            if not lance_dir:
+                raise click.ClickException(
+                    "Advanced search requires LanceDB path via --embed-db or config.search.vector_dir"
+                )
+            if embed_db and paper_config.search.vector_dir and \
+                    str(Path(embed_db).resolve()) != str(Path(paper_config.search.vector_dir).resolve()):
+                click.echo(
+                    f"[WARN] --embed-db ({embed_db}) differs from config.search.vector_dir ({paper_config.search.vector_dir}); using CLI",
+                    err=True,
+                )
+
+            token = search_access_token_cli or paper_config.search.access_token
+            if not token:
+                raise click.ClickException(
+                    "Advanced search requires a token via --search-access-token, "
+                    "SEARCH_ACCESS_TOKEN, or config.search.access_token"
+                )
+
+            import lancedb
+
+            from deepresearch_flow.paper.snapshot.advanced import AdvancedSearchContext
+            from deepresearch_flow.paper.vector_store import validate_index_meta
+
+            lance_path = Path(lance_dir)
+            lance_db = lancedb.connect(str(lance_path))
+            embedding_provider, embedding_model = paper_config.embedding.resolve_active()
+            try:
+                validate_index_meta(
+                    lance_path,
+                    model=embedding_model.model_name,
+                    canonical_model=embedding_model.canonical_name,
+                    dimensions=embedding_model.dimensions,
+                    normalized=paper_config.embedding.normalized,
+                    provider=embedding_provider.name,
+                )
+            except Exception as exc:
+                raise click.ClickException(
+                    f"Advanced search INDEX_MISMATCH: {exc}"
+                ) from exc
+
+            embedding_pool = RoutePool.from_embedding_provider(paper_config.embedding)
+            rerank_pool = None
+            if paper_config.rerank is not None and paper_config.rerank.enabled:
+                rerank_pool = RoutePool.from_rerank_provider(paper_config.rerank)
+
+            advanced_ctx = AdvancedSearchContext(
+                embed_db_path=lance_path,
+                lance_db=lance_db,
+                paper_config=paper_config,
+                embedding_route_pool=embedding_pool,
+                rerank_route_pool=rerank_pool,
+                search_access_token=token,
+                search_config=paper_config.search,
+            )
         app = create_app(
             snapshot_db=Path(snapshot_db),
             static_base_url=static_base_url_value,
             cors_allowed_origins=cors_allowed,
             limits=limits,
             admin_token=admin_token,
+            advanced_config=advanced_ctx,
         )
         click.echo(f"Serving API on http://{host}:{port} (Ctrl+C to stop)")
         uvicorn.run(app, host=host, port=port, log_level="info")
