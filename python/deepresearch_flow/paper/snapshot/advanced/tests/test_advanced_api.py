@@ -232,6 +232,118 @@ def test_search_bad_filter_venue(tmp_path, monkeypatch) -> None:
     assert response.json()["error"]["code"] == "INVALID_FILTER"
 
 
+def test_search_invalid_rerank_value(tmp_path, monkeypatch) -> None:
+    app, _db = _build_app(tmp_path, monkeypatch)
+    client = TestClient(app)
+    response = client.get(
+        "/api/v1/search/advanced?q=vision&rerank=bogus",
+        headers={"Authorization": "Bearer secret"},
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "INVALID_QUERY"
+
+
+def test_search_rerank_never_skips_reranker(tmp_path, monkeypatch) -> None:
+    from deepresearch_flow.paper.snapshot.advanced import rerank_adapter
+
+    app, _db = _build_app(tmp_path, monkeypatch)
+
+    async def boom_rerank(**kwargs):
+        raise AssertionError("reranker should be skipped")
+
+    monkeypatch.setattr(rerank_adapter, "rerank_with_timeout", boom_rerank)
+
+    client = TestClient(app)
+    response = client.get(
+        "/api/v1/search/advanced?q=vision&rerank=never",
+        headers={"Authorization": "Bearer secret"},
+    )
+    assert response.status_code == 200
+    assert response.json()["metadata"]["reranker"]["applied"] is False
+
+
+def test_search_rerank_always_applies_reranker(tmp_path, monkeypatch) -> None:
+    from deepresearch_flow.paper.snapshot.advanced import rerank_adapter
+
+    app, _db = _build_app(tmp_path, monkeypatch)
+
+    class _EnabledRerankCfg:
+        enabled = True
+
+        def resolve_active(self):
+            class Provider:
+                name = "rerank"
+
+            class Model:
+                model_name = "bge-reranker-v2-m3"
+
+            return Provider(), Model()
+
+    class _PaperCfgWithRerank:
+        embedding = _EmbeddingCfg()
+        rerank = _EnabledRerankCfg()
+
+    app.state.advanced = AdvancedSearchContext(
+        embed_db_path=app.state.advanced.embed_db_path,
+        lance_db=app.state.advanced.lance_db,
+        paper_config=_PaperCfgWithRerank(),
+        embedding_route_pool=app.state.advanced.embedding_route_pool,
+        rerank_route_pool=object(),
+        search_access_token=app.state.advanced.search_access_token,
+        search_config=app.state.advanced.search_config,
+    )
+
+    async def fake_rerank(**kwargs):
+        class Outcome:
+            success = True
+            reason = None
+            chunks = kwargs["chunks"]
+            scores = [0.91 for _ in kwargs["chunks"]]
+
+        return Outcome()
+
+    monkeypatch.setattr(rerank_adapter, "rerank_with_timeout", fake_rerank)
+
+    client = TestClient(app)
+    response = client.get(
+        "/api/v1/search/advanced?q=vision&rerank=always",
+        headers={"Authorization": "Bearer secret"},
+    )
+    assert response.status_code == 200
+    assert response.json()["metadata"]["reranker"]["applied"] is True
+
+
+def test_search_mmr_lambda_boundaries(tmp_path, monkeypatch) -> None:
+    app, _db = _build_app(tmp_path, monkeypatch)
+    client = TestClient(app)
+
+    response_zero = client.get(
+        "/api/v1/search/advanced?q=vision&mmr_lambda=0.0",
+        headers={"Authorization": "Bearer secret"},
+    )
+    assert response_zero.status_code == 200
+    assert response_zero.json()["metadata"]["mmr"]["lambda"] == 0.0
+
+    response_one = client.get(
+        "/api/v1/search/advanced?q=vision&mmr_lambda=1.0",
+        headers={"Authorization": "Bearer secret"},
+    )
+    assert response_one.status_code == 200
+    assert response_one.json()["metadata"]["mmr"]["lambda"] == 1.0
+    assert response_one.json()["metadata"]["mmr"]["applied"] is False
+
+
+def test_search_invalid_mmr_lambda_value(tmp_path, monkeypatch) -> None:
+    app, _db = _build_app(tmp_path, monkeypatch)
+    client = TestClient(app)
+    response = client.get(
+        "/api/v1/search/advanced?q=vision&mmr_lambda=1.5",
+        headers={"Authorization": "Bearer secret"},
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "INVALID_QUERY"
+
+
 def test_trace_id_echoed(tmp_path, monkeypatch) -> None:
     app, _db = _build_app(tmp_path, monkeypatch)
     client = TestClient(app)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Sequence
 
 import pytest
 
@@ -97,3 +98,42 @@ def test_zh_lang_trigram_respects_filters(conn) -> None:
         lang="zh",
     )
     assert hits == []
+
+
+def test_zh_lang_prefers_better_trigram_rank() -> None:
+    class FakeResult(Sequence[dict[str, object]]):
+        def __init__(self, rows: list[dict[str, object]]):
+            self._rows = rows
+
+        def __getitem__(self, index):
+            return self._rows[index]
+
+        def __len__(self) -> int:
+            return len(self._rows)
+
+        def fetchall(self):
+            return list(self._rows)
+
+        def __iter__(self):
+            return iter(self._rows)
+
+    class FakeConn:
+        def execute(self, sql, params):  # noqa: ANN001
+            if "paper_fts_trigram" in sql:
+                return FakeResult([
+                    {"paper_id": "p1", "rank": -2.0},
+                ])
+            return FakeResult([
+                {"paper_id": "p1", "rank": -1.0},
+                {"paper_id": "p2", "rank": -0.5},
+            ])
+
+    hits = sparse_retrieve(
+        conn=FakeConn(),  # type: ignore[arg-type]
+        fts_expr='"视觉"',
+        filters=parse_filters({}),
+        top_k=10,
+        lang="zh",
+    )
+    by_id = {hit.paper_id: hit.sparse_score for hit in hits}
+    assert by_id["p1"] > by_id["p2"]

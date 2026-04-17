@@ -5,6 +5,7 @@ import sqlite3
 
 import pytest
 
+from deepresearch_flow.paper.snapshot.advanced.chunk_select import SelectedChunk
 from deepresearch_flow.paper.snapshot.advanced.errors import TotalFailureError, VectorStoreUnavailableError
 from deepresearch_flow.paper.snapshot.advanced.pipeline import RequestSpec, run_advanced_search
 
@@ -216,6 +217,54 @@ def test_dense_failure_degrades_to_sparse_only(conn, monkeypatch) -> None:
     assert output["degradation"]["reason"] == "embedding_failed"
 
 
+def test_sparse_failure_degrades_to_dense_only(conn, monkeypatch) -> None:
+    from deepresearch_flow.paper.snapshot.advanced import (
+        rerank_adapter,
+        retrieve_dense,
+        retrieve_sparse,
+    )
+
+    async def fake_embed(**kwargs):
+        class Result:
+            vectors = [[0.5, 0.5]]
+            model = "bge-m3"
+            usage_tokens = 0
+
+        return Result()
+
+    def fake_query_vector(db, vec, *, top_k, where=None):
+        return [_dense_row("p1")]
+
+    def raise_sparse(**kwargs):
+        raise RuntimeError("fts down")
+
+    async def fake_rerank(**kwargs):
+        class Outcome:
+            success = True
+            reason = None
+            chunks = kwargs["chunks"]
+            scores = [0.9 for _ in kwargs["chunks"]]
+
+        return Outcome()
+
+    monkeypatch.setattr(retrieve_dense, "call_embedding_with_route_pool", fake_embed)
+    monkeypatch.setattr(retrieve_dense, "query_vector", fake_query_vector)
+    monkeypatch.setattr(retrieve_sparse, "sparse_retrieve", raise_sparse)
+    monkeypatch.setattr(rerank_adapter, "rerank_with_timeout", fake_rerank)
+
+    output = asyncio.run(
+        run_advanced_search(
+            request_spec=RequestSpec("vision", 10, 0.6, "auto", {}, "t-fts"),
+            ctx=_Ctx([]),
+            conn=conn,
+            client=object(),
+        )
+    )
+    assert output["degraded"] is True
+    assert output["degradation"]["reason"] == "fts_unavailable"
+    assert output["results"][0]["paper_id"] == "p1"
+
+
 def test_rerank_failure_degrades(conn, monkeypatch) -> None:
     from deepresearch_flow.paper.snapshot.advanced import rerank_adapter, retrieve_dense
 
@@ -253,6 +302,84 @@ def test_rerank_failure_degrades(conn, monkeypatch) -> None:
     )
     assert output["degraded"] is True
     assert output["degradation"]["reason"] == "reranker_failed"
+
+
+def test_deduped_count_preserved_after_rerank(conn, monkeypatch) -> None:
+    from deepresearch_flow.paper.snapshot.advanced import (
+        chunk_select as chunk_select_mod,
+        rerank_adapter,
+        retrieve_dense,
+    )
+
+    async def fake_embed(**kwargs):
+        class Result:
+            vectors = [[0.5, 0.5]]
+            model = "bge-m3"
+            usage_tokens = 0
+
+        return Result()
+
+    def fake_query_vector(db, vec, *, top_k, where=None):
+        return [_dense_row("p1")]
+
+    def fake_select_chunks(**kwargs):
+        return [
+            SelectedChunk(
+                paper_id="p1",
+                chunk_id="p1_c0",
+                chunk_text="body-0",
+                field_name="simple/content",
+                template_tag="simple",
+                chunk_type="content",
+                chunk_index=0,
+                lang="en",
+                vector=(1.0, 0.0),
+                fused_score=0.5,
+                paper_dense_score=0.9,
+                paper_sparse_score=None,
+                dense_score=0.9,
+            ),
+            SelectedChunk(
+                paper_id="p1",
+                chunk_id="p1_c1",
+                chunk_text="body-1",
+                field_name="simple/content",
+                template_tag="simple",
+                chunk_type="content",
+                chunk_index=1,
+                lang="en",
+                vector=(0.0, 1.0),
+                fused_score=0.4,
+                paper_dense_score=0.8,
+                paper_sparse_score=None,
+                dense_score=0.8,
+            ),
+        ]
+
+    async def fake_rerank(**kwargs):
+        class Outcome:
+            success = True
+            reason = None
+            chunks = kwargs["chunks"][:1]
+            scores = [0.95]
+
+        return Outcome()
+
+    monkeypatch.setattr(retrieve_dense, "call_embedding_with_route_pool", fake_embed)
+    monkeypatch.setattr(retrieve_dense, "query_vector", fake_query_vector)
+    monkeypatch.setattr(chunk_select_mod, "select_chunks", fake_select_chunks)
+    monkeypatch.setattr(rerank_adapter, "rerank_with_timeout", fake_rerank)
+
+    output = asyncio.run(
+        run_advanced_search(
+            request_spec=RequestSpec("vision", 10, 0.6, "auto", {}, "t-counts"),
+            ctx=_Ctx([]),
+            conn=conn,
+            client=object(),
+        )
+    )
+    assert output["metadata"]["counts"]["deduped"] == 2
+    assert output["metadata"]["counts"]["reranked"] == 1
 
 
 def test_total_failure_raises(conn, monkeypatch) -> None:
