@@ -87,7 +87,7 @@ function toggle() {
           type="button"
           class="rounded-md border border-ink-200 px-3 py-2 text-sm"
           data-testid="advanced-verify-button"
-          :disabled="isVerifying"
+          :disabled="isVerifying || !tokenInput.trim()"
           @click="onVerify"
         >
           {{ isVerifying ? 'Verifying…' : 'Verify token' }}
