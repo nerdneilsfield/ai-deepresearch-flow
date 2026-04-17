@@ -15,6 +15,15 @@ import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
 import SearchResultItem from '@/components/search/SearchResultItem.vue'
+import AdvancedSearchPanel from '@/components/AdvancedSearchPanel.vue'
+import AdvancedSearchResults from '@/components/AdvancedSearchResults.vue'
+import {
+  advancedSearch,
+  AdvancedSearchHTTPError,
+  type AdvancedSearchParams,
+  type AdvancedSearchResult,
+} from '@/lib/api'
+import { useAdvancedSearchToken } from '@/composables/useAdvancedSearchToken'
 import { BarChart2 } from 'lucide-vue-next'
 
 const { t } = useI18n()
@@ -47,6 +56,7 @@ const {
 } = searchState
 
 const { searchQuery, statsQuery, facetQuery } = useSearchData(searchState)
+const { token: advancedToken, onAuthFailure } = useAdvancedSearchToken()
 
 const results = computed(() => searchQuery.data.value ?? null)
 const stats = computed(() => statsQuery.data.value ?? null)
@@ -84,10 +94,51 @@ const totalPages = computed(() => {
   if (!results.value) return 1
   return Math.max(1, Math.ceil(results.value.total / results.value.page_size))
 })
+const advancedResults = ref<AdvancedSearchResult[]>([])
+const advancedDegraded = ref(false)
+const advancedDegradationReason = ref<string | null>(null)
+const advancedSearching = ref(false)
 
 function forceSearch() {
   syncToRoute()
   searchQuery.refetch()
+}
+
+async function onAdvancedSearch(params: AdvancedSearchParams) {
+  if (!advancedToken.value) return
+  advancedSearching.value = true
+  try {
+    const body = await advancedSearch(params, advancedToken.value)
+    advancedResults.value = body.results
+    advancedDegraded.value = body.degraded
+    advancedDegradationReason.value = body.degradation?.reason ?? null
+    if (body.degraded) {
+      ui.pushToast(
+        `Advanced search degraded: ${body.degradation?.reason ?? 'unknown'}`,
+        'info',
+      )
+    }
+  } catch (error) {
+    advancedResults.value = []
+    advancedDegraded.value = false
+    advancedDegradationReason.value = null
+    if (error instanceof AdvancedSearchHTTPError) {
+      if (error.status === 401) {
+        await onAuthFailure()
+        ui.pushToast('Advanced search token is invalid. Please re-verify.', 'error')
+      } else if (error.status === 400) {
+        ui.pushToast(`Invalid request: ${error.message}`, 'error')
+      } else if (error.status === 503) {
+        ui.pushToast('Advanced search temporarily unavailable.', 'error')
+      } else {
+        ui.pushToast(`Advanced search failed (${error.status}).`, 'error')
+      }
+    } else {
+      ui.pushToast('Advanced search failed. Please try again.', 'error')
+    }
+  } finally {
+    advancedSearching.value = false
+  }
 }
 
 watch(
@@ -321,6 +372,17 @@ watch(facetQuery.error, (err) => {
           </div>
         </CardContent>
       </Card>
+
+      <AdvancedSearchPanel
+        :searching="advancedSearching"
+        @search="onAdvancedSearch"
+      />
+
+      <AdvancedSearchResults
+        :results="advancedResults"
+        :degraded="advancedDegraded"
+        :degradation-reason="advancedDegradationReason"
+      />
 
       <div v-if="loading" class="rounded-xl border border-ink-100 bg-white p-6 text-sm text-ink-500" role="status">
         {{ t('loading') }}
