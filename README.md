@@ -402,9 +402,20 @@ uv run deepresearch-flow paper db snapshot build \
 npx http-server ./dist/paper-static -p 8002 --cors
 
 # 3) Serve API (read-only)
+# Basic mode: keyword / facets / paper detail only
 PAPER_DB_STATIC_BASE_URL=http://127.0.0.1:8002 \
 uv run deepresearch-flow paper db api serve \
   --snapshot-db ./dist/paper_snapshot.db \
+  --cors-origin http://127.0.0.1:5173 \
+  --host 127.0.0.1 --port 8001
+
+# Advanced search mode: add LanceDB + token
+PAPER_DB_STATIC_BASE_URL=http://127.0.0.1:8002 \
+SEARCH_ACCESS_TOKEN=your-token \
+uv run deepresearch-flow paper db api serve \
+  --snapshot-db ./dist/paper_snapshot.db \
+  --embed-db ./paper_vectors \
+  --config ./config.toml \
   --cors-origin http://127.0.0.1:5173 \
   --host 127.0.0.1 --port 8001
 
@@ -856,11 +867,49 @@ server {
 ```bash
 export PAPER_DB_STATIC_BASE_URL="https://static.example.com"
 
+# Option A: basic mode (no advanced search routes)
 uv run deepresearch-flow paper db api serve \
   --snapshot-db /data/paper_snapshot.db \
   --cors-origin https://frontend.example.com \
   --host 0.0.0.0 --port 8001
+
+# Option B: enable advanced search fully from CLI
+SEARCH_ACCESS_TOKEN=your-token \
+uv run deepresearch-flow paper db api serve \
+  --snapshot-db /data/paper_snapshot.db \
+  --embed-db /data/paper_vectors \
+  --config ./config.toml \
+  --cors-origin https://frontend.example.com \
+  --host 0.0.0.0 --port 8001
 ```
+
+Or enable advanced search via `config.toml`:
+
+```toml
+[search]
+advanced_enabled = true
+vector_dir = "/data/paper_vectors"
+access_token = "env:SEARCH_ACCESS_TOKEN"
+```
+
+```bash
+export PAPER_DB_STATIC_BASE_URL="https://static.example.com"
+export SEARCH_ACCESS_TOKEN="your-token"
+
+# Option C: use config.search.vector_dir + config.search.access_token
+uv run deepresearch-flow paper db api serve \
+  --snapshot-db /data/paper_snapshot.db \
+  --config ./config.toml \
+  --cors-origin https://frontend.example.com \
+  --host 0.0.0.0 --port 8001
+```
+
+Advanced-search startup rules:
+
+- `--embed-db` has highest priority and overrides `config.search.vector_dir`.
+- `--search-access-token` has highest token priority; otherwise the server reads `SEARCH_ACCESS_TOKEN`, then `config.search.access_token`.
+- If `config.search.advanced_enabled = true` but neither `--embed-db` nor `config.search.vector_dir` is set, startup fails fast.
+- If `config.search.advanced_enabled = false`, the server starts normally without LanceDB or token and simply does not mount the advanced routes.
 
 BibTeX metadata endpoint:
 

@@ -385,8 +385,18 @@ uv run deepresearch-flow paper db serve \
 export PAPER_DB_STATIC_BASE_URL="https://static.example.com"
 export PAPER_DB_STATIC_EXPORT_DIR="/data/paper-static"  # 本地静态目录可选
 
+# 基础模式：只开启关键词 / facet / 论文详情等只读接口
 uv run deepresearch-flow paper db api serve \
   --snapshot-db /data/paper_snapshot.db \
+  --cors-origin https://frontend.example.com \
+  --host 0.0.0.0 --port 8001
+
+# 高级搜索模式：额外提供 LanceDB 和访问 token
+SEARCH_ACCESS_TOKEN=your-token \
+uv run deepresearch-flow paper db api serve \
+  --snapshot-db /data/paper_snapshot.db \
+  --embed-db /data/paper_vectors \
+  --config ./config.toml \
   --cors-origin https://frontend.example.com \
   --host 0.0.0.0 --port 8001
 ```
@@ -807,11 +817,49 @@ server {
 ```bash
 export PAPER_DB_STATIC_BASE_URL="https://static.example.com"
 
+# 方式 A：基础模式（不挂载高级搜索路由）
 uv run deepresearch-flow paper db api serve \
   --snapshot-db /data/paper_snapshot.db \
   --cors-origin https://frontend.example.com \
   --host 0.0.0.0 --port 8001
+
+# 方式 B：完全通过 CLI 打开高级搜索
+SEARCH_ACCESS_TOKEN=your-token \
+uv run deepresearch-flow paper db api serve \
+  --snapshot-db /data/paper_snapshot.db \
+  --embed-db /data/paper_vectors \
+  --config ./config.toml \
+  --cors-origin https://frontend.example.com \
+  --host 0.0.0.0 --port 8001
 ```
+
+也可以通过 `config.toml` 打开高级搜索：
+
+```toml
+[search]
+advanced_enabled = true
+vector_dir = "/data/paper_vectors"
+access_token = "env:SEARCH_ACCESS_TOKEN"
+```
+
+```bash
+export PAPER_DB_STATIC_BASE_URL="https://static.example.com"
+export SEARCH_ACCESS_TOKEN="your-token"
+
+# 方式 C：使用 config.search.vector_dir + config.search.access_token
+uv run deepresearch-flow paper db api serve \
+  --snapshot-db /data/paper_snapshot.db \
+  --config ./config.toml \
+  --cors-origin https://frontend.example.com \
+  --host 0.0.0.0 --port 8001
+```
+
+高级搜索启动规则：
+
+- `--embed-db` 优先级最高，会覆盖 `config.search.vector_dir`。
+- token 优先级是 `--search-access-token` > `SEARCH_ACCESS_TOKEN` > `config.search.access_token`。
+- 如果 `config.search.advanced_enabled = true`，但既没有 `--embed-db` 也没有 `config.search.vector_dir`，服务会在启动时直接失败。
+- 如果 `config.search.advanced_enabled = false`，服务会正常启动，但不会挂载高级搜索路由。
 
 ### 3.1) Admin API（可选）
 
