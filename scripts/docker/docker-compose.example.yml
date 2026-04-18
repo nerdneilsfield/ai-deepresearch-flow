@@ -14,6 +14,24 @@ services:
     # Exposes frontend + API, including MCP streamable (/mcp) and SSE (/mcp-sse).
     profiles: ["local-static"]
 
+  deploy-local-static-advanced:
+    image: ghcr.io/nerdneilsfield/deepresearch-flow:deploy-latest
+    ports:
+      - "8080:8899"
+    volumes:
+      - ./paper_snapshot.db:/db/papers.db
+      - ./paper-static:/static
+      - ./paper_vectors:/db/paper_vectors
+      - ./config.toml:/app/config.toml:ro
+    environment:
+      PAPER_DB_API_BASE: http://127.0.0.1:8000
+      PAPER_DB_STATIC_BASE: /static
+      PAPER_DB_EMBED_DB: /db/paper_vectors
+      PAPER_DB_CONFIG: /app/config.toml
+      SEARCH_ACCESS_TOKEN: your-token
+    # With >=2 advanced env vars set, start-api.sh enters embedded mode.
+    profiles: ["local-static-advanced"]
+
   deploy-external-static:
     image: ghcr.io/nerdneilsfield/deepresearch-flow:deploy-latest
     ports:
@@ -25,3 +43,20 @@ services:
       PAPER_DB_STATIC_BASE: https://static.example.com
     # Exposes frontend + API, including MCP streamable (/mcp) and SSE (/mcp-sse).
     profiles: ["external-static"]
+
+  deploy-external-static-advanced:
+    image: ghcr.io/nerdneilsfield/deepresearch-flow:deploy-latest
+    ports:
+      - "8080:8899"
+    volumes:
+      - ./paper_snapshot.db:/db/papers.db
+      - ./paper_vectors:/db/paper_vectors
+      - ./config.toml:/app/config.toml:ro
+    environment:
+      PAPER_DB_API_BASE: http://127.0.0.1:8000
+      PAPER_DB_STATIC_BASE: https://static.example.com
+      PAPER_DB_EMBED_DB: /db/paper_vectors
+      PAPER_DB_CONFIG: /app/config.toml
+      SEARCH_ACCESS_TOKEN: your-token
+    # With >=2 advanced env vars set, start-api.sh enters embedded mode.
+    profiles: ["external-static-advanced"]

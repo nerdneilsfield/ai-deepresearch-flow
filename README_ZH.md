@@ -1406,9 +1406,21 @@ docker run --rm -v $(pwd):/app -it ghcr.io/nerdneilsfield/deepresearch-flow:late
 Deploy 镜像（nginx + API + 前端）：
 
 ```bash
+# 基础模式：不设置高级搜索相关环境变量
 docker run --rm -p 8899:8899 \
   -v $(pwd)/paper_snapshot.db:/db/papers.db \
   -v $(pwd)/paper-static:/static \
+  ghcr.io/nerdneilsfield/deepresearch-flow:deploy-latest
+
+# 嵌入式模式：至少设置两个高级搜索环境变量
+docker run --rm -p 8899:8899 \
+  -v $(pwd)/paper_snapshot.db:/db/papers.db \
+  -v $(pwd)/paper-static:/static \
+  -v $(pwd)/paper_vectors:/db/paper_vectors \
+  -v $(pwd)/config.toml:/app/config.toml:ro \
+  -e PAPER_DB_EMBED_DB=/db/paper_vectors \
+  -e PAPER_DB_CONFIG=/app/config.toml \
+  -e SEARCH_ACCESS_TOKEN=your-token \
   ghcr.io/nerdneilsfield/deepresearch-flow:deploy-latest
 ```
 
@@ -1417,13 +1429,21 @@ docker run --rm -p 8899:8899 \
 - 将 snapshot 数据库挂载到容器内 `/db/papers.db`。
 - 如果静态资源由此容器提供，请将 snapshot 静态目录挂载到 `/static`（默认 `PAPER_DB_STATIC_BASE` 为 `/static`）。
 - 如果 `PAPER_DB_STATIC_BASE` 是完整 URL（例如 `https://static.example.com`），nginx 仍仅提供本地前端，API 响应中的静态资源链接会使用该外部域名。
+- `scripts/docker/start-api.sh` 会根据高级搜索环境变量数量自动判定模式：`PAPER_DB_EMBED_DB`、`PAPER_DB_CONFIG`、`SEARCH_ACCESS_TOKEN`。
+- `0` 个 → 基础模式。
+- `1` 个 → 视为高级搜索配置不完整，直接启动失败。
+- `>=2` 个 → 进入嵌入式模式；脚本会在存在时自动追加 `--embed-db` 和 `--config`，`SEARCH_ACCESS_TOKEN` 继续通过现有 CLI envvar 读取。
 
-Docker Compose 示例（两种模式）：
+Docker Compose 示例（四个 profile）：
 
 ```bash
 docker compose -f scripts/docker/docker-compose.example.yml --profile local-static up
 # 或者
 docker compose -f scripts/docker/docker-compose.example.yml --profile external-static up
+# 或者
+docker compose -f scripts/docker/docker-compose.example.yml --profile local-static-advanced up
+# 或者
+docker compose -f scripts/docker/docker-compose.example.yml --profile external-static-advanced up
 ```
 
 外部静态资源示例：
