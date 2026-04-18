@@ -326,4 +326,67 @@ describe('SearchView advanced search integration', () => {
     expect(wrapper.findAll('[data-testid="basic-result-stub"]')).toHaveLength(1)
     expect(wrapper.find('[data-testid="advanced-panel-body"]').exists()).toBe(false)
   })
+
+  it('degraded advanced-search response surfaces the backend message as a warning toast', async () => {
+    mockAdvancedFetch(
+      [{ status: 200, body: { valid: true } }],
+      [{
+        status: 200,
+        body: {
+          success: true,
+          trace_id: 't-degraded',
+          query: { raw: 'vision', normalized: 'vision', applied_filters: {} },
+          results: [{
+            chunk_id: 'p1_c0',
+            paper_id: 'p1',
+            paper: {
+              title: 'Advanced Paper',
+              authors: ['Alice'],
+              year: '2024',
+              venue: 'ICLR',
+              doi: '',
+              source_hash: 'h',
+            },
+            chunk: {
+              text: 'advanced chunk body',
+              field_name: 'simple/content',
+              template_tag: 'simple',
+              chunk_type: 'content',
+              chunk_index: 0,
+              lang: 'en',
+            },
+            scores: { fused: 0.1, final: 0.1 },
+          }],
+          metadata: {
+            counts: {},
+            fusion: 'rrf',
+            reranker: { applied: false, model: 'Qwen/Qwen3-Reranker-4B' },
+            mmr: { applied: true, lambda: 0.6 },
+            embedding: { model: 'bge-m3', dimensions: 1024 },
+            latency_ms: {},
+          },
+          degraded: true,
+          degradation: {
+            reason: 'reranker_failed',
+            message: 'Reranking failed; results fall back to fused ranking.',
+          },
+        },
+      }],
+    )
+
+    const wrapper = await mountView()
+    await settle(wrapper)
+    await wrapper.find('[data-testid="advanced-panel-toggle"]').trigger('click')
+    await wrapper.find('[data-testid="advanced-token-input"]').setValue('secret')
+    await wrapper.find('[data-testid="advanced-verify-button"]').trigger('click')
+    await settle(wrapper)
+    await wrapper.find('[data-testid="advanced-query-input"]').setValue('vision')
+    await wrapper.find('[data-testid="advanced-search-button"]').trigger('click')
+    await settle(wrapper)
+
+    expect(pushToastMock).toHaveBeenCalledWith(
+      'Reranking failed; results fall back to fused ranking.',
+      'warning',
+    )
+  })
 })

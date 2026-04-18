@@ -68,7 +68,11 @@ export interface AdvancedSearchResponse {
     latency_ms: Record<string, number>
   }
   degraded: boolean
-  degradation: { reason: string } | null
+  degradation: {
+    reason: string
+    message?: string | null
+    details?: Record<string, unknown>
+  } | null
 }
 
 export class AdvancedSearchHTTPError extends Error {

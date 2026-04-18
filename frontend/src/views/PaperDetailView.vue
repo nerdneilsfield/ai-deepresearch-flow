@@ -32,6 +32,8 @@ const { detailQuery } = usePaperDetail(paperId)
 const detail = computed<PaperDetail | null>(() => detailQuery.data.value ?? null)
 const loading = computed(() => detailQuery.isLoading.value)
 const error = computed(() => (detailQuery.error.value ? 'Failed to load paper detail.' : ''))
+const advancedChunkText = computed(() => String(route.query.advanced_chunk_text || '').trim())
+const advancedChunkField = computed(() => String(route.query.advanced_chunk_field || '').trim())
 
 const prevId = computed(() => selection.getPrevId(paperId.value))
 const nextId = computed(() => selection.getNextId(paperId.value))
@@ -388,6 +390,15 @@ watch([viewMode, leftView, rightView, summaryTemplate], () => {
     {{ error }}
   </div>
   <div v-else-if="detail" class="space-y-4">
+    <div
+      v-if="advancedChunkText"
+      class="rounded-xl border border-accent-200 bg-accent-50 p-4 text-sm text-ink-800"
+      data-testid="advanced-match-banner"
+    >
+      <div class="font-semibold text-ink-900">Matched chunk from advanced search</div>
+      <div v-if="advancedChunkField" class="mt-1 text-xs text-ink-500">{{ advancedChunkField }}</div>
+      <p class="mt-2 whitespace-pre-wrap text-sm text-ink-700">{{ advancedChunkText }}</p>
+    </div>
 
     <div
       :class="[

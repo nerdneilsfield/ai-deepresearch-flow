@@ -83,7 +83,12 @@ async def _run_search(
     import httpx
 
     from deepresearch_flow.paper.reranker import RoutedReranker
-    from deepresearch_flow.paper.search import hybrid_search, rank_keyword_rows, validate_venue_filter
+    from deepresearch_flow.paper.search import (
+        SearchProgress,
+        hybrid_search,
+        rank_keyword_rows,
+        validate_venue_filter,
+    )
     from deepresearch_flow.paper.vector_store import open_store, scan_rows
 
     if not config.embedding:
@@ -144,6 +149,7 @@ async def _run_search(
         keyword_search_fn = lambda q, limit=30: rank_keyword_rows(keyword_rows, q, limit=limit)
 
     reranker = None
+    rerank_model_label: str | None = None
     if not no_rerank and config.rerank and config.rerank.enabled:
         if rerank_override:
             rerank_provider, rerank_model = _resolve_provider_model_override(
@@ -156,6 +162,10 @@ async def _run_search(
             rerank_provider, rerank_model = config.rerank.resolve_active()
             rerank_config = config.rerank
         reranker = RoutedReranker(route_pool=RoutePool.from_rerank_provider(rerank_config, verbose=verbose))
+        rerank_model_label = f"{rerank_provider.name}/{rerank_model.model_name}"
+
+    if verbose:
+        click.echo("Embedding query: starting.")
 
     async with httpx.AsyncClient() as client:
         embedding = await call_embedding_with_route_pool(
@@ -164,6 +174,15 @@ async def _run_search(
             dimensions=config.embedding.dimensions,
             client=client,
         )
+        if verbose:
+            click.echo("Embedding query: completed.")
+            if rerank_model_label is not None:
+                click.echo(f"Rerank: enabled with model {rerank_model_label}.")
+            elif no_rerank:
+                click.echo("Rerank: explicitly disabled.")
+            else:
+                click.echo("Rerank: not enabled.")
+        progress = SearchProgress()
         results = await hybrid_search(
             query_vector=embedding.vectors[0],
             query_text=query_text,
@@ -177,7 +196,31 @@ async def _run_search(
             where=where,
             document_text_resolver=lambda doc_id: document_text_by_doc_id.get(doc_id, doc_id),
             client=client,
+            progress=progress,
         )
+
+    if verbose:
+        click.echo(
+            f"Vector retrieval: completed with {progress.vector_candidates} candidate documents."
+        )
+        if not no_hybrid and keyword_search_fn is not None:
+            click.echo(
+                f"Keyword retrieval: completed with {progress.keyword_candidates} candidate documents."
+            )
+            click.echo(
+                f"Candidate fusion: completed with {progress.fused_candidates} candidate documents."
+            )
+        else:
+            click.echo("Keyword retrieval: not enabled.")
+        if progress.rerank_requested:
+            if progress.rerank_applied:
+                click.echo("Rerank: completed.")
+            else:
+                reason = progress.rerank_reason or "未知错误"
+                click.echo(
+                    f"Rerank: failed, falling back to the original ranking. Reason: {reason}"
+                )
+        click.echo(f"Search completed: returned {len(results)} results.")
 
     table = Table(title="paper search")
     table.add_column("doc_id", style="cyan")

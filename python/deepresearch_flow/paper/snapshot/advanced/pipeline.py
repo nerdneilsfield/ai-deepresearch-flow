@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from dataclasses import dataclass
 from typing import Any
+
+import httpx
 
 from deepresearch_flow.paper.reranker import RoutedReranker
 from deepresearch_flow.paper.snapshot.advanced import (
@@ -26,6 +29,8 @@ from deepresearch_flow.paper.snapshot.advanced.errors import (
     VectorStoreUnavailableError,
 )
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True)
 class RequestSpec:
@@ -39,6 +44,24 @@ class RequestSpec:
 
 def _now_ms() -> int:
     return int(time.monotonic() * 1000)
+
+
+def _exception_message_and_details(
+    exc: Exception,
+    *,
+    default_message: str,
+) -> tuple[str, dict[str, Any]]:
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code if exc.response is not None else None
+        body = exc.response.text if exc.response is not None else str(exc)
+        message = f"{default_message} Upstream HTTP status: {status}." if status is not None else default_message
+        return message, {
+            "status_code": status,
+            "provider_error": body,
+        }
+
+    detail = str(exc).strip() or exc.__class__.__name__
+    return default_message, {"error": detail}
 
 
 async def run_advanced_search(
@@ -124,6 +147,8 @@ async def run_advanced_search(
 
     degraded = False
     degradation_reason: str | None = None
+    degradation_message: str | None = None
+    degradation_details: dict[str, Any] | None = None
     if dense_failed and sparse_failed:
         raise TotalFailureError("both retrieval branches failed")
     if dense_failed and not sparse_hits:
@@ -131,9 +156,17 @@ async def run_advanced_search(
     if dense_failed:
         degraded = True
         degradation_reason = "embedding_failed"
+        degradation_message, degradation_details = _exception_message_and_details(
+            dense_result,
+            default_message="Dense retrieval failed; results fall back to sparse retrieval.",
+        )
     elif sparse_failed:
         degraded = True
         degradation_reason = "fts_unavailable"
+        degradation_message, degradation_details = _exception_message_and_details(
+            sparse_payload,
+            default_message="Sparse retrieval failed; results fall back to dense retrieval.",
+        )
 
     fusion_started = _now_ms()
     fused = fusion.fuse_paper_level(
@@ -197,6 +230,17 @@ async def run_advanced_search(
         else:
             degraded = True
             degradation_reason = rerank_outcome.reason or "reranker_failed"
+            degradation_message = (
+                getattr(rerank_outcome, "message", None)
+                or "Reranking failed; results fall back to fused ranking."
+            )
+            degradation_details = getattr(rerank_outcome, "details", None)
+            logger.warning(
+                "Advanced search degraded: reason=%s trace_id=%s message=%s",
+                degradation_reason,
+                request_spec.trace_id,
+                degradation_message,
+            )
 
     mmr_started = _now_ms()
     final_chunks = mmr_mod.mmr_select(
@@ -249,4 +293,6 @@ async def run_advanced_search(
         trace_id=request_spec.trace_id,
         degraded=degraded,
         degradation_reason=degradation_reason,
+        degradation_message=degradation_message,
+        degradation_details=degradation_details,
     )

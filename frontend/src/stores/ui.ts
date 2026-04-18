@@ -15,9 +15,16 @@ export const useUiStore = defineStore('ui', {
     setError(message: string) {
       this.error = message
     },
-    pushToast(message: string, tone: 'info' | 'error' | 'success' = 'info') {
+    pushToast(message: string, tone: 'info' | 'warning' | 'error' | 'success' = 'info') {
       toast({
-        title: tone === 'error' ? 'Error' : tone === 'success' ? 'Success' : 'Info',
+        title:
+          tone === 'error'
+            ? 'Error'
+            : tone === 'success'
+              ? 'Success'
+              : tone === 'warning'
+                ? 'Warning'
+                : 'Info',
         description: message,
         variant: tone === 'error' ? 'destructive' : 'default',
       })

@@ -62,6 +62,8 @@ def assemble_response(
     trace_id: str,
     degraded: bool,
     degradation_reason: str | None,
+    degradation_message: str | None,
+    degradation_details: dict[str, Any] | None,
 ) -> dict[str, Any]:
     papers = _hydrate_papers(conn, [chunk.paper_id for chunk in chunks])
 
@@ -124,5 +126,9 @@ def assemble_response(
             "latency_ms": latency_ms,
         },
         "degraded": degraded,
-        "degradation": {"reason": degradation_reason} if degraded else None,
+        "degradation": {
+            "reason": degradation_reason,
+            "message": degradation_message,
+            "details": degradation_details or {},
+        } if degraded else None,
     }

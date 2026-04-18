@@ -68,38 +68,43 @@ def test_happy_path_attaches_reranker_scores() -> None:
     assert output.scores[0] == pytest.approx(0.9)
 
 
-def test_timeout_returns_degraded() -> None:
+def test_timeout_returns_degraded_and_logs(caplog) -> None:
     chunks = [_selected("p1", 0.1)]
-    output = asyncio.run(
-        rerank_with_timeout(
-            reranker=_FakeReranker(indices=[0], scores=[0.5], sleep=0.2),
-            query="q",
-            chunks=chunks,
-            top_n=1,
-            timeout_ms=50,
-            client=object(),
+    with caplog.at_level("WARNING"):
+        output = asyncio.run(
+            rerank_with_timeout(
+                reranker=_FakeReranker(indices=[0], scores=[0.5], sleep=0.2),
+                query="q",
+                chunks=chunks,
+                top_n=1,
+                timeout_ms=50,
+                client=object(),
+            )
         )
-    )
     assert output.success is False
     assert output.reason == "reranker_failed"
     assert output.chunks == chunks
     assert output.scores == []
+    assert "rerank timed out" in caplog.text
 
 
-def test_exception_returns_degraded() -> None:
+def test_exception_returns_degraded_and_logs(caplog) -> None:
     chunks = [_selected("p1", 0.1)]
-    output = asyncio.run(
-        rerank_with_timeout(
-            reranker=_FakeReranker(indices=[], scores=[], raises=RuntimeError("boom")),
-            query="q",
-            chunks=chunks,
-            top_n=1,
-            timeout_ms=5000,
-            client=object(),
+    with caplog.at_level("ERROR"):
+        output = asyncio.run(
+            rerank_with_timeout(
+                reranker=_FakeReranker(indices=[], scores=[], raises=RuntimeError("boom")),
+                query="q",
+                chunks=chunks,
+                top_n=1,
+                timeout_ms=5000,
+                client=object(),
+            )
         )
-    )
     assert output.success is False
     assert output.reason == "reranker_failed"
+    assert "rerank failed" in caplog.text
+    assert "boom" in caplog.text
 
 
 def test_none_reranker_returns_success_without_changes() -> None:

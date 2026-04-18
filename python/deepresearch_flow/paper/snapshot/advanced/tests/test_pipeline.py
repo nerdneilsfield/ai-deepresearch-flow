@@ -215,6 +215,7 @@ def test_dense_failure_degrades_to_sparse_only(conn, monkeypatch) -> None:
     )
     assert output["degraded"] is True
     assert output["degradation"]["reason"] == "embedding_failed"
+    assert "sparse retrieval" in output["degradation"]["message"].lower()
 
 
 def test_sparse_failure_degrades_to_dense_only(conn, monkeypatch) -> None:
@@ -262,10 +263,11 @@ def test_sparse_failure_degrades_to_dense_only(conn, monkeypatch) -> None:
     )
     assert output["degraded"] is True
     assert output["degradation"]["reason"] == "fts_unavailable"
+    assert "dense retrieval" in output["degradation"]["message"].lower()
     assert output["results"][0]["paper_id"] == "p1"
 
 
-def test_rerank_failure_degrades(conn, monkeypatch) -> None:
+def test_rerank_failure_degrades_and_logs_trace(conn, monkeypatch, caplog) -> None:
     from deepresearch_flow.paper.snapshot.advanced import rerank_adapter, retrieve_dense
 
     async def fake_embed(**kwargs):
@@ -283,6 +285,8 @@ def test_rerank_failure_degrades(conn, monkeypatch) -> None:
         class Outcome:
             success = False
             reason = "reranker_failed"
+            message = "Rerank request failed with HTTP 401."
+            details = {"status_code": 401, "provider_error": '{"error":"bad api key"}'}
             chunks = kwargs["chunks"]
             scores = []
 
@@ -292,16 +296,22 @@ def test_rerank_failure_degrades(conn, monkeypatch) -> None:
     monkeypatch.setattr(retrieve_dense, "query_vector", fake_query_vector)
     monkeypatch.setattr(rerank_adapter, "rerank_with_timeout", fake_rerank)
 
-    output = asyncio.run(
-        run_advanced_search(
-            request_spec=RequestSpec("vision", 10, 0.6, "auto", {}, "t-3"),
-            ctx=_Ctx([]),
-            conn=conn,
-            client=object(),
+    with caplog.at_level("WARNING"):
+        output = asyncio.run(
+            run_advanced_search(
+                request_spec=RequestSpec("vision", 10, 0.6, "auto", {}, "t-3"),
+                ctx=_Ctx([]),
+                conn=conn,
+                client=object(),
+            )
         )
-    )
     assert output["degraded"] is True
     assert output["degradation"]["reason"] == "reranker_failed"
+    assert output["degradation"]["message"] == "Rerank request failed with HTTP 401."
+    assert output["degradation"]["details"]["status_code"] == 401
+    assert "bad api key" in output["degradation"]["details"]["provider_error"]
+    assert "reranker_failed" in caplog.text
+    assert "t-3" in caplog.text
 
 
 def test_deduped_count_preserved_after_rerank(conn, monkeypatch) -> None:

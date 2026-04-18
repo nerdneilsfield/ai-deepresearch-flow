@@ -37,6 +37,16 @@ class SearchResult:
     matched_lang: str
 
 
+@dataclass
+class SearchProgress:
+    vector_candidates: int = 0
+    keyword_candidates: int = 0
+    fused_candidates: int = 0
+    rerank_requested: bool = False
+    rerank_applied: bool = False
+    rerank_reason: str | None = None
+
+
 def rank_keyword_rows(
     rows: list[dict[str, Any]],
     query_text: str,
@@ -132,14 +142,19 @@ async def hybrid_search(
     where: str | None = None,
     document_text_resolver: Callable[[str], str] | None = None,
     client: httpx.AsyncClient | None = None,
+    progress: SearchProgress | None = None,
 ) -> list[SearchResult]:
     from deepresearch_flow.paper.vector_store import query_vector as query_vector_store
 
     raw_vector_hits = query_vector_store(vector_store_db, query_vector, top_k=vector_top_k, where=where)
     vector_hits = aggregate_by_doc_id(vector_hits_to_search_hits(raw_vector_hits))
+    if progress is not None:
+        progress.vector_candidates = len(vector_hits)
 
     if hybrid and keyword_search_fn is not None:
         keyword_ranked = list(keyword_search_fn(query_text, limit=keyword_top_k))
+        if progress is not None:
+            progress.keyword_candidates = len(keyword_ranked)
         vector_ranked = [hit.doc_id for hit in vector_hits]
         fused_scores = reciprocal_rank_fusion([vector_ranked, keyword_ranked], k=60)
         hit_map = {hit.doc_id: hit for hit in vector_hits}
@@ -152,8 +167,14 @@ async def hybrid_search(
     else:
         candidates = [(hit.doc_id, hit.score, hit) for hit in vector_hits]
         score_type = "cosine"
+        if progress is not None:
+            progress.keyword_candidates = 0
+    if progress is not None:
+        progress.fused_candidates = len(candidates)
 
     if reranker is not None and client is not None and candidates:
+        if progress is not None:
+            progress.rerank_requested = True
         docs_for_rerank = [
             (
                 hit.chunk_text
@@ -170,9 +191,15 @@ async def hybrid_search(
                 top_n=rerank_top_n,
                 client=client,
             )
-        except Exception:
+        except Exception as exc:
+            if progress is not None:
+                progress.rerank_applied = False
+                progress.rerank_reason = str(exc) or exc.__class__.__name__
             rerank_result = None
         if rerank_result is not None:
+            if progress is not None:
+                progress.rerank_applied = True
+                progress.rerank_reason = None
             hit_map = {hit.doc_id: hit for hit in vector_hits}
             return [
                 SearchResult(

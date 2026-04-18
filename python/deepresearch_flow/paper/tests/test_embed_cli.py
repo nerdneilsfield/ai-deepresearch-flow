@@ -385,3 +385,64 @@ def test_run_search_applies_embedding_and_rerank_overrides(monkeypatch, tmp_path
         "api_key": "rerank-alt-key",
         "model": "rerank-alt-model",
     }
+
+
+def test_run_search_verbose_emits_formal_stage_messages(monkeypatch, tmp_path: Path, capsys) -> None:
+    from deepresearch_flow.paper.cli import _run_search
+    from deepresearch_flow.paper.embedding import EmbeddingResult
+
+    monkeypatch.setattr("deepresearch_flow.paper.vector_store.open_store", lambda _: object())
+    monkeypatch.setattr(
+        "deepresearch_flow.paper.vector_store.scan_rows",
+        lambda _: [{"doc_id": "doc-1", "title": "Attention Paper", "text": "body text", "authors": "Author A", "venue": "NeurIPS", "tags": "transformer"}],
+    )
+    monkeypatch.setattr(
+        "deepresearch_flow.paper.vector_store.query_vector",
+        lambda db, query_vector, top_k=50, where=None: [  # noqa: ARG005
+            {
+                "doc_id": "doc-1",
+                "text": "Attention body",
+                "_distance": 0.2,
+                "field_name": "summary",
+                "template_tag": "simple",
+                "chunk_type": "abstract",
+                "lang": "",
+            }
+        ],
+    )
+    monkeypatch.setattr("rich.console.Console.print", lambda self, table: None)
+
+    async def fake_embed(base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None):  # noqa: ANN001
+        return EmbeddingResult(vectors=[[0.1] * 1024], model=model, usage_tokens=1)
+
+    class FakeRoutedReranker:
+        def __init__(self, *, route_pool) -> None:  # noqa: ANN001
+            self._route_pool = route_pool
+
+        async def rerank(self, query, documents, *, top_n, client):  # noqa: ANN001
+            return type("RerankResult", (), {"indices": [0], "scores": [0.99]})()
+
+    monkeypatch.setattr("deepresearch_flow.paper.embedding.call_embedding", fake_embed)
+    monkeypatch.setattr("deepresearch_flow.paper.reranker.RoutedReranker", FakeRoutedReranker)
+
+    asyncio.run(
+        _run_search(
+            config=_search_config(embedding_api_key="resolved-embed-key", rerank_api_key="resolved-rerank-key"),
+            vector_dir=tmp_path / "vectors",
+            query_text="attention",
+            top_n=5,
+            year=None,
+            venue=None,
+            no_rerank=False,
+            no_hybrid=False,
+            verbose=True,
+        )
+    )
+
+    output = capsys.readouterr().out
+    assert "Embedding query: starting." in output
+    assert "Embedding query: completed." in output
+    assert "Rerank: enabled with model" in output
+    assert "Vector retrieval: completed with" in output
+    assert "Keyword retrieval: completed with" in output
+    assert "Search completed: returned" in output

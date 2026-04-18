@@ -1,8 +1,16 @@
 import { mount } from '@vue/test-utils'
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import AdvancedSearchResults from '@/components/AdvancedSearchResults.vue'
 import type { AdvancedSearchResult } from '@/lib/advanced-search'
+
+const pushMock = vi.fn()
+
+vi.mock('vue-router', () => ({
+  useRouter: () => ({
+    push: pushMock,
+  }),
+}))
 
 function sample(): AdvancedSearchResult {
   return {
@@ -29,6 +37,10 @@ function sample(): AdvancedSearchResult {
 }
 
 describe('AdvancedSearchResults', () => {
+  beforeEach(() => {
+    pushMock.mockReset()
+  })
+
   it('renders one card per result', () => {
     const wrapper = mount(AdvancedSearchResults, { props: { results: [sample(), sample()] } })
     expect(wrapper.findAll('[data-testid="advanced-result-card"]')).toHaveLength(2)
@@ -42,10 +54,15 @@ describe('AdvancedSearchResults', () => {
 
   it('renders degradation banner when degraded', () => {
     const wrapper = mount(AdvancedSearchResults, {
-      props: { results: [], degraded: true, degradationReason: 'reranker_failed' },
+      props: {
+        results: [],
+        degraded: true,
+        degradationReason: 'reranker_failed',
+        degradationMessage: 'Reranking failed; results fall back to fused ranking.',
+      },
     })
     expect(wrapper.find('[data-testid="advanced-degraded-banner"]').exists()).toBe(true)
-    expect(wrapper.text()).toContain('reranker_failed')
+    expect(wrapper.text()).toContain('Reranking failed; results fall back to fused ranking.')
   })
 
   it('hides degradation banner when not degraded', () => {
@@ -56,5 +73,21 @@ describe('AdvancedSearchResults', () => {
   it('renders empty-state when no results', () => {
     const wrapper = mount(AdvancedSearchResults, { props: { results: [] } })
     expect(wrapper.find('[data-testid="advanced-results-empty"]').exists()).toBe(true)
+  })
+
+  it('navigates to paper detail with matched chunk context', async () => {
+    const wrapper = mount(AdvancedSearchResults, { props: { results: [sample()] } })
+
+    await wrapper.find('[data-testid="advanced-result-card"]').trigger('click')
+
+    expect(pushMock).toHaveBeenCalledWith({
+      name: 'paper',
+      params: { paperId: 'p1' },
+      query: {
+        advanced_chunk_id: 'p1_c0',
+        advanced_chunk_text: 'body...',
+        advanced_chunk_field: 'simple/content',
+      },
+    })
   })
 })

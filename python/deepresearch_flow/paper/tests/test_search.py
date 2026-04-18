@@ -7,6 +7,7 @@ from deepresearch_flow.paper.search import (
     aggregate_by_doc_id,
     hybrid_search,
     rank_keyword_rows,
+    SearchProgress,
     vector_hits_to_search_hits,
     reciprocal_rank_fusion,
 )
@@ -180,3 +181,53 @@ def test_hybrid_search_uses_reranker_with_keyword_only_candidates(monkeypatch) -
     assert [item.score_type for item in results] == ["rerank", "rerank"]
     assert results[0].matched_chunk == ""
     assert results[1].matched_chunk == "vector chunk"
+
+
+def test_hybrid_search_reports_formal_progress_on_rerank_failure(monkeypatch) -> None:
+    class FailingReranker:
+        async def rerank(self, query, documents, *, top_n, client):  # noqa: ANN001
+            raise RuntimeError("upstream timeout")
+
+    monkeypatch.setattr(
+        "deepresearch_flow.paper.vector_store.query_vector",
+        lambda db, query_vector, top_k=50, where=None: [  # noqa: ARG005
+            {
+                "doc_id": "doc-vector",
+                "text": "vector chunk",
+                "_distance": 0.2,
+                "field_name": "summary",
+                "template_tag": "simple",
+                "chunk_type": "abstract",
+                "lang": "",
+            }
+        ],
+    )
+
+    progress = SearchProgress()
+
+    async def _run():
+        return await hybrid_search(
+            query_vector=[0.1, 0.2],
+            query_text="attention mechanism",
+            vector_store_db=object(),
+            keyword_search_fn=lambda q, limit=30: ["doc-vector", "doc-keyword"],  # noqa: ARG005
+            reranker=FailingReranker(),
+            vector_top_k=5,
+            keyword_top_k=5,
+            rerank_top_n=2,
+            hybrid=True,
+            document_text_resolver=lambda doc_id: {
+                "doc-keyword": "keyword-only summary",
+            }.get(doc_id, doc_id),
+            client=object(),
+            progress=progress,
+        )
+
+    results = asyncio.run(_run())
+    assert [item.doc_id for item in results] == ["doc-vector", "doc-keyword"]
+    assert progress.vector_candidates == 1
+    assert progress.keyword_candidates == 2
+    assert progress.fused_candidates == 2
+    assert progress.rerank_requested is True
+    assert progress.rerank_applied is False
+    assert progress.rerank_reason == "upstream timeout"

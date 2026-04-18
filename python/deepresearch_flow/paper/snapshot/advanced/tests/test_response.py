@@ -82,6 +82,8 @@ def test_success_payload_shape(conn) -> None:
         trace_id="tid-1",
         degraded=False,
         degradation_reason=None,
+        degradation_message=None,
+        degradation_details=None,
     )
     assert output["success"] is True
     assert output["trace_id"] == "tid-1"
@@ -129,9 +131,15 @@ def test_degraded_fields_set_when_degraded(conn) -> None:
         trace_id="t",
         degraded=True,
         degradation_reason="reranker_failed",
+        degradation_message="Reranking failed; results fall back to fused ranking.",
+        degradation_details={"provider_error": "upstream timeout"},
     )
     assert output["degraded"] is True
-    assert output["degradation"] == {"reason": "reranker_failed"}
+    assert output["degradation"] == {
+        "reason": "reranker_failed",
+        "message": "Reranking failed; results fall back to fused ranking.",
+        "details": {"provider_error": "upstream timeout"},
+    }
     result = output["results"][0]
     assert "reranker" not in result["scores"]
     assert result["scores"]["final"] == pytest.approx(0.01)

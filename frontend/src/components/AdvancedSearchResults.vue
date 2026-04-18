@@ -1,11 +1,27 @@
 <script setup lang="ts">
+import { useRouter } from 'vue-router'
 import type { AdvancedSearchResult } from '@/lib/advanced-search'
 
-defineProps<{
+const props = defineProps<{
   results: AdvancedSearchResult[]
   degraded?: boolean
   degradationReason?: string | null
+  degradationMessage?: string | null
 }>()
+
+const router = useRouter()
+
+function openPaper(result: AdvancedSearchResult) {
+  router.push({
+    name: 'paper',
+    params: { paperId: result.paper_id },
+    query: {
+      advanced_chunk_id: result.chunk_id,
+      advanced_chunk_text: result.chunk.text,
+      advanced_chunk_field: result.chunk.field_name,
+    },
+  })
+}
 </script>
 
 <template>
@@ -15,7 +31,7 @@ defineProps<{
       class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"
       data-testid="advanced-degraded-banner"
     >
-      Results are degraded: {{ degradationReason ?? 'unknown' }}
+      Results are degraded: {{ degradationMessage ?? degradationReason ?? 'unknown' }}
     </div>
 
     <div
@@ -29,8 +45,13 @@ defineProps<{
     <article
       v-for="result in results"
       :key="result.chunk_id"
-      class="rounded-xl border border-ink-100 bg-white p-4"
+      class="cursor-pointer rounded-xl border border-ink-100 bg-white p-4 transition-all hover:border-ink-200 hover:shadow-card-hover"
       data-testid="advanced-result-card"
+      role="link"
+      tabindex="0"
+      @click="openPaper(result)"
+      @keydown.enter.prevent="openPaper(result)"
+      @keydown.space.prevent="openPaper(result)"
     >
       <h3 class="text-base font-semibold text-ink-900">{{ result.paper.title }}</h3>
       <p class="mt-1 text-sm text-ink-500">

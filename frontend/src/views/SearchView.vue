@@ -97,6 +97,7 @@ const totalPages = computed(() => {
 const advancedResults = ref<AdvancedSearchResult[]>([])
 const advancedDegraded = ref(false)
 const advancedDegradationReason = ref<string | null>(null)
+const advancedDegradationMessage = ref<string | null>(null)
 const advancedSearching = ref(false)
 
 function forceSearch() {
@@ -112,16 +113,18 @@ async function onAdvancedSearch(params: AdvancedSearchParams) {
     advancedResults.value = body.results
     advancedDegraded.value = body.degraded
     advancedDegradationReason.value = body.degradation?.reason ?? null
+    advancedDegradationMessage.value = body.degradation?.message ?? null
     if (body.degraded) {
       ui.pushToast(
-        `Advanced search degraded: ${body.degradation?.reason ?? 'unknown'}`,
-        'info',
+        body.degradation?.message ?? `Advanced search degraded: ${body.degradation?.reason ?? 'unknown'}`,
+        'warning',
       )
     }
   } catch (error) {
     advancedResults.value = []
     advancedDegraded.value = false
     advancedDegradationReason.value = null
+    advancedDegradationMessage.value = null
     if (error instanceof AdvancedSearchHTTPError) {
       if (error.status === 401) {
         await onAuthFailure()
@@ -382,6 +385,7 @@ watch(facetQuery.error, (err) => {
         :results="advancedResults"
         :degraded="advancedDegraded"
         :degradation-reason="advancedDegradationReason"
+        :degradation-message="advancedDegradationMessage"
       />
 
       <div v-if="loading" class="rounded-xl border border-ink-100 bg-white p-6 text-sm text-ink-500" role="status">
