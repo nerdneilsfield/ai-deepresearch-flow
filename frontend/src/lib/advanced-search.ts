@@ -1,3 +1,4 @@
+import { ADVANCED_SEARCH_TIMEOUT_MS } from '@/lib/config'
 import { buildUrl, fetchResponse } from '@/lib/http'
 
 export type VerifyResult =
@@ -141,8 +142,10 @@ export async function advancedSearch(
   const response = await fetchResponse(
     `${buildUrl('/search/advanced')}?${buildQueryString(params)}`,
     {
-    method: 'GET',
-    headers: { Authorization: `Bearer ${token}` },
+      method: 'GET',
+      headers: { Authorization: `Bearer ${token}` },
+      timeoutMs: ADVANCED_SEARCH_TIMEOUT_MS,
+      retry: 0,
     },
   )
   if (!response.ok) {

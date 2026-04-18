@@ -6,3 +6,4 @@ export const MAX_BATCH_SIZE = 10000
 
 export const SEARCH_DEBOUNCE_MS = 300
 export const SEARCH_TIMEOUT_MS = 10_000
+export const ADVANCED_SEARCH_TIMEOUT_MS = 120_000
