@@ -24,7 +24,6 @@ from deepresearch_flow.paper.snapshot.mcp_content import (
     get_markdown_outline as _get_markdown_outline,
     get_summary_key as _get_summary_key,
     get_summary_keys as _get_summary_keys,
-    truncate_text,
 )
 from deepresearch_flow.paper.snapshot.text import merge_adjacent_markers, remove_cjk_spaces, rewrite_search_query
 _DEFAULT_TIMEOUT = 10.0
@@ -125,6 +124,24 @@ def create_mcp_transport_app(
     *,
     transport: Literal["streamable-http", "sse"] = "streamable-http",
 ) -> tuple[Any, Any]:
+    bound_app, transport_lifespan = _create_mcp_transport_binding(config, transport=transport)
+
+    @asynccontextmanager
+    async def lifespan(app):
+        try:
+            async with transport_lifespan(app):
+                yield
+        finally:
+            config.close_http_client()
+
+    return bound_app, lifespan
+
+
+def _create_mcp_transport_binding(
+    config: McpSnapshotConfig,
+    *,
+    transport: Literal["streamable-http", "sse"],
+) -> tuple[Any, Any]:
     """Create MCP app for a specific transport following FastMCP 3.0 best practices.
 
     See: https://gofastmcp.com/deployment/running-server
@@ -140,14 +157,11 @@ def create_mcp_transport_app(
     bound_app = bearer_auth_app(_bind_mcp_config_app(mcp_app, config), config.mcp_access_token)
 
     @asynccontextmanager
-    async def lifespan(app):
-        try:
-            async with mcp_app.lifespan(app):
-                yield
-        finally:
-            config.close_http_client()
+    async def transport_lifespan(app):
+        async with mcp_app.lifespan(app):
+            yield
 
-    return bound_app, lifespan
+    return bound_app, transport_lifespan
 
 
 def create_mcp_apps(config: McpSnapshotConfig) -> tuple[dict[str, Any], Any]:
@@ -156,8 +170,24 @@ def create_mcp_apps(config: McpSnapshotConfig) -> tuple[dict[str, Any], Any]:
     Returns:
         A tuple of (apps_by_transport, lifespan_context).
     """
-    streamable_app, lifespan = create_mcp_transport_app(config, transport="streamable-http")
-    sse_app, _ = create_mcp_transport_app(config, transport="sse")
+    streamable_app, streamable_lifespan = _create_mcp_transport_binding(
+        config,
+        transport="streamable-http",
+    )
+    sse_app, sse_lifespan = _create_mcp_transport_binding(
+        config,
+        transport="sse",
+    )
+
+    @asynccontextmanager
+    async def lifespan(app):
+        try:
+            async with streamable_lifespan(app):
+                async with sse_lifespan(app):
+                    yield
+        finally:
+            config.close_http_client()
+
     return {"streamable-http": streamable_app, "sse": sse_app}, lifespan
 
 
@@ -217,13 +247,22 @@ def _validate_paper_id(paper_id: str, cfg: McpSnapshotConfig) -> str:
 
 
 def _truncate(text: str, max_chars: int | None) -> str:
-    """Truncate text without exceeding the requested ceiling."""
-    return truncate_text(text, max_chars)
+    """Truncate text while preserving the legacy truncation marker."""
+    if max_chars is None or len(text) <= max_chars:
+        return text
+    remaining = len(text) - max_chars
+    return f"{text[:max_chars]}\n[truncated: {remaining} more chars]"
 
 
 def _resolve_content_max_chars(cfg: McpSnapshotConfig, max_chars: int | None) -> int | None:
     """Resolve the effective max_chars ceiling for server content reads."""
     if max_chars is not None:
+        if max_chars <= 0:
+            raise McpToolError(
+                "invalid_max_chars",
+                "max_chars must be a positive integer",
+                max_chars=max_chars,
+            )
         return max_chars
     return min(cfg.max_chars_default, _DEFAULT_CONTENT_MAX_CHARS)
 

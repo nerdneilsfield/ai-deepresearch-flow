@@ -31,10 +31,27 @@ class MarkdownContentError(Exception):
 
 
 def truncate_text(text: str, max_chars: int | None) -> str:
-    """Return text truncated to the requested maximum length."""
+    """Return text truncated to the requested maximum length.
+
+    This helper is used by summary previews and keyed summary reads.
+    Legacy full-text MCP responses preserve their historical truncation marker
+    in ``mcp_server._truncate`` instead of calling this helper directly.
+    """
     if max_chars is None or max_chars <= 0 or len(text) <= max_chars:
         return text
     return text[:max_chars]
+
+
+def _require_positive_max_chars(max_chars: int | None, *, error_cls) -> int | None:
+    if max_chars is None:
+        return None
+    if max_chars <= 0:
+        raise error_cls(
+            "invalid_max_chars",
+            "max_chars must be a positive integer",
+            max_chars=max_chars,
+        )
+    return max_chars
 
 
 def _json_type(value: Any) -> str:
@@ -108,12 +125,19 @@ def _parse_summary_key(key: str) -> list[tuple[str, int | str]]:
             i = end + 1
             expecting_segment = False
             if i < length:
-                if text[i] != ".":
-                    raise SummaryContentError("invalid_summary_key", "Summary key must separate path segments with '.'", key=key)
-                i += 1
-                if i >= length:
-                    raise SummaryContentError("invalid_summary_key", "Summary key has an empty field name", key=key)
-                expecting_segment = True
+                if text[i] == ".":
+                    i += 1
+                    if i >= length:
+                        raise SummaryContentError("invalid_summary_key", "Summary key has an empty field name", key=key)
+                    expecting_segment = True
+                elif text[i] == "[":
+                    continue
+                else:
+                    raise SummaryContentError(
+                        "invalid_summary_key",
+                        "Summary key must separate path segments with '.'",
+                        key=key,
+                    )
             continue
 
         start = i
@@ -203,6 +227,7 @@ def get_summary_key(
     """Return the addressed summary subtree as text."""
     root = _parse_summary_json(summary_json)
     segments = _parse_summary_key(key)
+    effective_max_chars = _require_positive_max_chars(max_chars, error_cls=SummaryContentError)
 
     node: Any = root
     for kind, value in segments:
@@ -231,9 +256,9 @@ def get_summary_key(
             node = node[index]
 
     content, content_format = _serialize_value(node)
-    effective_max_chars = DEFAULT_MAX_CHARS if max_chars is None else max_chars
+    effective_max_chars = DEFAULT_MAX_CHARS if effective_max_chars is None else effective_max_chars
     truncated = False
-    if effective_max_chars > 0 and len(content) > effective_max_chars:
+    if len(content) > effective_max_chars:
         content = truncate_text(content, effective_max_chars)
         truncated = True
 
@@ -261,20 +286,36 @@ def _is_cjk_char(ch: str) -> bool:
     )
 
 
-def _slugify_heading(title: str, index: int, seen: dict[str, int]) -> str:
+def _slugify_heading(title: str, index: int, used: set[str]) -> str:
     slug_source = title.strip().lower()
     slug_source = re.sub(r"\s+", "-", slug_source)
     filtered: list[str] = []
     for ch in slug_source:
         if "a" <= ch <= "z" or "0" <= ch <= "9" or _is_cjk_char(ch) or ch == "-":
             filtered.append(ch)
-    slug = re.sub(r"-+", "-", "".join(filtered)).strip("-")
-    if not slug:
-        slug = f"section-{index}"
-    seen[slug] = seen.get(slug, 0) + 1
-    if seen[slug] > 1:
-        slug = f"{slug}-{seen[slug]}"
+    base_slug = re.sub(r"-+", "-", "".join(filtered)).strip("-")
+    if not base_slug:
+        base_slug = f"section-{index}"
+    slug = base_slug
+    suffix = 2
+    while slug in used:
+        slug = f"{base_slug}-{suffix}"
+        suffix += 1
+    used.add(slug)
     return slug
+
+
+def _parse_fence_marker(line: str) -> tuple[str, int] | None:
+    stripped = line.lstrip()
+    if not stripped or stripped[0] not in {"`", "~"}:
+        return None
+    marker = stripped[0]
+    length = 0
+    while length < len(stripped) and stripped[length] == marker:
+        length += 1
+    if length < 3:
+        return None
+    return marker, length
 
 
 def _scan_markdown_headings(markdown: str) -> tuple[list[str], list[dict[str, Any]]]:
@@ -283,18 +324,22 @@ def _scan_markdown_headings(markdown: str) -> tuple[list[str], list[dict[str, An
     headings: list[dict[str, Any]] = []
     in_fence = False
     fence_char = ""
+    fence_length = 0
 
     for line_number, line in enumerate(lines, start=1):
         stripped = line.lstrip()
         if in_fence:
-            if stripped.startswith(fence_char * 3):
+            marker = _parse_fence_marker(line)
+            if marker is not None and marker[0] == fence_char and marker[1] >= fence_length:
                 in_fence = False
                 fence_char = ""
+                fence_length = 0
             continue
 
-        if stripped.startswith("```") or stripped.startswith("~~~"):
+        marker = _parse_fence_marker(line)
+        if marker is not None:
             in_fence = True
-            fence_char = stripped[0]
+            fence_char, fence_length = marker
             continue
 
         heading_match = _MARKDOWN_HEADING_RE.match(line)
@@ -316,14 +361,14 @@ def _scan_markdown_headings(markdown: str) -> tuple[list[str], list[dict[str, An
 def get_markdown_outline(markdown: str) -> dict[str, Any]:
     lines, headings = _scan_markdown_headings(markdown)
     total_lines = len(lines)
-    seen: dict[str, int] = {}
+    used_ids: set[str] = set()
     sections: list[dict[str, Any]] = []
 
     for idx, heading in enumerate(headings, start=1):
         next_line = headings[idx]["line_number"] - 1 if idx < len(headings) else total_lines
         sections.append(
             {
-                "id": _slugify_heading(heading["title"], idx, seen),
+                "id": _slugify_heading(heading["title"], idx, used_ids),
                 "title": heading["title"],
                 "level": heading["level"],
                 "start_line": heading["line_number"],
@@ -348,13 +393,16 @@ def get_markdown_line_range(markdown: str, start_line: int, end_line: int) -> di
     lines = markdown.splitlines()
     total_lines = len(lines)
     if total_lines == 0:
-        actual_start_line = 0
-        actual_end_line = 0
-        content = ""
-    else:
-        actual_start_line = min(start, total_lines)
-        actual_end_line = min(end, total_lines)
-        content = "\n".join(lines[actual_start_line - 1 : actual_end_line])
+        raise MarkdownContentError(
+            "invalid_line_range",
+            "Line range is invalid for empty markdown",
+            start_line=start_line,
+            end_line=end_line,
+        )
+
+    actual_start_line = min(start, total_lines)
+    actual_end_line = min(end, total_lines)
+    content = "\n".join(lines[actual_start_line - 1 : actual_end_line])
 
     return {
         "start_line": start,
