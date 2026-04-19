@@ -416,6 +416,9 @@ MCP 客户端配置：
   - `/mcp`：仅支持 HTTP POST（GET 返回 405）
   - `/mcp-sse`：支持 SSE（允许 GET 握手）
 - Summary/Source/Translation 由 MCP 服务器代理读取静态资源并返回文本内容（不返回 URL）
+- MCP 鉴权：启用后，客户端必须携带 `Authorization: Bearer <token>`。
+  - 通过 `--mcp-access-token` 或 `MCP_ACCESS_TOKEN` 配置该 token。
+  - MCP token、高级搜索 token 和 admin token 是彼此独立的凭据，分别保护不同的接口面。
 
 **FastMCP 特性**：
 - 使用 `fastmcp>=3.0.0b1`，支持 stateless HTTP 模式
@@ -483,8 +486,38 @@ MCP 客户端配置：
 - 参数：
   - `paper_id`（str）
   - `template`（str | null）
-  - `max_chars`（int | null）：截断上限
+  - `max_chars`（int | null）：截断上限，默认 `8000`
 - 返回：JSON 字符串（可能包含 `[truncated: ...]` 标记）
+
+</details>
+
+<details>
+<summary><strong>get_paper_summary_keys(paper_id, template=None, max_depth=2, include_preview=False)</strong> — summary 键路径（按文档顺序）</summary>
+
+- 说明：
+  - 返回所选 summary 模板的递归键路径
+  - 当 `include_preview=True` 时，字符串预览最多 `80` 个 Unicode code points
+- 参数：
+  - `paper_id`（str）
+  - `template`（str | null）
+  - `max_depth`（int）：递归深度上限
+  - `include_preview`（bool）：是否为字符串叶子附加短预览
+- 返回：包含 `paper_id`、`template`、`root_type` 和 `paths` 的 dict
+
+</details>
+
+<details>
+<summary><strong>get_paper_summary_key(paper_id, key, template=None, max_chars=None)</strong> — 单个定位 summary 节点</summary>
+
+- 说明：
+  - 返回被定位的 summary 子树文本
+  - `max_chars` 默认 `8000`
+- 参数：
+  - `paper_id`（str）
+  - `key`（str）：点号路径，列表索引可写成 `items[0]`
+  - `template`（str | null）
+  - `max_chars`（int | null）
+- 返回：包含 `key`、`value_type`、`content_format`、`content`、`truncated` 的 dict
 
 </details>
 
@@ -493,8 +526,50 @@ MCP 客户端配置：
 
 - 参数：
   - `paper_id`（str）
-  - `max_chars`（int | null）：截断上限
+  - `max_chars`（int | null）：截断上限，默认 `8000`
 - 返回：Markdown 字符串（可能包含 `[truncated: ...]` 标记）
+
+</details>
+
+<details>
+<summary><strong>get_paper_source_outline(paper_id)</strong> — source Markdown 大纲（按章节范围）</summary>
+
+- 参数：
+  - `paper_id`（str）
+- 返回：包含 `paper_id`、`total_lines` 和 `sections` 的 dict，其中每个 section 都带 `start_line` / `end_line`
+
+</details>
+
+<details>
+<summary><strong>get_paper_source_lines(paper_id, start_line, end_line)</strong> — source Markdown 行范围</summary>
+
+- 参数：
+  - `paper_id`（str）
+  - `start_line`（int）：1 起始的包含式起点
+  - `end_line`（int）：1 起始的包含式终点
+- 返回：包含 `paper_id`、`start_line`、`end_line`、`actual_start_line`、`actual_end_line`、`total_lines`、`content` 的 dict
+
+</details>
+
+<details>
+<summary><strong>get_paper_translation_outline(paper_id, lang)</strong> — 翻译 Markdown 大纲（按章节范围）</summary>
+
+- 参数：
+  - `paper_id`（str）
+  - `lang`（str）：语言代码，例如 `zh` 或 `ja`
+- 返回：包含 `paper_id`、`lang`、`total_lines` 和 `sections` 的 dict
+
+</details>
+
+<details>
+<summary><strong>get_paper_translation_lines(paper_id, lang, start_line, end_line)</strong> — 翻译 Markdown 行范围</summary>
+
+- 参数：
+  - `paper_id`（str）
+  - `lang`（str）：语言代码，例如 `zh` 或 `ja`
+  - `start_line`（int）：1 起始的包含式起点
+  - `end_line`（int）：1 起始的包含式终点
+- 返回：包含 `paper_id`、`lang`、`start_line`、`end_line`、`actual_start_line`、`actual_end_line`、`total_lines`、`content` 的 dict
 
 </details>
 

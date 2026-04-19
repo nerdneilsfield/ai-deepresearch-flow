@@ -1034,6 +1034,9 @@ This project exposes MCP servers mounted on the snapshot API:
   - `/mcp-sse`: SSE-enabled transport (supports `GET` handshake)
 - Protocol header: optional `mcp-protocol-version` (`2025-03-26` or `2025-06-18`)
 - Static reads: summary/source/translation are served as **text content** by reading snapshot static assets (local-first via `PAPER_DB_STATIC_EXPORT_DIR`, HTTP fallback via `PAPER_DB_STATIC_BASE` / `PAPER_DB_STATIC_BASE_URL`)
+- MCP auth: when enabled, clients must send `Authorization: Bearer <token>`.
+  - Configure it with `--mcp-access-token` or `MCP_ACCESS_TOKEN`.
+  - The MCP token, advanced-search token, and admin token are separate credentials that protect different surfaces.
 
 Optional (avoid HTTP fetch by reading exported assets directly on the API host):
 
@@ -1098,8 +1101,38 @@ export PAPER_DB_STATIC_EXPORT_DIR=/data/paper-static
 - Args:
   - `paper_id` (str)
   - `template` (str | null)
-  - `max_chars` (int | null): truncation limit
+  - `max_chars` (int | null): truncation limit, default `8000`
 - Returns: JSON string (may include a `[truncated: ...]` marker)
+
+</details>
+
+<details>
+<summary><strong>get_paper_summary_keys(paper_id, template=None, max_depth=2, include_preview=False)</strong> — summary key paths in document order</summary>
+
+- Notes:
+  - Returns recursive summary key paths for the selected summary template
+  - When `include_preview=True`, string previews are capped at `80` Unicode code points
+- Args:
+  - `paper_id` (str)
+  - `template` (str | null)
+  - `max_depth` (int): recursion depth limit
+  - `include_preview` (bool): include short string previews for leaf strings
+- Returns: dict with `paper_id`, `template`, `root_type`, and `paths`
+
+</details>
+
+<details>
+<summary><strong>get_paper_summary_key(paper_id, key, template=None, max_chars=None)</strong> — one addressed summary node</summary>
+
+- Notes:
+  - Returns the selected summary subtree as text
+  - `max_chars` defaults to `8000`
+- Args:
+  - `paper_id` (str)
+  - `key` (str): dotted path, with optional list indexes like `items[0]`
+  - `template` (str | null)
+  - `max_chars` (int | null)
+- Returns: dict with `key`, `value_type`, `content_format`, `content`, `truncated`
 
 </details>
 
@@ -1108,8 +1141,50 @@ export PAPER_DB_STATIC_EXPORT_DIR=/data/paper-static
 
 - Args:
   - `paper_id` (str)
-  - `max_chars` (int | null): truncation limit
+  - `max_chars` (int | null): truncation limit, default `8000`
 - Returns: markdown string (may include a `[truncated: ...]` marker)
+
+</details>
+
+<details>
+<summary><strong>get_paper_source_outline(paper_id)</strong> — source markdown outline as section ranges</summary>
+
+- Args:
+  - `paper_id` (str)
+- Returns: dict with `paper_id`, `total_lines`, and `sections` with `start_line` / `end_line`
+
+</details>
+
+<details>
+<summary><strong>get_paper_source_lines(paper_id, start_line, end_line)</strong> — source markdown line range</summary>
+
+- Args:
+  - `paper_id` (str)
+  - `start_line` (int): 1-based inclusive start
+  - `end_line` (int): 1-based inclusive end
+- Returns: dict with `paper_id`, `start_line`, `end_line`, `actual_start_line`, `actual_end_line`, `total_lines`, `content`
+
+</details>
+
+<details>
+<summary><strong>get_paper_translation_outline(paper_id, lang)</strong> — translated markdown outline as section ranges</summary>
+
+- Args:
+  - `paper_id` (str)
+  - `lang` (str): language code such as `zh` or `ja`
+- Returns: dict with `paper_id`, `lang`, `total_lines`, and `sections`
+
+</details>
+
+<details>
+<summary><strong>get_paper_translation_lines(paper_id, lang, start_line, end_line)</strong> — translated markdown line range</summary>
+
+- Args:
+  - `paper_id` (str)
+  - `lang` (str): language code such as `zh` or `ja`
+  - `start_line` (int): 1-based inclusive start
+  - `end_line` (int): 1-based inclusive end
+- Returns: dict with `paper_id`, `lang`, `start_line`, `end_line`, `actual_start_line`, `actual_end_line`, `total_lines`, `content`
 
 </details>
 
