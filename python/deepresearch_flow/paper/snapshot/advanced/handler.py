@@ -15,7 +15,8 @@ from deepresearch_flow.paper.snapshot.advanced.errors import (
     InvalidQueryError,
     UnauthorizedError,
 )
-from deepresearch_flow.paper.snapshot.advanced.pipeline import RequestSpec, run_advanced_search
+from deepresearch_flow.paper.snapshot.advanced.pipeline import run_advanced_search
+from deepresearch_flow.paper.snapshot.advanced.request_spec import build_request_spec
 from deepresearch_flow.paper.snapshot.common import _open_ro_conn
 
 
@@ -95,26 +96,17 @@ async def _api_search_advanced(request: Request) -> JSONResponse:
 
     search_cfg = ctx.search_config
     try:
-        top_n = int(request.query_params.get("top_n", "10"))
-        if top_n < 1 or top_n > search_cfg.advanced_top_n_max:
-            raise InvalidQueryError(
-                f"top_n must be in [1, {search_cfg.advanced_top_n_max}]"
-            )
-        mmr_lambda = float(
-            request.query_params.get("mmr_lambda", str(search_cfg.advanced_mmr_lambda_default))
-        )
-        if not (0.0 <= mmr_lambda <= 1.0):
-            raise InvalidQueryError("mmr_lambda must be in [0,1]")
-        rerank_mode = request.query_params.get("rerank", "auto")
-        if rerank_mode not in {"auto", "always", "never"}:
-            raise InvalidQueryError("rerank must be auto|always|never")
-        request_spec = RequestSpec(
+        request_spec = build_request_spec(
             query_raw=request.query_params.get("q", ""),
-            top_n=top_n,
-            mmr_lambda=mmr_lambda,
-            rerank_mode=rerank_mode,
+            top_n=request.query_params.get("top_n", "10"),
+            mmr_lambda=request.query_params.get(
+                "mmr_lambda",
+                str(search_cfg.advanced_mmr_lambda_default),
+            ),
+            rerank_mode=request.query_params.get("rerank", "auto"),
             filter_params=_collect_filter_params(request),
             trace_id=trace_id,
+            search_cfg=search_cfg,
         )
     except AdvancedSearchError as exc:
         return _error_response(exc, trace_id)
