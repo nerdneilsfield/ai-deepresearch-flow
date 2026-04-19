@@ -143,6 +143,14 @@ class TestMcpTransportAuth(unittest.IsolatedAsyncioTestCase):
                 response = await _capture_response_start(
                     app,
                     method="GET",
+                    path="/mcp/",
+                )
+                self.assertEqual(response["status_code"], 401)
+                self.assertEqual(response["headers"].get("www-authenticate"), "Bearer")
+
+                response = await _capture_response_start(
+                    app,
+                    method="GET",
                     path="/mcp-sse/",
                     headers={
                         "Accept": "text/event-stream",

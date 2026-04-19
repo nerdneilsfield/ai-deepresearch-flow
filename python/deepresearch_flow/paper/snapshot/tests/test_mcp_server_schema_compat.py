@@ -390,12 +390,12 @@ class TestMcpServerSchemaCompat(unittest.TestCase):
         summary = get_paper_summary(self.long_summary_paper_id)
         headline = get_paper_summary_key(self.long_summary_paper_id, "headline")
 
-        self.assertLessEqual(len(summary), 8000)
+        self.assertIn("[truncated:", summary)
         self.assertEqual(headline["content_format"], "text/plain")
         self.assertEqual(len(headline["content"]), 8000)
         self.assertTrue(headline["truncated"])
 
-    def test_omitted_max_chars_stays_capped_even_if_config_raises_default(self) -> None:
+    def test_omitted_max_chars_uses_shared_8000_default_even_if_config_raises_default(self) -> None:
         configure(
             McpSnapshotConfig(
                 snapshot_db=self.db_path,
@@ -412,9 +412,9 @@ class TestMcpServerSchemaCompat(unittest.TestCase):
             translated = resource_translation(self.long_summary_paper_id, "zh")
             headline = get_paper_summary_key(self.long_summary_paper_id, "headline")
 
-            self.assertLessEqual(len(summary), 8000)
-            self.assertLessEqual(len(source), 8000)
-            self.assertLessEqual(len(translated), 8000)
+            self.assertIn("[truncated:", summary)
+            self.assertIn("[truncated:", source)
+            self.assertIn("[truncated:", translated)
             self.assertEqual(len(headline["content"]), 8000)
         finally:
             configure(
@@ -454,6 +454,20 @@ class TestMcpServerSchemaCompat(unittest.TestCase):
                     origin_allowlist=["*"],
                 )
             )
+
+    def test_non_positive_max_chars_is_rejected_for_content_tools(self) -> None:
+        for fn, kwargs in (
+            (get_paper_summary, {"paper_id": self.paper_id, "max_chars": 0}),
+            (get_paper_source, {"paper_id": self.paper_id, "max_chars": -1}),
+            (
+                get_paper_summary_key,
+                {"paper_id": self.paper_id, "key": "summary", "max_chars": 0},
+            ),
+        ):
+            with self.subTest(function=fn.__name__, kwargs=kwargs):
+                with self.assertRaises(McpToolError) as ctx:
+                    fn(**kwargs)
+                self.assertEqual(ctx.exception.code, "invalid_max_chars")
 
     def test_get_paper_summary_template_not_available(self) -> None:
         with self.assertRaises(McpToolError) as ctx:

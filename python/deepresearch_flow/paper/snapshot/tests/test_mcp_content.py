@@ -68,6 +68,24 @@ class TestMcpContent(unittest.TestCase):
         self.assertEqual(result["content"], '["first","second"]')
         self.assertFalse(result["truncated"])
 
+    def test_get_summary_key_supports_nested_array_indexes(self) -> None:
+        payload = json.dumps({"matrix": [["a", "b"], ["c", "d"]]}, ensure_ascii=False)
+
+        result = get_summary_key(payload, "matrix[0][1]")
+
+        self.assertEqual(result["value_type"], "string")
+        self.assertEqual(result["content"], "b")
+        self.assertFalse(result["truncated"])
+
+    def test_get_summary_key_rejects_non_positive_max_chars(self) -> None:
+        payload = json.dumps({"summary": "alpha"}, ensure_ascii=False)
+
+        for max_chars in (0, -1):
+            with self.subTest(max_chars=max_chars):
+                with self.assertRaises(SummaryContentError) as ctx:
+                    get_summary_key(payload, "summary", max_chars=max_chars)
+                self.assertEqual(ctx.exception.code, "invalid_max_chars")
+
     def test_get_markdown_outline_generates_stable_ids_and_ranges(self) -> None:
         markdown = dedent(
             """\
@@ -146,6 +164,53 @@ class TestMcpContent(unittest.TestCase):
             ],
         )
 
+    def test_get_markdown_outline_avoids_duplicate_slug_collisions(self) -> None:
+        markdown = dedent(
+            """\
+            # Introduction
+            body A
+            # Introduction 2
+            body B
+            # Introduction
+            body C
+            """
+        )
+
+        result = get_markdown_outline(markdown)
+
+        self.assertEqual(
+            [section["id"] for section in result["sections"]],
+            ["introduction", "introduction-2", "introduction-3"],
+        )
+
+    def test_get_markdown_outline_respects_long_fence_lengths(self) -> None:
+        markdown = dedent(
+            """\
+            ~~~~
+            ## hidden
+            ~~~
+            ## still hidden
+            ~~~~
+            ## visible
+            body
+            """
+        )
+
+        result = get_markdown_outline(markdown)
+
+        self.assertEqual(
+            result["sections"],
+            [
+                {
+                    "id": "visible",
+                    "title": "visible",
+                    "level": 2,
+                    "start_line": 6,
+                    "end_line": 7,
+                }
+            ],
+        )
+
     def test_get_markdown_line_range_returns_requested_slice_and_actual_bounds(self) -> None:
         markdown = "\n".join(["alpha", "beta", "gamma", "delta", "epsilon"])
 
@@ -178,6 +243,12 @@ class TestMcpContent(unittest.TestCase):
                 with self.assertRaises(MarkdownContentError) as ctx:
                     get_markdown_line_range(markdown, start_line, end_line)
                 self.assertEqual(ctx.exception.code, "invalid_line_range")
+
+    def test_get_markdown_line_range_rejects_empty_markdown(self) -> None:
+        with self.assertRaises(MarkdownContentError) as ctx:
+            get_markdown_line_range("", 1, 1)
+
+        self.assertEqual(ctx.exception.code, "invalid_line_range")
 
 
 if __name__ == "__main__":

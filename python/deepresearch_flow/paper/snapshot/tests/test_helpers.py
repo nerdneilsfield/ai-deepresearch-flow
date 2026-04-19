@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sqlite3
@@ -7,12 +8,15 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from starlette.applications import Starlette
+
 from deepresearch_flow.paper.snapshot.mcp_server import (
     ApiLimits,
     McpSnapshotConfig,
     McpToolError,
     configure,
     create_mcp_app,
+    create_mcp_apps,
     create_mcp_transport_app,
     resource_metadata,
     resource_source,
@@ -183,6 +187,25 @@ class TestMcpSnapshotPublicBehavior(unittest.TestCase):
         self.assertTrue(callable(lifespan))
         self.assertEqual(resource_summary_default("p1"), '{"summary": "base"}')
         self.assertIsNotNone(app)
+
+    def test_create_mcp_apps_shared_lifespan_closes_shared_http_client(self) -> None:
+        cfg = self._base_config()
+        client1 = cfg.get_http_client()
+        apps, lifespan = create_mcp_apps(cfg)
+
+        self.assertEqual(sorted(apps.keys()), ["sse", "streamable-http"])
+        self.assertTrue(callable(lifespan))
+
+        async def run_lifespan() -> None:
+            app = Starlette()
+            async with lifespan(app):
+                self.assertIs(cfg.get_http_client(), client1)
+
+        asyncio.run(run_lifespan())
+
+        self.assertTrue(client1.is_closed)
+        client2 = cfg.get_http_client()
+        self.assertIsNot(client1, client2)
 
     def test_resource_metadata_reflects_database_state(self) -> None:
         payload = json.loads(resource_metadata("p1"))
