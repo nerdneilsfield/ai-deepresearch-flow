@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 from typing import Any, Literal
+import uuid
 
 import httpx
 
@@ -51,6 +52,7 @@ class McpSnapshotConfig:
     static_export_dir: Path | None
     limits: ApiLimits
     origin_allowlist: list[str]
+    advanced_config: Any | None = None
     mcp_access_token: str | None = None
     max_chars_default: int = _DEFAULT_MAX_CHARS
     http_timeout: float = _DEFAULT_TIMEOUT
@@ -220,6 +222,37 @@ def _validate_query(query: str, cfg: McpSnapshotConfig) -> str:
             max_length=cfg.limits.max_query_length
         )
     return normalized
+
+
+def _normalize_advanced_filter_params(filters: dict[str, Any] | None) -> dict[str, list[str]]:
+    if not filters:
+        return {}
+    params: dict[str, list[str]] = {}
+    for raw_key, raw_value in filters.items():
+        key = str(raw_key or "").strip()
+        if not key:
+            continue
+        normalized_key = key if key.startswith("filters.") else f"filters.{key}"
+        if isinstance(raw_value, list):
+            values: list[str] = []
+            for item in raw_value:
+                if isinstance(item, bool) or not isinstance(item, (str, int, float)):
+                    raise ValueError(
+                        f"Filter '{normalized_key}' must use string or numeric values"
+                    )
+                text = str(item).strip()
+                if text:
+                    values.append(text)
+        else:
+            if isinstance(raw_value, bool) or not isinstance(raw_value, (str, int, float)):
+                raise ValueError(
+                    f"Filter '{normalized_key}' must use string or numeric values"
+                )
+            value = str(raw_value).strip()
+            values = [value] if value else []
+        if values:
+            params[normalized_key] = values
+    return params
 
 
 def _validate_paper_id(paper_id: str, cfg: McpSnapshotConfig) -> str:
@@ -1030,6 +1063,65 @@ def filter_papers(
             }
             for row in rows
         ]
+    finally:
+        conn.close()
+
+
+@mcp.tool()
+async def search_papers_semantic(
+    query: str,
+    top_n: int = 10,
+    mmr_lambda: float | None = None,
+    rerank: str = "auto",
+    filters: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Run the full advanced semantic search pipeline and return its payload."""
+    cfg = _get_config()
+    ctx = cfg.advanced_config
+    if ctx is None:
+        raise McpToolError(
+            "advanced_search_not_available",
+            "Advanced semantic search is not configured for this MCP server",
+        )
+
+    # Deferred imports keep MCP startup light when advanced search is disabled.
+    from deepresearch_flow.paper.snapshot.advanced.errors import AdvancedSearchError
+    from deepresearch_flow.paper.snapshot.advanced.pipeline import run_advanced_search
+    from deepresearch_flow.paper.snapshot.advanced.request_spec import build_request_spec
+
+    trace_id = uuid.uuid4().hex
+    search_cfg = ctx.search_config
+    try:
+        request_spec = build_request_spec(
+            query_raw=query,
+            top_n=top_n,
+            mmr_lambda=(
+                search_cfg.advanced_mmr_lambda_default
+                if mmr_lambda is None
+                else mmr_lambda
+            ),
+            rerank_mode=rerank,
+            filter_params=_normalize_advanced_filter_params(filters),
+            trace_id=trace_id,
+            search_cfg=search_cfg,
+        )
+    except AdvancedSearchError as exc:
+        raise McpToolError(exc.code.lower(), str(exc), trace_id=trace_id) from exc
+    except ValueError as exc:
+        raise McpToolError("invalid_query", str(exc), trace_id=trace_id) from exc
+
+    conn = _open_ro_conn(cfg.snapshot_db)
+    try:
+        async with httpx.AsyncClient() as client:
+            try:
+                return await run_advanced_search(
+                    request_spec=request_spec,
+                    ctx=ctx,
+                    conn=conn,
+                    client=client,
+                )
+            except AdvancedSearchError as exc:
+                raise McpToolError(exc.code.lower(), str(exc), trace_id=trace_id) from exc
     finally:
         conn.close()
 

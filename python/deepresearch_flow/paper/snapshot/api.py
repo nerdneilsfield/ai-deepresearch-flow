@@ -1020,6 +1020,7 @@ def create_app(
         static_export_dir=resolve_static_export_dir(),
         limits=limits or ApiLimits(),
         origin_allowlist=cors_allowed_origins or ["*"],
+        advanced_config=advanced_config,
         mcp_access_token=mcp_access_token,
     )
     mcp_apps, mcp_lifespan = create_mcp_apps(mcp_config)
