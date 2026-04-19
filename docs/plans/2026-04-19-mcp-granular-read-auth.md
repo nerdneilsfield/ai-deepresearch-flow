@@ -153,10 +153,12 @@ Create helper utilities for:
 - summary key-path enumeration
 - selected-node extraction and serialization
 
-Set `_DEFAULT_MAX_CHARS = 8000` for MCP content-returning reads and keep explicit `max_chars` overrides available.
-Add a regression assertion that when `max_chars` is omitted, returned content length does not exceed `8000`.
+Set `_DEFAULT_MAX_CHARS = 8000` for MCP content-returning reads and keep explicit positive `max_chars` overrides available.
+Apply that shared omitted-value ceiling to both new granular reads and existing string-returning MCP tools, even when config raises `max_chars_default` higher.
+Preserve the legacy `[truncated: N more chars]` marker on existing string-returning tools when truncation happens.
+Add a regression assertion that omitted `max_chars` keeps the content body capped at `8000`, while legacy string tools still expose truncation via the marker.
 
-Register the new MCP tools in `mcp_server.py` while keeping `get_paper_summary(...)` unchanged.
+Register the new MCP tools in `mcp_server.py` while keeping the existing full-text tool shapes unchanged.
 
 **Step 4: Run tests to verify they pass**
 

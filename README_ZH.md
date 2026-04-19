@@ -483,10 +483,11 @@ MCP 客户端配置：
 - 说明：
   - `template` 为空时使用 `preferred_summary_template`
   - 返回 **JSON 内容本身**（不是 URL）
+  - 如果省略 `max_chars`，会使用共享的 `8000` 默认上限；即使服务端把 `max_chars_default` 设得更高也不会放宽
 - 参数：
   - `paper_id`（str）
   - `template`（str | null）
-  - `max_chars`（int | null）：截断上限，默认 `8000`
+  - `max_chars`（int | null）：截断上限；如果传入，必须是正整数；省略时默认 `8000`
 - 返回：JSON 字符串（可能包含 `[truncated: ...]` 标记）
 
 </details>
@@ -511,12 +512,13 @@ MCP 客户端配置：
 
 - 说明：
   - 返回被定位的 summary 子树文本
+  - `key` 支持点号字段、`items[0]` 这样的数组索引，以及 `matrix[0][1]` 这样的连续数组索引
   - `max_chars` 默认 `8000`
 - 参数：
   - `paper_id`（str）
-  - `key`（str）：点号路径，列表索引可写成 `items[0]`
+  - `key`（str）：点号路径，列表索引可写成 `items[0]` 或 `matrix[0][1]`
   - `template`（str | null）
-  - `max_chars`（int | null）
+  - `max_chars`（int | null）：如果传入，必须是正整数
 - 返回：包含 `key`、`value_type`、`content_format`、`content`、`truncated` 的 dict
 
 </details>
@@ -524,9 +526,11 @@ MCP 客户端配置：
 <details>
 <summary><strong>get_paper_source(paper_id, max_chars=None)</strong> — source Markdown 原文</summary>
 
+- 说明：
+  - 如果省略 `max_chars`，会使用共享的 `8000` 默认上限；即使服务端把 `max_chars_default` 设得更高也不会放宽
 - 参数：
   - `paper_id`（str）
-  - `max_chars`（int | null）：截断上限，默认 `8000`
+  - `max_chars`（int | null）：截断上限；如果传入，必须是正整数；省略时默认 `8000`
 - 返回：Markdown 字符串（可能包含 `[truncated: ...]` 标记）
 
 </details>

@@ -1098,10 +1098,11 @@ export PAPER_DB_STATIC_EXPORT_DIR=/data/paper-static
 - Notes:
   - Uses `preferred_summary_template` if `template` is omitted
   - Returns the **full JSON content** (not a URL)
+  - When `max_chars` is omitted, the shared MCP default ceiling is `8000` even if server config raises `max_chars_default`
 - Args:
   - `paper_id` (str)
   - `template` (str | null)
-  - `max_chars` (int | null): truncation limit, default `8000`
+  - `max_chars` (int | null): truncation limit, must be positive if provided; omitted defaults to `8000`
 - Returns: JSON string (may include a `[truncated: ...]` marker)
 
 </details>
@@ -1126,12 +1127,13 @@ export PAPER_DB_STATIC_EXPORT_DIR=/data/paper-static
 
 - Notes:
   - Returns the selected summary subtree as text
+  - `key` accepts dotted fields, indexed arrays like `items[0]`, and chained array indexes like `matrix[0][1]`
   - `max_chars` defaults to `8000`
 - Args:
   - `paper_id` (str)
-  - `key` (str): dotted path, with optional list indexes like `items[0]`
+  - `key` (str): dotted path, with optional list indexes like `items[0]` or `matrix[0][1]`
   - `template` (str | null)
-  - `max_chars` (int | null)
+  - `max_chars` (int | null): must be positive if provided
 - Returns: dict with `key`, `value_type`, `content_format`, `content`, `truncated`
 
 </details>
@@ -1139,9 +1141,11 @@ export PAPER_DB_STATIC_EXPORT_DIR=/data/paper-static
 <details>
 <summary><strong>get_paper_source(paper_id, max_chars=None)</strong> — source markdown as raw text</summary>
 
+- Notes:
+  - When `max_chars` is omitted, the shared MCP default ceiling is `8000` even if server config raises `max_chars_default`
 - Args:
   - `paper_id` (str)
-  - `max_chars` (int | null): truncation limit, default `8000`
+  - `max_chars` (int | null): truncation limit, must be positive if provided; omitted defaults to `8000`
 - Returns: markdown string (may include a `[truncated: ...]` marker)
 
 </details>

@@ -135,9 +135,9 @@ Add two new MCP tools:
 - `get_paper_summary_keys(paper_id, template=None, max_depth=2, include_preview=False)`
 - `get_paper_summary_key(paper_id, key, template=None, max_chars=None)`
 
-Existing `get_paper_summary(...)` remains unchanged.
+Existing `get_paper_summary(...)` keeps the same tool shape and return type.
 
-The only default-behavior tightening is truncation size: content-returning MCP tools should use `8000` as the default `max_chars` ceiling unless the caller overrides it explicitly.
+The default-behavior tightening applies to all content-returning MCP tools, including existing full-text reads: omitted `max_chars` should resolve to a shared `8000`-character ceiling even if server config raises `max_chars_default` higher than that. Existing string-returning tools should continue appending the legacy `[truncated: N more chars]` marker when truncation happens.
 
 ### Key grammar
 
@@ -146,6 +146,7 @@ Use a predictable path grammar:
 - object fields use dot access: `experiments.main_result`
 - array elements use brackets: `contributions[0]`
 - mixed paths are allowed: `limitations.items[1].title`
+- chained array indexes are allowed: `matrix[0][1]`
 
 This is simple enough for MCP clients and deterministic enough for black-box testing.
 
@@ -227,6 +228,7 @@ Add four new MCP tools:
 - `get_paper_translation_lines(paper_id, lang, start_line, end_line)`
 
 Existing `get_paper_source(...)` and translation resource behavior remain unchanged.
+They now share the same default `8000`-character ceiling as the new tools when `max_chars` is omitted, and they keep the legacy truncation marker on string responses.
 
 ### Outline behavior
 
