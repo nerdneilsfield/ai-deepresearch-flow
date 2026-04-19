@@ -915,6 +915,13 @@ def register_db_commands(db_group: click.Group) -> None:
         envvar="PAPER_DB_ADMIN_TOKEN",
         help="Bearer token for /api/v1/admin endpoints (or set PAPER_DB_ADMIN_TOKEN)",
     )
+    @click.option(
+        "--mcp-access-token",
+        "mcp_access_token",
+        default=None,
+        envvar="MCP_ACCESS_TOKEN",
+        help="Bearer token for /mcp and /mcp-sse endpoints (or set MCP_ACCESS_TOKEN)",
+    )
     def api_serve(
         snapshot_db: str,
         static_base_url: str | None,
@@ -928,6 +935,7 @@ def register_db_commands(db_group: click.Group) -> None:
         search_access_token_cli: str | None,
         config_path: str,
         admin_token: str | None,
+        mcp_access_token: str | None,
     ) -> None:
         """Serve the snapshot-backed JSON API."""
         import os
@@ -1021,6 +1029,7 @@ def register_db_commands(db_group: click.Group) -> None:
             static_base_url=static_base_url_value,
             cors_allowed_origins=cors_allowed,
             limits=limits,
+            mcp_access_token=mcp_access_token,
             admin_token=admin_token,
             advanced_config=advanced_ctx,
         )

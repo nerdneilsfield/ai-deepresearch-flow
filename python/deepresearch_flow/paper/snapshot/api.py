@@ -996,6 +996,7 @@ def create_app(
     static_base_url: str,
     cors_allowed_origins: list[str] | None = None,
     limits: ApiLimits | None = None,
+    mcp_access_token: str | None = None,
     admin_token: str | None = None,
     advanced_config: Any | None = None,
 ) -> Starlette:
@@ -1019,6 +1020,7 @@ def create_app(
         static_export_dir=resolve_static_export_dir(),
         limits=limits or ApiLimits(),
         origin_allowlist=cors_allowed_origins or ["*"],
+        mcp_access_token=mcp_access_token,
     )
     mcp_apps, mcp_lifespan = create_mcp_apps(mcp_config)
 

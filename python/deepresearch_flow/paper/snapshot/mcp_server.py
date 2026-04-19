@@ -8,16 +8,25 @@ import re
 from typing import Any, Literal
 
 import httpx
-from starlette.applications import Starlette
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError as FastMCPToolError
 
+from deepresearch_flow.paper.snapshot.auth import bearer_auth_app
 from deepresearch_flow.paper.snapshot.common import ApiLimits, _column_exists, _open_ro_conn, _table_exists
+from deepresearch_flow.paper.snapshot.mcp_content import (
+    DEFAULT_MAX_CHARS as _DEFAULT_MAX_CHARS,
+    MarkdownContentError,
+    SummaryContentError,
+    get_markdown_line_range as _get_markdown_line_range,
+    get_markdown_outline as _get_markdown_outline,
+    get_summary_key as _get_summary_key,
+    get_summary_keys as _get_summary_keys,
+    truncate_text,
+)
 from deepresearch_flow.paper.snapshot.text import merge_adjacent_markers, remove_cjk_spaces, rewrite_search_query
-
-_DEFAULT_MAX_CHARS = 50_000
 _DEFAULT_TIMEOUT = 10.0
+_DEFAULT_CONTENT_MAX_CHARS = 8_000
 _PAPER_ID_PATTERN = re.compile(r'^[a-zA-Z0-9_-]+$')
 
 
@@ -41,6 +50,7 @@ class McpSnapshotConfig:
     static_export_dir: Path | None
     limits: ApiLimits
     origin_allowlist: list[str]
+    mcp_access_token: str | None = None
     max_chars_default: int = _DEFAULT_MAX_CHARS
     http_timeout: float = _DEFAULT_TIMEOUT
     max_paper_id_length: int = 64
@@ -86,7 +96,7 @@ def create_mcp_transport_app(
     config: McpSnapshotConfig,
     *,
     transport: Literal["streamable-http", "sse"] = "streamable-http",
-) -> tuple[Starlette, Any]:
+) -> tuple[Any, Any]:
     """Create MCP app for a specific transport following FastMCP 3.0 best practices.
 
     See: https://gofastmcp.com/deployment/running-server
@@ -100,10 +110,10 @@ def create_mcp_transport_app(
         stateless_http=(transport == "streamable-http"),
         json_response=True,
     )
-    return mcp_app, mcp_app.lifespan
+    return bearer_auth_app(mcp_app, config.mcp_access_token), mcp_app.lifespan
 
 
-def create_mcp_apps(config: McpSnapshotConfig) -> tuple[dict[str, Starlette], Any]:
+def create_mcp_apps(config: McpSnapshotConfig) -> tuple[dict[str, Any], Any]:
     """Create streamable-http and sse MCP apps.
 
     Returns:
@@ -114,7 +124,7 @@ def create_mcp_apps(config: McpSnapshotConfig) -> tuple[dict[str, Starlette], An
     return {"streamable-http": streamable_app, "sse": sse_app}, lifespan
 
 
-def create_mcp_app(config: McpSnapshotConfig) -> tuple[Starlette, Any]:
+def create_mcp_app(config: McpSnapshotConfig) -> tuple[Any, Any]:
     """Backward-compatible helper returning streamable-http MCP app."""
     return create_mcp_transport_app(config, transport="streamable-http")
 
@@ -169,13 +179,15 @@ def _validate_paper_id(paper_id: str, cfg: McpSnapshotConfig) -> str:
 
 
 def _truncate(text: str, max_chars: int | None) -> str:
-    """Truncate text with marker."""
-    if max_chars is None or max_chars <= 0:
-        return text
-    if len(text) <= max_chars:
-        return text
-    remaining = len(text) - max_chars
-    return f"{text[:max_chars]}\n[truncated: {remaining} more chars]"
+    """Truncate text without exceeding the requested ceiling."""
+    return truncate_text(text, max_chars)
+
+
+def _resolve_content_max_chars(cfg: McpSnapshotConfig, max_chars: int | None) -> int | None:
+    """Resolve the effective max_chars ceiling for server content reads."""
+    if max_chars is not None:
+        return max_chars
+    return min(cfg.max_chars_default, _DEFAULT_CONTENT_MAX_CHARS)
 
 
 def _read_static_text(rel_path: str) -> str | None:
@@ -216,7 +228,7 @@ def _load_static_text(rel_path: str) -> str:
         raise RuntimeError("asset_fetch_failed:not_configured") from exc
 
 
-def _load_summary_json(paper_id: str, template: str | None) -> tuple[str | None, list[str] | None]:
+def _load_summary_json(paper_id: str, template: str | None) -> tuple[str | None, list[str] | None, str | None]:
     """Load summary JSON content and return available templates list."""
     cfg = _get_config()
     conn = _open_ro_conn(cfg.snapshot_db)
@@ -226,7 +238,7 @@ def _load_summary_json(paper_id: str, template: str | None) -> tuple[str | None,
             (paper_id,),
         ).fetchone()
         if not row:
-            return None, None
+            return None, None, None
         preferred = str(row["preferred_summary_template"] or "")
         template_rows = conn.execute(
             "SELECT template_tag FROM paper_summary WHERE paper_id = ?",
@@ -235,12 +247,12 @@ def _load_summary_json(paper_id: str, template: str | None) -> tuple[str | None,
         available = sorted((str(item["template_tag"]) for item in template_rows), key=str.lower)
         selected = (template or preferred).strip()
         if not selected or selected not in set(available):
-            return None, available
+            return None, available, selected or None
         if template:
             rel_path = f"summary/{paper_id}/{selected}.json"
         else:
             rel_path = f"summary/{paper_id}.json"
-        return _load_static_text(rel_path), available
+        return _load_static_text(rel_path), available, selected
     finally:
         conn.close()
 
@@ -473,10 +485,10 @@ def get_paper_summary(paper_id: str, template: str | None = None, max_chars: int
     """
     cfg = _get_config()
     paper_id = _validate_paper_id(paper_id, cfg)
-    max_chars = max_chars if max_chars is not None else cfg.max_chars_default
+    max_chars = _resolve_content_max_chars(cfg, max_chars)
     
     try:
-        payload, available = _load_summary_json(paper_id, template)
+        payload, available, _ = _load_summary_json(paper_id, template)
     except RuntimeError as exc:
         raise McpToolError(
             "asset_fetch_failed",
@@ -499,6 +511,102 @@ def get_paper_summary(paper_id: str, template: str | None = None, max_chars: int
 
 
 @mcp.tool()
+def get_paper_summary_keys(
+    paper_id: str,
+    template: str | None = None,
+    max_depth: int = 2,
+    include_preview: bool = False,
+) -> dict[str, Any]:
+    """Get recursive summary key paths in document order."""
+    cfg = _get_config()
+    paper_id = _validate_paper_id(paper_id, cfg)
+
+    try:
+        payload, available, selected_template = _load_summary_json(paper_id, template)
+    except RuntimeError as exc:
+        raise McpToolError(
+            "asset_fetch_failed",
+            "Failed to fetch summary asset",
+            paper_id=paper_id,
+            template=template,
+            detail=str(exc),
+        ) from exc
+
+    if payload is None:
+        raise McpToolError(
+            "template_not_available",
+            "Template not available",
+            paper_id=paper_id,
+            template=template,
+            available_summary_templates=available,
+        )
+
+    try:
+        content = _get_summary_keys(
+            payload,
+            max_depth=max(0, int(max_depth)),
+            include_preview=bool(include_preview),
+        )
+    except SummaryContentError as exc:
+        details = {"paper_id": paper_id, "template": selected_template}
+        details.update(exc.details)
+        raise McpToolError(exc.code, exc.message, **details) from exc
+
+    return {
+        "paper_id": paper_id,
+        "template": selected_template,
+        **content,
+    }
+
+
+@mcp.tool()
+def get_paper_summary_key(
+    paper_id: str,
+    key: str,
+    template: str | None = None,
+    max_chars: int | None = None,
+) -> dict[str, Any]:
+    """Get a single addressed summary node."""
+    cfg = _get_config()
+    paper_id = _validate_paper_id(paper_id, cfg)
+    max_chars = _resolve_content_max_chars(cfg, max_chars)
+
+    try:
+        payload, available, selected_template = _load_summary_json(paper_id, template)
+    except RuntimeError as exc:
+        raise McpToolError(
+            "asset_fetch_failed",
+            "Failed to fetch summary asset",
+            paper_id=paper_id,
+            template=template,
+            detail=str(exc),
+        ) from exc
+
+    if payload is None:
+        raise McpToolError(
+            "template_not_available",
+            "Template not available",
+            paper_id=paper_id,
+            template=template,
+            available_summary_templates=available,
+        )
+
+    try:
+        content = _get_summary_key(payload, key, max_chars=max_chars)
+    except SummaryContentError as exc:
+        details = {"paper_id": paper_id, "template": selected_template}
+        details.update(exc.details)
+        details.setdefault("key", key)
+        raise McpToolError(exc.code, exc.message, **details) from exc
+
+    return {
+        "paper_id": paper_id,
+        "template": selected_template,
+        **content,
+    }
+
+
+@mcp.tool()
 def get_paper_source(paper_id: str, max_chars: int | None = None) -> str:
     """Get source markdown text.
     
@@ -506,7 +614,7 @@ def get_paper_source(paper_id: str, max_chars: int | None = None) -> str:
     """
     cfg = _get_config()
     paper_id = _validate_paper_id(paper_id, cfg)
-    max_chars = max_chars if max_chars is not None else cfg.max_chars_default
+    max_chars = _resolve_content_max_chars(cfg, max_chars)
     
     try:
         content = _load_source_markdown(paper_id)
@@ -526,6 +634,175 @@ def get_paper_source(paper_id: str, max_chars: int | None = None) -> str:
         )
     
     return _truncate(content, max_chars)
+
+
+@mcp.tool()
+def get_paper_source_outline(paper_id: str) -> dict[str, Any]:
+    """Get the source markdown outline as section ranges."""
+    cfg = _get_config()
+    paper_id = _validate_paper_id(paper_id, cfg)
+
+    try:
+        content = _load_source_markdown(paper_id)
+    except RuntimeError as exc:
+        raise McpToolError(
+            "asset_fetch_failed",
+            "Failed to fetch source asset",
+            paper_id=paper_id,
+            detail=str(exc),
+        ) from exc
+
+    if content is None:
+        raise McpToolError(
+            "source_not_available",
+            "Source markdown not available",
+            paper_id=paper_id,
+        )
+
+    try:
+        outline = _get_markdown_outline(content)
+    except MarkdownContentError as exc:
+        details = {"paper_id": paper_id}
+        details.update(exc.details)
+        raise McpToolError(exc.code, exc.message, **details) from exc
+
+    return {
+        "paper_id": paper_id,
+        **outline,
+    }
+
+
+@mcp.tool()
+def get_paper_source_lines(paper_id: str, start_line: int, end_line: int) -> dict[str, Any]:
+    """Get a 1-based inclusive slice of the source markdown."""
+    cfg = _get_config()
+    paper_id = _validate_paper_id(paper_id, cfg)
+
+    try:
+        content = _load_source_markdown(paper_id)
+    except RuntimeError as exc:
+        raise McpToolError(
+            "asset_fetch_failed",
+            "Failed to fetch source asset",
+            paper_id=paper_id,
+            detail=str(exc),
+        ) from exc
+
+    if content is None:
+        raise McpToolError(
+            "source_not_available",
+            "Source markdown not available",
+            paper_id=paper_id,
+        )
+
+    try:
+        slice_payload = _get_markdown_line_range(content, start_line, end_line)
+    except MarkdownContentError as exc:
+        details = {
+            "paper_id": paper_id,
+            "start_line": start_line,
+            "end_line": end_line,
+        }
+        details.update(exc.details)
+        raise McpToolError(exc.code, exc.message, **details) from exc
+
+    return {
+        "paper_id": paper_id,
+        **slice_payload,
+    }
+
+
+@mcp.tool()
+def get_paper_translation_outline(paper_id: str, lang: str) -> dict[str, Any]:
+    """Get the translated markdown outline as section ranges."""
+    cfg = _get_config()
+    paper_id = _validate_paper_id(paper_id, cfg)
+    normalized_lang = (lang or "").strip().lower()
+
+    try:
+        content = _load_translation_markdown(paper_id, normalized_lang)
+    except RuntimeError as exc:
+        raise McpToolError(
+            "asset_fetch_failed",
+            "Failed to fetch translation asset",
+            paper_id=paper_id,
+            lang=normalized_lang,
+            detail=str(exc),
+        ) from exc
+
+    if content is None:
+        raise McpToolError(
+            "translation_not_available",
+            "Translation not available",
+            paper_id=paper_id,
+            lang=normalized_lang,
+        )
+
+    try:
+        outline = _get_markdown_outline(content)
+    except MarkdownContentError as exc:
+        details = {
+            "paper_id": paper_id,
+            "lang": normalized_lang,
+        }
+        details.update(exc.details)
+        raise McpToolError(exc.code, exc.message, **details) from exc
+
+    return {
+        "paper_id": paper_id,
+        "lang": normalized_lang,
+        **outline,
+    }
+
+
+@mcp.tool()
+def get_paper_translation_lines(
+    paper_id: str,
+    lang: str,
+    start_line: int,
+    end_line: int,
+) -> dict[str, Any]:
+    """Get a 1-based inclusive slice of the translated markdown."""
+    cfg = _get_config()
+    paper_id = _validate_paper_id(paper_id, cfg)
+    normalized_lang = (lang or "").strip().lower()
+
+    try:
+        content = _load_translation_markdown(paper_id, normalized_lang)
+    except RuntimeError as exc:
+        raise McpToolError(
+            "asset_fetch_failed",
+            "Failed to fetch translation asset",
+            paper_id=paper_id,
+            lang=normalized_lang,
+            detail=str(exc),
+        ) from exc
+
+    if content is None:
+        raise McpToolError(
+            "translation_not_available",
+            "Translation not available",
+            paper_id=paper_id,
+            lang=normalized_lang,
+        )
+
+    try:
+        slice_payload = _get_markdown_line_range(content, start_line, end_line)
+    except MarkdownContentError as exc:
+        details = {
+            "paper_id": paper_id,
+            "lang": normalized_lang,
+            "start_line": start_line,
+            "end_line": end_line,
+        }
+        details.update(exc.details)
+        raise McpToolError(exc.code, exc.message, **details) from exc
+
+    return {
+        "paper_id": paper_id,
+        "lang": normalized_lang,
+        **slice_payload,
+    }
 
 
 @mcp.tool()
@@ -755,7 +1032,7 @@ def resource_translation(paper_id: str, lang: str) -> str:
             lang=lang,
         )
     
-    return _truncate(content, cfg.max_chars_default)
+    return _truncate(content, _resolve_content_max_chars(cfg, None))
 
 
 def resolve_static_export_dir() -> Path | None:
