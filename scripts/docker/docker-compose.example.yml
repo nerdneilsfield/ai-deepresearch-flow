@@ -11,6 +11,7 @@ services:
     environment:
       PAPER_DB_API_BASE: http://127.0.0.1:8000
       PAPER_DB_STATIC_BASE: /static
+      MCP_ACCESS_TOKEN: your-mcp-token
     # Exposes frontend + API, including MCP streamable (/mcp) and SSE (/mcp-sse).
     profiles: ["local-static"]
 
@@ -26,6 +27,7 @@ services:
     environment:
       PAPER_DB_API_BASE: http://127.0.0.1:8000
       PAPER_DB_STATIC_BASE: /static
+      MCP_ACCESS_TOKEN: your-mcp-token
       PAPER_DB_EMBED_DB: /db/paper_vectors
       PAPER_DB_CONFIG: /app/config.toml
       SEARCH_ACCESS_TOKEN: your-token
@@ -41,6 +43,7 @@ services:
     environment:
       PAPER_DB_API_BASE: http://127.0.0.1:8000
       PAPER_DB_STATIC_BASE: https://static.example.com
+      MCP_ACCESS_TOKEN: your-mcp-token
     # Exposes frontend + API, including MCP streamable (/mcp) and SSE (/mcp-sse).
     profiles: ["external-static"]
 
@@ -55,6 +58,7 @@ services:
     environment:
       PAPER_DB_API_BASE: http://127.0.0.1:8000
       PAPER_DB_STATIC_BASE: https://static.example.com
+      MCP_ACCESS_TOKEN: your-mcp-token
       PAPER_DB_EMBED_DB: /db/paper_vectors
       PAPER_DB_CONFIG: /app/config.toml
       SEARCH_ACCESS_TOKEN: your-token
