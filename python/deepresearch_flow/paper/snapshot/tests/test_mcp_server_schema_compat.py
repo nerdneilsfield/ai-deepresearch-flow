@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from deepresearch_flow.paper.snapshot.common import ApiLimits
 from deepresearch_flow.paper.snapshot.mcp_server import (
@@ -21,6 +24,7 @@ from deepresearch_flow.paper.snapshot.mcp_server import (
     get_paper_translation_lines,
     get_paper_translation_outline,
     resource_translation,
+    search_papers_semantic,
     search_papers,
     search_papers_by_keyword,
 )
@@ -477,6 +481,278 @@ class TestMcpServerSchemaCompat(unittest.TestCase):
             ctx.exception.details["available_summary_templates"],
             ["deep_read", "simple"],
         )
+
+    def test_search_papers_semantic_requires_advanced_context(self) -> None:
+        with self.assertRaises(McpToolError) as ctx:
+            asyncio.run(search_papers_semantic("vision"))
+
+        self.assertEqual(ctx.exception.code, "advanced_search_not_available")
+
+    def test_search_papers_semantic_returns_full_advanced_payload(self) -> None:
+        class _SearchCfg:
+            advanced_top_n_max = 50
+            advanced_mmr_lambda_default = 0.6
+
+        captured: dict[str, object] = {}
+
+        async def fake_run_advanced_search(*, request_spec, ctx, conn, client):  # noqa: ANN001
+            captured["query_raw"] = request_spec.query_raw
+            captured["top_n"] = request_spec.top_n
+            captured["mmr_lambda"] = request_spec.mmr_lambda
+            captured["rerank_mode"] = request_spec.rerank_mode
+            captured["filter_params"] = request_spec.filter_params
+            captured["trace_id"] = request_spec.trace_id
+            captured["ctx"] = ctx
+            return {
+                "success": True,
+                "trace_id": request_spec.trace_id,
+                "results": [{"paper_id": self.paper_id}],
+                "metadata": {"counts": {"returned": 1}},
+                "degraded": False,
+                "degradation": None,
+            }
+
+        advanced_ctx = SimpleNamespace(search_config=_SearchCfg())
+        configure(
+            McpSnapshotConfig(
+                snapshot_db=self.db_path,
+                static_base_url="",
+                static_export_dir=self.static_dir,
+                limits=ApiLimits(),
+                origin_allowlist=["*"],
+                advanced_config=advanced_ctx,
+            )
+        )
+        try:
+            with patch(
+                "deepresearch_flow.paper.snapshot.advanced.pipeline.run_advanced_search",
+                new=fake_run_advanced_search,
+            ):
+                payload = asyncio.run(
+                    search_papers_semantic(
+                        "vision transformer",
+                        top_n=5,
+                        mmr_lambda=0.3,
+                        rerank="always",
+                        filters={"year": "2024", "venue": ["ICLR", "NeurIPS"]},
+                    )
+                )
+        finally:
+            configure(
+                McpSnapshotConfig(
+                    snapshot_db=self.db_path,
+                    static_base_url="",
+                    static_export_dir=self.static_dir,
+                    limits=ApiLimits(),
+                    origin_allowlist=["*"],
+                )
+            )
+
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["trace_id"], captured["trace_id"])
+        self.assertEqual(payload["results"][0]["paper_id"], self.paper_id)
+        self.assertEqual(captured["query_raw"], "vision transformer")
+        self.assertEqual(captured["top_n"], 5)
+        self.assertEqual(captured["mmr_lambda"], 0.3)
+        self.assertEqual(captured["rerank_mode"], "always")
+        self.assertEqual(
+            captured["filter_params"],
+            {
+                "filters.year": ["2024"],
+                "filters.venue": ["ICLR", "NeurIPS"],
+            },
+        )
+        self.assertTrue(captured["trace_id"])
+        self.assertIs(captured["ctx"], advanced_ctx)
+
+    def test_search_papers_semantic_accepts_prefixed_filter_keys(self) -> None:
+        class _SearchCfg:
+            advanced_top_n_max = 50
+            advanced_mmr_lambda_default = 0.6
+
+        captured: dict[str, object] = {}
+
+        async def fake_run_advanced_search(*, request_spec, ctx, conn, client):  # noqa: ANN001
+            captured["filter_params"] = request_spec.filter_params
+            return {
+                "success": True,
+                "trace_id": request_spec.trace_id,
+                "results": [],
+                "metadata": {"counts": {"returned": 0}},
+                "degraded": False,
+                "degradation": None,
+            }
+
+        configure(
+            McpSnapshotConfig(
+                snapshot_db=self.db_path,
+                static_base_url="",
+                static_export_dir=self.static_dir,
+                limits=ApiLimits(),
+                origin_allowlist=["*"],
+                advanced_config=SimpleNamespace(search_config=_SearchCfg()),
+            )
+        )
+        try:
+            with patch(
+                "deepresearch_flow.paper.snapshot.advanced.pipeline.run_advanced_search",
+                new=fake_run_advanced_search,
+            ):
+                asyncio.run(
+                    search_papers_semantic(
+                        "vision",
+                        filters={"filters.year": "2024", "filters.venue": ["ICLR"]},
+                    )
+                )
+        finally:
+            configure(
+                McpSnapshotConfig(
+                    snapshot_db=self.db_path,
+                    static_base_url="",
+                    static_export_dir=self.static_dir,
+                    limits=ApiLimits(),
+                    origin_allowlist=["*"],
+                )
+            )
+
+        self.assertEqual(
+            captured["filter_params"],
+            {
+                "filters.year": ["2024"],
+                "filters.venue": ["ICLR"],
+            },
+        )
+
+    def test_search_papers_semantic_rejects_structured_filter_values(self) -> None:
+        class _SearchCfg:
+            advanced_top_n_max = 50
+            advanced_mmr_lambda_default = 0.6
+
+        configure(
+            McpSnapshotConfig(
+                snapshot_db=self.db_path,
+                static_base_url="",
+                static_export_dir=self.static_dir,
+                limits=ApiLimits(),
+                origin_allowlist=["*"],
+                advanced_config=SimpleNamespace(search_config=_SearchCfg()),
+            )
+        )
+        try:
+            for filters in (
+                {"year": {"$gte": 2020}},
+                {"year": True},
+                {"venue": ["ICLR", False]},
+            ):
+                with self.subTest(filters=filters):
+                    with self.assertRaises(McpToolError) as ctx:
+                        asyncio.run(
+                            search_papers_semantic(
+                                "vision",
+                                filters=filters,
+                            )
+                        )
+                    self.assertEqual(ctx.exception.code, "invalid_query")
+        finally:
+            configure(
+                McpSnapshotConfig(
+                    snapshot_db=self.db_path,
+                    static_base_url="",
+                    static_export_dir=self.static_dir,
+                    limits=ApiLimits(),
+                    origin_allowlist=["*"],
+                )
+            )
+
+    def test_search_papers_semantic_rejects_top_n_above_limit(self) -> None:
+        class _SearchCfg:
+            advanced_top_n_max = 50
+            advanced_mmr_lambda_default = 0.6
+
+        configure(
+            McpSnapshotConfig(
+                snapshot_db=self.db_path,
+                static_base_url="",
+                static_export_dir=self.static_dir,
+                limits=ApiLimits(),
+                origin_allowlist=["*"],
+                advanced_config=SimpleNamespace(search_config=_SearchCfg()),
+            )
+        )
+        try:
+            with self.assertRaises(McpToolError) as ctx:
+                asyncio.run(search_papers_semantic("vision", top_n=51))
+            self.assertEqual(ctx.exception.code, "invalid_query")
+        finally:
+            configure(
+                McpSnapshotConfig(
+                    snapshot_db=self.db_path,
+                    static_base_url="",
+                    static_export_dir=self.static_dir,
+                    limits=ApiLimits(),
+                    origin_allowlist=["*"],
+                )
+            )
+
+    def test_search_papers_semantic_rejects_invalid_mmr_lambda(self) -> None:
+        class _SearchCfg:
+            advanced_top_n_max = 50
+            advanced_mmr_lambda_default = 0.6
+
+        configure(
+            McpSnapshotConfig(
+                snapshot_db=self.db_path,
+                static_base_url="",
+                static_export_dir=self.static_dir,
+                limits=ApiLimits(),
+                origin_allowlist=["*"],
+                advanced_config=SimpleNamespace(search_config=_SearchCfg()),
+            )
+        )
+        try:
+            with self.assertRaises(McpToolError) as ctx:
+                asyncio.run(search_papers_semantic("vision", mmr_lambda=1.5))
+            self.assertEqual(ctx.exception.code, "invalid_query")
+        finally:
+            configure(
+                McpSnapshotConfig(
+                    snapshot_db=self.db_path,
+                    static_base_url="",
+                    static_export_dir=self.static_dir,
+                    limits=ApiLimits(),
+                    origin_allowlist=["*"],
+                )
+            )
+
+    def test_search_papers_semantic_rejects_invalid_rerank_mode(self) -> None:
+        class _SearchCfg:
+            advanced_top_n_max = 50
+            advanced_mmr_lambda_default = 0.6
+
+        configure(
+            McpSnapshotConfig(
+                snapshot_db=self.db_path,
+                static_base_url="",
+                static_export_dir=self.static_dir,
+                limits=ApiLimits(),
+                origin_allowlist=["*"],
+                advanced_config=SimpleNamespace(search_config=_SearchCfg()),
+            )
+        )
+        try:
+            with self.assertRaises(McpToolError) as ctx:
+                asyncio.run(search_papers_semantic("vision", rerank="bogus"))
+            self.assertEqual(ctx.exception.code, "invalid_query")
+        finally:
+            configure(
+                McpSnapshotConfig(
+                    snapshot_db=self.db_path,
+                    static_base_url="",
+                    static_export_dir=self.static_dir,
+                    limits=ApiLimits(),
+                    origin_allowlist=["*"],
+                )
+            )
 
     def test_source_and_translation_loading(self) -> None:
         source = get_paper_source(self.paper_id)
