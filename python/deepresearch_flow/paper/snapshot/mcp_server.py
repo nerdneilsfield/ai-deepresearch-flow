@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 import json
 import os
@@ -74,9 +76,20 @@ class McpSnapshotConfig:
             )
         return self._http_client
 
+    def close_http_client(self) -> None:
+        """Close and clear the lazily-created shared HTTP client if present."""
+        client = self._http_client
+        if client is not None:
+            client.close()
+            object.__setattr__(self, "_http_client", None)
+
 
 
 _CONFIG: McpSnapshotConfig | None = None
+_REQUEST_CONFIG: ContextVar[McpSnapshotConfig | None] = ContextVar(
+    "paper_db_mcp_request_config",
+    default=None,
+)
 mcp = FastMCP("Paper DB MCP")
 
 
@@ -91,6 +104,21 @@ def _allowed_methods_for_transport(transport: Literal["streamable-http", "sse"])
     return {"POST", "OPTIONS"}
 
 
+def _bind_mcp_config_app(app, config: McpSnapshotConfig):
+    """Bind a specific MCP config to an ASGI app per request."""
+
+    async def wrapped(scope, receive, send):
+        token = _REQUEST_CONFIG.set(config)
+        try:
+            await app(scope, receive, send)
+        finally:
+            _REQUEST_CONFIG.reset(token)
+
+    # Preserve common ASGI app metadata for route inspection and transport helpers.
+    wrapped.routes = getattr(app, "routes", None)
+    wrapped.router = getattr(app, "router", None)
+    return wrapped
+
 
 def create_mcp_transport_app(
     config: McpSnapshotConfig,
@@ -101,7 +129,6 @@ def create_mcp_transport_app(
 
     See: https://gofastmcp.com/deployment/running-server
     """
-    configure(config)
     # Use stateless_http=True for optimal scalability with streamable-http transport
     # Don't wrap in additional middleware - FastMCP handles the protocol
     mcp_app = mcp.http_app(
@@ -110,7 +137,17 @@ def create_mcp_transport_app(
         stateless_http=(transport == "streamable-http"),
         json_response=True,
     )
-    return bearer_auth_app(mcp_app, config.mcp_access_token), mcp_app.lifespan
+    bound_app = bearer_auth_app(_bind_mcp_config_app(mcp_app, config), config.mcp_access_token)
+
+    @asynccontextmanager
+    async def lifespan(app):
+        try:
+            async with mcp_app.lifespan(app):
+                yield
+        finally:
+            config.close_http_client()
+
+    return bound_app, lifespan
 
 
 def create_mcp_apps(config: McpSnapshotConfig) -> tuple[dict[str, Any], Any]:
@@ -130,9 +167,10 @@ def create_mcp_app(config: McpSnapshotConfig) -> tuple[Any, Any]:
 
 
 def _get_config() -> McpSnapshotConfig:
-    if _CONFIG is None:
+    config = _REQUEST_CONFIG.get() or _CONFIG
+    if config is None:
         raise RuntimeError("MCP server not configured")
-    return _CONFIG
+    return config
 
 
 def _validate_query(query: str, cfg: McpSnapshotConfig) -> str:

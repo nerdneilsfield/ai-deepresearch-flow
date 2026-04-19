@@ -54,4 +54,7 @@ def bearer_auth_app(app, access_token: str | None):
 
         await app(scope, receive, send)
 
+    # Preserve common ASGI app metadata for route inspection and transport helpers.
+    wrapped.routes = getattr(app, "routes", None)
+    wrapped.router = getattr(app, "router", None)
     return wrapped
