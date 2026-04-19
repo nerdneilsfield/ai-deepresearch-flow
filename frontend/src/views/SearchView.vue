@@ -23,6 +23,7 @@ import {
   type AdvancedSearchParams,
   type AdvancedSearchResult,
 } from '@/lib/api'
+import type { SearchItem } from '@/types/api'
 import { useAdvancedSearchToken } from '@/composables/useAdvancedSearchToken'
 import { BarChart2 } from 'lucide-vue-next'
 
@@ -142,6 +143,30 @@ async function onAdvancedSearch(params: AdvancedSearchParams) {
   } finally {
     advancedSearching.value = false
   }
+}
+
+function advancedResultToSelectionItem(result: AdvancedSearchResult): SearchItem {
+  return {
+    paper_id: result.paper_id,
+    title: result.paper.title,
+    year: result.paper.year,
+    venue: result.paper.venue,
+    authors: result.paper.authors,
+    summary_preview: result.chunk.text,
+    preferred_summary_template: result.chunk.template_tag || undefined,
+    has_pdf: false,
+    has_source: false,
+    has_translated: false,
+    pdf_url: null,
+    source_md_url: null,
+    translated_md_urls: {},
+    summary_url: undefined,
+    manifest_url: undefined,
+  }
+}
+
+function onAdvancedToggleSelect(result: AdvancedSearchResult) {
+  void selection.toggle(advancedResultToSelectionItem(result))
 }
 
 watch(
@@ -386,6 +411,9 @@ watch(facetQuery.error, (err) => {
         :degraded="advancedDegraded"
         :degradation-reason="advancedDegradationReason"
         :degradation-message="advancedDegradationMessage"
+        :selected-ids="selection.selectedIds"
+        :selection-full="selection.isFull"
+        @toggle-select="onAdvancedToggleSelect"
       />
 
       <div v-if="loading" class="rounded-xl border border-ink-100 bg-white p-6 text-sm text-ink-500" role="status">

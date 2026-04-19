@@ -12,6 +12,12 @@ vi.mock('vue-router', () => ({
   }),
 }))
 
+vi.mock('vue-i18n', () => ({
+  useI18n: () => ({
+    t: (key: string) => key,
+  }),
+}))
+
 function sample(): AdvancedSearchResult {
   return {
     chunk_id: 'p1_c0',
@@ -89,5 +95,33 @@ describe('AdvancedSearchResults', () => {
         advanced_chunk_field: 'simple/content',
       },
     })
+  })
+
+  it('renders a select control and emits toggleSelect without navigating', async () => {
+    const wrapper = mount(AdvancedSearchResults, {
+      props: {
+        results: [sample()],
+        selectedIds: new Set<string>(),
+        selectionFull: false,
+      },
+    })
+
+    await wrapper.find('[data-testid="advanced-result-select"]').trigger('click')
+
+    expect(wrapper.emitted('toggleSelect')).toBeTruthy()
+    expect(wrapper.emitted('toggleSelect')?.[0]?.[0]).toMatchObject({ paper_id: 'p1' })
+    expect(pushMock).not.toHaveBeenCalled()
+  })
+
+  it('shows selected state for items already in the selection queue', () => {
+    const wrapper = mount(AdvancedSearchResults, {
+      props: {
+        results: [sample()],
+        selectedIds: new Set<string>(['p1']),
+        selectionFull: false,
+      },
+    })
+
+    expect(wrapper.find('[data-testid="advanced-result-select"]').text()).toContain('selected_btn')
   })
 })

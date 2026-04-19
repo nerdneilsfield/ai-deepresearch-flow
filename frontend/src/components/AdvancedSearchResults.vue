@@ -1,15 +1,25 @@
 <script setup lang="ts">
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import type { AdvancedSearchResult } from '@/lib/advanced-search'
+import { Button } from '@/components/ui/button'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 
 const props = defineProps<{
   results: AdvancedSearchResult[]
   degraded?: boolean
   degradationReason?: string | null
   degradationMessage?: string | null
+  selectedIds?: Set<string>
+  selectionFull?: boolean
+}>()
+
+const emit = defineEmits<{
+  toggleSelect: [result: AdvancedSearchResult]
 }>()
 
 const router = useRouter()
+const { t } = useI18n()
 
 function openPaper(result: AdvancedSearchResult) {
   router.push({
@@ -21,6 +31,11 @@ function openPaper(result: AdvancedSearchResult) {
       advanced_chunk_field: result.chunk.field_name,
     },
   })
+}
+
+function onToggleSelect(event: Event, result: AdvancedSearchResult) {
+  event.stopPropagation()
+  emit('toggleSelect', result)
 }
 </script>
 
@@ -57,6 +72,33 @@ function openPaper(result: AdvancedSearchResult) {
       <p class="mt-1 text-sm text-ink-500">
         {{ result.paper.authors.join(', ') }} · {{ result.paper.year }} · {{ result.paper.venue }}
       </p>
+      <div class="mt-3 flex items-center justify-between gap-2">
+        <div class="text-xs text-ink-500">{{ result.chunk.field_name }}</div>
+        <TooltipProvider>
+          <Tooltip v-if="selectionFull && !selectedIds?.has(result.paper_id)">
+            <TooltipTrigger as-child>
+              <Button
+                size="sm"
+                variant="outline"
+                data-testid="advanced-result-select"
+                @click="onToggleSelect($event, result)"
+              >
+                {{ t('select') }}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{{ t('selectionLimitReached') }}</TooltipContent>
+          </Tooltip>
+          <Button
+            v-else
+            size="sm"
+            variant="outline"
+            data-testid="advanced-result-select"
+            @click="onToggleSelect($event, result)"
+          >
+            {{ selectedIds?.has(result.paper_id) ? t('selected_btn') : t('select') }}
+          </Button>
+        </TooltipProvider>
+      </div>
       <p class="mt-3 text-sm text-ink-700">{{ result.chunk.text }}</p>
       <dl class="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-ink-500 sm:grid-cols-5">
         <template v-if="result.scores.dense !== undefined">
