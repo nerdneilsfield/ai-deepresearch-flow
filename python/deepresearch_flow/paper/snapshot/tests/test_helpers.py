@@ -150,6 +150,40 @@ class TestMcpSnapshotPublicBehavior(unittest.TestCase):
         client2 = cfg.get_http_client()
         self.assertIs(client1, client2)
 
+    def test_http_client_can_be_closed_and_recreated(self) -> None:
+        cfg = self._base_config()
+        client1 = cfg.get_http_client()
+
+        cfg.close_http_client()
+
+        self.assertTrue(client1.is_closed)
+        client2 = cfg.get_http_client()
+        self.assertIsNot(client1, client2)
+
+    def test_create_mcp_transport_app_does_not_override_default_config(self) -> None:
+        summary_file = self.static_dir / "summary" / "p1.json"
+        summary_file.parent.mkdir(parents=True, exist_ok=True)
+        summary_file.write_text('{"summary": "base"}', encoding="utf-8")
+        configure(self._base_config())
+
+        alt_static_dir = Path(self.tmpdir.name) / "alt-static"
+        (alt_static_dir / "summary").mkdir(parents=True, exist_ok=True)
+        (alt_static_dir / "summary" / "p1.json").write_text('{"summary": "other"}', encoding="utf-8")
+        alt_cfg = McpSnapshotConfig(
+            snapshot_db=self.db_path,
+            static_base_url="",
+            static_export_dir=alt_static_dir,
+            limits=ApiLimits(max_query_length=8),
+            origin_allowlist=["*"],
+            max_paper_id_length=12,
+        )
+
+        app, lifespan = create_mcp_transport_app(alt_cfg, transport="sse")
+
+        self.assertTrue(callable(lifespan))
+        self.assertEqual(resource_summary_default("p1"), '{"summary": "base"}')
+        self.assertIsNotNone(app)
+
     def test_resource_metadata_reflects_database_state(self) -> None:
         payload = json.loads(resource_metadata("p1"))
         self.assertEqual(payload["paper_id"], "p1")
