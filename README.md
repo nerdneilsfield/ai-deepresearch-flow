@@ -1037,6 +1037,7 @@ This project exposes MCP servers mounted on the snapshot API:
 - MCP auth: when enabled, clients must send `Authorization: Bearer <token>`.
   - Configure it with `--mcp-access-token` or `MCP_ACCESS_TOKEN`.
   - The MCP token, advanced-search token, and admin token are separate credentials that protect different surfaces.
+  - `search_papers_semantic(...)` is gated only by the MCP surface, not by `SEARCH_ACCESS_TOKEN`. If advanced search is enabled and should not be exposed through MCP, set `MCP_ACCESS_TOKEN`.
 
 Optional (avoid HTTP fetch by reading exported assets directly on the API host):
 
@@ -1063,6 +1064,23 @@ export PAPER_DB_STATIC_EXPORT_DIR=/data/paper-static
   - `keyword` (str): keyword substring
   - `limit` (int): number of results (clamped)
 - Returns: list of `{ paper_id, title, year, venue, snippet_markdown }`
+
+</details>
+
+<details>
+<summary><strong>search_papers_semantic(query, top_n=10, mmr_lambda=None, rerank="auto", filters=None)</strong> — full advanced semantic search payload</summary>
+
+- Notes:
+  - Requires advanced search to be configured on the snapshot API / MCP server
+  - This MCP tool is protected by the MCP bearer token only; it does not additionally enforce `SEARCH_ACCESS_TOKEN`
+  - Returns the same full payload shape as the advanced HTTP search pipeline
+- Args:
+  - `query` (str): raw semantic search query
+  - `top_n` (int): number of final chunks to return
+  - `mmr_lambda` (float | null): optional MMR lambda override; defaults to advanced search config
+  - `rerank` (str): `auto`, `always`, or `never`
+  - `filters` (dict | null): MCP-friendly filter map such as `{ "year": "2024", "venue": ["ICLR"] }`
+- Returns: dict with `success`, `trace_id`, `query`, `results`, `metadata`, `degraded`, and `degradation`
 
 </details>
 

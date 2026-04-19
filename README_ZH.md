@@ -419,6 +419,7 @@ MCP 客户端配置：
 - MCP 鉴权：启用后，客户端必须携带 `Authorization: Bearer <token>`。
   - 通过 `--mcp-access-token` 或 `MCP_ACCESS_TOKEN` 配置该 token。
   - MCP token、高级搜索 token 和 admin token 是彼此独立的凭据，分别保护不同的接口面。
+  - `search_papers_semantic(...)` 只受 MCP 这一层 bearer 保护，不会额外校验 `SEARCH_ACCESS_TOKEN`。如果你启用了 advanced search 且不希望它通过 MCP 暴露，必须配置 `MCP_ACCESS_TOKEN`。
 
 **FastMCP 特性**：
 - 使用 `fastmcp>=3.0.0b1`，支持 stateless HTTP 模式
@@ -448,6 +449,23 @@ MCP 客户端配置：
   - `keyword`（str）：关键词子串
   - `limit`（int）：返回数量（会被限制）
 - 返回：`[{ paper_id, title, year, venue, snippet_markdown }, ...]`
+
+</details>
+
+<details>
+<summary><strong>search_papers_semantic(query, top_n=10, mmr_lambda=None, rerank="auto", filters=None)</strong> — 完整 advanced 语义检索载荷</summary>
+
+- 说明：
+  - 需要 snapshot API / MCP server 已启用 advanced search
+  - 这个 MCP 工具只受 MCP bearer token 保护，不会额外要求 `SEARCH_ACCESS_TOKEN`
+  - 返回值与 advanced HTTP search pipeline 的完整 payload 形状一致
+- 参数：
+  - `query`（str）：原始语义检索查询
+  - `top_n`（int）：最终返回的 chunk 数量
+  - `mmr_lambda`（float | null）：可选的 MMR lambda 覆盖；默认使用 advanced search 配置
+  - `rerank`（str）：`auto`、`always` 或 `never`
+  - `filters`（dict | null）：MCP 友好的过滤条件，例如 `{ "year": "2024", "venue": ["ICLR"] }`
+- 返回：包含 `success`、`trace_id`、`query`、`results`、`metadata`、`degraded`、`degradation` 的 dict
 
 </details>
 
