@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import base64
+import errno
 import hashlib
+import logging
 import mimetypes
 import re
 from pathlib import Path
+import time
 from typing import Any
 
 from deepresearch_flow.paper.db_ops import PaperIndex
@@ -20,6 +23,9 @@ _SRC_ATTR_PATTERN = re.compile(r"\bsrc\s*=\s*(\"[^\"]*\"|'[^']*'|[^\s>]+)", re.I
 _EXTENSION_OVERRIDES = {
     ".jpe": ".jpg",
 }
+
+logger = logging.getLogger(__name__)
+_EIO_RETRY_DELAYS = (0.2, 0.5)
 
 
 @dataclass(frozen=True)
@@ -89,6 +95,26 @@ def _split_link_target(raw_link: str) -> tuple[str, str, str, str]:
     return target, suffix, "", ""
 
 
+def _write_bytes_with_eio_retry(dest: Path, data: bytes, *, log_label: str) -> None:
+    for attempt, delay in enumerate((0.0, *_EIO_RETRY_DELAYS), start=1):
+        if delay:
+            time.sleep(delay)
+        try:
+            dest.write_bytes(data)
+            return
+        except OSError as exc:
+            if exc.errno != errno.EIO or attempt > len(_EIO_RETRY_DELAYS):
+                raise
+            logger.warning(
+                "Transient I/O error while writing %s %s; retrying in %.1fs (%d/%d)",
+                log_label,
+                dest,
+                _EIO_RETRY_DELAYS[attempt - 1],
+                attempt,
+                len(_EIO_RETRY_DELAYS),
+            )
+
+
 class _ImageStore:
     def __init__(self, output_dir: Path | None) -> None:
         self.output_dir = output_dir
@@ -105,7 +131,11 @@ class _ImageStore:
         if self.output_dir and filename not in self._written:
             dest = self.output_dir / filename
             if not dest.exists():
-                dest.write_bytes(data)
+                try:
+                    _write_bytes_with_eio_retry(dest, data, log_label="static image")
+                except OSError as exc:
+                    logger.warning("Failed to export static image %s: %s", dest, exc)
+                    return None
             self._written.add(filename)
         return f"images/{filename}"
 

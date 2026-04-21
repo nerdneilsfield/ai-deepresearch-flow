@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import base64
 from datetime import datetime, timezone
+import errno
 import hashlib
 import json
 import logging
@@ -10,8 +11,11 @@ import mimetypes
 from pathlib import Path
 import re
 import sqlite3
+import time
 from typing import Any
 import uuid
+
+from tqdm import tqdm
 
 from deepresearch_flow.paper.db_ops import build_index, load_and_merge_papers
 
@@ -118,6 +122,27 @@ _IMG_TAG_PATTERN = re.compile(r"<img\\b[^>]*>", re.IGNORECASE)
 _SRC_ATTR_PATTERN = re.compile(r"\\bsrc\\s*=\\s*(\"[^\"]*\"|'[^']*'|[^\\s>]+)", re.IGNORECASE | re.DOTALL)
 _EXTENSION_OVERRIDES = {".jpe": ".jpg"}
 _WHITESPACE_RE = re.compile(r"\s+")
+_EIO_RETRY_DELAYS = (0.2, 0.5)
+
+
+def _write_bytes_with_eio_retry(dest: Path, data: bytes, *, log_label: str) -> None:
+    for attempt, delay in enumerate((0.0, *_EIO_RETRY_DELAYS), start=1):
+        if delay:
+            time.sleep(delay)
+        try:
+            dest.write_bytes(data)
+            return
+        except OSError as exc:
+            if exc.errno != errno.EIO or attempt > len(_EIO_RETRY_DELAYS):
+                raise
+            logger.warning(
+                "Transient I/O error while writing %s %s; retrying in %.1fs (%d/%d)",
+                log_label,
+                dest,
+                _EIO_RETRY_DELAYS[attempt - 1],
+                attempt,
+                len(_EIO_RETRY_DELAYS),
+            )
 
 
 def _split_link_target(raw_link: str) -> tuple[str, str, str, str]:
@@ -188,7 +213,12 @@ def _rewrite_markdown_images(
             images_output_dir.mkdir(parents=True, exist_ok=True)
             dest = images_output_dir / filename
             if not dest.exists():
-                dest.write_bytes(data)
+                try:
+                    _write_bytes_with_eio_retry(dest, data, log_label="snapshot image")
+                except OSError as exc:
+                    logger.warning("Failed to export snapshot image %s: %s", dest, exc)
+                    images.append({"path": rel, "sha256": digest, "ext": ext.lstrip("."), "status": "write_failed"})
+                    return None
             written.add(filename)
         images.append({"path": rel, "sha256": digest, "ext": ext.lstrip("."), "status": "available"})
         return rel
@@ -211,7 +241,12 @@ def _rewrite_markdown_images(
                 images_output_dir.mkdir(parents=True, exist_ok=True)
                 dest = images_output_dir / filename
                 if not dest.exists():
-                    dest.write_bytes(local_path.read_bytes())
+                    try:
+                        _write_bytes_with_eio_retry(dest, local_path.read_bytes(), log_label="snapshot image copy")
+                    except OSError as exc:
+                        logger.warning("Failed to copy snapshot image %s to %s: %s", local_path, dest, exc)
+                        images.append({"path": rel, "sha256": digest, "ext": ext.lstrip("."), "status": "write_failed"})
+                        return None
                 written.add(filename)
             images.append({"path": rel, "sha256": digest, "ext": ext.lstrip("."), "status": "available"})
             return rel
@@ -727,7 +762,7 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
         with conn:
             unique_paper_ids: set[str] = set()
             missing_pdf_hashes: set[str] = set()
-            for idx, paper in enumerate(index.papers):
+            for idx, paper in enumerate(tqdm(index.papers, total=len(index.papers), desc="snapshot build", unit="paper")):
                 candidates = build_paper_key_candidates(paper)
                 paper_id, preferred, conflicts = _pick_paper_id(
                     candidates,

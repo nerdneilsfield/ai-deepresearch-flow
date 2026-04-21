@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import base64
+import errno
 import hashlib
+import logging
 import mimetypes
 import re
 from pathlib import Path
+import time
 from typing import Any
+
+logger = logging.getLogger(__name__)
+_EIO_RETRY_DELAYS = (0.2, 0.5)
 
 
 def _hash_bytes(data: bytes) -> str:
@@ -77,6 +83,26 @@ def _split_link_target(raw_link: str) -> tuple[str, str, str, str]:
     return target, suffix, "", ""
 
 
+def _write_bytes_with_eio_retry(dest: Path, data: bytes, *, log_label: str) -> None:
+    for attempt, delay in enumerate((0.0, *_EIO_RETRY_DELAYS), start=1):
+        if delay:
+            time.sleep(delay)
+        try:
+            dest.write_bytes(data)
+            return
+        except OSError as exc:
+            if exc.errno != errno.EIO or attempt > len(_EIO_RETRY_DELAYS):
+                raise
+            logger.warning(
+                "Transient I/O error while writing %s %s; retrying in %.1fs (%d/%d)",
+                log_label,
+                dest,
+                _EIO_RETRY_DELAYS[attempt - 1],
+                attempt,
+                len(_EIO_RETRY_DELAYS),
+            )
+
+
 def rewrite_markdown_images(
     markdown: str,
     *,
@@ -113,7 +139,12 @@ def rewrite_markdown_images(
             images_output_dir.mkdir(parents=True, exist_ok=True)
             dest = images_output_dir / filename
             if not dest.exists():
-                dest.write_bytes(data)
+                try:
+                    _write_bytes_with_eio_retry(dest, data, log_label="snapshot image")
+                except OSError as exc:
+                    logger.warning("Failed to export snapshot image %s: %s", dest, exc)
+                    images.append({"path": rel, "sha256": digest, "ext": ext.lstrip("."), "status": "write_failed"})
+                    return None
             written.add(filename)
         images.append({"path": rel, "sha256": digest, "ext": ext.lstrip("."), "status": "available"})
         return rel
@@ -136,7 +167,12 @@ def rewrite_markdown_images(
                 images_output_dir.mkdir(parents=True, exist_ok=True)
                 dest = images_output_dir / filename
                 if not dest.exists():
-                    dest.write_bytes(local_path.read_bytes())
+                    try:
+                        _write_bytes_with_eio_retry(dest, local_path.read_bytes(), log_label="snapshot image copy")
+                    except OSError as exc:
+                        logger.warning("Failed to copy snapshot image %s to %s: %s", local_path, dest, exc)
+                        images.append({"path": rel, "sha256": digest, "ext": ext.lstrip("."), "status": "write_failed"})
+                        return None
                 written.add(filename)
             images.append({"path": rel, "sha256": digest, "ext": ext.lstrip("."), "status": "available"})
             return rel
