@@ -968,6 +968,15 @@ def register_db_commands(db_group: click.Group) -> None:
         )
         advanced_ctx = None
         paper_config = load_config(config_path)
+        admin_embed_db = None
+        admin_embed_dimensions = None
+        if admin_token:
+            if embed_db:
+                admin_embed_db = Path(embed_db)
+            elif paper_config.search is not None and paper_config.search.vector_dir:
+                admin_embed_db = Path(paper_config.search.vector_dir)
+            if admin_embed_db is not None and paper_config.embedding is not None:
+                admin_embed_dimensions = paper_config.embedding.dimensions
         if paper_config.search is not None and paper_config.search.advanced_enabled:
             lance_dir = embed_db or paper_config.search.vector_dir
             if not lance_dir:
@@ -1031,6 +1040,8 @@ def register_db_commands(db_group: click.Group) -> None:
             limits=limits,
             mcp_access_token=mcp_access_token,
             admin_token=admin_token,
+            admin_embed_db=admin_embed_db,
+            admin_embed_dimensions=admin_embed_dimensions,
             advanced_config=advanced_ctx,
         )
         click.echo(f"Serving API on http://{host}:{port} (Ctrl+C to stop)")

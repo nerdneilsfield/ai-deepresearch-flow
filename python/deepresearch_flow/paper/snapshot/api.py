@@ -998,6 +998,8 @@ def create_app(
     limits: ApiLimits | None = None,
     mcp_access_token: str | None = None,
     admin_token: str | None = None,
+    admin_embed_db: Path | None = None,
+    admin_embed_dimensions: int | None = None,
     advanced_config: Any | None = None,
 ) -> Starlette:
     cfg = SnapshotApiConfig(
@@ -1045,7 +1047,12 @@ def create_app(
     if admin_token:
         from deepresearch_flow.paper.snapshot.admin import create_admin_app
 
-        admin_app = create_admin_app(snapshot_db=snapshot_db, admin_token=admin_token)
+        admin_app = create_admin_app(
+            snapshot_db=snapshot_db,
+            admin_token=admin_token,
+            embed_db=admin_embed_db,
+            embed_dimensions=admin_embed_dimensions,
+        )
         routes.append(Mount("/api/v1/admin", app=admin_app))
 
     if advanced_config is not None:
