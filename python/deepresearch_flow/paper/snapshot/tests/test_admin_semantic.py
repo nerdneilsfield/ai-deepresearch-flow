@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from starlette.testclient import TestClient
@@ -44,13 +45,25 @@ def _chunk(doc_id: str, tag: str, idx: int, *, content_hash: str = "h") -> dict:
     }
 
 
-def _meta() -> dict:
-    return {"model": "m", "dimensions": 4, "normalized": True, "provider": "p", "index_version": 1}
+def _meta(*, model: str = "m", canonical_model: str | None = None) -> dict:
+    payload = {"model": model, "dimensions": 4, "normalized": True, "provider": "p", "index_version": 1}
+    if canonical_model is not None:
+        payload["canonical_model"] = canonical_model
+    return payload
 
 
-def _body(doc_id: str, tag: str, chunks: list[dict], *, group_hash: str | None = None, part_index: int = 0, part_count: int = 1) -> dict:
+def _body(
+    doc_id: str,
+    tag: str,
+    chunks: list[dict],
+    *,
+    group_hash: str | None = None,
+    part_index: int = 0,
+    part_count: int = 1,
+    index_meta: dict | None = None,
+) -> dict:
     return {
-        "index_meta": _meta(),
+        "index_meta": index_meta or _meta(),
         "group": {
             "doc_id": doc_id,
             "template_tag": tag,
@@ -144,6 +157,68 @@ def test_rejects_invalid_vector_payload_per_chunk(tmp_path: Path) -> None:
     resp = client.post('/semantic/chunks/batch', json=_body('d1', 'simple', [bad]), headers=headers)
     assert resp.status_code == 400
     assert 'invalid vector payload' in resp.json()['detail']
+
+
+def test_accepts_alias_model_when_canonical_model_matches_existing_index(tmp_path: Path) -> None:
+    client, headers, embed_dir = _make_app(tmp_path)
+    (embed_dir / "index_meta.json").write_text(
+        json.dumps(
+            {
+                "model": "Qwen3-Embedding-4B",
+                "canonical_model": "Qwen3-Embedding-4B",
+                "dimensions": 4,
+                "normalized": True,
+                "provider": "siliconflow",
+                "index_version": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    resp = client.post(
+        '/semantic/chunks/batch',
+        json=_body(
+            'd1',
+            'simple',
+            [_chunk('d1', 'simple', 0)],
+            index_meta=_meta(model="qwen3-embedding:4b", canonical_model="Qwen3-Embedding-4B"),
+        ),
+        headers=headers,
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()['inserted'] == 1
+
+
+def test_model_mismatch_returns_400_instead_of_500(tmp_path: Path) -> None:
+    client, headers, embed_dir = _make_app(tmp_path)
+    (embed_dir / "index_meta.json").write_text(
+        json.dumps(
+            {
+                "model": "Qwen3-Embedding-4B",
+                "canonical_model": "Qwen3-Embedding-4B",
+                "dimensions": 4,
+                "normalized": True,
+                "provider": "siliconflow",
+                "index_version": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    resp = client.post(
+        '/semantic/chunks/batch',
+        json=_body(
+            'd1',
+            'simple',
+            [_chunk('d1', 'simple', 0)],
+            index_meta=_meta(model="other-model", canonical_model="other-model"),
+        ),
+        headers=headers,
+    )
+
+    assert resp.status_code == 400
+    assert "Index model mismatch" in resp.json()["detail"]
 
 
 def test_multi_part_write_failure_keeps_staged_parts(tmp_path: Path) -> None:

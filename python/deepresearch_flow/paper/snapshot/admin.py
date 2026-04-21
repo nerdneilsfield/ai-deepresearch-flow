@@ -604,18 +604,23 @@ async def _admin_ingest_semantic_chunks(request: Request) -> JSONResponse:
 
     meta_path = cfg.embed_db / "index_meta.json"
     if meta_path.exists():
-        validate_index_meta(
-            cfg.embed_db,
-            model=str(index_meta.get("model") or ""),
-            dimensions=dimensions,
-            normalized=bool(index_meta.get("normalized")),
-            provider=str(index_meta.get("provider") or ""),
-        )
+        try:
+            validate_index_meta(
+                cfg.embed_db,
+                model=str(index_meta.get("model") or ""),
+                canonical_model=str(index_meta.get("canonical_model") or "") or None,
+                dimensions=dimensions,
+                normalized=bool(index_meta.get("normalized")),
+                provider=str(index_meta.get("provider") or ""),
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": "bad_request", "detail": str(exc)}, status_code=400)
     else:
         save_index_meta(
             cfg.embed_db,
             {
                 "model": str(index_meta.get("model") or ""),
+                "canonical_model": str(index_meta.get("canonical_model") or index_meta.get("model") or ""),
                 "dimensions": cfg.embed_dimensions if cfg.embed_dimensions is not None else dimensions,
                 "normalized": bool(index_meta.get("normalized")),
                 "provider": str(index_meta.get("provider") or ""),
