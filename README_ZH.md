@@ -973,6 +973,19 @@ uv run deepresearch-flow paper db api serve \
 
 也可通过命令行参数传入：`--admin-token your-secret-token`
 
+如果要接收 `paper db api push --embed-db` 推送过来的语义分块，还需要让 Admin API 同时拿到远端 LanceDB 路径：
+
+```bash
+PAPER_DB_ADMIN_TOKEN=your-secret-token \
+uv run deepresearch-flow paper db api serve \
+  --snapshot-db /data/paper_snapshot.db \
+  --embed-db /data/paper_vectors \
+  --cors-origin https://frontend.example.com \
+  --host 0.0.0.0 --port 8001
+```
+
+如果你更偏向走配置文件，也可以通过 `config.search.vector_dir` 提供同一个远端 LanceDB 路径；当二者同时存在时，`--embed-db` 优先。
+
 端点（均需 `Authorization: Bearer <token>` 请求头）：
 
 - `POST /api/v1/admin/papers` — 批量添加论文（每次最多 200 篇）
@@ -1025,10 +1038,24 @@ uv run deepresearch-flow paper db api push \
   --static-export-dir ./dist/paper-static \
   --config remote.toml
 
+# 推送元数据 + 语义 LanceDB 分块
+uv run deepresearch-flow paper db api push \
+  --snapshot-db ./dist/paper_snapshot.db \
+  --static-export-dir ./dist/paper-static \
+  --embed-db ./dist/paper_vectors \
+  --config remote.toml
+
 # 只推送 admin API 元数据
 uv run deepresearch-flow paper db api push \
   --snapshot-db ./dist/paper_snapshot.db \
   --static-export-dir ./dist/paper-static \
+  --config remote.toml \
+  --only-api
+
+# 只推送 admin API 元数据 + 语义分块
+uv run deepresearch-flow paper db api push \
+  --snapshot-db ./dist/paper_snapshot.db \
+  --embed-db ./dist/paper_vectors \
   --config remote.toml \
   --only-api
 
@@ -1049,16 +1076,21 @@ uv run deepresearch-flow paper db api push \
 ```
 
 - `--static-export-dir` 可选 — 提供后会将 summary JSON 内容一并推送，使远端可构建 FTS 索引和预览文本。
+- `--embed-db` 可选 — 提供后，`api push` 会读取本地 LanceDB，并在元数据/静态文件阶段之后继续推送语义分块。
 - 重复论文（相同 `paper_id`）会自动跳过。
 - 配置 `[remote.storage]` 后，元数据 API 推送完成后会继续推送静态文件。
+- 远端语义同步要求服务端以启用 Admin API 的方式启动 `paper db api serve`，并通过 `--embed-db` 或 `config.search.vector_dir` 提供远端 LanceDB 路径。
 - 当前支持的静态存储后端是 `webdav`。
 - 静态文件推送时会逐文件打印状态日志：`uploaded`、`skipped`、`failed`。
 - 如果部分静态文件推送失败，会生成 `push-static-errors.json`，可用 `--retry-failed` 只重试失败项。
 - `--only-api` 只推送 admin API 元数据，跳过静态存储推送。
+- `--only-api` 可以和 `--embed-db` 一起使用，只推送元数据和语义分块。
 - `--only-storage` 只推送静态存储文件，跳过 admin API 元数据步骤。
+- `--embed-db` 不能与 `--only-storage` 一起使用。
 - `--storage-concurrency` 用于控制静态存储推送时的并发 worker 数。
 - `--only-api` 与 `--only-storage` 互斥，不能同时使用。
 - `--dry-run` 不能与 `--only-storage` 一起使用。
+- 即使提供了 `--embed-db`，`--dry-run` 也会跳过语义分块推送。
 - `--retry-failed` 只作用于静态存储，不能与 `--only-api` 一起使用。
 - 如果更新后的 `summary` / `manifest` JSON 只在某一个浏览器里表现异常，先尝试强制刷新或清理该浏览器的站点缓存；静态 JSON 在 push 之后可能会被陈旧浏览器缓存影响。
 

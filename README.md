@@ -934,6 +934,19 @@ uv run deepresearch-flow paper db api serve \
 
 Or pass the token via CLI flag: `--admin-token your-secret-token`
 
+To receive semantic chunk syncs from `paper db api push --embed-db`, start the admin API with a remote LanceDB path as well:
+
+```bash
+PAPER_DB_ADMIN_TOKEN=your-secret-token \
+uv run deepresearch-flow paper db api serve \
+  --snapshot-db /data/paper_snapshot.db \
+  --embed-db /data/paper_vectors \
+  --cors-origin https://frontend.example.com \
+  --host 0.0.0.0 --port 8001
+```
+
+If you prefer config-driven advanced search, `config.search.vector_dir` can provide the same remote LanceDB path; `--embed-db` still takes precedence when both are set.
+
 Endpoints (all require `Authorization: Bearer <token>` header):
 
 - `POST /api/v1/admin/papers` — Batch add papers (up to 200 per request)
@@ -986,10 +999,24 @@ uv run deepresearch-flow paper db api push \
   --static-export-dir ./dist/paper-static \
   --config remote.toml
 
+# Push metadata + semantic LanceDB chunks to the remote admin API
+uv run deepresearch-flow paper db api push \
+  --snapshot-db ./dist/paper_snapshot.db \
+  --static-export-dir ./dist/paper-static \
+  --embed-db ./dist/paper_vectors \
+  --config remote.toml
+
 # Push only the admin API metadata
 uv run deepresearch-flow paper db api push \
   --snapshot-db ./dist/paper_snapshot.db \
   --static-export-dir ./dist/paper-static \
+  --config remote.toml \
+  --only-api
+
+# Push only admin API metadata + semantic chunks
+uv run deepresearch-flow paper db api push \
+  --snapshot-db ./dist/paper_snapshot.db \
+  --embed-db ./dist/paper_vectors \
   --config remote.toml \
   --only-api
 
@@ -1010,16 +1037,21 @@ uv run deepresearch-flow paper db api push \
 ```
 
 - `--static-export-dir` is optional — when provided, summary JSON payloads are included so the remote side can build FTS indexes and preview text.
+- `--embed-db` is optional — when provided, `api push` reads the local LanceDB snapshot and uploads semantic chunks after the metadata/static phases.
 - Duplicate papers (same `paper_id`) are automatically skipped.
 - When `[remote.storage]` is configured, static files under the export dir are pushed after the metadata API sync.
+- Remote semantic sync requires the server to run `paper db api serve` with admin auth enabled and a remote LanceDB path available via `--embed-db` or `config.search.vector_dir`.
 - The currently supported storage backend is `webdav`.
 - Static file push prints per-file status logs: `uploaded`, `skipped`, and `failed`.
 - If some static uploads fail, a `push-static-errors.json` report is written and can be retried with `--retry-failed`.
 - `--only-api` pushes only the admin API metadata and skips static storage.
+- `--only-api` can be combined with `--embed-db` to push metadata plus semantic chunks only.
 - `--only-storage` pushes only static storage and skips the admin API metadata step.
+- `--embed-db` cannot be combined with `--only-storage`.
 - `--storage-concurrency` controls the number of concurrent workers used for static storage push.
 - `--only-api` and `--only-storage` are mutually exclusive.
 - `--dry-run` cannot be combined with `--only-storage`.
+- `--dry-run` silently skips semantic push even if `--embed-db` is provided.
 - `--retry-failed` applies only to static storage and cannot be combined with `--only-api`.
 - If updated `summary` / `manifest` JSON behaves differently in one browser only, try a hard refresh or clear that browser's site cache first; stale browser cache can make static JSON appear inconsistent after a push.
 
