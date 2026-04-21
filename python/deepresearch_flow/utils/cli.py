@@ -24,7 +24,12 @@ from deepresearch_flow.paper.config import (
     resolve_api_key_configs,
 )
 from deepresearch_flow.paper.llm import call_provider
-from deepresearch_flow.paper.routing import RuntimeRoute, parse_model_selector, select_runtime_route
+from deepresearch_flow.paper.routing import (
+    RuntimeRoute,
+    parse_model_selector,
+    provider_window_error_as_click,
+    select_runtime_route,
+)
 from deepresearch_flow.paper.providers.base import ProviderError
 
 logger = logging.getLogger(__name__)
@@ -69,12 +74,18 @@ def _serialize_key_entry(key: KeyConfig) -> str:
 
 
 def _serialize_base_entry(base: BaseConfig) -> str:
+    parts = [
+        f"url = {_toml_string(base.url)}",
+        f"weight = {base.weight}",
+    ]
+    if base.active_windows:
+        windows = ", ".join(_toml_string(window) for window in base.active_windows)
+        parts.append(f"active_windows = [{windows}]")
+    if base.active_timezone is not None:
+        parts.append(f"active_timezone = {_toml_string(base.active_timezone)}")
     keys = ", ".join(_serialize_key_entry(key) for key in base.key)
-    return (
-        "{ "
-        + f"url = {_toml_string(base.url)}, weight = {base.weight}, key = [{keys}]"
-        + " }"
-    )
+    parts.append(f"key = [{keys}]")
+    return "{ " + ", ".join(parts) + " }"
 
 
 def _serialize_model_entry(model: ModelCapability) -> str:
@@ -255,7 +266,8 @@ def test_mode(config_path: Path, model_refs: tuple[str, ...], write_back: bool) 
         if selector.kind != "single" or not selector.fixed_model:
             raise click.ClickException("test-mode only accepts provider/model references")
         try:
-            route = select_runtime_route(config, selector)
+            with provider_window_error_as_click():
+                route = select_runtime_route(config, selector)
         except ValueError as exc:
             raise click.ClickException(str(exc)) from exc
 

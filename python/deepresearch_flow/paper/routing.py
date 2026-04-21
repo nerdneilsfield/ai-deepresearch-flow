@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, time as time_of_day, timezone, tzinfo
 from pathlib import Path
 from random import Random
-from typing import Callable, Generic, Literal, Protocol, TypeVar, cast
+from typing import Any, Callable, Generic, Literal, Protocol, TypeVar, cast
 import json
 import logging
 import math
@@ -29,8 +30,10 @@ from deepresearch_flow.paper.config import (
 
 T = TypeVar("T")
 logger = logging.getLogger(__name__)
-ProviderT = TypeVar("ProviderT", bound="_RouteableProvider")
-ModelT = TypeVar("ModelT", bound="_RouteableModel")
+ProviderT = TypeVar("ProviderT")
+ModelT = TypeVar("ModelT")
+ProviderT_co = TypeVar("ProviderT_co", covariant=True)
+ModelT_co = TypeVar("ModelT_co", covariant=True)
 
 
 class ProviderOutOfActiveWindow(RuntimeError):
@@ -42,6 +45,16 @@ class ProviderOutOfActiveWindow(RuntimeError):
             f"All provider URLs are outside their active window: [{', '.join(urls)}]; "
             f"next available at {next_text}"
         )
+
+
+@contextmanager
+def provider_window_error_as_click():
+    try:
+        yield
+    except ProviderOutOfActiveWindow as exc:
+        import click  # type: ignore[import-not-found]
+
+        raise click.ClickException(str(exc)) from exc
 
 
 @dataclass(frozen=True)
@@ -80,8 +93,8 @@ class _RouteCandidate(Generic[ProviderT, ModelT]):
     weight: int
 
 
-class _SupportsActiveRouteConfig(Protocol[ProviderT, ModelT]):
-    def resolve_active(self) -> tuple[ProviderT, ModelT]: ...
+class _SupportsActiveRouteConfig(Protocol[ProviderT_co, ModelT_co]):
+    def resolve_active(self) -> tuple[ProviderT_co, ModelT_co]: ...
 
 
 def structured_mode_for_model(model: _RouteableModel) -> str:
@@ -124,9 +137,11 @@ def _parse_pool_item(item: object, providers: list[ProviderConfig], item_name: s
     weight = item.get("weight")
     if not isinstance(model_ref, str) or not model_ref:
         raise ValueError(f"{item_name} entries must include model")
+    if not isinstance(weight, (int, str)):
+        raise ValueError(f"{item_name} entries must include positive integer weight")
     try:
         weight_value = int(weight)
-    except (TypeError, ValueError) as exc:
+    except ValueError as exc:
         raise ValueError(f"{item_name} entries must include positive integer weight") from exc
     if weight_value <= 0:
         raise ValueError(f"{item_name} entries must include positive integer weight")
@@ -289,7 +304,9 @@ def _build_route_candidates(
     weight: int,
 ) -> list[_RouteCandidate[ProviderT, ModelT]]:
     candidates: list[_RouteCandidate[ProviderT, ModelT]] = []
-    for base in provider.base:
+    routeable_provider = cast(_RouteableProvider, provider)
+    routeable_model = cast(_RouteableModel, model)
+    for base in routeable_provider.base:
         resolved_keys = resolve_api_key_configs(base.key)
         for key in resolved_keys:
             routed_base = BaseConfig(
@@ -299,14 +316,14 @@ def _build_route_candidates(
                 active_windows=base.active_windows,
                 active_timezone=base.active_timezone,
             )
-            routed_provider = cast(ProviderT, replace(provider, base=[routed_base], models=[model]))
-            route_id = f"{provider.name}|{model.model_name}|{base.url}|{key.value}"
+            routed_provider = cast(ProviderT, replace(cast(Any, provider), base=[routed_base], models=[model]))
+            route_id = f"{routeable_provider.name}|{routeable_model.model_name}|{base.url}|{key.value}"
             route = RuntimeRoute(
                 provider=routed_provider,
                 base=routed_base,
                 key=key,
                 model=model,
-                structured_mode=structured_mode_for_model(model),
+                structured_mode=structured_mode_for_model(routeable_model),
                 route_id=route_id,
             )
             candidates.append(
@@ -378,12 +395,15 @@ class RoutePool(Generic[ProviderT, ModelT]):
                     weight=pool_item.weight,
                 )
             )
-        return cls(
-            candidates,
-            cooldown_seconds=cooldown_seconds,
-            verbose=verbose,
-            rng=rng,
-            now_provider=now_provider,
+        return cast(
+            "RoutePool[ProviderConfig, ModelCapability]",
+            cls(
+                cast(Any, candidates),
+                cooldown_seconds=cooldown_seconds,
+                verbose=verbose,
+                rng=rng,
+                now_provider=now_provider,
+            ),
         )
 
     @classmethod

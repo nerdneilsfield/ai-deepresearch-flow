@@ -21,6 +21,7 @@ from tqdm import tqdm
 from deepresearch_flow.paper.config import load_config
 from deepresearch_flow.paper.routing import (
     parse_model_selector,
+    provider_window_error_as_click,
     RoutePool,
     select_runtime_route,
 )
@@ -1195,7 +1196,8 @@ def recognize_fix_math(
         selector = parse_model_selector(model_ref, config)
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
-    route = select_runtime_route(config, selector)
+    with provider_window_error_as_click():
+        route = select_runtime_route(config, selector)
     provider = replace(route.provider, base=[route.base], models=[route.model])
     model_name = route.model.model_name
     route_pool = RoutePool.from_selector(config, selector, cooldown_seconds=1.0, verbose=verbose)
@@ -1383,7 +1385,8 @@ def recognize_fix_math(
         return stats_total
 
     try:
-        stats = asyncio.run(run())
+        with provider_window_error_as_click():
+            stats = asyncio.run(run())
     finally:
         progress.close()
         formula_progress.close()
@@ -1505,7 +1508,8 @@ def recognize_fix_mermaid(
         selector = parse_model_selector(model_ref, config)
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
-    route = select_runtime_route(config, selector)
+    with provider_window_error_as_click():
+        route = select_runtime_route(config, selector)
     provider = replace(route.provider, base=[route.base], models=[route.model])
     model_name = route.model.model_name
     route_pool = RoutePool.from_selector(config, selector, cooldown_seconds=1.0, verbose=verbose)
@@ -1828,7 +1832,8 @@ def recognize_fix_mermaid(
         return stats_total
 
     try:
-        stats = asyncio.run(run())
+        with provider_window_error_as_click():
+            stats = asyncio.run(run())
     finally:
         progress.close()
         field_progress.close()

@@ -21,7 +21,12 @@ from rich.table import Table
 from deepresearch_flow.paper.config import load_config
 from deepresearch_flow.paper.llm import backoff_delay, call_provider
 from deepresearch_flow.paper.providers.base import ProviderError
-from deepresearch_flow.paper.routing import RoutePool, parse_model_selector, resolve_model_capability
+from deepresearch_flow.paper.routing import (
+    RoutePool,
+    parse_model_selector,
+    provider_window_error_as_click,
+    resolve_model_capability,
+)
 from deepresearch_flow.paper.schema import SchemaError, load_schema
 from deepresearch_flow.paper.template_registry import (
     get_stage_definitions,
@@ -1802,7 +1807,8 @@ def register_db_commands(db_group: click.Group) -> None:
             write_json(Path(output_path), papers)
             click.echo(f"Generated tags for {len(papers)} papers")
 
-        asyncio.run(_run())
+        with provider_window_error_as_click():
+            asyncio.run(_run())
 
     @db_group.command("filter")
     @click.option("-i", "--input", "input_path", required=True, help="Input JSON file path")

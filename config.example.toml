@@ -38,6 +38,11 @@ main_concurrency = 4
 fallback_concurrency = 2
 fallback_2_concurrency = 2
 
+# Optional per-base routing windows:
+# active_windows = ["22:00-06:00"]
+# active_timezone = "Asia/Shanghai"
+# See docs/superpowers/specs/2026-04-21-provider-active-window-design.md
+
 [[providers]]
 name = "openai"
 type = "openai_compatible"
@@ -94,6 +99,8 @@ base = [
   {
     url = "http://localhost:11434",
     weight = 1,
+    # active_windows = ["22:00-06:00"],
+    # active_timezone = "Asia/Shanghai",
     key = [
       { value = "local", weight = 1 },
     ],
@@ -117,7 +124,13 @@ chunk_overlap_tokens = 64
 name = "ollama"
 type = "openai_compatible"
 base = [
-  { url = "http://localhost:11434/v1", weight = 1, key = [{ value = "ollama", weight = 1 }] },
+  {
+    url = "http://localhost:11434/v1",
+    weight = 1,
+    # active_windows = ["09:00-12:00", "14:00-18:00"],
+    # active_timezone = "Asia/Shanghai",
+    key = [{ value = "ollama", weight = 1 }],
+  },
 ]
 models = [
   { model_name = "Qwen3-Embedding-4B", dimensions = 1024, max_context = 32768 },

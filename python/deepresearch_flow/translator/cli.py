@@ -18,6 +18,7 @@ from rich.table import Table
 from deepresearch_flow.paper.config import ProviderConfig, load_config, resolve_api_keys
 from deepresearch_flow.paper.routing import (
     parse_model_selector,
+    provider_window_error_as_click,
     RoutePool,
     select_runtime_route,
 )
@@ -329,7 +330,8 @@ def translate(
         selector = parse_model_selector(model_ref, config)
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
-    route = select_runtime_route(config, selector)
+    with provider_window_error_as_click():
+        route = select_runtime_route(config, selector)
     provider = replace(route.provider, base=[route.base], models=[route.model])
     model_name = route.model.model_name
     route_pool = RoutePool.from_selector(config, selector, cooldown_seconds=1.0, verbose=verbose)
@@ -350,7 +352,8 @@ def translate(
             fallback_selector = parse_model_selector(fallback_model_ref, config)
         except ValueError as exc:
             raise click.ClickException(str(exc)) from exc
-        fallback_route = select_runtime_route(config, fallback_selector)
+        with provider_window_error_as_click():
+            fallback_route = select_runtime_route(config, fallback_selector)
         fallback_provider = replace(
             fallback_route.provider,
             base=[fallback_route.base],
@@ -382,7 +385,8 @@ def translate(
             fallback_selector_2 = parse_model_selector(fallback_model_ref_2, config)
         except ValueError as exc:
             raise click.ClickException(str(exc)) from exc
-        fallback_route_2 = select_runtime_route(config, fallback_selector_2)
+        with provider_window_error_as_click():
+            fallback_route_2 = select_runtime_route(config, fallback_selector_2)
         fallback_provider_2 = replace(
             fallback_route_2.provider,
             base=[fallback_route_2.base],
@@ -640,7 +644,8 @@ def translate(
         for path in failed_files:
             click.echo(f"Failed {path}", err=True)
 
-    asyncio.run(run_scheduler())
+    with provider_window_error_as_click():
+        asyncio.run(run_scheduler())
 
     duration = time.monotonic() - start_time
     table = Table(

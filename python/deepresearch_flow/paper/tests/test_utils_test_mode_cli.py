@@ -196,3 +196,38 @@ def test_explicit_unsupported_error_writes_back_false(
     assert "is_support_json_schema = false" in updated
     assert "is_support_json_object = true" in updated
     assert "unsupported" in result.output
+
+
+def test_write_back_preserves_active_window_fields(tmp_path: Path, monkeypatch) -> None:
+    runner = CliRunner()
+    config_path = _write_config(tmp_path)
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace(
+            '{ url = "https://api.example.com/v1", weight = 1, key = [{ value = "test-key", weight = 1 }] }',
+            '{ url = "https://api.example.com/v1", weight = 1, active_windows = ["00:00-24:00"], active_timezone = "Asia/Shanghai", key = [{ value = "test-key", weight = 1 }] }',
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("deepresearch_flow.utils.cli.probe_model_mode", lambda route, mode: mode == "json_schema")
+
+    result = runner.invoke(
+        cli,
+        [
+            "utils",
+            "test-mode",
+            "--config",
+            str(config_path),
+            "--model",
+            "openai/gpt-4.1",
+            "--write-back",
+        ],
+    )
+
+    assert result.exit_code == 0
+    updated = config_path.read_text(encoding="utf-8")
+    assert 'active_windows = ["00:00-24:00"]' in updated
+    assert 'active_timezone = "Asia/Shanghai"' in updated
+    reloaded = load_config(str(config_path))
+    assert reloaded.providers[0].base[0].active_windows == ["00:00-24:00"]
+    assert reloaded.providers[0].base[0].active_timezone == "Asia/Shanghai"

@@ -22,7 +22,13 @@ from deepresearch_flow.paper.config import (
 )
 from deepresearch_flow.paper.embedding import call_embedding_with_route_pool
 from deepresearch_flow.paper.extract import extract_documents, configure_logging
-from deepresearch_flow.paper.routing import ParsedModelSelector, RoutePool, parse_model_selector, resolve_model_capability
+from deepresearch_flow.paper.routing import (
+    ParsedModelSelector,
+    RoutePool,
+    parse_model_selector,
+    provider_window_error_as_click,
+    resolve_model_capability,
+)
 from deepresearch_flow.paper.db import register_db_commands
 from deepresearch_flow.paper.schema import load_schema, validate_schema, SchemaError
 from deepresearch_flow.paper.template_registry import list_template_names, load_schema_for_template
@@ -577,8 +583,9 @@ def extract(
 
     configure_logging(verbose)
 
-    asyncio.run(
-        extract_documents(
+    with provider_window_error_as_click():
+        asyncio.run(
+            extract_documents(
             inputs=tuple(all_inputs) if all_inputs else inputs,
             glob_pattern=glob_pattern,
             provider=provider,
@@ -615,8 +622,8 @@ def extract(
             sleep_time=sleep_time,
             verbose=verbose,
             model_selector=model_selector,
+            )
         )
-    )
 
 
 @paper.command()
@@ -687,8 +694,9 @@ def embed(
 
     from deepresearch_flow.paper.embed_pipeline import run_embed_pipeline
 
-    asyncio.run(
-        run_embed_pipeline(
+    with provider_window_error_as_click():
+        asyncio.run(
+            run_embed_pipeline(
             config=config,
             input_paths=[Path(p) for p in input_paths] if has_json else None,
             snapshot_db=Path(snapshot_db) if snapshot_db else None,
@@ -698,8 +706,8 @@ def embed(
             vector_dir=vector_dir,
             template_tag_override=template_tag,
             verbose=verbose,
+            )
         )
-    )
     click.echo("Embedding complete.")
 
 
@@ -737,8 +745,9 @@ def search(
     if not vector_dir.exists():
         raise click.ClickException(f"Vector index not found at {vector_dir}. Run 'paper embed' first.")
 
-    asyncio.run(
-        _run_search(
+    with provider_window_error_as_click():
+        asyncio.run(
+            _run_search(
             config=config,
             vector_dir=vector_dir,
             query_text=query_text,
@@ -750,8 +759,8 @@ def search(
             verbose=verbose,
             embedding_override=embedding_override,
             rerank_override=rerank_override,
+            )
         )
-    )
 
 
 @paper.group()
