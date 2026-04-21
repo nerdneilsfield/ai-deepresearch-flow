@@ -6,11 +6,13 @@ Authentication is via Bearer token in the ``Authorization`` header.
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import json
 import logging
 import sqlite3
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -535,6 +537,168 @@ def _clear_staged_parts(cfg: AdminConfig, doc_id: str, template_tag: str, group_
         conn.close()
 
 
+def _update_index_meta_after_group_write(
+    vector_dir: Path,
+    *,
+    previous_doc_groups: dict[str, str],
+    template_tag: str,
+    previous_group_count: int,
+    new_group_count: int,
+    had_template_elsewhere: bool,
+) -> None:
+    from deepresearch_flow.paper.vector_store import load_index_meta, save_index_meta
+
+    meta = load_index_meta(vector_dir)
+    meta["chunk_count"] = max(
+        0,
+        int(meta.get("chunk_count") or 0) + new_group_count - previous_group_count,
+    )
+
+    before_doc_present = bool(previous_doc_groups)
+    current_template_key = template_tag or "_shared"
+    other_doc_groups = {key for key in previous_doc_groups if key != current_template_key}
+    after_doc_present = bool(other_doc_groups) or new_group_count > 0
+    doc_count = int(meta.get("doc_count") or 0)
+    if not before_doc_present and after_doc_present:
+        doc_count += 1
+    elif before_doc_present and not after_doc_present:
+        doc_count = max(0, doc_count - 1)
+    meta["doc_count"] = doc_count
+
+    if template_tag:
+        before_template_present = had_template_elsewhere or previous_group_count > 0
+        after_template_present = had_template_elsewhere or new_group_count > 0
+        template_count = int(meta.get("template_count") or 0)
+        if not before_template_present and after_template_present:
+            template_count += 1
+        elif before_template_present and not after_template_present:
+            template_count = max(0, template_count - 1)
+        meta["template_count"] = template_count
+
+    meta["last_updated"] = datetime.now(timezone.utc).isoformat()
+    save_index_meta(vector_dir, meta)
+
+
+def _apply_semantic_chunk_batch(
+    cfg: AdminConfig,
+    *,
+    index_meta: dict[str, Any],
+    doc_id: str,
+    template_tag: str,
+    dimensions: int,
+    all_chunks: list[dict[str, Any]],
+) -> dict[str, int]:
+    from deepresearch_flow.paper.vector_store import (
+        ChunkRow,
+        decode_vector_b64,
+        delete_groups,
+        has_rows_for_template,
+        open_store,
+        read_chunks_for_group,
+        read_group_hashes_for_doc,
+        save_index_meta,
+        validate_index_meta,
+        write_chunks,
+    )
+
+    meta_path = cfg.embed_db / "index_meta.json"
+    if meta_path.exists():
+        validate_index_meta(
+            cfg.embed_db,
+            model=str(index_meta.get("model") or ""),
+            canonical_model=str(index_meta.get("canonical_model") or "") or None,
+            dimensions=dimensions,
+            normalized=bool(index_meta.get("normalized")),
+            provider=str(index_meta.get("provider") or ""),
+        )
+    else:
+        save_index_meta(
+            cfg.embed_db,
+            {
+                "model": str(index_meta.get("model") or ""),
+                "canonical_model": str(index_meta.get("canonical_model") or index_meta.get("model") or ""),
+                "dimensions": cfg.embed_dimensions if cfg.embed_dimensions is not None else dimensions,
+                "normalized": bool(index_meta.get("normalized")),
+                "provider": str(index_meta.get("provider") or ""),
+                "index_version": int(index_meta.get("index_version") or 1),
+                "doc_count": 0,
+                "template_count": 0,
+                "chunk_count": 0,
+                "last_updated": None,
+            },
+        )
+
+    db = open_store(cfg.embed_db)
+    previous_doc_groups = read_group_hashes_for_doc(db, doc_id)
+    existing_rows = read_chunks_for_group(db, doc_id, template_tag)
+    existing_by_id = {str(row["id"]): str(row.get("content_hash") or "") for row in existing_rows}
+    had_template_elsewhere = has_rows_for_template(db, template_tag, exclude_doc_id=doc_id)
+
+    inserted = 0
+    updated = 0
+    skipped = 0
+    incoming_ids: set[str] = set()
+    current_rows: list[ChunkRow] = []
+    for chunk in all_chunks:
+        chunk_id = str(chunk.get("id") or "")
+        incoming_ids.add(chunk_id)
+        content_hash = str(chunk.get("content_hash") or "")
+        if chunk_id in existing_by_id:
+            if existing_by_id[chunk_id] == content_hash:
+                skipped += 1
+            else:
+                updated += 1
+        else:
+            inserted += 1
+        try:
+            vector = decode_vector_b64(
+                str(chunk.get("vector_b64") or ""),
+                int(chunk.get("vector_dim") or dimensions),
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"invalid vector payload for chunk {chunk_id}: {exc}") from exc
+        current_rows.append(
+            ChunkRow(
+                id=chunk_id,
+                doc_id=str(chunk.get("doc_id") or doc_id),
+                source_path=str(chunk.get("source_path") or ""),
+                template_tag=str(chunk.get("template_tag") or template_tag),
+                chunk_type=str(chunk.get("chunk_type") or ""),
+                chunk_index=int(chunk.get("chunk_index") or 0),
+                field_name=str(chunk.get("field_name") or ""),
+                lang=str(chunk.get("lang") or ""),
+                text=str(chunk.get("text") or ""),
+                content_hash=content_hash,
+                vector=vector,
+                title=str(chunk.get("title") or ""),
+                year=int(chunk.get("year") or 0),
+                authors=str(chunk.get("authors") or ""),
+                venue=str(chunk.get("venue") or ""),
+                tags=str(chunk.get("tags") or ""),
+            )
+        )
+
+    deleted = len(set(existing_by_id) - incoming_ids)
+    delete_groups(db, [(doc_id, template_tag if template_tag else "_shared")])
+    if current_rows:
+        write_chunks(db, current_rows, dimensions=dimensions)
+    _update_index_meta_after_group_write(
+        cfg.embed_db,
+        previous_doc_groups=previous_doc_groups,
+        template_tag=template_tag,
+        previous_group_count=len(existing_rows),
+        new_group_count=len(current_rows),
+        had_template_elsewhere=had_template_elsewhere,
+    )
+    return {
+        "received": len(all_chunks),
+        "inserted": inserted,
+        "updated": updated,
+        "skipped": skipped,
+        "deleted": deleted,
+    }
+
+
 async def _admin_ingest_semantic_chunks(request: Request) -> JSONResponse:
     if not _check_auth(request):
         return _AUTH_ERROR
@@ -574,130 +738,50 @@ async def _admin_ingest_semantic_chunks(request: Request) -> JSONResponse:
     if not doc_id or not group_hash or part_count < 1:
         return JSONResponse({"error": "bad_request", "detail": "invalid group metadata"}, status_code=400)
 
-    if part_count > 1:
-        _stage_part(cfg, doc_id, template_tag, group_hash, part_index, part_count, chunks)
-        if _count_staged_parts(cfg, doc_id, template_tag, group_hash) < part_count:
-            return JSONResponse({"received": len(chunks), "inserted": 0, "updated": 0, "skipped": 0, "deleted": 0})
-        all_chunks = _collect_staged_parts(cfg, doc_id, template_tag, group_hash)
-    else:
-        all_chunks = chunks
+    lock: asyncio.Lock = request.app.state.semantic_ingest_lock
+    async with lock:
+        if part_count > 1:
+            _stage_part(cfg, doc_id, template_tag, group_hash, part_index, part_count, chunks)
+            if _count_staged_parts(cfg, doc_id, template_tag, group_hash) < part_count:
+                return JSONResponse({"received": len(chunks), "inserted": 0, "updated": 0, "skipped": 0, "deleted": 0})
+            all_chunks = _collect_staged_parts(cfg, doc_id, template_tag, group_hash)
+        else:
+            all_chunks = chunks
 
-    from deepresearch_flow.paper.vector_store import (
-        ChunkRow,
-        compute_group_hash,
-        decode_vector_b64,
-        delete_groups,
-        open_store,
-        read_all_chunks,
-        save_index_meta,
-        update_index_meta_stats,
-        validate_index_meta,
-        write_chunks,
-    )
+        from deepresearch_flow.paper.vector_store import compute_group_hash
 
-    expected_group_hash = compute_group_hash([str(chunk.get("content_hash") or "") for chunk in all_chunks])
-    if expected_group_hash != group_hash:
-        return JSONResponse(
-            {"error": "bad_request", "detail": "group_hash does not match chunk content_hash values"},
-            status_code=400,
-        )
+        expected_group_hash = compute_group_hash([str(chunk.get("content_hash") or "") for chunk in all_chunks])
+        if expected_group_hash != group_hash:
+            return JSONResponse(
+                {"error": "bad_request", "detail": "group_hash does not match chunk content_hash values"},
+                status_code=400,
+            )
 
-    meta_path = cfg.embed_db / "index_meta.json"
-    if meta_path.exists():
         try:
-            validate_index_meta(
-                cfg.embed_db,
-                model=str(index_meta.get("model") or ""),
-                canonical_model=str(index_meta.get("canonical_model") or "") or None,
+            result = await asyncio.to_thread(
+                _apply_semantic_chunk_batch,
+                cfg,
+                index_meta=index_meta,
+                doc_id=doc_id,
+                template_tag=template_tag,
                 dimensions=dimensions,
-                normalized=bool(index_meta.get("normalized")),
-                provider=str(index_meta.get("provider") or ""),
+                all_chunks=all_chunks,
             )
         except ValueError as exc:
             return JSONResponse({"error": "bad_request", "detail": str(exc)}, status_code=400)
-    else:
-        save_index_meta(
-            cfg.embed_db,
-            {
-                "model": str(index_meta.get("model") or ""),
-                "canonical_model": str(index_meta.get("canonical_model") or index_meta.get("model") or ""),
-                "dimensions": cfg.embed_dimensions if cfg.embed_dimensions is not None else dimensions,
-                "normalized": bool(index_meta.get("normalized")),
-                "provider": str(index_meta.get("provider") or ""),
-                "index_version": int(index_meta.get("index_version") or 1),
-                "doc_count": 0,
-                "template_count": 0,
-                "chunk_count": 0,
-                "last_updated": None,
-            },
-        )
-
-    db = open_store(cfg.embed_db)
-    existing_rows = [row for row in read_all_chunks(db) if str(row.get("doc_id")) == doc_id and str(row.get("template_tag") or "") == template_tag]
-    existing_by_id = {str(row["id"]): str(row.get("content_hash") or "") for row in existing_rows}
-
-    inserted = 0
-    updated = 0
-    skipped = 0
-    incoming_ids: set[str] = set()
-    current_rows: list[ChunkRow] = []
-    for chunk in all_chunks:
-        chunk_id = str(chunk.get("id") or "")
-        incoming_ids.add(chunk_id)
-        content_hash = str(chunk.get("content_hash") or "")
-        if chunk_id in existing_by_id:
-            if existing_by_id[chunk_id] == content_hash:
-                skipped += 1
-            else:
-                updated += 1
-        else:
-            inserted += 1
-        try:
-            vector = decode_vector_b64(
-                str(chunk.get("vector_b64") or ""),
-                int(chunk.get("vector_dim") or dimensions),
+        except Exception:
+            logger.exception(
+                "Semantic chunk ingest failed for doc_id=%s template_tag=%s part=%s/%s",
+                doc_id,
+                template_tag,
+                part_index,
+                part_count,
             )
-        except (TypeError, ValueError) as exc:
-            return JSONResponse(
-                {"error": "bad_request", "detail": f"invalid vector payload for chunk {chunk_id}: {exc}"},
-                status_code=400,
-            )
-        current_rows.append(
-            ChunkRow(
-                id=chunk_id,
-                doc_id=str(chunk.get("doc_id") or doc_id),
-                source_path=str(chunk.get("source_path") or ""),
-                template_tag=str(chunk.get("template_tag") or template_tag),
-                chunk_type=str(chunk.get("chunk_type") or ""),
-                chunk_index=int(chunk.get("chunk_index") or 0),
-                field_name=str(chunk.get("field_name") or ""),
-                lang=str(chunk.get("lang") or ""),
-                text=str(chunk.get("text") or ""),
-                content_hash=content_hash,
-                vector=vector,
-                title=str(chunk.get("title") or ""),
-                year=int(chunk.get("year") or 0),
-                authors=str(chunk.get("authors") or ""),
-                venue=str(chunk.get("venue") or ""),
-                tags=str(chunk.get("tags") or ""),
-            )
-        )
+            raise
 
-    deleted = len(set(existing_by_id) - incoming_ids)
-    delete_groups(db, [(doc_id, template_tag if template_tag else "_shared")])
-    if current_rows:
-        write_chunks(db, current_rows, dimensions=dimensions)
-    update_index_meta_stats(cfg.embed_db, db)
-    if part_count > 1:
-        _clear_staged_parts(cfg, doc_id, template_tag, group_hash)
-
-    return JSONResponse({
-        "received": len(all_chunks),
-        "inserted": inserted,
-        "updated": updated,
-        "skipped": skipped,
-        "deleted": deleted,
-    })
+        if part_count > 1:
+            _clear_staged_parts(cfg, doc_id, template_tag, group_hash)
+        return JSONResponse(result)
 
 
 # ---------------------------------------------------------------------------
@@ -718,4 +802,5 @@ def create_admin_app(*, snapshot_db: Path, admin_token: str, embed_db: Path | No
 
     app = Starlette(routes=routes)
     app.state.admin_cfg = cfg
+    app.state.semantic_ingest_lock = asyncio.Lock()
     return app

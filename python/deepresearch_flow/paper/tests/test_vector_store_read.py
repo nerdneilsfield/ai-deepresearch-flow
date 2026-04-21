@@ -11,6 +11,7 @@ from deepresearch_flow.paper.vector_store import (
     delete_groups,
     open_store,
     read_all_chunks,
+    read_chunks_for_group,
     write_chunks,
 )
 
@@ -109,3 +110,117 @@ def test_delete_groups_escapes_filter_literals(tmp_path: Path) -> None:
     delete_groups(db, [("doc'a", "_shared")])
     chunks = read_all_chunks(db)
     assert [chunk['doc_id'] for chunk in chunks] == ['docb']
+
+
+def test_read_chunks_for_group_returns_only_matching_doc_and_template(tmp_path: Path) -> None:
+    db = open_store(tmp_path)
+    rows = [
+        ChunkRow(
+            id="doc1_simple_title_0",
+            doc_id="doc1",
+            source_path="a.md",
+            template_tag="simple",
+            chunk_type="title",
+            chunk_index=0,
+            field_name="title",
+            lang="",
+            text="A",
+            content_hash="ha",
+            vector=[0.1] * 4,
+            title="A",
+            year=2024,
+            authors="A",
+            venue="V",
+            tags="t",
+        ),
+        ChunkRow(
+            id="doc1_deep_title_0",
+            doc_id="doc1",
+            source_path="a.md",
+            template_tag="deep",
+            chunk_type="title",
+            chunk_index=0,
+            field_name="title",
+            lang="",
+            text="B",
+            content_hash="hb",
+            vector=[0.2] * 4,
+            title="B",
+            year=2024,
+            authors="A",
+            venue="V",
+            tags="t",
+        ),
+        ChunkRow(
+            id="doc2_simple_title_0",
+            doc_id="doc2",
+            source_path="b.md",
+            template_tag="simple",
+            chunk_type="title",
+            chunk_index=0,
+            field_name="title",
+            lang="",
+            text="C",
+            content_hash="hc",
+            vector=[0.3] * 4,
+            title="C",
+            year=2024,
+            authors="B",
+            venue="V",
+            tags="t",
+        ),
+    ]
+    write_chunks(db, rows, dimensions=4)
+
+    chunks = read_chunks_for_group(db, "doc1", "simple")
+
+    assert len(chunks) == 1
+    assert chunks[0]["id"] == "doc1_simple_title_0"
+
+
+def test_read_chunks_for_group_handles_shared_template(tmp_path: Path) -> None:
+    db = open_store(tmp_path)
+    rows = [
+        ChunkRow(
+            id="doc1__shared_title_0",
+            doc_id="doc1",
+            source_path="a.md",
+            template_tag="",
+            chunk_type="title",
+            chunk_index=0,
+            field_name="title",
+            lang="",
+            text="A",
+            content_hash="ha",
+            vector=[0.1] * 4,
+            title="A",
+            year=2024,
+            authors="A",
+            venue="V",
+            tags="t",
+        ),
+        ChunkRow(
+            id="doc1_simple_title_0",
+            doc_id="doc1",
+            source_path="a.md",
+            template_tag="simple",
+            chunk_type="title",
+            chunk_index=0,
+            field_name="title",
+            lang="",
+            text="B",
+            content_hash="hb",
+            vector=[0.2] * 4,
+            title="B",
+            year=2024,
+            authors="A",
+            venue="V",
+            tags="t",
+        ),
+    ]
+    write_chunks(db, rows, dimensions=4)
+
+    chunks = read_chunks_for_group(db, "doc1", "")
+
+    assert len(chunks) == 1
+    assert chunks[0]["id"] == "doc1__shared_title_0"

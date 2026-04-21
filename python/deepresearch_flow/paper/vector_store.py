@@ -26,6 +26,13 @@ def _quote_filter_literal(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
+def _group_filter(doc_id: str, template_tag: str) -> str:
+    return (
+        f"doc_id = {_quote_filter_literal(doc_id)} AND "
+        f"template_tag = {_quote_filter_literal(template_tag)}"
+    )
+
+
 def _table_names(db: lancedb.DBConnection) -> list[str]:
     response = db.list_tables()
     if hasattr(response, "tables"):
@@ -244,9 +251,7 @@ def delete_groups(db: lancedb.DBConnection, groups: list[tuple[str, str]]) -> No
     table = db.open_table(_CHUNKS_TABLE)
     for doc_id, template_key in groups:
         tag = "" if template_key == _SHARED_KEY else template_key
-        table.delete(
-            f"doc_id = {_quote_filter_literal(doc_id)} AND template_tag = {_quote_filter_literal(tag)}"
-        )
+        table.delete(_group_filter(doc_id, tag))
 
 
 def read_group_hashes(db: lancedb.DBConnection) -> dict[tuple[str, str], str]:
@@ -295,6 +300,29 @@ def read_all_chunks(db: lancedb.DBConnection) -> list[dict[str, Any]]:
         return []
     table = db.open_table(_CHUNKS_TABLE)
     return table.to_arrow().to_pylist()
+
+
+def read_chunks_for_group(db: lancedb.DBConnection, doc_id: str, template_tag: str) -> list[dict[str, Any]]:
+    if _CHUNKS_TABLE not in _table_names(db):
+        return []
+    table = db.open_table(_CHUNKS_TABLE)
+    return table.search().where(_group_filter(doc_id, template_tag)).to_list()
+
+
+def has_rows_for_template(
+    db: lancedb.DBConnection,
+    template_tag: str,
+    *,
+    exclude_doc_id: str | None = None,
+) -> bool:
+    if not template_tag or _CHUNKS_TABLE not in _table_names(db):
+        return False
+    table = db.open_table(_CHUNKS_TABLE)
+    filter_expr = f"template_tag = {_quote_filter_literal(template_tag)}"
+    if exclude_doc_id is not None:
+        filter_expr += f" AND doc_id != {_quote_filter_literal(exclude_doc_id)}"
+    rows = table.search().where(filter_expr).limit(1).select(["id"]).to_list()
+    return bool(rows)
 
 
 def scan_rows(db: lancedb.DBConnection) -> list[dict[str, Any]]:

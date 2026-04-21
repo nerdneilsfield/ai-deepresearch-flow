@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
+import time
 
+import httpx
+import pytest
 from starlette.testclient import TestClient
 
 from deepresearch_flow.paper.snapshot.admin import create_admin_app
-from deepresearch_flow.paper.vector_store import compute_group_hash, encode_vector_b64
+from deepresearch_flow.paper.vector_store import ChunkRow, compute_group_hash, encode_vector_b64, load_index_meta, open_store, read_chunks_for_group, save_index_meta, write_chunks
 
 
-def _make_app(tmp_path: Path) -> tuple[TestClient, dict[str, str], Path]:
+def _make_admin_app(tmp_path: Path):
     snapshot_db = tmp_path / "test.db"
     embed_dir = tmp_path / "embed_vectors"
     embed_dir.mkdir()
@@ -19,6 +23,11 @@ def _make_app(tmp_path: Path) -> tuple[TestClient, dict[str, str], Path]:
         embed_db=embed_dir,
         embed_dimensions=4,
     )
+    return app, embed_dir
+
+
+def _make_app(tmp_path: Path) -> tuple[TestClient, dict[str, str], Path]:
+    app, embed_dir = _make_admin_app(tmp_path)
     headers = {"Authorization": "Bearer test-token", "Content-Type": "application/json"}
     return TestClient(app, raise_server_exceptions=False), headers, embed_dir
 
@@ -240,3 +249,115 @@ def test_multi_part_write_failure_keeps_staged_parts(tmp_path: Path) -> None:
     finally:
         conn.close()
     assert count == 2
+
+
+@pytest.mark.anyio
+async def test_concurrent_same_group_writes_do_not_duplicate_rows(tmp_path: Path, monkeypatch) -> None:
+    app, embed_dir = _make_admin_app(tmp_path)
+    headers = {"Authorization": "Bearer test-token", "Content-Type": "application/json"}
+
+    original_write_chunks = write_chunks
+
+    def slow_write_chunks(db, rows, *, dimensions):  # noqa: ANN001
+        time.sleep(0.05)
+        return original_write_chunks(db, rows, dimensions=dimensions)
+
+    monkeypatch.setattr("deepresearch_flow.paper.vector_store.write_chunks", slow_write_chunks)
+
+    transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp_a, resp_b = await asyncio.gather(
+            client.post(
+                "/semantic/chunks/batch",
+                json=_body("d1", "simple", [_chunk("d1", "simple", 0, content_hash="old")]),
+                headers=headers,
+            ),
+            client.post(
+                "/semantic/chunks/batch",
+                json=_body("d1", "simple", [_chunk("d1", "simple", 0, content_hash="new")]),
+                headers=headers,
+            ),
+        )
+
+    assert resp_a.status_code == 200
+    assert resp_b.status_code == 200
+    rows = read_chunks_for_group(open_store(embed_dir), "d1", "simple")
+    assert len(rows) == 1
+    assert rows[0]["content_hash"] in {"old_0", "new_0"}
+
+
+@pytest.mark.anyio
+async def test_concurrent_writes_preserve_index_meta_counts(tmp_path: Path, monkeypatch) -> None:
+    app, embed_dir = _make_admin_app(tmp_path)
+    headers = {"Authorization": "Bearer test-token", "Content-Type": "application/json"}
+
+    db = open_store(embed_dir)
+    write_chunks(
+        db,
+        [
+            ChunkRow(
+                id="seed_simple_content_0",
+                doc_id="seed",
+                source_path="seed.md",
+                template_tag="simple",
+                chunk_type="content",
+                chunk_index=0,
+                field_name="summary",
+                lang="",
+                text="seed",
+                content_hash="seed_0",
+                vector=[0.1, 0.2, 0.3, 0.4],
+                title="Seed",
+                year=2024,
+                authors="A",
+                venue="V",
+                tags="t",
+            )
+        ],
+        dimensions=4,
+    )
+    save_index_meta(
+        embed_dir,
+        {
+            "model": "m",
+            "canonical_model": "m",
+            "dimensions": 4,
+            "normalized": True,
+            "provider": "p",
+            "index_version": 1,
+            "doc_count": 1,
+            "template_count": 1,
+            "chunk_count": 1,
+            "last_updated": None,
+        },
+    )
+
+    original_write_chunks = write_chunks
+
+    def slow_write_chunks(db, rows, *, dimensions):  # noqa: ANN001
+        time.sleep(0.05)
+        return original_write_chunks(db, rows, dimensions=dimensions)
+
+    monkeypatch.setattr("deepresearch_flow.paper.vector_store.write_chunks", slow_write_chunks)
+
+    transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp_a, resp_b = await asyncio.gather(
+            client.post(
+                "/semantic/chunks/batch",
+                json=_body("d1", "simple", [_chunk("d1", "simple", 0, content_hash="a")]),
+                headers=headers,
+            ),
+            client.post(
+                "/semantic/chunks/batch",
+                json=_body("d2", "simple", [_chunk("d2", "simple", 0, content_hash="b")]),
+                headers=headers,
+            ),
+        )
+
+    assert resp_a.status_code == 200
+    assert resp_b.status_code == 200
+    meta = load_index_meta(embed_dir)
+    assert meta["doc_count"] == 3
+    assert meta["template_count"] == 1
+    assert meta["chunk_count"] == 3
