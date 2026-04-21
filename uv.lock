@@ -549,7 +549,7 @@ wheels = [
 
 [[package]]
 name = "deepresearch-flow"
-version = "0.9.10"
+version = "0.9.11"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
