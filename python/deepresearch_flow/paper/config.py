@@ -7,6 +7,9 @@ from pathlib import Path
 from typing import Any
 import os
 import tomllib
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from deepresearch_flow.paper.active_window import parse_windows
 
 
 @dataclass(frozen=True)
@@ -53,6 +56,8 @@ class BaseConfig:
     url: str
     weight: int
     key: list[KeyConfig]
+    active_windows: list[str] = field(default_factory=list)
+    active_timezone: str | None = None
 
 
 @dataclass(frozen=True)
@@ -463,13 +468,13 @@ def _parse_key_config(value: Any, field_name: str) -> KeyConfig:
     )
 
 
-def _parse_base_configs(value: Any, provider_name: str) -> list[BaseConfig]:
+def _parse_base_configs(value: Any, provider_path: str) -> list[BaseConfig]:
     if not isinstance(value, list) or not value:
-        raise ValueError(f"Provider '{provider_name}' must include non-empty base")
+        raise ValueError(f"{provider_path} must include non-empty base")
 
     parsed: list[BaseConfig] = []
     for idx, item in enumerate(value):
-        field_name = f"providers[{provider_name}].base[{idx}]"
+        field_name = f"{provider_path}.base[{idx}]"
         if not isinstance(item, dict):
             raise ValueError(f"{field_name} must be an object")
         url = _as_str(item.get("url"))
@@ -478,11 +483,40 @@ def _parse_base_configs(value: Any, provider_name: str) -> list[BaseConfig]:
         keys_raw = item.get("key")
         if not isinstance(keys_raw, list) or not keys_raw:
             raise ValueError(f"{field_name} must include non-empty key")
+        raw_windows = item.get("active_windows")
+        if raw_windows is None:
+            active_windows: list[str] = []
+        elif not isinstance(raw_windows, list):
+            raise ValueError(f"{field_name}.active_windows must be a list of strings")
+        else:
+            active_windows = []
+            for window_idx, raw_window in enumerate(raw_windows):
+                if not isinstance(raw_window, str):
+                    raise ValueError(f"{field_name}.active_windows[{window_idx}] must be a string")
+                try:
+                    parse_windows([raw_window])
+                except ValueError as exc:
+                    raise ValueError(f"{field_name}.active_windows[{window_idx}]: {exc}") from exc
+                active_windows.append(raw_window)
+
+        raw_timezone = item.get("active_timezone")
+        if raw_timezone is None:
+            active_timezone: str | None = None
+        elif not isinstance(raw_timezone, str):
+            raise ValueError(f"{field_name}.active_timezone must be a string")
+        else:
+            try:
+                ZoneInfo(raw_timezone)
+            except ZoneInfoNotFoundError as exc:
+                raise ValueError(f"{field_name}.active_timezone: unknown timezone '{raw_timezone}'") from exc
+            active_timezone = raw_timezone
         parsed.append(
             BaseConfig(
                 url=url,
                 weight=_validate_weight(item.get("weight"), f"{field_name}.weight"),
                 key=[_parse_key_config(entry, f"{field_name}.key[{key_idx}]") for key_idx, entry in enumerate(keys_raw)],
+                active_windows=active_windows,
+                active_timezone=active_timezone,
             )
         )
     return parsed
@@ -585,7 +619,7 @@ def _parse_embedding_provider_configs(value: Any, default_dimensions: int) -> li
             EmbeddingProviderConfig(
                 name=name,
                 type=_as_str(item.get("type"), "openai_compatible") or "openai_compatible",
-                base=_parse_base_configs(item.get("base"), name),
+                base=_parse_base_configs(item.get("base"), f"embedding.providers[{name}]"),
                 models=_parse_embedding_model_configs(item.get("models"), name, default_dimensions),
             )
         )
@@ -666,7 +700,7 @@ def _parse_rerank_provider_configs(value: Any, *, required: bool) -> list[Rerank
             RerankProviderConfig(
                 name=name,
                 type=_as_str(item.get("type"), "openai_compatible") or "openai_compatible",
-                base=_parse_base_configs(item.get("base"), name),
+                base=_parse_base_configs(item.get("base"), f"rerank.providers[{name}]"),
                 models=_parse_rerank_model_configs(item.get("models"), name),
             )
         )
@@ -833,7 +867,7 @@ def load_config(path: str) -> PaperConfig:
         parsed_provider = ProviderConfig(
             name=name,
             type=provider_type,
-            base=_parse_base_configs(provider.get("base"), name),
+            base=_parse_base_configs(provider.get("base"), f"providers[{name}]"),
             models=_parse_model_capabilities(provider.get("models"), name),
             api_version=_as_str(provider.get("api_version"), None),
             deployment=_as_str(provider.get("deployment"), None),
