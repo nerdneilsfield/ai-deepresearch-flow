@@ -419,6 +419,7 @@ def register_db_commands(db_group: click.Group) -> None:
         help="Optional previous snapshot DB path for identity continuity",
     )
     @click.option("--output-embed-db", "output_embed_db", default=None, help="Build LanceDB vector index alongside snapshot")
+    @click.option("-v", "--verbose", is_flag=True, help="Show detailed snapshot build logs")
     def snapshot_build(
         input_paths: tuple[str, ...],
         config_path: str,
@@ -430,6 +431,7 @@ def register_db_commands(db_group: click.Group) -> None:
         static_export_dir: str,
         previous_snapshot_db: str | None,
         output_embed_db: str | None,
+        verbose: bool,
     ) -> None:
         """Build a production snapshot (SQLite + static export)."""
         from deepresearch_flow.paper.snapshot.builder import SnapshotBuildOptions, build_snapshot
@@ -443,6 +445,7 @@ def register_db_commands(db_group: click.Group) -> None:
             output_db=Path(output_db),
             static_export_dir=Path(static_export_dir),
             previous_snapshot_db=Path(previous_snapshot_db) if previous_snapshot_db else None,
+            verbose=verbose,
         )
         build_snapshot(opts)
         click.echo(f"Wrote snapshot DB: {opts.output_db}")

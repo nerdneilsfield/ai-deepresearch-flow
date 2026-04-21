@@ -60,6 +60,7 @@ class SnapshotBuildOptions:
     output_db: Path
     static_export_dir: Path
     previous_snapshot_db: Path | None
+    verbose: bool = False
     min_meta_title_similarity: float = 0.6
     min_meta_author_jaccard: float = 0.4
 
@@ -126,6 +127,21 @@ _WHITESPACE_RE = re.compile(r"\s+")
 _EIO_RETRY_DELAYS = (0.2, 0.5)
 
 
+class _TqdmStdoutHandler(logging.Handler):
+    def emit(self, record: logging.LogRecord) -> None:
+        tqdm.write(self.format(record), file=sys.stdout)
+
+
+def _configure_build_logging(verbose: bool) -> None:
+    level = logging.DEBUG if verbose else logging.INFO
+    handler = _TqdmStdoutHandler()
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    logger.handlers.clear()
+    logger.addHandler(handler)
+    logger.setLevel(level)
+    logger.propagate = False
+
+
 def _write_bytes_with_eio_retry(dest: Path, data: bytes, *, log_label: str) -> None:
     for attempt, delay in enumerate((0.0, *_EIO_RETRY_DELAYS), start=1):
         if delay:
@@ -144,6 +160,12 @@ def _write_bytes_with_eio_retry(dest: Path, data: bytes, *, log_label: str) -> N
                 attempt,
                 len(_EIO_RETRY_DELAYS),
             )
+
+
+def _log_skip(label: str, reason: str, *, verbose_reason: str | None = None, verbose: bool) -> None:
+    logger.info("  %s: skipped (%s)", label, reason)
+    if verbose and verbose_reason:
+        logger.debug("    %s", verbose_reason)
 
 
 def _split_link_target(raw_link: str) -> tuple[str, str, str, str]:
@@ -683,6 +705,8 @@ def _print_build_summary(
 
 
 def build_snapshot(opts: SnapshotBuildOptions) -> None:
+    _configure_build_logging(opts.verbose)
+
     if opts.output_db.exists():
         opts.output_db.unlink()
 
@@ -699,6 +723,14 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
         md_translated_roots=opts.md_translated_roots,
         pdf_roots=opts.pdf_roots,
     )
+    logger.info("Building snapshot for %d paper(s) from %d input file(s)", len(index.papers), len(opts.input_paths))
+    if opts.verbose:
+        logger.debug("  md roots: %s", ", ".join(str(root) for root in opts.md_roots) if opts.md_roots else "none configured")
+        logger.debug(
+            "  translated roots: %s",
+            ", ".join(str(root) for root in opts.md_translated_roots) if opts.md_translated_roots else "none configured",
+        )
+        logger.debug("  pdf roots: %s", ", ".join(str(root) for root in opts.pdf_roots) if opts.pdf_roots else "none configured")
 
     previous_aliases = _load_previous_aliases(opts.previous_snapshot_db) if opts.previous_snapshot_db else {}
     previous_metadata = _load_previous_metadata(opts.previous_snapshot_db) if opts.previous_snapshot_db else {}
@@ -822,6 +854,10 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
                 venue = _normalize_display_venue(str(paper.get("_venue") or "").strip()) or "unknown"
                 source_hash = str(paper.get("source_hash") or stable_hash(str(paper.get("source_path") or idx)))
                 unique_paper_ids.add(paper_id)
+                logger.info("[%d/%d] %s", idx + 1, len(index.papers), title or paper_id)
+                if opts.verbose:
+                    logger.debug("  paper_id=%s", paper_id)
+                    logger.debug("  source_hash=%s", source_hash)
 
                 authors = paper.get("_authors") or paper.get("paper_authors") or []
                 if not isinstance(authors, list):
@@ -835,6 +871,9 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
 
                 md_path = index.md_path_by_hash.get(source_hash)
                 if md_path:
+                    logger.info("  source markdown: exported")
+                    if opts.verbose:
+                        logger.debug("    path=%s", md_path)
                     raw_md = _safe_read_text(md_path)
                     rewritten_md, md_images = _rewrite_markdown_images(
                         raw_md,
@@ -847,6 +886,17 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
                     if not md_target.exists():
                         md_target.write_text(rewritten_md, encoding="utf-8")
                     images.extend(md_images)
+                else:
+                    _log_skip(
+                        "source markdown",
+                        "no --md-root configured" if not opts.md_roots else "no markdown matched source_hash",
+                        verbose_reason=(
+                            "md roots: none configured"
+                            if not opts.md_roots
+                            else f"source_hash={source_hash}; md roots={', '.join(str(root) for root in opts.md_roots)}"
+                        ),
+                        verbose=opts.verbose,
+                    )
 
                 translations = index.translated_md_by_hash.get(source_hash, {})
                 for lang, t_path in translations.items():
@@ -865,14 +915,46 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
                         md_target.write_text(rewritten_md, encoding="utf-8")
                     translated_hashes[lang_norm] = md_hash
                     images.extend(md_images)
+                if translations:
+                    logger.info("  translated markdown: exported %d language(s)", len(translations))
+                    if opts.verbose:
+                        logger.debug("    langs=%s", ", ".join(sorted(str(lang).lower() for lang in translations)))
+                else:
+                    _log_skip(
+                        "translated markdown",
+                        (
+                            "no --md-translated-root configured"
+                            if not opts.md_translated_roots
+                            else "no translated markdown matched source_hash"
+                        ),
+                        verbose_reason=(
+                            "translated roots: none configured"
+                            if not opts.md_translated_roots
+                            else f"source_hash={source_hash}; translated roots={', '.join(str(root) for root in opts.md_translated_roots)}"
+                        ),
+                        verbose=opts.verbose,
+                    )
 
                 pdf_path = index.pdf_path_by_hash.get(source_hash)
                 if pdf_path:
+                    logger.info("  pdf: exported")
+                    if opts.verbose:
+                        logger.debug("    path=%s", pdf_path)
                     pdf_hash = _hash_file(pdf_path)
                     pdf_target = static_root / "pdf" / f"{pdf_hash}.pdf"
                     if not pdf_target.exists():
                         pdf_target.write_bytes(pdf_path.read_bytes())
                 else:
+                    _log_skip(
+                        "pdf",
+                        "no --pdf-root configured" if not opts.pdf_roots else "no PDF matched source_hash",
+                        verbose_reason=(
+                            "pdf roots: none configured"
+                            if not opts.pdf_roots
+                            else f"source_hash={source_hash}; pdf roots={', '.join(str(root) for root in opts.pdf_roots)}"
+                        ),
+                        verbose=opts.verbose,
+                    )
                     missing_pdf_hashes.add(source_hash)
 
                 template_summaries = _extract_template_summaries(paper)

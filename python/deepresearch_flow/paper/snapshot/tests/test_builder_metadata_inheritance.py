@@ -178,6 +178,91 @@ class TestBuilderMetadataInheritance(unittest.TestCase):
             self.assertIn("snapshot build", stdout_buffer.getvalue())
             self.assertNotIn("snapshot build", stderr_buffer.getvalue())
 
+    def test_builder_logs_skip_reasons_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_db = root / "output.db"
+            static_dir = root / "static"
+            input_path = root / "papers.json"
+
+            payload = {
+                "template_tag": "simple",
+                "papers": [
+                    {
+                        "paper_title": "Skip Reasons Paper",
+                        "paper_authors": ["Alice Example"],
+                        "publication_date": "2024",
+                        "publication_venue": "ACL",
+                        "summary": "summary body",
+                    }
+                ],
+            }
+            input_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+            stdout_buffer = StringIO()
+            with redirect_stdout(stdout_buffer):
+                build_snapshot(
+                    SnapshotBuildOptions(
+                        input_paths=[input_path],
+                        bibtex_path=None,
+                        md_roots=[],
+                        md_translated_roots=[],
+                        pdf_roots=[],
+                        output_db=output_db,
+                        static_export_dir=static_dir,
+                        previous_snapshot_db=None,
+                    )
+                )
+
+            output = stdout_buffer.getvalue()
+            self.assertIn("source markdown: skipped (no --md-root configured)", output)
+            self.assertIn("translated markdown: skipped (no --md-translated-root configured)", output)
+            self.assertIn("pdf: skipped (no --pdf-root configured)", output)
+
+    def test_builder_verbose_logs_more_context_for_skipped_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_db = root / "output.db"
+            static_dir = root / "static"
+            input_path = root / "papers.json"
+
+            payload = {
+                "template_tag": "simple",
+                "papers": [
+                    {
+                        "paper_title": "Verbose Paper",
+                        "paper_authors": ["Alice Example"],
+                        "publication_date": "2024",
+                        "publication_venue": "ACL",
+                        "summary": "summary body",
+                    }
+                ],
+            }
+            input_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+            stdout_buffer = StringIO()
+            with redirect_stdout(stdout_buffer):
+                build_snapshot(
+                    SnapshotBuildOptions(
+                        input_paths=[input_path],
+                        bibtex_path=None,
+                        md_roots=[],
+                        md_translated_roots=[],
+                        pdf_roots=[],
+                        output_db=output_db,
+                        static_export_dir=static_dir,
+                        previous_snapshot_db=None,
+                        verbose=True,
+                    )
+                )
+
+            output = stdout_buffer.getvalue()
+            self.assertIn("paper_id=", output)
+            self.assertIn("source_hash=", output)
+            self.assertIn("md roots: none configured", output)
+            self.assertIn("translated roots: none configured", output)
+            self.assertIn("pdf roots: none configured", output)
+
     def test_rebuild_inherits_and_overrides_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
