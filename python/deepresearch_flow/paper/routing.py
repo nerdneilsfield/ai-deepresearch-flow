@@ -4,16 +4,18 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import datetime, time as time_of_day, timezone, tzinfo
 from pathlib import Path
 from random import Random
-from typing import Generic, Literal, Protocol, TypeVar, cast
+from typing import Callable, Generic, Literal, Protocol, TypeVar, cast
 import json
 import logging
 import math
 import re
 import time
+from zoneinfo import ZoneInfo
 
+from deepresearch_flow.paper.active_window import is_active, next_active_start, parse_windows
 from deepresearch_flow.paper.config import (
     BaseConfig,
     KeyConfig,
@@ -29,6 +31,17 @@ T = TypeVar("T")
 logger = logging.getLogger(__name__)
 ProviderT = TypeVar("ProviderT", bound="_RouteableProvider")
 ModelT = TypeVar("ModelT", bound="_RouteableModel")
+
+
+class ProviderOutOfActiveWindow(RuntimeError):
+    def __init__(self, urls: list[str], next_available: datetime | None) -> None:
+        self.urls = urls
+        self.next_available = next_available
+        next_text = str(next_available) if next_available is not None else "unknown"
+        super().__init__(
+            f"All provider URLs are outside their active window: [{', '.join(urls)}]; "
+            f"next available at {next_text}"
+        )
 
 
 @dataclass(frozen=True)
@@ -214,6 +227,61 @@ def _compute_next_reset_epoch(meta: KeyConfig) -> float | None:
     return base_utc.timestamp() + cycles * duration
 
 
+def _current_local_tz() -> tzinfo:
+    return datetime.now().astimezone().tzinfo or timezone.utc
+
+
+def _resolve_window_config(
+    base: BaseConfig,
+    *,
+    fallback_tz: tzinfo | None = None,
+) -> tuple[list[tuple[time_of_day, time_of_day]], tzinfo]:
+    local_tz = fallback_tz or _current_local_tz()
+    return (
+        parse_windows(base.active_windows),
+        ZoneInfo(base.active_timezone) if base.active_timezone else local_tz,
+    )
+
+
+def _parse_windows_for_candidates(
+    candidates: list[_RouteCandidate[ProviderT, ModelT]],
+    *,
+    fallback_tz: tzinfo | None = None,
+) -> tuple[dict[str, list[tuple[time_of_day, time_of_day]]], dict[str, tzinfo]]:
+    local_tz = fallback_tz or _current_local_tz()
+    windows: dict[str, list[tuple[time_of_day, time_of_day]]] = {}
+    timezones: dict[str, tzinfo] = {}
+    for candidate in candidates:
+        route_id = candidate.route.route_id
+        parsed_windows, parsed_tz = _resolve_window_config(candidate.route.base, fallback_tz=local_tz)
+        windows[route_id] = parsed_windows
+        timezones[route_id] = parsed_tz
+    return windows, timezones
+
+
+def _unique_route_urls(candidates: list[_RouteCandidate[ProviderT, ModelT]]) -> list[str]:
+    urls: list[str] = []
+    for candidate in candidates:
+        url = candidate.route.base.url
+        if url not in urls:
+            urls.append(url)
+    return urls
+
+
+def _earliest_next_active_start(
+    now_dt: datetime,
+    candidates: list[_RouteCandidate[ProviderT, ModelT]],
+    windows: dict[str, list[tuple[time_of_day, time_of_day]]],
+    timezones: dict[str, tzinfo],
+) -> datetime | None:
+    starts = [
+        next_active_start(now_dt, windows[candidate.route.route_id], timezones[candidate.route.route_id])
+        for candidate in candidates
+    ]
+    valid = [start for start in starts if start is not None]
+    return min(valid) if valid else None
+
+
 def _build_route_candidates(
     provider: ProviderT,
     model: ModelT,
@@ -224,7 +292,13 @@ def _build_route_candidates(
     for base in provider.base:
         resolved_keys = resolve_api_key_configs(base.key)
         for key in resolved_keys:
-            routed_base = BaseConfig(url=base.url, weight=base.weight, key=[key])
+            routed_base = BaseConfig(
+                url=base.url,
+                weight=base.weight,
+                key=[key],
+                active_windows=base.active_windows,
+                active_timezone=base.active_timezone,
+            )
             routed_provider = cast(ProviderT, replace(provider, base=[routed_base], models=[model]))
             route_id = f"{provider.name}|{model.model_name}|{base.url}|{key.value}"
             route = RuntimeRoute(
@@ -252,6 +326,7 @@ class RoutePool(Generic[ProviderT, ModelT]):
         cooldown_seconds: float = 1.0,
         verbose: bool = False,
         rng: Random | None = None,
+        now_provider: Callable[[], float] | None = None,
     ) -> None:
         if not candidates:
             raise ValueError("RoutePool requires at least one candidate route")
@@ -259,6 +334,7 @@ class RoutePool(Generic[ProviderT, ModelT]):
         self._rng = rng or Random()
         self._cooldown_seconds = max(cooldown_seconds, 0.0)
         self._verbose = verbose
+        self._now = now_provider or time.time
         self._lock = asyncio.Lock()
         self._cooldowns: dict[str, float] = {candidate.route.route_id: 0.0 for candidate in candidates}
         self._quota_until: dict[str, float] = {candidate.route.route_id: 0.0 for candidate in candidates}
@@ -266,6 +342,7 @@ class RoutePool(Generic[ProviderT, ModelT]):
         self._last_pause_until: float = 0.0
         self._last_key_quota_until: dict[str, float] = {candidate.route.route_id: 0.0 for candidate in candidates}
         self._key_meta: dict[str, KeyConfig] = {candidate.route.route_id: candidate.route.key for candidate in candidates}
+        self._windows, self._tz = _parse_windows_for_candidates(candidates)
 
     @property
     def candidate_count(self) -> int:
@@ -280,6 +357,7 @@ class RoutePool(Generic[ProviderT, ModelT]):
         cooldown_seconds: float = 1.0,
         verbose: bool = False,
         rng: Random | None = None,
+        now_provider: Callable[[], float] | None = None,
     ) -> "RoutePool[ProviderConfig, ModelCapability]":
         candidates: list[_RouteCandidate[ProviderConfig, ModelCapability]] = []
         if model_selector.kind == "single":
@@ -300,7 +378,13 @@ class RoutePool(Generic[ProviderT, ModelT]):
                     weight=pool_item.weight,
                 )
             )
-        return cls(candidates, cooldown_seconds=cooldown_seconds, verbose=verbose, rng=rng)
+        return cls(
+            candidates,
+            cooldown_seconds=cooldown_seconds,
+            verbose=verbose,
+            rng=rng,
+            now_provider=now_provider,
+        )
 
     @classmethod
     def _from_active_route_config(
@@ -310,10 +394,17 @@ class RoutePool(Generic[ProviderT, ModelT]):
         cooldown_seconds: float = 1.0,
         verbose: bool = False,
         rng: Random | None = None,
+        now_provider: Callable[[], float] | None = None,
     ) -> "RoutePool[ProviderT, ModelT]":
         provider, model = config.resolve_active()
         candidates = _build_route_candidates(provider, model, weight=1)
-        return cls(candidates, cooldown_seconds=cooldown_seconds, verbose=verbose, rng=rng)
+        return cls(
+            candidates,
+            cooldown_seconds=cooldown_seconds,
+            verbose=verbose,
+            rng=rng,
+            now_provider=now_provider,
+        )
 
     @classmethod
     def from_embedding_provider(
@@ -323,12 +414,14 @@ class RoutePool(Generic[ProviderT, ModelT]):
         cooldown_seconds: float = 1.0,
         verbose: bool = False,
         rng: Random | None = None,
+        now_provider: Callable[[], float] | None = None,
     ) -> "RoutePool[ProviderT, ModelT]":
         return cls._from_active_route_config(
             config,
             cooldown_seconds=cooldown_seconds,
             verbose=verbose,
             rng=rng,
+            now_provider=now_provider,
         )
 
     @classmethod
@@ -339,12 +432,14 @@ class RoutePool(Generic[ProviderT, ModelT]):
         cooldown_seconds: float = 1.0,
         verbose: bool = False,
         rng: Random | None = None,
+        now_provider: Callable[[], float] | None = None,
     ) -> "RoutePool[ProviderT, ModelT]":
         return cls._from_active_route_config(
             config,
             cooldown_seconds=cooldown_seconds,
             verbose=verbose,
             rng=rng,
+            now_provider=now_provider,
         )
 
     async def get(self) -> RuntimeRoute[ProviderT, ModelT]:
@@ -355,13 +450,29 @@ class RoutePool(Generic[ProviderT, ModelT]):
             should_log_pause = False
             async with self._lock:
                 now = time.monotonic()
-                now_epoch = time.time()
-                available = [
-                    candidate
-                    for candidate in self._candidates
-                    if self._cooldowns.get(candidate.route.route_id, 0.0) <= now
-                    and self._quota_until.get(candidate.route.route_id, 0.0) <= now_epoch
-                ]
+                now_epoch = self._now()
+                now_dt = datetime.fromtimestamp(now_epoch, tz=timezone.utc)
+                available: list[_RouteCandidate[ProviderT, ModelT]] = []
+                waits: list[float] = []
+                has_cooldown_wait = False
+                has_quota_wait = False
+                any_window_ok = False
+                for candidate in self._candidates:
+                    route_id = candidate.route.route_id
+                    window_ok = is_active(now_dt, self._windows[route_id], self._tz[route_id])
+                    cooldown_wait = max(self._cooldowns.get(route_id, 0.0) - now, 0.0)
+                    quota_wait = max(self._quota_until.get(route_id, 0.0) - now_epoch, 0.0)
+                    timer_ok = cooldown_wait <= 0 and quota_wait <= 0
+                    if window_ok and timer_ok:
+                        available.append(candidate)
+                    if not window_ok:
+                        continue
+                    any_window_ok = True
+                    if cooldown_wait > 0:
+                        has_cooldown_wait = True
+                    if quota_wait > 0:
+                        has_quota_wait = True
+                    waits.append(max(cooldown_wait, quota_wait))
                 if available:
                     selected = choose_weighted(
                         available,
@@ -370,18 +481,16 @@ class RoutePool(Generic[ProviderT, ModelT]):
                     )
                     return selected.route
 
-                waits: list[float] = []
-                has_cooldown_wait = False
-                has_quota_wait = False
-                for candidate in self._candidates:
-                    route_id = candidate.route.route_id
-                    cooldown_wait = max(self._cooldowns.get(route_id, 0.0) - now, 0.0)
-                    quota_wait = max(self._quota_until.get(route_id, 0.0) - now_epoch, 0.0)
-                    if cooldown_wait > 0:
-                        has_cooldown_wait = True
-                    if quota_wait > 0:
-                        has_quota_wait = True
-                    waits.append(max(cooldown_wait, quota_wait))
+                if not any_window_ok:
+                    urls = _unique_route_urls(self._candidates)
+                    earliest = _earliest_next_active_start(now_dt, self._candidates, self._windows, self._tz)
+                    logger.warning(
+                        "All provider URLs are outside their active window: [%s]; next available at %s",
+                        ", ".join(urls),
+                        str(earliest) if earliest is not None else "unknown",
+                    )
+                    raise ProviderOutOfActiveWindow(urls, earliest)
+
                 wait_for = min(waits) if waits else None
                 if wait_for is not None:
                     wait_until_epoch = now_epoch + wait_for
@@ -503,9 +612,19 @@ def select_runtime_route(
     rng: Random | None = None,
 ) -> RuntimeRoute:
     pool = RoutePool.from_selector(config, model_selector, rng=rng)
-    # Stateless callers still need a synchronous one-shot selection.
+    now_dt = datetime.now(timezone.utc)
+    windows, timezones = _parse_windows_for_candidates(pool._candidates)
+    active_candidates = [
+        candidate
+        for candidate in pool._candidates
+        if is_active(now_dt, windows[candidate.route.route_id], timezones[candidate.route.route_id])
+    ]
+    if not active_candidates:
+        urls = _unique_route_urls(pool._candidates)
+        earliest = _earliest_next_active_start(now_dt, pool._candidates, windows, timezones)
+        raise ProviderOutOfActiveWindow(urls, earliest)
     return choose_weighted(
-        [candidate.route for candidate in pool._candidates],
-        [candidate.weight for candidate in pool._candidates],
+        [candidate.route for candidate in active_candidates],
+        [candidate.weight for candidate in active_candidates],
         rng=rng,
     )

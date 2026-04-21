@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
+from datetime import datetime, timezone
 from random import Random
 
 import pytest
@@ -224,6 +226,47 @@ def test_route_pool_expands_all_model_base_key_candidates() -> None:
     ]
 
 
+def test_build_route_candidates_preserves_active_window_fields() -> None:
+    from deepresearch_flow.paper.routing import _build_route_candidates
+
+    provider = ProviderConfig(
+        name="openai",
+        type="openai_compatible",
+        base=[
+            BaseConfig(
+                url="https://a.example.com/v1",
+                weight=1,
+                key=[KeyConfig(value="key-a", weight=1)],
+                active_windows=["09:00-12:00"],
+                active_timezone="Asia/Shanghai",
+            )
+        ],
+        models=[
+            ModelCapability(
+                model_name="gpt-4.1",
+                is_stream=True,
+                is_support_json_schema=True,
+                is_support_json_object=True,
+            )
+        ],
+        api_version=None,
+        deployment=None,
+        project_id=None,
+        location=None,
+        credentials_path=None,
+        anthropic_version=None,
+        max_tokens=None,
+        extra_headers={},
+        system_prompt=None,
+        user_prompt=None,
+    )
+
+    candidates = _build_route_candidates(provider, provider.models[0], weight=1)
+
+    assert all(candidate.route.base.active_windows == ["09:00-12:00"] for candidate in candidates)
+    assert all(candidate.route.base.active_timezone == "Asia/Shanghai" for candidate in candidates)
+
+
 def test_route_pool_get_matches_weighted_selection_when_available() -> None:
     from deepresearch_flow.paper.routing import RoutePool, choose_weighted, parse_model_selector
 
@@ -379,3 +422,130 @@ def test_route_pool_waits_until_route_recovers() -> None:
 
     assert route_id == only_route.route_id
     assert elapsed >= 0.04
+
+
+def test_select_runtime_route_raises_when_all_candidates_are_out_of_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    import deepresearch_flow.paper.routing as routing
+    from deepresearch_flow.paper.routing import ParsedModelSelector, ProviderOutOfActiveWindow, select_runtime_route
+
+    class _FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            frozen = datetime(2026, 4, 21, 9, 0, tzinfo=timezone.utc)
+            return frozen if tz is None else frozen.astimezone(tz)
+
+    monkeypatch.setattr(routing, "datetime", _FrozenDateTime)
+
+    provider = _build_provider(
+        "openai",
+        models=["gpt-4.1"],
+        base_urls=["https://night-only.example.com/v1"],
+    )
+    provider = replace(
+        provider,
+        base=[
+            replace(
+                provider.base[0],
+                active_windows=["22:00-23:00"],
+                active_timezone="UTC",
+            )
+        ],
+    )
+    config = PaperConfig(
+        extract=DEFAULT_EXTRACT,
+        render=DEFAULT_RENDER,
+        providers=[provider],
+        main_model=[MainModelConfig(model="openai/gpt-4.1", weight=1)],
+    )
+
+    with pytest.raises(ProviderOutOfActiveWindow):
+        select_runtime_route(
+            config,
+            ParsedModelSelector(kind="pool", fixed_model=None, pool=config.main_model),
+            rng=Random(1),
+        )
+
+
+def test_select_runtime_route_filters_out_window_inactive_candidates(monkeypatch: pytest.MonkeyPatch) -> None:
+    import deepresearch_flow.paper.routing as routing
+    from deepresearch_flow.paper.routing import ParsedModelSelector, select_runtime_route
+
+    class _FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            frozen = datetime(2026, 4, 21, 9, 0, tzinfo=timezone.utc)
+            return frozen if tz is None else frozen.astimezone(tz)
+
+    monkeypatch.setattr(routing, "datetime", _FrozenDateTime)
+
+    provider = ProviderConfig(
+        name="openai",
+        type="openai_compatible",
+        base=[
+            BaseConfig(
+                url="https://always-on.example.com/v1",
+                weight=1,
+                key=[KeyConfig(value="always-key", weight=1)],
+                active_windows=["00:00-24:00"],
+                active_timezone="UTC",
+            ),
+            BaseConfig(
+                url="https://night-only.example.com/v1",
+                weight=10,
+                key=[KeyConfig(value="night-key", weight=1)],
+                active_windows=["22:00-23:00"],
+                active_timezone="UTC",
+            ),
+        ],
+        models=[
+            ModelCapability(
+                model_name="gpt-4.1",
+                is_stream=True,
+                is_support_json_schema=True,
+                is_support_json_object=True,
+            )
+        ],
+        api_version=None,
+        deployment=None,
+        project_id=None,
+        location=None,
+        credentials_path=None,
+        anthropic_version=None,
+        max_tokens=None,
+        extra_headers={},
+        system_prompt=None,
+        user_prompt=None,
+    )
+    config = PaperConfig(
+        extract=DEFAULT_EXTRACT,
+        render=DEFAULT_RENDER,
+        providers=[provider],
+        main_model=[MainModelConfig(model="openai/gpt-4.1", weight=1)],
+    )
+    selector = ParsedModelSelector(kind="pool", fixed_model=None, pool=config.main_model)
+
+    for seed in range(20):
+        route = select_runtime_route(config, selector, rng=Random(seed))
+        assert route.base.url == "https://always-on.example.com/v1"
+
+
+def test_select_runtime_route_keeps_default_no_window_behavior(monkeypatch: pytest.MonkeyPatch) -> None:
+    import deepresearch_flow.paper.routing as routing
+    from deepresearch_flow.paper.routing import ParsedModelSelector, select_runtime_route
+
+    class _FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            frozen = datetime(2026, 4, 21, 9, 0, tzinfo=timezone.utc)
+            return frozen if tz is None else frozen.astimezone(tz)
+
+    monkeypatch.setattr(routing, "datetime", _FrozenDateTime)
+
+    config = _build_config()
+    route = select_runtime_route(
+        config,
+        ParsedModelSelector(kind="pool", fixed_model=None, pool=[MainModelConfig(model="openai/gpt-4.1", weight=1)]),
+        rng=Random(7),
+    )
+
+    assert route.provider.name == "openai"
