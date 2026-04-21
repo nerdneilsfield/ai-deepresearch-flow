@@ -978,6 +978,13 @@ api_base_url = "https://api.example.com"
 admin_token = "env:PAPER_DB_ADMIN_TOKEN"
 batch_size = 10
 
+[remote.semantic]
+max_rows = 25
+max_payload_bytes = 4000000
+timeout = 120
+retries = 3
+retry_backoff_seconds = 2
+
 [remote.storage]
 type = "webdav"
 url = "https://cdn.example.com/paper-static"
@@ -1038,11 +1045,13 @@ uv run deepresearch-flow paper db api push \
 
 - `--static-export-dir` is optional — when provided, summary JSON payloads are included so the remote side can build FTS indexes and preview text.
 - `--embed-db` is optional — when provided, `api push` reads the local LanceDB snapshot and uploads semantic chunks after the metadata/static phases.
+- `[remote.semantic]` tunes semantic sync batching and retries. Defaults are `max_rows = 25`, `max_payload_bytes = 4000000`, `timeout = 120`, `retries = 3`, and `retry_backoff_seconds = 2`.
 - Duplicate papers (same `paper_id`) are automatically skipped.
 - When `[remote.storage]` is configured, static files under the export dir are pushed after the metadata API sync.
 - Remote semantic sync requires the server to run `paper db api serve` with admin auth enabled and a remote LanceDB path available via `--embed-db` or `config.search.vector_dir`.
 - The currently supported storage backend is `webdav`.
 - Static file push prints per-file status logs: `uploaded`, `skipped`, and `failed`.
+- Semantic push now shows a `tqdm` progress bar by chunk and writes `push-semantic-errors.json` when a semantic batch still fails after retries.
 - If some static uploads fail, a `push-static-errors.json` report is written and can be retried with `--retry-failed`.
 - `--only-api` pushes only the admin API metadata and skips static storage.
 - `--only-api` can be combined with `--embed-db` to push metadata plus semantic chunks only.

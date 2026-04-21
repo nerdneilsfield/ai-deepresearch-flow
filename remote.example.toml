@@ -1,0 +1,17 @@
+[remote]
+api_base_url = "https://api.example.com"
+admin_token = "env:PAPER_DB_ADMIN_TOKEN"
+batch_size = 10
+
+[remote.semantic]
+max_rows = 25
+max_payload_bytes = 4000000
+timeout = 120
+retries = 3
+retry_backoff_seconds = 2
+
+[remote.storage]
+type = "webdav"
+url = "https://cdn.example.com/paper-static"
+username = "deploy"
+password = "env:PAPER_DB_WEBDAV_PASSWORD"

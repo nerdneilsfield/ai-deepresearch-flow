@@ -1017,6 +1017,13 @@ api_base_url = "https://api.example.com"
 admin_token = "env:PAPER_DB_ADMIN_TOKEN"
 batch_size = 10
 
+[remote.semantic]
+max_rows = 25
+max_payload_bytes = 4000000
+timeout = 120
+retries = 3
+retry_backoff_seconds = 2
+
 [remote.storage]
 type = "webdav"
 url = "https://cdn.example.com/paper-static"
@@ -1077,11 +1084,13 @@ uv run deepresearch-flow paper db api push \
 
 - `--static-export-dir` 可选 — 提供后会将 summary JSON 内容一并推送，使远端可构建 FTS 索引和预览文本。
 - `--embed-db` 可选 — 提供后，`api push` 会读取本地 LanceDB，并在元数据/静态文件阶段之后继续推送语义分块。
+- `[remote.semantic]` 用于调节语义同步的分批与重试。默认值是 `max_rows = 25`、`max_payload_bytes = 4000000`、`timeout = 120`、`retries = 3`、`retry_backoff_seconds = 2`。
 - 重复论文（相同 `paper_id`）会自动跳过。
 - 配置 `[remote.storage]` 后，元数据 API 推送完成后会继续推送静态文件。
 - 远端语义同步要求服务端以启用 Admin API 的方式启动 `paper db api serve`，并通过 `--embed-db` 或 `config.search.vector_dir` 提供远端 LanceDB 路径。
 - 当前支持的静态存储后端是 `webdav`。
 - 静态文件推送时会逐文件打印状态日志：`uploaded`、`skipped`、`failed`。
+- 语义分块推送会按 chunk 显示 `tqdm` 进度条；如果重试后仍失败，会生成 `push-semantic-errors.json`。
 - 如果部分静态文件推送失败，会生成 `push-static-errors.json`，可用 `--retry-failed` 只重试失败项。
 - `--only-api` 只推送 admin API 元数据，跳过静态存储推送。
 - `--only-api` 可以和 `--embed-db` 一起使用，只推送元数据和语义分块。
