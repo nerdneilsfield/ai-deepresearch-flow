@@ -1316,7 +1316,12 @@ def register_db_commands(db_group: click.Group) -> None:
 
 
         if embed_db:
-            from deepresearch_flow.paper.snapshot.push_semantic import push_semantic_chunks
+            from deepresearch_flow.paper.snapshot.push_semantic import (
+                SemanticPushError,
+                group_chunks_for_push,
+                push_semantic_chunks,
+                write_error_report as write_semantic_error_report,
+            )
             from deepresearch_flow.paper.vector_store import load_index_meta, open_store, read_all_chunks
 
             embed_path = Path(embed_db)
@@ -1327,20 +1332,78 @@ def register_db_commands(db_group: click.Group) -> None:
             embed_store = open_store(embed_path)
             all_chunks = read_all_chunks(embed_store)
             if all_chunks:
+                semantic_cfg = config.semantic
+                semantic_requests = group_chunks_for_push(
+                    all_chunks,
+                    max_rows=semantic_cfg.max_rows,
+                    max_payload_bytes=semantic_cfg.max_payload_bytes,
+                )
                 console.print(f"[cyan]Pushing {len(all_chunks)} semantic chunks...[/cyan]")
+                console.print(
+                    "[cyan]Semantic config:[/cyan] "
+                    f"max_rows={semantic_cfg.max_rows} "
+                    f"max_payload_bytes={semantic_cfg.max_payload_bytes} "
+                    f"timeout={semantic_cfg.timeout} "
+                    f"retries={semantic_cfg.retries} "
+                    f"retry_backoff_seconds={semantic_cfg.retry_backoff_seconds}"
+                )
+                console.print(f"[cyan]Semantic requests:[/cyan] {len(semantic_requests)}")
+                progress = tqdm(total=len(all_chunks), desc="Semantic push", unit="chunk")
+                progress_counts = {"requests": 0, "retries": 0, "ins": 0, "upd": 0, "skip": 0, "del": 0}
+
+                def on_semantic_batch(batch_idx: int, chunk_count: int, data: dict[str, Any]) -> None:
+                    progress_counts["requests"] = batch_idx + 1
+                    progress_counts["ins"] += int(data.get("inserted", 0))
+                    progress_counts["upd"] += int(data.get("updated", 0))
+                    progress_counts["skip"] += int(data.get("skipped", 0))
+                    progress_counts["del"] += int(data.get("deleted", 0))
+                    progress.update(chunk_count)
+                    progress.set_postfix(progress_counts, refresh=False)
+
+                def on_semantic_retry(batch_idx: int, attempt: int, failure: dict[str, Any]) -> None:
+                    progress_counts["retries"] += 1
+                    progress.set_postfix(progress_counts, refresh=False)
+                    console.print(
+                        "  [yellow]semantic retry[/yellow] "
+                        f"{attempt}/{semantic_cfg.retries} "
+                        f"batch={batch_idx + 1}/{len(semantic_requests)} "
+                        f"doc={failure.get('doc_id') or '?'} "
+                        f"tag={failure.get('template_tag') or '_shared'} "
+                        f"chunks={failure.get('chunk_count', 0)} "
+                        f"payload_bytes={failure.get('payload_bytes', 0)} "
+                        f"error={failure.get('error')}"
+                    )
                 try:
                     semantic_stats = push_semantic_chunks(
                         all_chunks,
                         index_meta,
                         config,
-                        on_batch=lambda idx, count, data: console.print(
-                            f"  semantic request {idx + 1}: {count} chunks -> "
-                            f"ins={data.get('inserted', 0)} upd={data.get('updated', 0)} "
-                            f"skip={data.get('skipped', 0)} del={data.get('deleted', 0)}"
-                        ),
+                        requests=semantic_requests,
+                        on_batch=on_semantic_batch,
+                        on_retry=on_semantic_retry,
                     )
+                except SemanticPushError as exc:
+                    error_path = Path("push-semantic-errors.json")
+                    write_semantic_error_report(exc.stats.errors, error_path)
+                    failure = exc.failure
+                    console.print("\n[red]Semantic batch failed:[/red]")
+                    console.print(
+                        f"  batch={int(failure.get('batch_index', 0)) + 1}/{failure.get('total_batches', 0)} "
+                        f"doc={failure.get('doc_id') or '?'} "
+                        f"tag={failure.get('template_tag') or '_shared'}"
+                    )
+                    console.print(
+                        f"  chunks={failure.get('chunk_count', 0)} "
+                        f"payload_bytes={failure.get('payload_bytes', 0)} "
+                        f"attempts={failure.get('attempts', 0)}"
+                    )
+                    console.print(f"  error={failure.get('error')}")
+                    console.print(f"\nFull error list saved to [bold]{error_path}[/bold]")
+                    raise click.ClickException(f"Semantic push failed: {exc}") from exc
                 except Exception as exc:
                     raise click.ClickException(f"Semantic push failed: {exc}") from exc
+                finally:
+                    progress.close()
                 console.print(
                     f"[green]Semantic:[/green] requests={semantic_stats.batches_sent} "
                     f"ins={semantic_stats.inserted} upd={semantic_stats.updated} "

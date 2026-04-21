@@ -16,6 +16,20 @@ from deepresearch_flow.storage.config import StorageConfig
 
 DEFAULT_BATCH_SIZE = 10
 DEFAULT_TIMEOUT = 60.0
+DEFAULT_SEMANTIC_MAX_ROWS = 25
+DEFAULT_SEMANTIC_MAX_PAYLOAD_BYTES = 4_000_000
+DEFAULT_SEMANTIC_TIMEOUT = 120.0
+DEFAULT_SEMANTIC_RETRIES = 3
+DEFAULT_SEMANTIC_RETRY_BACKOFF_SECONDS = 2.0
+
+
+@dataclass(frozen=True)
+class RemoteSemanticConfig:
+    max_rows: int = DEFAULT_SEMANTIC_MAX_ROWS
+    max_payload_bytes: int = DEFAULT_SEMANTIC_MAX_PAYLOAD_BYTES
+    timeout: float = DEFAULT_SEMANTIC_TIMEOUT
+    retries: int = DEFAULT_SEMANTIC_RETRIES
+    retry_backoff_seconds: float = DEFAULT_SEMANTIC_RETRY_BACKOFF_SECONDS
 
 
 @dataclass(frozen=True)
@@ -24,6 +38,7 @@ class RemoteConfig:
     admin_token: str
     batch_size: int = DEFAULT_BATCH_SIZE
     storage: StorageConfig | None = None
+    semantic: RemoteSemanticConfig = field(default_factory=RemoteSemanticConfig)
 
 
 @dataclass
@@ -101,11 +116,52 @@ def load_remote_config(config_path: Path) -> RemoteConfig:
         s_pass = _resolve_env(s_pass, "remote.storage.password", config_path)
         storage = StorageConfig(type=s_type, url=s_url, username=s_user, password=s_pass)
 
+    semantic_raw = remote.get("semantic") or {}
+    if not isinstance(semantic_raw, dict):
+        raise ValueError(f"remote.semantic must be a table in {config_path}")
+
+    semantic_max_rows = int(semantic_raw.get("max_rows", DEFAULT_SEMANTIC_MAX_ROWS))
+    if semantic_max_rows < 1:
+        raise ValueError(f"remote.semantic.max_rows must be at least 1, got {semantic_max_rows}")
+
+    semantic_max_payload_bytes = int(
+        semantic_raw.get("max_payload_bytes", DEFAULT_SEMANTIC_MAX_PAYLOAD_BYTES)
+    )
+    if semantic_max_payload_bytes < 1024:
+        raise ValueError(
+            "remote.semantic.max_payload_bytes must be at least 1024, "
+            f"got {semantic_max_payload_bytes}"
+        )
+
+    semantic_timeout = float(semantic_raw.get("timeout", DEFAULT_SEMANTIC_TIMEOUT))
+    if semantic_timeout <= 0:
+        raise ValueError(f"remote.semantic.timeout must be > 0, got {semantic_timeout}")
+
+    semantic_retries = int(semantic_raw.get("retries", DEFAULT_SEMANTIC_RETRIES))
+    if semantic_retries < 0:
+        raise ValueError(f"remote.semantic.retries must be >= 0, got {semantic_retries}")
+
+    semantic_retry_backoff_seconds = float(
+        semantic_raw.get("retry_backoff_seconds", DEFAULT_SEMANTIC_RETRY_BACKOFF_SECONDS)
+    )
+    if semantic_retry_backoff_seconds < 0:
+        raise ValueError(
+            "remote.semantic.retry_backoff_seconds must be >= 0, "
+            f"got {semantic_retry_backoff_seconds}"
+        )
+
     return RemoteConfig(
         api_base_url=api_base_url,
         admin_token=admin_token,
         batch_size=batch_size,
         storage=storage,
+        semantic=RemoteSemanticConfig(
+            max_rows=semantic_max_rows,
+            max_payload_bytes=semantic_max_payload_bytes,
+            timeout=semantic_timeout,
+            retries=semantic_retries,
+            retry_backoff_seconds=semantic_retry_backoff_seconds,
+        ),
     )
 
 

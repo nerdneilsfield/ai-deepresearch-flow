@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
+import time
 from typing import Any, Callable
 
 import httpx
@@ -28,6 +30,27 @@ class PushSemanticStats:
     errors: list[dict[str, Any]] = field(default_factory=list)
 
 
+class SemanticPushError(RuntimeError):
+    def __init__(self, failure: dict[str, Any], stats: PushSemanticStats):
+        self.failure = failure
+        self.stats = stats
+        doc_id = str(failure.get("doc_id") or "")
+        template_tag = str(failure.get("template_tag") or "")
+        chunk_count = int(failure.get("chunk_count") or 0)
+        batch_index = int(failure.get("batch_index") or 0) + 1
+        total_batches = int(failure.get("total_batches") or 0)
+        attempts = int(failure.get("attempts") or 0)
+        payload_bytes = int(failure.get("payload_bytes") or 0)
+        error = str(failure.get("error") or "unknown error")
+        super().__init__(
+            "batch "
+            f"{batch_index}/{total_batches} "
+            f"doc={doc_id} tag={template_tag or '_shared'} "
+            f"chunks={chunk_count} payload_bytes={payload_bytes} "
+            f"attempts={attempts}: {error}"
+        )
+
+
 def _encode_chunk_for_wire(chunk: dict[str, Any]) -> dict[str, Any]:
     wire = {k: v for k, v in chunk.items() if k != "vector"}
     vector = list(chunk["vector"])
@@ -38,6 +61,37 @@ def _encode_chunk_for_wire(chunk: dict[str, Any]) -> dict[str, Any]:
 
 def _estimate_chunk_bytes(chunk: dict[str, Any]) -> int:
     return len(json.dumps(chunk, ensure_ascii=False).encode("utf-8"))
+
+
+def _estimate_request_payload_bytes(
+    index_meta: dict[str, Any],
+    group: dict[str, Any],
+    chunks: list[dict[str, Any]],
+) -> int:
+    return len(
+        json.dumps(
+            {
+                "index_meta": index_meta,
+                "group": group,
+                "chunks": chunks,
+            },
+            ensure_ascii=False,
+        ).encode("utf-8")
+    )
+
+
+def _is_retryable_exception(exc: Exception) -> bool:
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        return status == 429 or 500 <= status < 600
+    return isinstance(exc, httpx.TransportError)
+
+
+def write_error_report(entries: list[dict[str, Any]], output_path: Path) -> None:
+    output_path.write_text(
+        json.dumps(entries, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
 
 def group_chunks_for_push(
@@ -99,12 +153,33 @@ def push_semantic_chunks(
     index_meta: dict[str, Any],
     config: RemoteConfig,
     *,
-    max_rows: int = 100,
-    max_payload_bytes: int = 16_000_000,
-    timeout: float = 120.0,
+    requests: list[dict[str, Any]] | None = None,
+    max_rows: int | None = None,
+    max_payload_bytes: int | None = None,
+    timeout: float | None = None,
+    retries: int | None = None,
+    retry_backoff_seconds: float | None = None,
+    sleep_fn: Callable[[float], None] = time.sleep,
     on_batch: Callable[[int, int, dict[str, Any]], None] | None = None,
+    on_retry: Callable[[int, int, dict[str, Any]], None] | None = None,
 ) -> PushSemanticStats:
-    requests = group_chunks_for_push(chunks, max_rows=max_rows, max_payload_bytes=max_payload_bytes)
+    semantic_config = config.semantic
+    effective_max_rows = max_rows if max_rows is not None else semantic_config.max_rows
+    effective_max_payload_bytes = (
+        max_payload_bytes if max_payload_bytes is not None else semantic_config.max_payload_bytes
+    )
+    effective_timeout = timeout if timeout is not None else semantic_config.timeout
+    effective_retries = retries if retries is not None else semantic_config.retries
+    effective_retry_backoff_seconds = (
+        retry_backoff_seconds
+        if retry_backoff_seconds is not None
+        else semantic_config.retry_backoff_seconds
+    )
+    requests_to_send = requests or group_chunks_for_push(
+        chunks,
+        max_rows=effective_max_rows,
+        max_payload_bytes=effective_max_payload_bytes,
+    )
     stats = PushSemanticStats()
     url = f"{config.api_base_url}/api/v1/admin/semantic/chunks/batch"
     headers = {
@@ -112,23 +187,57 @@ def push_semantic_chunks(
         "Content-Type": "application/json",
     }
 
-    with httpx.Client(timeout=timeout) as client:
-        for batch_index, request_payload in enumerate(requests):
+    with httpx.Client(timeout=effective_timeout) as client:
+        for batch_index, request_payload in enumerate(requests_to_send):
+            chunk_count = len(request_payload["chunks"])
+            payload_bytes = _estimate_request_payload_bytes(
+                index_meta,
+                request_payload["group"],
+                request_payload["chunks"],
+            )
             body = {
                 "index_meta": index_meta,
                 "group": request_payload["group"],
                 "chunks": request_payload["chunks"],
             }
-            response = client.post(url, json=body, headers=headers)
-            response.raise_for_status()
-            data = response.json()
-            stats.received += int(data.get("received", 0))
-            stats.inserted += int(data.get("inserted", 0))
-            stats.updated += int(data.get("updated", 0))
-            stats.skipped += int(data.get("skipped", 0))
-            stats.deleted += int(data.get("deleted", 0))
-            stats.batches_sent += 1
-            if on_batch is not None:
-                on_batch(batch_index, len(request_payload["chunks"]), data)
+            attempts = 0
+            while True:
+                attempts += 1
+                try:
+                    response = client.post(url, json=body, headers=headers)
+                    response.raise_for_status()
+                    data = response.json()
+                    stats.received += int(data.get("received", 0))
+                    stats.inserted += int(data.get("inserted", 0))
+                    stats.updated += int(data.get("updated", 0))
+                    stats.skipped += int(data.get("skipped", 0))
+                    stats.deleted += int(data.get("deleted", 0))
+                    stats.batches_sent += 1
+                    if on_batch is not None:
+                        on_batch(batch_index, chunk_count, data)
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    failure = {
+                        "batch_index": batch_index,
+                        "total_batches": len(requests_to_send),
+                        "doc_id": str(request_payload["group"].get("doc_id") or ""),
+                        "template_tag": str(request_payload["group"].get("template_tag") or ""),
+                        "part_index": int(request_payload["group"].get("part_index") or 0),
+                        "part_count": int(request_payload["group"].get("part_count") or 0),
+                        "chunk_count": chunk_count,
+                        "payload_bytes": payload_bytes,
+                        "attempts": attempts,
+                        "error": str(exc),
+                        "request": body,
+                    }
+                    can_retry = attempts <= effective_retries and _is_retryable_exception(exc)
+                    if can_retry:
+                        if on_retry is not None:
+                            on_retry(batch_index, attempts, failure)
+                        if effective_retry_backoff_seconds > 0:
+                            sleep_fn(effective_retry_backoff_seconds * attempts)
+                        continue
+                    stats.errors.append(failure)
+                    raise SemanticPushError(failure, stats) from exc
 
     return stats
