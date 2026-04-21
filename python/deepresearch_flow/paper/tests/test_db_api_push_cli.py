@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from click.testing import CliRunner
 
 from deepresearch_flow.paper.cli import paper
-from deepresearch_flow.paper.snapshot.push import PushStats, RemoteConfig
+from deepresearch_flow.paper.snapshot.push import PushStats, RemoteConfig, RemoteSemanticConfig
+from deepresearch_flow.paper.snapshot.push_semantic import PushSemanticStats, SemanticPushError
 from deepresearch_flow.paper.snapshot.push_static import PushStaticStats
 from deepresearch_flow.storage.config import StorageConfig
 
@@ -480,3 +482,135 @@ class TestApiPushCli:
 
         assert result.exit_code == 0
         assert calls == ["api", "static", "semantic"]
+
+    def test_embed_db_shows_semantic_tqdm_progress(self, tmp_path: Path) -> None:
+        config_path = tmp_path / "remote.toml"
+        snapshot_db = tmp_path / "paper_snapshot.db"
+        embed_dir = tmp_path / "embed_vectors"
+        _write_config(config_path)
+        snapshot_db.write_text("")
+        embed_dir.mkdir()
+
+        config = RemoteConfig(
+            api_base_url="https://api.example.com",
+            admin_token="token",
+            batch_size=10,
+            semantic=RemoteSemanticConfig(max_rows=2, max_payload_bytes=1024, timeout=30.0, retries=1, retry_backoff_seconds=0.0),
+        )
+        progress = MagicMock()
+
+        def _fake_push_semantic(*args, **kwargs):
+            kwargs["on_batch"](0, 2, {"inserted": 2, "updated": 0, "skipped": 0, "deleted": 0})
+            kwargs["on_batch"](1, 1, {"inserted": 1, "updated": 0, "skipped": 0, "deleted": 0})
+            return PushSemanticStats(batches_sent=2, inserted=3, updated=0, skipped=0, deleted=0)
+
+        with (
+            patch("deepresearch_flow.paper.snapshot.push.load_remote_config", return_value=config),
+            patch("deepresearch_flow.paper.snapshot.push.extract_papers_from_db", return_value=[{"paper_id": "paper-1", "paper_title": "Paper"}]),
+            patch("deepresearch_flow.paper.snapshot.push.push_papers", return_value=PushStats(total=1, added=1, batches_sent=1)),
+            patch("deepresearch_flow.paper.vector_store.load_index_meta", return_value={"model": "m", "dimensions": 4, "normalized": True, "provider": "p", "index_version": 1}),
+            patch("deepresearch_flow.paper.vector_store.open_store", return_value=object()),
+            patch(
+                "deepresearch_flow.paper.vector_store.read_all_chunks",
+                return_value=[
+                    {"doc_id": "paper-1", "template_tag": "", "content_hash": "h1", "vector": [0.1, 0.2, 0.3, 0.4]},
+                    {"doc_id": "paper-1", "template_tag": "", "content_hash": "h2", "vector": [0.1, 0.2, 0.3, 0.4]},
+                    {"doc_id": "paper-1", "template_tag": "", "content_hash": "h3", "vector": [0.1, 0.2, 0.3, 0.4]},
+                ],
+            ),
+            patch(
+                "deepresearch_flow.paper.snapshot.push_semantic.group_chunks_for_push",
+                return_value=[
+                    {"group": {"doc_id": "paper-1", "template_tag": "", "group_hash": "g", "part_index": 0, "part_count": 2, "is_final_part": False}, "chunks": [{}, {}]},
+                    {"group": {"doc_id": "paper-1", "template_tag": "", "group_hash": "g", "part_index": 1, "part_count": 2, "is_final_part": True}, "chunks": [{}]},
+                ],
+            ) as mock_group,
+            patch("deepresearch_flow.paper.snapshot.push_semantic.push_semantic_chunks", side_effect=_fake_push_semantic),
+            patch("deepresearch_flow.paper.db.tqdm", return_value=progress) as mock_tqdm,
+        ):
+            runner = CliRunner()
+            result = runner.invoke(
+                paper,
+                [
+                    "db", "api", "push",
+                    "--snapshot-db", str(snapshot_db),
+                    "--config", str(config_path),
+                    "--embed-db", str(embed_dir),
+                    "--only-api",
+                ],
+            )
+
+        assert result.exit_code == 0
+        mock_group.assert_called_once_with(
+            [
+                {"doc_id": "paper-1", "template_tag": "", "content_hash": "h1", "vector": [0.1, 0.2, 0.3, 0.4]},
+                {"doc_id": "paper-1", "template_tag": "", "content_hash": "h2", "vector": [0.1, 0.2, 0.3, 0.4]},
+                {"doc_id": "paper-1", "template_tag": "", "content_hash": "h3", "vector": [0.1, 0.2, 0.3, 0.4]},
+            ],
+            max_rows=2,
+            max_payload_bytes=1024,
+        )
+        mock_tqdm.assert_called_once()
+        assert mock_tqdm.call_args.kwargs["total"] == 3
+        assert mock_tqdm.call_args.kwargs["desc"] == "Semantic push"
+        assert progress.update.call_count == 2
+        assert progress.set_postfix.call_count >= 2
+
+    def test_embed_db_failure_writes_semantic_error_report(self, tmp_path: Path, monkeypatch) -> None:
+        config_path = tmp_path / "remote.toml"
+        snapshot_db = tmp_path / "paper_snapshot.db"
+        embed_dir = tmp_path / "embed_vectors"
+        _write_config(config_path)
+        snapshot_db.write_text("")
+        embed_dir.mkdir()
+        monkeypatch.chdir(tmp_path)
+
+        config = RemoteConfig(api_base_url="https://api.example.com", admin_token="token", batch_size=10)
+        failure = {
+            "batch_index": 0,
+            "total_batches": 1,
+            "doc_id": "paper-1",
+            "template_tag": "",
+            "part_index": 0,
+            "part_count": 1,
+            "chunk_count": 1,
+            "payload_bytes": 123,
+            "attempts": 2,
+            "error": "Server disconnected",
+            "request": {"index_meta": {"dimensions": 4}, "group": {"doc_id": "paper-1"}, "chunks": [{"id": "chunk-1"}]},
+        }
+        error = SemanticPushError(failure, PushSemanticStats(errors=[failure]))
+
+        with (
+            patch("deepresearch_flow.paper.snapshot.push.load_remote_config", return_value=config),
+            patch("deepresearch_flow.paper.snapshot.push.extract_papers_from_db", return_value=[{"paper_id": "paper-1", "paper_title": "Paper"}]),
+            patch("deepresearch_flow.paper.snapshot.push.push_papers", return_value=PushStats(total=1, added=1, batches_sent=1)),
+            patch("deepresearch_flow.paper.vector_store.load_index_meta", return_value={"model": "m", "dimensions": 4, "normalized": True, "provider": "p", "index_version": 1}),
+            patch("deepresearch_flow.paper.vector_store.open_store", return_value=object()),
+            patch("deepresearch_flow.paper.vector_store.read_all_chunks", return_value=[{"doc_id": "paper-1", "template_tag": "", "content_hash": "h1", "vector": [0.1, 0.2, 0.3, 0.4]}]),
+            patch(
+                "deepresearch_flow.paper.snapshot.push_semantic.group_chunks_for_push",
+                return_value=[
+                    {"group": {"doc_id": "paper-1", "template_tag": "", "group_hash": "g", "part_index": 0, "part_count": 1, "is_final_part": True}, "chunks": [{}]},
+                ],
+            ),
+            patch("deepresearch_flow.paper.snapshot.push_semantic.push_semantic_chunks", side_effect=error),
+            patch("deepresearch_flow.paper.db.tqdm"),
+        ):
+            runner = CliRunner()
+            result = runner.invoke(
+                paper,
+                [
+                    "db", "api", "push",
+                    "--snapshot-db", str(snapshot_db),
+                    "--config", str(config_path),
+                    "--embed-db", str(embed_dir),
+                    "--only-api",
+                ],
+            )
+
+        assert result.exit_code != 0
+        report_path = tmp_path / "push-semantic-errors.json"
+        assert report_path.exists()
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        assert report[0]["doc_id"] == "paper-1"

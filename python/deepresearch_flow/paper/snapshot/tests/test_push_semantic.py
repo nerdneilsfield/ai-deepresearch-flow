@@ -1,9 +1,18 @@
 from __future__ import annotations
 
+import json
 from unittest import mock
 
+import httpx
+import pytest
+
 from deepresearch_flow.paper.snapshot.push import RemoteConfig
-from deepresearch_flow.paper.snapshot.push_semantic import group_chunks_for_push, push_semantic_chunks
+from deepresearch_flow.paper.snapshot.push_semantic import (
+    SemanticPushError,
+    group_chunks_for_push,
+    push_semantic_chunks,
+    write_error_report,
+)
 from deepresearch_flow.paper.vector_store import decode_vector_b64
 
 
@@ -100,3 +109,69 @@ def test_push_sends_requests_and_accumulates_stats() -> None:
         assert "group" in call_body
         assert "chunks" in call_body
         assert "vector_b64" in call_body["chunks"][0]
+
+
+def test_push_retries_transport_errors_then_succeeds() -> None:
+    chunks = [_make_chunk("doc1", "simple", i) for i in range(2)]
+    index_meta = {"model": "m", "dimensions": 4, "normalized": True, "provider": "p", "index_version": 1}
+
+    with mock.patch("deepresearch_flow.paper.snapshot.push_semantic.httpx.Client") as mock_cls:
+        mock_client = mock.MagicMock()
+        retry_error = httpx.RemoteProtocolError("Server disconnected")
+        mock_resp = mock.MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"received": 2, "inserted": 2, "updated": 0, "skipped": 0, "deleted": 0}
+        mock_resp.raise_for_status = mock.MagicMock()
+        mock_client.post.side_effect = [retry_error, mock_resp]
+        mock_client.__enter__ = mock.MagicMock(return_value=mock_client)
+        mock_client.__exit__ = mock.MagicMock(return_value=False)
+        mock_cls.return_value = mock_client
+
+        config = RemoteConfig(api_base_url="http://localhost", admin_token="tok")
+        stats = push_semantic_chunks(
+            chunks,
+            index_meta,
+            config,
+            retries=1,
+            retry_backoff_seconds=0,
+        )
+
+    assert stats.inserted == 2
+    assert stats.batches_sent == 1
+    assert not stats.errors
+    assert mock_client.post.call_count == 2
+
+
+def test_push_failure_carries_batch_metadata_and_report(tmp_path) -> None:
+    chunks = [_make_chunk("doc1", "simple", i) for i in range(2)]
+    index_meta = {"model": "m", "dimensions": 4, "normalized": True, "provider": "p", "index_version": 1}
+
+    with mock.patch("deepresearch_flow.paper.snapshot.push_semantic.httpx.Client") as mock_cls:
+        mock_client = mock.MagicMock()
+        mock_client.post.side_effect = httpx.RemoteProtocolError("Server disconnected")
+        mock_client.__enter__ = mock.MagicMock(return_value=mock_client)
+        mock_client.__exit__ = mock.MagicMock(return_value=False)
+        mock_cls.return_value = mock_client
+
+        config = RemoteConfig(api_base_url="http://localhost", admin_token="tok")
+        with pytest.raises(SemanticPushError) as excinfo:
+            push_semantic_chunks(
+                chunks,
+                index_meta,
+                config,
+                retries=1,
+                retry_backoff_seconds=0,
+            )
+
+    failure = excinfo.value.failure
+    assert failure["doc_id"] == "doc1"
+    assert failure["template_tag"] == "simple"
+    assert failure["chunk_count"] == 2
+    assert failure["attempts"] == 2
+    assert "Server disconnected" in failure["error"]
+
+    report_path = tmp_path / "push-semantic-errors.json"
+    write_error_report(excinfo.value.stats.errors, report_path)
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report[0]["doc_id"] == "doc1"
+    assert report[0]["request"]["group"]["doc_id"] == "doc1"

@@ -15,6 +15,7 @@ from starlette.testclient import TestClient
 from deepresearch_flow.paper.snapshot.admin import create_admin_app
 from deepresearch_flow.paper.snapshot.push import (
     RemoteConfig,
+    RemoteSemanticConfig,
     extract_papers_from_db,
     load_remote_config,
     push_papers,
@@ -192,6 +193,7 @@ class TestLoadRemoteConfig(TestCase):
         assert cfg.api_base_url == "https://api.example.com"
         assert cfg.admin_token == "my-token"
         assert cfg.batch_size == 10
+        assert cfg.semantic == RemoteSemanticConfig()
 
     def test_load_env_token(self) -> None:
         with tempfile.NamedTemporaryFile(suffix=".toml", mode="w", delete=False) as f:
@@ -466,4 +468,43 @@ class TestStorageConfigLoading:
             'password = "env:NONEXISTENT_PW"\n'
         )
         with pytest.raises(ValueError, match="NONEXISTENT_PW"):
+            load_remote_config(f)
+
+
+class TestSemanticConfigLoading:
+    def test_semantic_config_parsed(self, tmp_path: Path) -> None:
+        f = tmp_path / "remote.toml"
+        f.write_text(
+            '[remote]\n'
+            'api_base_url = "https://api.example.com"\n'
+            'admin_token = "my-token"\n\n'
+            '[remote.semantic]\n'
+            'max_rows = 25\n'
+            'max_payload_bytes = 4000000\n'
+            'timeout = 120\n'
+            'retries = 3\n'
+            'retry_backoff_seconds = 2\n'
+        )
+
+        cfg = load_remote_config(f)
+
+        assert cfg.semantic == RemoteSemanticConfig(
+            max_rows=25,
+            max_payload_bytes=4_000_000,
+            timeout=120.0,
+            retries=3,
+            retry_backoff_seconds=2.0,
+        )
+
+    def test_semantic_config_invalid_rows_raise(self, tmp_path: Path) -> None:
+        f = tmp_path / "remote.toml"
+        f.write_text(
+            '[remote]\n'
+            'api_base_url = "https://api.example.com"\n'
+            'admin_token = "my-token"\n\n'
+            '[remote.semantic]\n'
+            'max_rows = 0\n'
+        )
+
+        with pytest.raises(ValueError, match="max_rows"):
             load_remote_config(f)
