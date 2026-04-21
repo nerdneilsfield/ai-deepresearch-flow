@@ -11,6 +11,7 @@ import mimetypes
 from pathlib import Path
 import re
 import sqlite3
+import sys
 import time
 from typing import Any
 import uuid
@@ -762,7 +763,9 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
         with conn:
             unique_paper_ids: set[str] = set()
             missing_pdf_hashes: set[str] = set()
-            for idx, paper in enumerate(tqdm(index.papers, total=len(index.papers), desc="snapshot build", unit="paper")):
+            for idx, paper in enumerate(
+                tqdm(index.papers, total=len(index.papers), desc="snapshot build", unit="paper", file=sys.stdout)
+            ):
                 candidates = build_paper_key_candidates(paper)
                 paper_id, preferred, conflicts = _pick_paper_id(
                     candidates,
