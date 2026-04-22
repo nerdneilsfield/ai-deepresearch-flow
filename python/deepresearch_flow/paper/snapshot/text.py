@@ -146,9 +146,10 @@ def rewrite_search_query(user_query: str) -> str:
                 phrase = insert_cjk_spaces(seg)
                 out.append(f"\"{phrase}\"")
             else:
-                # Remove FTS special characters to prevent syntax errors
+                # Keep safe punctuation inside a quoted term so FTS5 does not
+                # reinterpret tokens like `end-to-end` as operators.
                 safe = re.sub(r"[^0-9A-Za-z._+-]+", "", seg)
                 if safe:
-                    out.append(safe.lower())
+                    out.append(f"\"{safe.lower()}\"")
 
     return " ".join(out)

@@ -58,16 +58,22 @@ class TestSearchText(unittest.TestCase):
         self.assertEqual(rewrite_search_query("深度学习"), '"深 度 学 习"')
 
     def test_rewrite_search_query_mixed(self) -> None:
-        self.assertEqual(rewrite_search_query("深度学习 transformer"), '"深 度 学 习" transformer')
+        self.assertEqual(rewrite_search_query("深度学习 transformer"), '"深 度 学 习" "transformer"')
 
     def test_rewrite_search_query_splits_mixed_latin_cjk_tokens(self) -> None:
-        self.assertEqual(rewrite_search_query("abc深度def"), 'abc "深 度" def')
+        self.assertEqual(rewrite_search_query("abc深度def"), '"abc" "深 度" "def"')
 
     def test_rewrite_search_query_boolean(self) -> None:
-        self.assertEqual(rewrite_search_query("lidar AND localization"), "lidar AND localization")
+        self.assertEqual(rewrite_search_query("lidar AND localization"), '"lidar" AND "localization"')
 
     def test_rewrite_search_query_empty_after_cleanup(self) -> None:
         self.assertEqual(rewrite_search_query("  ，。！？  "), "")
+
+    def test_rewrite_search_query_quotes_ascii_terms_with_fts_punctuation(self) -> None:
+        self.assertEqual(
+            rewrite_search_query("deep-to c++ x.y"),
+            '"deep-to" "c++" "x.y"',
+        )
 
     def test_markdown_to_plain_text_strips_tables(self) -> None:
         md = "hello\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\nworld"
