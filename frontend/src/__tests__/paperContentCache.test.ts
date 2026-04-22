@@ -9,7 +9,7 @@ import {
   touchPaperContentRecord,
   writePaperContentRecord,
 } from '@/lib/paper-content-cache'
-import { getPaperDetailCached } from '@/lib/api'
+import { getPaperDetailCached, getSummaryPayloadCached } from '@/lib/api'
 
 const { fetchJsonMock } = vi.hoisted(() => ({
   fetchJsonMock: vi.fn(),
@@ -89,7 +89,10 @@ async function waitForRecord(
   return readPaperContentRecord(paperId)
 }
 
-beforeEach(wipeDb)
+beforeEach(async () => {
+  fetchJsonMock.mockReset()
+  await wipeDb()
+})
 afterEach(wipeDb)
 
 describe('paper-content-cache storage', () => {
@@ -361,5 +364,103 @@ describe('paper-content-cache storage', () => {
 
     expect(cachedDetail.title).toBe('Cached Order Stable')
     expect(record?.detail?.title).toBe('Cached Order Stable')
+  })
+
+  it('fetches and writes back the first uncached summary template into an existing paper record', async () => {
+    await writePaperContentRecord({
+      paperId: 'paper-3',
+      detail: makeDetail('paper-3'),
+      detailFreshness: {
+        manifestUrl: 'https://example.com/manifest/paper-3.json?v=1',
+        summaryUrl: 'https://example.com/summary/paper-3.json?v=1',
+        summaryUrls: {
+          default: 'https://example.com/summary/paper-3/default.json?v=1',
+        },
+        translatedMdUrls: {},
+        sourceMdUrl: null,
+      },
+      summaries: {},
+      translations: {},
+      lastAccessedAt: 55,
+    })
+    fetchJsonMock.mockResolvedValueOnce({ summary: 'template body' })
+
+    const payload = await getSummaryPayloadCached(
+      'paper-3',
+      'deep_read',
+      'https://example.com/summary/paper-3/deep_read.json?v=1',
+    )
+    const record = await readPaperContentRecord('paper-3')
+
+    expect(payload).toEqual({ summary: 'template body' })
+    expect(record?.summaries.deep_read?.payload).toEqual({ summary: 'template body' })
+    expect(record?.lastAccessedAt).toBe(55)
+  })
+
+  it('reuses cached summary when the template url is unchanged', async () => {
+    await writePaperContentRecord({
+      paperId: 'paper-4',
+      detail: makeDetail('paper-4'),
+      detailFreshness: {
+        manifestUrl: 'https://example.com/manifest/paper-4.json?v=1',
+        summaryUrl: 'https://example.com/summary/paper-4.json?v=1',
+        summaryUrls: {},
+        translatedMdUrls: {},
+        sourceMdUrl: null,
+      },
+      summaries: {
+        deep_read: {
+          url: 'https://example.com/summary/paper-4/deep_read.json?v=1',
+          payload: { summary: 'cached summary' },
+          cachedAt: 1,
+        },
+      },
+      translations: {},
+      lastAccessedAt: 77,
+    })
+
+    const payload = await getSummaryPayloadCached(
+      'paper-4',
+      'deep_read',
+      'https://example.com/summary/paper-4/deep_read.json?v=1',
+    )
+
+    expect(payload).toEqual({ summary: 'cached summary' })
+    expect(fetchJsonMock).not.toHaveBeenCalled()
+  })
+
+  it('replaces cached summary when the template url changes', async () => {
+    await writePaperContentRecord({
+      paperId: 'paper-5',
+      detail: makeDetail('paper-5'),
+      detailFreshness: {
+        manifestUrl: 'https://example.com/manifest/paper-5.json?v=1',
+        summaryUrl: 'https://example.com/summary/paper-5.json?v=1',
+        summaryUrls: {},
+        translatedMdUrls: {},
+        sourceMdUrl: null,
+      },
+      summaries: {
+        deep_read: {
+          url: 'https://example.com/summary/paper-5/deep_read.json?v=1',
+          payload: { summary: 'old summary' },
+          cachedAt: 1,
+        },
+      },
+      translations: {},
+      lastAccessedAt: 88,
+    })
+    fetchJsonMock.mockResolvedValueOnce({ summary: 'new summary' })
+
+    const payload = await getSummaryPayloadCached(
+      'paper-5',
+      'deep_read',
+      'https://example.com/summary/paper-5/deep_read.json?v=2',
+    )
+    const record = await readPaperContentRecord('paper-5')
+
+    expect(payload).toEqual({ summary: 'new summary' })
+    expect(record?.summaries.deep_read?.url).toContain('v=2')
+    expect(record?.summaries.deep_read?.payload).toEqual({ summary: 'new summary' })
   })
 })
