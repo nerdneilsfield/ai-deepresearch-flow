@@ -1,5 +1,5 @@
 import { ref } from 'vue'
-import { fetchJson } from '@/lib/api'
+import { getSummaryPayloadCached } from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
 import type { SearchResponse } from '@/types/api'
 
@@ -10,6 +10,7 @@ export function useExpandableSummary() {
   const expanded = ref<Record<string, boolean>>({})
   const expandedMarkdown = ref<Record<string, string>>({})
   const expandedLoading = ref<Record<string, boolean>>({})
+  const expandedSummaryUrls = ref<Record<string, string>>({})
 
   async function toggleSummary(item: SearchItem) {
     const id = item.paper_id
@@ -18,11 +19,13 @@ export function useExpandableSummary() {
       return
     }
 
-    if (!expandedMarkdown.value[id] && item.summary_url) {
+    if ((!expandedMarkdown.value[id] || expandedSummaryUrls.value[id] !== item.summary_url) && item.summary_url) {
       expandedLoading.value = { ...expandedLoading.value, [id]: true }
       try {
-        const data = await fetchJson(item.summary_url) as { summary?: string }
+        const template = item.preferred_summary_template || 'default'
+        const data = await getSummaryPayloadCached(item.paper_id, template, item.summary_url) as { summary?: string }
         expandedMarkdown.value = { ...expandedMarkdown.value, [id]: data.summary || '' }
+        expandedSummaryUrls.value = { ...expandedSummaryUrls.value, [id]: item.summary_url }
       } catch {
         ui.pushToast('Failed to load summary', 'error')
       } finally {

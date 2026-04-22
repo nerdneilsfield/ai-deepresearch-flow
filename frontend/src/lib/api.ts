@@ -97,6 +97,36 @@ export async function getPaperDetailCached(
   return freshDetail
 }
 
+export async function getSummaryPayloadCached(
+  paperId: string,
+  template: string,
+  url: string,
+): Promise<Record<string, unknown>> {
+  const cachedRecord = await readPaperContentRecord(paperId)
+  const cachedSummary = cachedRecord?.summaries?.[template]
+  if (cachedSummary && cachedSummary.url === url) {
+    return JSON.parse(JSON.stringify(cachedSummary.payload))
+  }
+
+  const payload = (await fetchJson(url)) as Record<string, unknown>
+  await writePaperContentRecord({
+    paperId,
+    detail: cachedRecord?.detail ?? null,
+    detailFreshness: cachedRecord?.detailFreshness ?? null,
+    summaries: {
+      ...(cachedRecord?.summaries ?? {}),
+      [template]: {
+        url,
+        payload: JSON.parse(JSON.stringify(payload)),
+        cachedAt: Date.now(),
+      },
+    },
+    translations: cachedRecord?.translations ?? {},
+    lastAccessedAt: cachedRecord?.lastAccessedAt ?? 0,
+  })
+  return payload
+}
+
 export async function getFacet(facet: string, page: number, pageSize: number): Promise<FacetResponse> {
   const url = buildUrl(`/facets/${facet}`, { page, page_size: pageSize })
   const data = await fetchJson(url)

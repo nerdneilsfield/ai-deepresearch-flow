@@ -2,7 +2,7 @@
 import { onUnmounted, ref, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { fetchJson, type PaperDetail } from '@/lib/api'
+import { fetchJson, getSummaryPayloadCached, type PaperDetail } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
@@ -155,11 +155,11 @@ const panelHeightStyle = computed(() => {
   return { height: `${height}px`, minHeight: '70vh' }
 })
 
-async function loadSummary(url: string) {
+async function loadSummary(template: string, url: string) {
   summaryLoading.value = true
   console.log('[loadSummary] Loading URL:', url)
   try {
-    const data = await fetchJson(url) as Record<string, any>
+    const data = await getSummaryPayloadCached(paperId.value, template, url) as Record<string, any>
     console.log('[loadSummary] Data keys:', Object.keys(data))
 
     // Handle different summary formats
@@ -256,7 +256,7 @@ watch(summaryTemplate, async (value) => {
   console.log('[watch:summaryTemplate] Changed to:', value)
   if (value && summaryUrls.value?.[value]) {
     console.log('[watch:summaryTemplate] Loading URL:', summaryUrls.value[value])
-    await loadSummary(summaryUrls.value[value])
+    await loadSummary(value, summaryUrls.value[value])
   } else {
     console.warn('[watch:summaryTemplate] No URL found for template:', value)
   }
@@ -320,7 +320,7 @@ watch(
       console.log('[watch:detail] Template unchanged, manually loading:', nextTemplate)
       const url = summaryUrls.value[nextTemplate]
       if (url) {
-        await loadSummary(url)
+        await loadSummary(nextTemplate, url)
       }
     }
     console.log('[watch:detail] Setting summaryTemplate to:', nextTemplate)
