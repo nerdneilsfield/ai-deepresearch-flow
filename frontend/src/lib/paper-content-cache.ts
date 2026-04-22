@@ -50,6 +50,7 @@ const HOT_CACHE_LIMIT = 2
 const hotCache = new Map<string, PaperContentRecord>()
 
 function cloneRecord(record: PaperContentRecord): PaperContentRecord {
+  // Paper cache records are plain JSON data; JSON cloning keeps snapshots isolated.
   return {
     schemaVersion: SCHEMA_VERSION,
     paperId: record.paperId,
@@ -113,32 +114,45 @@ function readRecordFromStore(
   })
 }
 
-function getAllRecords(store: IDBObjectStore): Promise<PaperContentRecord[]> {
-  return new Promise((resolve, reject) => {
-    const req = store.getAll()
-    req.onsuccess = () => {
-      const records = (req.result as Partial<PaperContentRecord>[])
-        .filter(
-          (raw): raw is PaperContentRecord =>
-            raw.schemaVersion === SCHEMA_VERSION && typeof raw.paperId === 'string',
-        )
-        .map((record) => cloneRecord(record))
-      resolve(records)
-    }
-    req.onerror = () => reject(req.error)
-  })
-}
+function enqueuePaperLimitEnforcement(
+  store: IDBObjectStore,
+  tx: IDBTransaction,
+) {
+  const getAllReq = store.getAll()
+  getAllReq.onsuccess = () => {
+    const records = (getAllReq.result as Partial<PaperContentRecord>[])
+      .filter(
+        (raw): raw is PaperContentRecord =>
+          raw.schemaVersion === SCHEMA_VERSION && typeof raw.paperId === 'string',
+      )
+      .map((record) => cloneRecord(record))
 
-async function enforcePaperLimit(store: IDBObjectStore) {
-  const records = await getAllRecords(store)
-  if (records.length <= MAX_PAPER_RECORDS) return
-  records
-    .sort((left, right) => left.lastAccessedAt - right.lastAccessedAt)
-    .slice(0, records.length - MAX_PAPER_RECORDS)
-    .forEach((record) => {
-      store.delete(record.paperId)
-      hotCache.delete(record.paperId)
-    })
+    if (records.length <= MAX_PAPER_RECORDS) return
+
+    records
+      .sort((left, right) => left.lastAccessedAt - right.lastAccessedAt)
+      .slice(0, records.length - MAX_PAPER_RECORDS)
+      .forEach((record) => {
+        const deleteReq = store.delete(record.paperId)
+        deleteReq.onsuccess = () => {
+          hotCache.delete(record.paperId)
+        }
+        deleteReq.onerror = () => {
+          try {
+            tx.abort()
+          } catch {
+            // ignore abort errors if the transaction is already closing
+          }
+        }
+      })
+  }
+  getAllReq.onerror = () => {
+    try {
+      tx.abort()
+    } catch {
+      // ignore abort errors if the transaction is already closing
+    }
+  }
 }
 
 export async function readPaperContentRecord(paperId: string): Promise<PaperContentRecord | null> {
@@ -179,7 +193,7 @@ export async function writePaperContentRecord(input: WritePaperContentInput): Pr
     const store = tx.objectStore(STORE_NAME)
     const putReq = store.put(record)
     putReq.onsuccess = () => {
-      void enforcePaperLimit(store).catch(reject)
+      enqueuePaperLimitEnforcement(store, tx)
     }
     putReq.onerror = () => reject(putReq.error)
     tx.oncomplete = () => {

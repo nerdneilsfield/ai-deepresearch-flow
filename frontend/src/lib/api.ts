@@ -122,7 +122,7 @@ export async function getSummaryPayloadCached(
       },
     },
     translations: cachedRecord?.translations ?? {},
-    lastAccessedAt: cachedRecord?.lastAccessedAt ?? 0,
+    lastAccessedAt: cachedRecord?.lastAccessedAt ?? Date.now(),
   })
   return payload
 }
@@ -152,7 +152,7 @@ export async function getTranslatedMarkdownCached(
         cachedAt: Date.now(),
       },
     },
-    lastAccessedAt: cachedRecord?.lastAccessedAt ?? 0,
+    lastAccessedAt: cachedRecord?.lastAccessedAt ?? Date.now(),
   })
   return markdown
 }
