@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import lancedb
 import pytest
 
 from deepresearch_flow.paper.embedding import EmbeddingResult
@@ -19,7 +20,19 @@ from deepresearch_flow.paper.config import (
     DEFAULT_RENDER,
 )
 from deepresearch_flow.paper.embed_pipeline import run_embed_pipeline
-from deepresearch_flow.paper.vector_store import load_index_meta, open_store, scan_rows
+from deepresearch_flow.paper.vector_store import (
+    _reset_ensured_scalar_index_cache,
+    load_index_meta,
+    open_store,
+    scan_rows,
+)
+
+
+@pytest.fixture(autouse=True)
+def _clear_scalar_index_cache() -> None:
+    _reset_ensured_scalar_index_cache()
+    yield
+    _reset_ensured_scalar_index_cache()
 
 
 def _write_json(tmp_path: Path) -> Path:
@@ -147,6 +160,51 @@ def test_pipeline_incremental_skips_unchanged(tmp_path: Path, monkeypatch) -> No
     )
 
     assert call_count == first_count
+
+
+def test_pipeline_upgrades_existing_table_indices_even_when_no_reembed_needed(tmp_path: Path, monkeypatch) -> None:
+    json_path = _write_json(tmp_path)
+    vector_dir = tmp_path / "vectors"
+
+    async def ok_embed(base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None):  # noqa: ARG001, ANN001
+        return EmbeddingResult(
+            vectors=[[0.1] * 1024 for _ in texts],
+            model=model,
+            usage_tokens=len(texts),
+        )
+
+    monkeypatch.setattr("deepresearch_flow.paper.embedding.call_embedding", ok_embed)
+    asyncio.run(
+        run_embed_pipeline(
+            config=_test_config(),
+            input_paths=[json_path],
+            vector_dir=vector_dir,
+        )
+    )
+
+    existing_rows = scan_rows(open_store(vector_dir))
+    raw_db = lancedb.connect(str(vector_dir))
+    raw_db.create_table("paper_chunks", data=existing_rows, mode="overwrite")
+    assert list(raw_db.open_table("paper_chunks").list_indices()) == []
+
+    async def should_not_embed(base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None):  # noqa: ARG001, ANN001
+        raise AssertionError("unchanged embed run should not request embeddings")
+
+    monkeypatch.setattr("deepresearch_flow.paper.embedding.call_embedding", should_not_embed)
+    asyncio.run(
+        run_embed_pipeline(
+            config=_test_config(),
+            input_paths=[json_path],
+            vector_dir=vector_dir,
+        )
+    )
+
+    indexed_columns = {
+        column
+        for index in lancedb.connect(str(vector_dir)).open_table("paper_chunks").list_indices()
+        for column in getattr(index, "columns", [])
+    }
+    assert {"doc_id", "template_tag"} <= indexed_columns
 
 
 def test_pipeline_resumes_after_partial_failure(tmp_path: Path, monkeypatch) -> None:
