@@ -22,6 +22,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from deepresearch_flow.paper.vector_store import SHARED_TEMPLATE_KEY
 from deepresearch_flow.paper.snapshot.bibtex_utils import (
     extract_canonical_doi,
     extract_current_bibtex_payload,
@@ -70,7 +71,7 @@ class AdminConfig:
 
 
 def _semantic_tag_label(template_tag: str) -> str:
-    return template_tag or "_shared"
+    return template_tag or SHARED_TEMPLATE_KEY
 
 
 def _log_semantic_phase(doc_id: str, template_tag: str, phase: str, started_at: float, *, detail: str = "") -> float:
@@ -562,7 +563,7 @@ def _clear_staged_parts(cfg: AdminConfig, doc_id: str, template_tag: str, group_
 def _update_index_meta_after_group_write(
     vector_dir: Path,
     *,
-    previous_doc_groups: dict[str, str],
+    previous_template_keys: set[str],
     template_tag: str,
     previous_group_count: int,
     new_group_count: int,
@@ -576,10 +577,10 @@ def _update_index_meta_after_group_write(
         int(meta.get("chunk_count") or 0) + new_group_count - previous_group_count,
     )
 
-    before_doc_present = bool(previous_doc_groups)
-    current_template_key = template_tag or "_shared"
-    other_doc_groups = {key for key in previous_doc_groups if key != current_template_key}
-    after_doc_present = bool(other_doc_groups) or new_group_count > 0
+    before_doc_present = bool(previous_template_keys)
+    current_template_key = template_tag or SHARED_TEMPLATE_KEY
+    other_template_keys = {key for key in previous_template_keys if key != current_template_key}
+    after_doc_present = bool(other_template_keys) or new_group_count > 0
     doc_count = int(meta.get("doc_count") or 0)
     if not before_doc_present and after_doc_present:
         doc_count += 1
@@ -614,10 +615,8 @@ def _apply_semantic_chunk_batch(
         ChunkRow,
         decode_vector_b64,
         delete_groups,
-        has_rows_for_template,
         open_store,
-        read_chunks_for_group,
-        read_group_hashes_for_doc,
+        read_admin_ingest_state,
         save_index_meta,
         validate_index_meta,
         write_chunks,
@@ -664,18 +663,19 @@ def _apply_semantic_chunk_batch(
     _log_semantic_phase(doc_id, template_tag, "open_store", phase_started_at)
 
     phase_started_at = time.perf_counter()
-    previous_doc_groups = read_group_hashes_for_doc(db, doc_id)
-    existing_rows = read_chunks_for_group(db, doc_id, template_tag)
-    existing_by_id = {str(row["id"]): str(row.get("content_hash") or "") for row in existing_rows}
-    had_template_elsewhere = has_rows_for_template(db, template_tag, exclude_doc_id=doc_id)
+    state = read_admin_ingest_state(db, doc_id, template_tag)
+    previous_template_keys = state.previous_template_keys
+    existing_by_id = state.existing_by_id
+    had_template_elsewhere = state.had_template_elsewhere
     _log_semantic_phase(
         doc_id,
         template_tag,
         "read_existing_state",
         phase_started_at,
         detail=(
-            f"existing_rows={len(existing_rows)} "
-            f"doc_groups={len(previous_doc_groups)} "
+            f"existing_rows={len(existing_by_id)} "
+            f"doc_templates={len(previous_template_keys)} "
+            f"doc_had_any_rows={int(state.doc_had_any_rows)} "
             f"had_template_elsewhere={int(had_template_elsewhere)}"
         ),
     )
@@ -733,15 +733,22 @@ def _apply_semantic_chunk_batch(
     )
 
     deleted = len(set(existing_by_id) - incoming_ids)
-    phase_started_at = time.perf_counter()
-    delete_groups(db, [(doc_id, template_tag if template_tag else "_shared")])
-    _log_semantic_phase(
-        doc_id,
-        template_tag,
-        "delete_groups",
-        phase_started_at,
-        detail=f"deleted_rows={deleted}",
-    )
+    if existing_by_id:
+        phase_started_at = time.perf_counter()
+        delete_groups(db, [(doc_id, template_tag if template_tag else SHARED_TEMPLATE_KEY)])
+        _log_semantic_phase(
+            doc_id,
+            template_tag,
+            "delete_groups",
+            phase_started_at,
+            detail=f"deleted_rows={deleted}",
+        )
+    else:
+        logger.info(
+            "semantic batch phase doc=%s tag=%s phase=delete_groups elapsed_ms=0.0 deleted_rows=0 skipped_delete=1",
+            doc_id,
+            _semantic_tag_label(template_tag),
+        )
     if current_rows:
         phase_started_at = time.perf_counter()
         write_chunks(db, current_rows, dimensions=dimensions)
@@ -761,9 +768,9 @@ def _apply_semantic_chunk_batch(
     phase_started_at = time.perf_counter()
     _update_index_meta_after_group_write(
         cfg.embed_db,
-        previous_doc_groups=previous_doc_groups,
+        previous_template_keys=previous_template_keys,
         template_tag=template_tag,
-        previous_group_count=len(existing_rows),
+        previous_group_count=len(existing_by_id),
         new_group_count=len(current_rows),
         had_template_elsewhere=had_template_elsewhere,
     )

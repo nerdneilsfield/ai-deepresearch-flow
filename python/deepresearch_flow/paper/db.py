@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 import json
 import re
 import shutil
@@ -976,6 +977,47 @@ def register_db_commands(db_group: click.Group) -> None:
         )
         advanced_ctx = None
         paper_config = load_config(config_path)
+        startup_embed_db = None
+        if embed_db:
+            startup_embed_db = Path(embed_db)
+        elif paper_config.search is not None and paper_config.search.vector_dir:
+            startup_embed_db = Path(paper_config.search.vector_dir)
+        if startup_embed_db is not None:
+            from deepresearch_flow.paper.vector_store import ensure_admin_scalar_indices, open_store
+
+            timeout_env = str(os.getenv("SEMANTIC_INDEX_BUILD_TIMEOUT") or "").strip()
+            wait_timeout = timedelta(minutes=30)
+            if timeout_env:
+                try:
+                    timeout_seconds = float(timeout_env)
+                except ValueError as exc:
+                    raise click.ClickException(
+                        "SEMANTIC_INDEX_BUILD_TIMEOUT must be a positive number of seconds."
+                    ) from exc
+                if timeout_seconds <= 0:
+                    raise click.ClickException(
+                        "SEMANTIC_INDEX_BUILD_TIMEOUT must be a positive number of seconds."
+                    )
+                wait_timeout = timedelta(seconds=timeout_seconds)
+            startup_lance_db = open_store(startup_embed_db)
+            try:
+                ensure_result = ensure_admin_scalar_indices(
+                    startup_lance_db,
+                    vector_dir=startup_embed_db,
+                    wait_timeout=wait_timeout,
+                )
+            except TimeoutError as exc:
+                raise click.ClickException(
+                    "SEMANTIC_INDEX_BUILD_TIMEOUT while building semantic scalar indices for "
+                    f"{startup_embed_db}. Increase SEMANTIC_INDEX_BUILD_TIMEOUT "
+                    "(seconds) and retry."
+                ) from exc
+            if ensure_result.table_exists and ensure_result.created_names:
+                click.echo(
+                    f"[INFO] Ensured semantic scalar indices for {startup_embed_db}: "
+                    + ", ".join(ensure_result.created_names),
+                    err=True,
+                )
         admin_embed_db = None
         admin_embed_dimensions = None
         if admin_token:

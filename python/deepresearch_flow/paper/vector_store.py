@@ -7,8 +7,8 @@ import hashlib
 import json
 import shutil
 import struct
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -18,8 +18,15 @@ import pyarrow as pa
 
 INDEX_VERSION = 1
 _SHARED_KEY = "_shared"
+SHARED_TEMPLATE_KEY = _SHARED_KEY
 _META_FILE = "index_meta.json"
 _CHUNKS_TABLE = "paper_chunks"
+_ADMIN_SCALAR_INDICES = {
+    "doc_id": "idx_chunks_doc_id",
+    "template_tag": "idx_chunks_template_tag",
+}
+_ENSURED_ADMIN_SCALAR_INDEX_DIRS: set[str] = set()
+_DEFAULT_ADMIN_SCALAR_INDEX_WAIT_TIMEOUT = timedelta(minutes=30)
 
 
 def _quote_filter_literal(value: str) -> str:
@@ -58,6 +65,22 @@ class ChunkRow:
     authors: str
     venue: str
     tags: str
+
+
+@dataclass(frozen=True)
+class AdminIngestState:
+    existing_by_id: dict[str, str]
+    previous_template_keys: set[str]
+    had_template_elsewhere: bool
+    doc_had_any_rows: bool
+
+
+@dataclass(frozen=True)
+class ScalarIndexEnsureResult:
+    table_exists: bool
+    created_names: tuple[str, ...] = field(default_factory=tuple)
+    existing_names: tuple[str, ...] = field(default_factory=tuple)
+    skipped_cached: bool = False
 
 
 def build_chunk_id(doc_id: str, template_tag: str, chunk_type: str, chunk_index: int) -> str:
@@ -154,6 +177,77 @@ def open_store(vector_dir: Path) -> lancedb.DBConnection:
     return lancedb.connect(str(vector_dir))
 
 
+def _resolved_vector_dir_key(vector_dir: Path | None) -> str | None:
+    if vector_dir is None:
+        return None
+    return str(vector_dir.resolve())
+
+
+def _db_vector_dir(db: lancedb.DBConnection) -> Path | None:
+    uri = getattr(db, "uri", None)
+    if not uri:
+        return None
+    return Path(str(uri))
+
+
+def _list_index_configs(table: Any) -> list[Any]:
+    response = table.list_indices()
+    return list(response)
+
+
+def _scalar_index_columns(table: Any) -> tuple[set[str], tuple[str, ...]]:
+    indexed_columns: set[str] = set()
+    index_names: list[str] = []
+    for index in _list_index_configs(table):
+        name = str(getattr(index, "name", "") or "")
+        if name:
+            index_names.append(name)
+        columns = getattr(index, "columns", None) or []
+        for column in columns:
+            indexed_columns.add(str(column))
+    return indexed_columns, tuple(index_names)
+
+
+def ensure_admin_scalar_indices(
+    db: lancedb.DBConnection,
+    *,
+    vector_dir: Path | None = None,
+    wait_timeout: timedelta = _DEFAULT_ADMIN_SCALAR_INDEX_WAIT_TIMEOUT,
+) -> ScalarIndexEnsureResult:
+    resolved_vector_dir = vector_dir or _db_vector_dir(db)
+    cache_key = _resolved_vector_dir_key(resolved_vector_dir)
+    if _CHUNKS_TABLE not in _table_names(db):
+        return ScalarIndexEnsureResult(table_exists=False)
+
+    table = db.open_table(_CHUNKS_TABLE)
+    indexed_columns, existing_names = _scalar_index_columns(table)
+    missing_columns = {column for column in _ADMIN_SCALAR_INDICES if column not in indexed_columns}
+    if cache_key is not None and cache_key in _ENSURED_ADMIN_SCALAR_INDEX_DIRS and not missing_columns:
+        return ScalarIndexEnsureResult(
+            table_exists=True,
+            existing_names=existing_names,
+            skipped_cached=True,
+        )
+    created_names: list[str] = []
+    for column, index_name in _ADMIN_SCALAR_INDICES.items():
+        if column in indexed_columns:
+            continue
+        table.create_scalar_index(column, replace=False, name=index_name)
+        created_names.append(index_name)
+    if created_names:
+        table.wait_for_index(created_names, timeout=wait_timeout)
+        indexed_columns, existing_names = _scalar_index_columns(table)
+
+    if cache_key is not None:
+        _ENSURED_ADMIN_SCALAR_INDEX_DIRS.add(cache_key)
+    return ScalarIndexEnsureResult(
+        table_exists=True,
+        created_names=tuple(created_names),
+        existing_names=existing_names,
+        skipped_cached=False,
+    )
+
+
 def preflight_vector_store(vector_dir: Path, *, dimensions: int) -> None:
     parent = vector_dir.parent if vector_dir.parent != Path("") else Path(".")
     temp_dir = parent / f".lance-preflight-{uuid4().hex}"
@@ -243,6 +337,7 @@ def write_chunks(db: lancedb.DBConnection, rows: list[ChunkRow], *, dimensions: 
         db.open_table(_CHUNKS_TABLE).add(data)
     else:
         db.create_table(_CHUNKS_TABLE, data=data, schema=_chunks_schema(dimensions))
+        ensure_admin_scalar_indices(db)
 
 
 def delete_groups(db: lancedb.DBConnection, groups: list[tuple[str, str]]) -> None:
@@ -307,6 +402,63 @@ def read_chunks_for_group(db: lancedb.DBConnection, doc_id: str, template_tag: s
         return []
     table = db.open_table(_CHUNKS_TABLE)
     return table.search().where(_group_filter(doc_id, template_tag)).to_list()
+
+
+def read_admin_ingest_state(
+    db: lancedb.DBConnection,
+    doc_id: str,
+    template_tag: str,
+) -> AdminIngestState:
+    if _CHUNKS_TABLE not in _table_names(db):
+        return AdminIngestState(
+            existing_by_id={},
+            previous_template_keys=set(),
+            had_template_elsewhere=False,
+            doc_had_any_rows=False,
+        )
+
+    table = db.open_table(_CHUNKS_TABLE)
+    doc_filter = f"doc_id = {_quote_filter_literal(doc_id)}"
+    current_template_key = template_tag or SHARED_TEMPLATE_KEY
+    doc_rows = (
+        table.search()
+        .where(doc_filter)
+        .select(["id", "template_tag", "content_hash"])
+        .to_list()
+    )
+
+    existing_by_id: dict[str, str] = {}
+    previous_template_keys: set[str] = set()
+    doc_had_any_rows = bool(doc_rows)
+    had_template_elsewhere = False
+    for row in doc_rows:
+        row_template_key = str(row.get("template_tag") or SHARED_TEMPLATE_KEY)
+        previous_template_keys.add(row_template_key)
+        if row_template_key == current_template_key:
+            existing_by_id[str(row["id"])] = str(row.get("content_hash") or "")
+
+    if template_tag:
+        had_template_elsewhere = bool(
+            table.search()
+            .where(
+                "template_tag = "
+                f"{_quote_filter_literal(template_tag)} AND doc_id != {_quote_filter_literal(doc_id)}"
+            )
+            .limit(1)
+            .select(["id"])
+            .to_list()
+        )
+
+    return AdminIngestState(
+        existing_by_id=existing_by_id,
+        previous_template_keys=previous_template_keys,
+        had_template_elsewhere=had_template_elsewhere,
+        doc_had_any_rows=doc_had_any_rows,
+    )
+
+
+def _reset_ensured_scalar_index_cache() -> None:
+    _ENSURED_ADMIN_SCALAR_INDEX_DIRS.clear()
 
 
 def has_rows_for_template(
