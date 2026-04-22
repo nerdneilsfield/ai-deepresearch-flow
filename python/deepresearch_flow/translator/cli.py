@@ -87,6 +87,21 @@ def _unique_output_name(path: Path, suffix: str, used: set[str]) -> str:
     return filename
 
 
+def _select_markdown_range(
+    markdown_files: list[Path],
+    *,
+    start_index: int,
+    end_index: int | None,
+) -> tuple[list[Path], int, int]:
+    if start_index > len(markdown_files):
+        raise click.ClickException(
+            f"--start-index {start_index} exceeds discovered markdown count {len(markdown_files)}"
+        )
+    effective_end = len(markdown_files) if end_index is None else min(end_index, len(markdown_files))
+    selected = markdown_files[start_index - 1 : effective_end]
+    return selected, start_index, effective_end
+
+
 @click.group()
 def translator() -> None:
     """Translation workflows for OCR markdown."""
@@ -109,6 +124,8 @@ def translator() -> None:
     help="Text file containing markdown file paths (one per line)",
 )
 @click.option("--count", "count_limit", default=None, type=int, help="Translate up to N files")
+@click.option("--start-index", "start_index", default=1, show_default=True, type=int, help="1-based inclusive start index in discovered markdown order")
+@click.option("--end-index", "end_index", default=None, type=int, help="1-based inclusive end index in discovered markdown order (default: last discovered file)")
 @click.option("-g", "--glob", "glob_pattern", default=None, help="Glob filter when input is a directory")
 @click.option("-m", "--model", "model_ref", required=False, help="provider/model")
 @click.option("--source-lang", "source_lang", default=None, help="Source language hint")
@@ -226,6 +243,8 @@ def translate(
     inputs: tuple[str, ...],
     input_list: str | None,
     count_limit: int | None,
+    start_index: int,
+    end_index: int | None,
     glob_pattern: str | None,
     model_ref: str,
     source_lang: str | None,
@@ -441,6 +460,12 @@ def translate(
         raise click.ClickException("--retry-times must be positive")
     if count_limit is not None and count_limit <= 0:
         raise click.ClickException("--count must be positive")
+    if start_index <= 0:
+        raise click.ClickException("--start-index must be positive")
+    if end_index is not None and end_index <= 0:
+        raise click.ClickException("--end-index must be positive")
+    if end_index is not None and end_index < start_index:
+        raise click.ClickException("--end-index must be greater than or equal to --start-index")
     if fallback_retry_times is not None and fallback_retry_times <= 0:
         raise click.ClickException("--fallback-retry-times must be positive")
     if fallback_retry_times_2 is not None and fallback_retry_times_2 <= 0:
@@ -451,6 +476,11 @@ def translate(
     markdown_files = discover_markdown(tuple(all_inputs), glob_pattern)
     if not markdown_files:
         raise click.ClickException("No markdown files discovered")
+    markdown_files, effective_start_index, effective_end_index = _select_markdown_range(
+        markdown_files,
+        start_index=start_index,
+        end_index=end_index,
+    )
     if count_limit is not None and dry_run:
         markdown_files = markdown_files[:count_limit]
 
@@ -469,6 +499,8 @@ def translate(
         table.add_column("Metric", style="cyan", no_wrap=True)
         table.add_column("Value", style="white", overflow="fold")
         table.add_row("Documents", str(len(markdown_files)))
+        if start_index != 1 or end_index is not None:
+            table.add_row("Index range", f"{effective_start_index}-{effective_end_index}")
         if count_limit is not None:
             table.add_row("Limit", str(count_limit))
         table.add_row("Duration", _format_duration(duration))
@@ -522,6 +554,8 @@ def translate(
         table.add_row("Documents", str(len(markdown_files)))
         table.add_row("Skipped", str(skipped))
         table.add_row("Processed", "0")
+        if start_index != 1 or end_index is not None:
+            table.add_row("Index range", f"{effective_start_index}-{effective_end_index}")
         if count_limit is not None:
             table.add_row("Limit", str(count_limit))
         Console().print(table)
@@ -659,6 +693,8 @@ def translate(
     table.add_row("Skipped", str(skipped))
     table.add_row("Processed", str(len(to_process)))
     table.add_row("Failed files", str(len(failed_files)))
+    if start_index != 1 or end_index is not None:
+        table.add_row("Index range", f"{effective_start_index}-{effective_end_index}")
     if count_limit is not None:
         table.add_row("Limit", str(count_limit))
     table.add_row("Duration", _format_duration(duration))
