@@ -5,10 +5,27 @@ from pathlib import Path
 from unittest.mock import patch
 
 from click.testing import CliRunner
+import lancedb
 from starlette.testclient import TestClient
 
 from deepresearch_flow.cli import cli
-from deepresearch_flow.paper.vector_store import compute_group_hash, encode_vector_b64
+from deepresearch_flow.paper.vector_store import (
+    _reset_ensured_scalar_index_cache,
+    compute_group_hash,
+    encode_vector_b64,
+)
+
+
+def _clear_scalar_index_cache() -> None:
+    _reset_ensured_scalar_index_cache()
+
+
+def setup_function() -> None:
+    _clear_scalar_index_cache()
+
+
+def teardown_function() -> None:
+    _clear_scalar_index_cache()
 
 
 def _write_semantic_config(
@@ -178,6 +195,7 @@ def test_api_serve_accepts_cli_embed_db_without_search_vector_dir(tmp_path: Path
     db = tmp_path / "snap.db"
     db.write_text("", encoding="utf-8")
     config = tmp_path / "config.toml"
+    embed_dir = tmp_path / "lance"
     config.write_text(
         """
 main_model = [ { model = "ollama/m", weight = 1 } ]
@@ -219,7 +237,6 @@ advanced_enabled = true
     )
 
     with (
-        patch("lancedb.connect", return_value=object()),
         patch("uvicorn.run"),
         patch("deepresearch_flow.paper.vector_store.validate_index_meta"),
         patch("deepresearch_flow.paper.db.RoutePool.from_embedding_provider", return_value=object()),
@@ -231,7 +248,7 @@ advanced_enabled = true
                 "paper", "db", "api", "serve",
                 "--snapshot-db", str(db),
                 "--config", str(config),
-                "--embed-db", str(tmp_path / "lance"),
+                "--embed-db", str(embed_dir),
                 "--search-access-token", "t",
             ],
         )
@@ -239,7 +256,7 @@ advanced_enabled = true
     assert result.exit_code == 0
     advanced_ctx = create_app.call_args.kwargs["advanced_config"]
     assert advanced_ctx is not None
-    assert advanced_ctx.embed_db_path == tmp_path / "lance"
+    assert advanced_ctx.embed_db_path == embed_dir
 
 
 def test_api_serve_requires_lance_path_for_advanced_search(tmp_path: Path) -> None:
@@ -311,7 +328,6 @@ def test_api_serve_mounts_admin_semantic_push_with_cli_embed_db(tmp_path: Path) 
     _write_semantic_config(config)
 
     with (
-        patch("lancedb.connect", return_value=object()),
         patch("uvicorn.run") as mock_run,
         patch("deepresearch_flow.paper.vector_store.validate_index_meta"),
         patch("deepresearch_flow.paper.db.RoutePool.from_embedding_provider", return_value=object()),
@@ -345,6 +361,118 @@ def test_api_serve_mounts_admin_semantic_push_with_cli_embed_db(tmp_path: Path) 
     assert response.json()["inserted"] == 1
 
 
+def test_api_serve_startup_builds_missing_scalar_indices_for_existing_table(tmp_path: Path) -> None:
+    runner = CliRunner()
+    db = tmp_path / "snap.db"
+    db.write_text("", encoding="utf-8")
+    config = tmp_path / "config.toml"
+    embed_dir = tmp_path / "lance"
+    embed_dir.mkdir()
+    _write_semantic_config(config, advanced_enabled=False)
+    config.write_text(
+        config.read_text(encoding="utf-8").replace(
+            "[search]\n",
+            f"[search]\nvector_dir = \"{embed_dir}\"\n",
+        ),
+        encoding="utf-8",
+    )
+
+    lance_db = lancedb.connect(str(embed_dir))
+    lance_db.create_table(
+        "paper_chunks",
+        data=[{"id": "1", "doc_id": "d1", "template_tag": "simple", "content_hash": "h", "vector": [0.1, 0.2, 0.3, 0.4]}],
+        mode="overwrite",
+    )
+    assert list(lance_db.open_table("paper_chunks").list_indices()) == []
+
+    with patch("uvicorn.run"):
+        result = runner.invoke(
+            cli,
+            [
+                "paper", "db", "api", "serve",
+                "--snapshot-db", str(db),
+                "--config", str(config),
+                "--embed-db", str(embed_dir),
+                "--admin-token", "admin-token",
+            ],
+        )
+
+    assert result.exit_code == 0
+    indexed_columns = {
+        column
+        for index in lancedb.connect(str(embed_dir)).open_table("paper_chunks").list_indices()
+        for column in getattr(index, "columns", [])
+    }
+    assert {"doc_id", "template_tag"} <= indexed_columns
+
+
+def test_api_serve_startup_skips_index_creation_for_empty_vector_dir(tmp_path: Path) -> None:
+    runner = CliRunner()
+    db = tmp_path / "snap.db"
+    db.write_text("", encoding="utf-8")
+    config = tmp_path / "config.toml"
+    embed_dir = tmp_path / "lance"
+    embed_dir.mkdir()
+    _write_semantic_config(config, advanced_enabled=False)
+    config.write_text(
+        config.read_text(encoding="utf-8").replace(
+            "[search]\n",
+            f"[search]\nvector_dir = \"{embed_dir}\"\n",
+        ),
+        encoding="utf-8",
+    )
+
+    with patch("uvicorn.run"):
+        result = runner.invoke(
+            cli,
+            [
+                "paper", "db", "api", "serve",
+                "--snapshot-db", str(db),
+                "--config", str(config),
+                "--embed-db", str(embed_dir),
+                "--admin-token", "admin-token",
+            ],
+        )
+
+    assert result.exit_code == 0
+
+
+def test_api_serve_reports_index_build_timeout_with_guidance(tmp_path: Path) -> None:
+    runner = CliRunner()
+    db = tmp_path / "snap.db"
+    db.write_text("", encoding="utf-8")
+    config = tmp_path / "config.toml"
+    embed_dir = tmp_path / "lance"
+    embed_dir.mkdir()
+    _write_semantic_config(config, advanced_enabled=False)
+    config.write_text(
+        config.read_text(encoding="utf-8").replace(
+            "[search]\n",
+            f"[search]\nvector_dir = \"{embed_dir}\"\n",
+        ),
+        encoding="utf-8",
+    )
+
+    with patch(
+        "deepresearch_flow.paper.vector_store.ensure_admin_scalar_indices",
+        side_effect=TimeoutError("timed out"),
+    ):
+        result = runner.invoke(
+            cli,
+            [
+                "paper", "db", "api", "serve",
+                "--snapshot-db", str(db),
+                "--config", str(config),
+                "--embed-db", str(embed_dir),
+                "--admin-token", "admin-token",
+            ],
+        )
+
+    assert result.exit_code != 0
+    assert "SEMANTIC_INDEX_BUILD_TIMEOUT" in result.output
+    assert str(embed_dir) in result.output
+
+
 def test_api_serve_admin_semantic_push_accepts_reduced_dimensions(tmp_path: Path) -> None:
     runner = CliRunner()
     db = tmp_path / "snap.db"
@@ -360,7 +488,6 @@ def test_api_serve_admin_semantic_push_accepts_reduced_dimensions(tmp_path: Path
     )
 
     with (
-        patch("lancedb.connect", return_value=object()),
         patch("uvicorn.run") as mock_run,
         patch("deepresearch_flow.paper.vector_store.validate_index_meta"),
         patch("deepresearch_flow.paper.db.RoutePool.from_embedding_provider", return_value=object()),

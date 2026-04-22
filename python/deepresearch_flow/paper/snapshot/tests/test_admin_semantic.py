@@ -150,6 +150,21 @@ def test_logs_semantic_batch_phase_timings(tmp_path: Path, caplog: pytest.LogCap
     assert "semantic batch done doc=d1 tag=simple" in caplog.text
 
 
+def test_skips_delete_phase_for_empty_existing_group(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    client, headers, _ = _make_app(tmp_path)
+    caplog.set_level("INFO", logger="deepresearch_flow.paper.snapshot.admin")
+
+    resp = client.post(
+        '/semantic/chunks/batch',
+        json=_body('d1', 'simple', [_chunk('d1', 'simple', 0)]),
+        headers=headers,
+    )
+
+    assert resp.status_code == 200
+    assert "phase=delete_groups" in caplog.text
+    assert "skipped_delete=1" in caplog.text
+
+
 def test_logs_staging_progress_before_final_apply(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     client, headers, _ = _make_app(tmp_path)
     caplog.set_level("INFO", logger="deepresearch_flow.paper.snapshot.admin")
@@ -400,3 +415,47 @@ async def test_concurrent_writes_preserve_index_meta_counts(tmp_path: Path, monk
     assert meta["doc_count"] == 3
     assert meta["template_count"] == 1
     assert meta["chunk_count"] == 3
+
+
+def test_membership_transitions_update_doc_and_template_counts(tmp_path: Path) -> None:
+    client, headers, embed_dir = _make_app(tmp_path)
+
+    resp_simple = client.post(
+        '/semantic/chunks/batch',
+        json=_body('d1', 'simple', [_chunk('d1', 'simple', 0)]),
+        headers=headers,
+    )
+    assert resp_simple.status_code == 200
+
+    resp_deep = client.post(
+        '/semantic/chunks/batch',
+        json=_body('d1', 'deep', [_chunk('d1', 'deep', 0)]),
+        headers=headers,
+    )
+    assert resp_deep.status_code == 200
+
+    meta = load_index_meta(embed_dir)
+    assert meta["doc_count"] == 1
+    assert meta["template_count"] == 2
+
+    resp_remove_simple = client.post(
+        '/semantic/chunks/batch',
+        json=_body('d1', 'simple', []),
+        headers=headers,
+    )
+    assert resp_remove_simple.status_code == 200
+
+    meta = load_index_meta(embed_dir)
+    assert meta["doc_count"] == 1
+    assert meta["template_count"] == 1
+
+    resp_remove_deep = client.post(
+        '/semantic/chunks/batch',
+        json=_body('d1', 'deep', []),
+        headers=headers,
+    )
+    assert resp_remove_deep.status_code == 200
+
+    meta = load_index_meta(embed_dir)
+    assert meta["doc_count"] == 0
+    assert meta["template_count"] == 0
