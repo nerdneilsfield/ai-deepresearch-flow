@@ -219,6 +219,15 @@ The implementation must not split:
 
 into separate transactions, because that can over-evict under concurrent multi-tab writes.
 
+### Known gap in v1
+
+The detail-hit path still performs:
+
+- one transaction for the explicit user touch
+- then, if needed, a later background revalidation write in a separate transaction
+
+That second transaction preserves the existing `lastAccessedAt`, so it does not create LRU drift on its own. However, a narrow multi-tab race remains possible between the touch and the later background write. This is acceptable for the first iteration and should be treated as a follow-up hardening task rather than a blocker for the cache feature itself.
+
 ## Integration Points
 
 Create one shared frontend cache module, for example:
