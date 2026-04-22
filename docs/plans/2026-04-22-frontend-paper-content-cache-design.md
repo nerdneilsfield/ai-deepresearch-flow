@@ -62,6 +62,16 @@ Snapshot-backed asset URLs already carry freshness signals:
 - `summary_url` and `summary_urls[tag]` append `?v=<snapshot_build_id>`
 - translated markdown URLs include content-hash-derived paths
 
+This is not just a frontend assumption. The current snapshot API constructs these URLs in:
+
+- `python/deepresearch_flow/paper/snapshot/api.py:_asset_urls(...)`
+- `python/deepresearch_flow/paper/snapshot/api.py:_summary_urls(...)`
+
+Specifically, the current implementation appends `?v=<snapshot_build_id>` to summary and manifest URLs at:
+
+- `python/deepresearch_flow/paper/snapshot/api.py:127-131`
+- `python/deepresearch_flow/paper/snapshot/api.py:156-158`
+
 So the first iteration will treat the resource identity itself as the freshness key.
 
 ### Chosen freshness key
@@ -75,6 +85,20 @@ For each cached paper:
 If the URL identity changes, that cached sub-entry is stale.
 
 This avoids inventing a pseudo-timestamp and fits the current backend reality.
+
+### Comparison rules
+
+Some freshness fields are record-typed:
+
+- `summaryUrls: Record<string, string>`
+- `translatedMdUrls: Record<string, string>`
+
+Freshness comparison for these fields must be order-independent.
+
+That means the implementation must not rely on raw `JSON.stringify(...)` of unsorted objects. It should either:
+
+- compare sorted key/value pairs
+- or perform an explicit deep equality check that ignores key insertion order
 
 ## Read and Revalidation Behavior
 
@@ -99,6 +123,8 @@ Instead:
 - if the resource identity changed, fetch the new content and replace the cached entry before rendering that newly requested view
 
 This prevents the “I was reading paragraph three and the content changed underneath me” problem.
+
+If a paper record already exists but a requested summary template or translation language does not yet exist inside that record, that is a normal cache miss for that sub-entry. The frontend should fetch it, render it, and write it back into the existing paper record.
 
 ## Cache Shape
 
@@ -179,6 +205,20 @@ Do **not** update `lastAccessedAt` when the user repeatedly switches summary tem
 
 This prevents one heavily inspected paper from constantly pinning itself at the top of the LRU just because the user toggled views.
 
+Cache writes triggered by background detail revalidation must also **not** update `lastAccessedAt`. Revalidation is a maintenance write, not a user access event.
+
+### Transaction rule
+
+LRU enforcement must happen inside the same IndexedDB `readwrite` transaction as the write that may cause the cache to exceed its limit.
+
+The implementation must not split:
+
+- read current count
+- write the new paper record
+- evict the oldest paper
+
+into separate transactions, because that can over-evict under concurrent multi-tab writes.
+
 ## Integration Points
 
 Create one shared frontend cache module, for example:
@@ -232,12 +272,15 @@ Tests should stay black-box and focus on observable behavior:
 - cached detail is reused on repeated open
 - cached summary is reused on repeated template open
 - cached translated markdown is reused on repeated translation open
+- first-time open of an uncached summary template fetches from the network and writes back into an existing paper record
+- first-time open of an uncached translation language fetches from the network and writes back into an existing paper record
 - opening more than 50 papers evicts the oldest paper record
 - schema-version mismatch is treated as cache miss
 - detail freshness proxy change invalidates stale detail cache
 - summary cache is replaced when the template URL changes
 - translation cache is replaced when the language URL changes
 - repeated template toggling within one paper does not retouch LRU for other papers
+- background detail revalidation that writes newer metadata does not change the LRU position of that paper
 
 ## Success Criteria
 

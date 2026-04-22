@@ -45,6 +45,7 @@ Implement `paper-content-cache.ts` with:
 - `touchPaper(...)`
 - `enforcePaperLimit(...)`
 - a two-entry in-memory hot cache
+- `enforcePaperLimit(...)` executed inside the same `readwrite` transaction as the write that may overflow the cache
 
 **Step 4: Run tests to verify they pass**
 
@@ -75,6 +76,7 @@ Add black-box tests covering:
 - repeated paper detail open reuses cached detail payload
 - detail cache becomes stale when the returned freshness proxy changes
 - opening a paper touches that paper once in the LRU
+- background revalidation that writes newer detail does not update `lastAccessedAt`
 
 **Step 2: Run tests to verify they fail**
 
@@ -94,6 +96,8 @@ Add a cached detail wrapper that:
 - returns cached detail immediately when present
 - performs background revalidation using the current `getPaperDetail(...)`
 - updates cache if the detail freshness proxy changed
+- compares `summary_urls` and `translated_md_urls` in an order-independent way
+- does not treat background revalidation writes as LRU touches
 
 Use these fields for the detail freshness proxy:
 - `manifest_url`
@@ -129,6 +133,7 @@ git commit -m "test(frontend): cover cached paper detail loading"
 
 Add black-box tests covering:
 - reopening the same summary template reuses cached summary payload
+- first-time open of an uncached summary template fetches from the network and writes back into an existing paper record
 - changing the summary URL for a template invalidates the cached summary entry
 - summary content is not silently background-swapped while already displayed
 
@@ -180,6 +185,7 @@ git commit -m "test(frontend): cover cached paper summaries"
 
 Add black-box tests covering:
 - reopening the same translated markdown reuses cached content
+- first-time open of an uncached translation language fetches from the network and writes back into an existing paper record
 - changing the translated markdown URL invalidates the cached translation entry
 - switching translations within one paper does not retouch the global LRU timestamp for unrelated papers
 
@@ -254,7 +260,14 @@ Verify in browser:
 - switch summary template twice
 - switch translated markdown twice
 - reload the page
-- reopen the same paper and confirm summary/translation render faster than first open
+- reopen the same paper and confirm cache-hit signals appear for detail, summary, and translation paths
+
+Use a simple observable signal such as:
+
+- a development-only console log
+- or a readable in-memory counter exposed by the cache module in development mode
+
+Do not rely on subjective “it feels faster” judgment alone.
 
 **Step 4: Commit any residual cleanup**
 
