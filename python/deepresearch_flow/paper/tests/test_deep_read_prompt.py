@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from deepresearch_flow.paper.extract import build_stage_schema
+from deepresearch_flow.paper.extract import build_stage_schema, normalize_response_keys
 from deepresearch_flow.paper.schema import schema_to_prompt, validate_schema
 from deepresearch_flow.paper.template_registry import (
     load_prompt_templates,
@@ -416,3 +416,71 @@ def test_deep_read_method_hint_excludes_survey_only_wording(
 
     for keyword in survey_only_keywords:
         assert keyword.lower() not in prompt_before_schema
+
+
+def test_deep_read_normalization_preserves_paper_archetype_metadata() -> None:
+    schema = load_schema_for_template("deep_read")
+    validator = validate_schema(schema)
+
+    normalized = normalize_response_keys(
+        {
+            "paper_title": "A Method Paper",
+            "paper_authors": ["Alice Example"],
+            "publication_date": "",
+            "publication_venue": "",
+            "paperArchetype": "method",
+            "module_a": "module a",
+            "module_b": "module b",
+            "module_c1": "module c1",
+            "module_c2": "module c2",
+            "module_c3": "module c3",
+            "module_c4": "module c4",
+            "module_c5": "module c5",
+            "module_c6": "module c6",
+            "module_c7": "module c7",
+            "module_c8": "module c8",
+            "module_d": "module d",
+            "module_e": "module e",
+            "module_h": "module h",
+        },
+        schema,
+    )
+
+    assert normalized["paper_archetype"] == "method"
+    assert "paperArchetype" not in normalized
+    assert normalize_response_keys(normalized, schema) == normalized
+    assert sorted(validator.iter_errors(normalized), key=lambda err: list(err.path)) == []
+
+
+def test_deep_read_normalization_still_rejects_invalid_archetype_values() -> None:
+    schema = load_schema_for_template("deep_read")
+    validator = validate_schema(schema)
+
+    normalized = normalize_response_keys(
+        {
+            "paper_title": "A Borderline Paper",
+            "paper_authors": ["Alice Example"],
+            "publication_date": "",
+            "publication_venue": "",
+            "paperArchetype": "survey_or_method",
+            "module_a": "module a",
+            "module_b": "module b",
+            "module_c1": "module c1",
+            "module_c2": "module c2",
+            "module_c3": "module c3",
+            "module_c4": "module c4",
+            "module_c5": "module c5",
+            "module_c6": "module c6",
+            "module_c7": "module c7",
+            "module_c8": "module c8",
+            "module_d": "module d",
+            "module_e": "module e",
+            "module_h": "module h",
+        },
+        schema,
+    )
+
+    errors = sorted(validator.iter_errors(normalized), key=lambda err: list(err.path))
+
+    assert normalized["paper_archetype"] == "survey_or_method"
+    assert errors
