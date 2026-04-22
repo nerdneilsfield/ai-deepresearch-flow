@@ -207,11 +207,19 @@ Must include:
 Suggested structure: `Method -> core idea -> limitation`.
 {% elif stage_name == "module_c3" %}
 ### Module C3: How does the paper solve the problem?
+{% if paper_archetype_hint == "survey" %}
+Must include:
+1. Taxonomy or classification framework overview
+2. Main classification axes or comparison dimensions
+3. Representative work grouping and why the grouping matters
+4. A taxonomy diagram (`flowchart TD`)
+{% else %}
 Must include:
 1. Core mechanism overview
 2. Step-by-step breakdown
 3. Key formulas or module roles
 4. A process diagram (`flowchart TD`) when the paper is method-oriented
+{% endif %}
 
 Reference example:
 ```mermaid
@@ -220,22 +228,34 @@ flowchart TD
 ```
 {% elif stage_name == "module_c4" %}
 ### Module C4: Datasets, benchmarks, and implementation or evaluation setup
+{% if paper_archetype_hint == "survey" %}
+Must include:
+1. Dataset coverage (name, scale, scenario, and what slice of the field it represents)
+2. Benchmark coverage and how the survey organizes benchmark usage across papers
+3. Evaluation protocol coverage and any protocol mismatches across the literature
+4. Why these coverage choices matter and what they validate
+{% else %}
 Must include:
 1. Dataset / benchmark list (name, scale, scenario)
 2. Preprocessing and split or coverage setup
 3. Training / inference / evaluation environment when applicable
 4. Why these choices matter and what they validate
-
-If the paper archetype is `survey`, emphasize dataset coverage, benchmark coverage, and evaluation protocol coverage rather than training recipes.
+{% endif %}
 {% elif stage_name == "module_c5" %}
 ### Module C5: Metrics and results
+{% if paper_archetype_hint == "survey" %}
+Must include:
+1. Metrics (with definitions or short explanations)
+2. Comparison patterns across representative prior work
+3. Consensus and disagreement across papers
+4. Benchmark interpretation and evidence strength across the literature
+{% else %}
 Must include:
 1. Metrics (with definitions or short explanations)
 2. Main results (use concrete numbers when available)
 3. Comparison against baselines or representative prior work
 4. Ablations, sensitivity, or synthesis of cross-paper differences when available
-
-If the paper archetype is `survey`, emphasize comparison patterns, benchmark interpretation, consensus, disagreement, and evidence strength across papers.
+{% endif %}
 {% elif stage_name == "module_c6" %}
 ### Module C6: What could be explored next?
 Include at least one item each for theory, engineering, and data/evaluation directions.
@@ -250,24 +270,38 @@ Must include:
 3. One core formula or mechanism (LaTeX if helpful)
 {% elif stage_name == "module_d" %}
 ### Module D: Second-pass understanding
+{% if paper_archetype_hint == "survey" %}
+Must include:
+1. Taxonomy structure
+2. Representative clusters and how the paper separates them
+3. Explanation of at least two important figures or tables
+4. Comparison-table interpretation and coverage structure
+5. A diagram suited to survey synthesis
+{% else %}
 Must include:
 1. Structure tree
 2. Method or system breakdown (inputs, outputs, modules, losses, training/inference flow when applicable)
 3. Explanation of at least two important figures or tables
 4. Experiment or evaluation details (datasets, metrics, comparison targets, fairness, ablations)
 5. A diagram suited to the paper archetype
-
-If the paper archetype is `survey`, emphasize taxonomy structure, representative clusters, and comparison-table interpretation rather than forcing a training-flow narrative.
+{% endif %}
 {% elif stage_name == "module_e" %}
 ### Module E: Third-pass deep review
+{% if paper_archetype_hint == "survey" %}
+Must include:
+1. Taxonomy assumptions
+2. Coverage bias
+3. Blind spots or omitted areas (2-4 bullets)
+4. Strengths and weaknesses
+5. Future survey-update directions (2-4 bullets)
+{% else %}
 Must include:
 1. Reconstructability (pseudocode or reconstruction notes when appropriate)
 2. Assumptions (3-6 bullets)
 3. Failure modes or blind spots (2-4 bullets)
 4. Strengths and weaknesses
 5. Next-step research directions (2-4 bullets)
-
-If the paper archetype is `survey`, emphasize taxonomy assumptions, coverage bias, blind spots, and future survey-update directions.
+{% endif %}
 {% elif stage_name == "module_f" %}
 ### Module F: Glossary
 Output 15-40 entries. Each entry should include:
@@ -286,13 +320,19 @@ Must include:
 3. Reference list
 {% elif stage_name == "module_h" %}
 ### Module H: Figure and table extraction
+{% if paper_archetype_hint == "survey" %}
+Must include:
+1. Full index (table: number / caption / type / location / supported claim / score)
+2. Top-priority deep reads (3-5 items)
+3. Taxonomy figures, comparison tables, or benchmark summary tables
+4. Timeline/grouping visuals and mapping from figures/tables to conclusions
+{% else %}
 Must include:
 1. Full index (table: number / caption / type / location / supported claim / score)
 2. Top-priority deep reads (3-5 items)
 3. Figure relationship or experiment-setup diagram
 4. Mapping from figures/tables to conclusions
-
-If the paper archetype is `survey`, prioritize taxonomy figures, comparison tables, benchmark summary tables, and timeline/grouping visuals.
+{% endif %}
 {% endif %}
 {% else %}
 ### Single-shot mode: all modules must be completed in detail
