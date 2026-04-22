@@ -372,6 +372,7 @@ uv run deepresearch-flow paper db serve \
 
 - `paper embed` 支持重复传入 `-i/--input`，会把同一篇论文的多个模板一起合并入索引。
 - `paper embed --snapshot-db --static-export-dir` 支持对已经构建好的 snapshot 在后续单独补建或重建向量库。
+- `paper embed` 和 `paper db snapshot build --output-embed-db` 会自动为 LanceDB 向量库确保 `doc_id` / `template_tag` 的 scalar index。已有旧向量库如果缺少这两个索引，也会在构建过程中被补齐，即使这次运行没有新增 chunk。
 - `paper search` 会使用 `[[embedding.providers]]` 里的 embedding provider/model，并可选启用 hybrid recall 和 `[[rerank.providers]]` 里的云端 rerank。
 - Web UI 搜索框右侧会出现锁按钮。输入一次 token 后会保存在浏览器中，后续访问 `/api/papers/semantic` 会自动复用。
 - `paper db snapshot build --output-embed-db` 可以一次生成 snapshot 和 LanceDB 向量索引。

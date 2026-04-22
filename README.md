@@ -379,6 +379,7 @@ Notes:
 
 - `paper embed` accepts repeatable `-i/--input` JSON files and merges multiple templates for the same paper.
 - `paper embed --snapshot-db --static-export-dir` lets you add or rebuild embeddings later from an already-built snapshot.
+- `paper embed` and `paper db snapshot build --output-embed-db` automatically ensure scalar indexes for `doc_id` and `template_tag` inside the LanceDB store. Existing vector stores missing those indexes are upgraded during the build, even if the current run does not add new chunks.
 - `paper search` uses the configured embedding provider/model from `[[embedding.providers]]`, optional hybrid recall, and optional cloud reranking from `[[rerank.providers]]`.
 - The Web UI exposes a lock button next to the search bar. After you enter the token once, it is stored in the browser and reused for `/api/papers/semantic`.
 - `paper db snapshot build --output-embed-db` builds the snapshot and LanceDB index in one pass.
