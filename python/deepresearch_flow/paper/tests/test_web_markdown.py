@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from deepresearch_flow.paper.web.markdown import (
     create_md_renderer,
     extract_html_img_placeholders,
@@ -251,3 +253,67 @@ def test_render_paper_markdown_uses_requested_or_default_template() -> None:
     assert "# Paper" in fallback_rendered
     assert "**Authors:** Alice" in fallback_rendered
     assert "**Publication Venue:** ACL" in fallback_rendered
+
+
+@pytest.mark.parametrize("paper_archetype", ["survey", "method", "system", "other"])
+def test_render_paper_markdown_keeps_deep_read_output_unchanged_with_archetype(
+    paper_archetype: str,
+) -> None:
+    deep_read_record = {
+        "paper_title": "Deep Paper",
+        "paper_authors": ["Alice"],
+        "publication_venue": "{{NeurIPS}} 2024",
+        "output_language": "zh",
+        "module_a": "module a",
+        "module_b": "module b",
+        "module_c1": "module c1",
+        "module_c2": "module c2",
+        "module_c3": "module c3",
+        "module_c4": "module c4",
+        "module_c5": "module c5",
+        "module_c6": "module c6",
+        "module_c7": "module c7",
+        "module_c8": "module c8",
+        "module_d": "module d",
+        "module_e": "module e",
+        "module_h": "module h",
+    }
+    paper_without_archetype = {
+        "paper_title": "Deep Paper",
+        "paper_authors": [],
+        "publication_venue": "{{NeurIPS}} 2024",
+        "output_language": "zh",
+        "templates": {
+            "deep_read": dict(deep_read_record),
+        },
+    }
+    paper_with_archetype = {
+        "paper_title": "Deep Paper",
+        "paper_authors": [],
+        "publication_venue": "{{NeurIPS}} 2024",
+        "output_language": "zh",
+        "templates": {
+            "deep_read": {
+                **deep_read_record,
+                "paper_archetype": paper_archetype,
+            },
+        },
+    }
+
+    rendered_without, template_name_without, warning_without = render_paper_markdown(
+        paper_without_archetype,
+        "zh",
+        template_tag="deep_read",
+    )
+    rendered_with, template_name_with, warning_with = render_paper_markdown(
+        paper_with_archetype,
+        "zh",
+        template_tag="deep_read",
+    )
+
+    assert template_name_without == "deep_read"
+    assert template_name_with == "deep_read"
+    assert warning_without is None
+    assert warning_with is None
+    assert rendered_with == rendered_without
+    assert "paper_archetype" not in rendered_with
