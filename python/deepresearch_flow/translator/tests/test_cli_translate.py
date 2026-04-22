@@ -410,6 +410,152 @@ def test_translate_requires_model_when_not_in_cli_or_config(tmp_path: Path) -> N
     assert "--model is required" in result.output
 
 
+def test_translate_filters_documents_by_start_and_end_index(tmp_path: Path, monkeypatch) -> None:
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    for name in ("001.md", "002.md", "003.md"):
+        (input_dir / name).write_text(f"source {name}", encoding="utf-8")
+    config_path = _write_config(tmp_path)
+
+    async def fake_run(self, *, paths, output_map, **kwargs):
+        _ = (self, kwargs)
+        for path in paths:
+            output_map[path].write_text(path.stem, encoding="utf-8")
+        return []
+
+    monkeypatch.setattr("deepresearch_flow.translator.scheduler.Scheduler.run", fake_run)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "translator",
+            "translate",
+            "--config",
+            str(config_path),
+            "--input",
+            str(input_dir),
+            "--output-dir",
+            str(output_dir),
+            "--model",
+            "openai/gpt-4.1",
+            "--start-index",
+            "2",
+            "--end-index",
+            "3",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert not (output_dir / "001.zh.md").exists()
+    assert (output_dir / "002.zh.md").read_text(encoding="utf-8") == "002"
+    assert (output_dir / "003.zh.md").read_text(encoding="utf-8") == "003"
+
+
+def test_translate_start_index_without_end_uses_remaining_documents(tmp_path: Path, monkeypatch) -> None:
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    for name in ("001.md", "002.md", "003.md"):
+        (input_dir / name).write_text(f"source {name}", encoding="utf-8")
+    config_path = _write_config(tmp_path)
+
+    async def fake_run(self, *, paths, output_map, **kwargs):
+        _ = (self, kwargs)
+        for path in paths:
+            output_map[path].write_text(path.stem, encoding="utf-8")
+        return []
+
+    monkeypatch.setattr("deepresearch_flow.translator.scheduler.Scheduler.run", fake_run)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "translator",
+            "translate",
+            "--config",
+            str(config_path),
+            "--input",
+            str(input_dir),
+            "--output-dir",
+            str(output_dir),
+            "--model",
+            "openai/gpt-4.1",
+            "--start-index",
+            "2",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert not (output_dir / "001.zh.md").exists()
+    assert (output_dir / "002.zh.md").read_text(encoding="utf-8") == "002"
+    assert (output_dir / "003.zh.md").read_text(encoding="utf-8") == "003"
+
+
+def test_translate_rejects_end_index_before_start_index(tmp_path: Path) -> None:
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    (input_dir / "001.md").write_text("source 001", encoding="utf-8")
+    config_path = _write_config(tmp_path)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "translator",
+            "translate",
+            "--config",
+            str(config_path),
+            "--input",
+            str(input_dir),
+            "--output-dir",
+            str(output_dir),
+            "--model",
+            "openai/gpt-4.1",
+            "--start-index",
+            "3",
+            "--end-index",
+            "2",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "--end-index must be greater than or equal to --start-index" in result.output
+
+
+def test_translate_rejects_start_index_beyond_discovered_files(tmp_path: Path) -> None:
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    (input_dir / "001.md").write_text("source 001", encoding="utf-8")
+    config_path = _write_config(tmp_path)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "translator",
+            "translate",
+            "--config",
+            str(config_path),
+            "--input",
+            str(input_dir),
+            "--output-dir",
+            str(output_dir),
+            "--model",
+            "openai/gpt-4.1",
+            "--start-index",
+            "2",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "--start-index 2 exceeds discovered markdown count 1" in result.output
+
+
 def test_dump_requests_log_stays_on_scheduler_path(tmp_path: Path, monkeypatch) -> None:
     input_dir = tmp_path / "input"
     output_dir = tmp_path / "out"
