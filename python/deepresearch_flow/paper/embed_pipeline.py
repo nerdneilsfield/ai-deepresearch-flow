@@ -20,6 +20,7 @@ from deepresearch_flow.paper.vector_store import (
     build_chunk_id,
     compute_group_hash,
     delete_groups,
+    ensure_admin_scalar_indices,
     open_store,
     read_group_hashes_for_doc,
     read_group_keys,
@@ -228,6 +229,7 @@ async def run_embed_pipeline(
     )
 
     db = open_store(vector_dir)
+    ensure_admin_scalar_indices(db, vector_dir=vector_dir)
     source_group_keys: set[tuple[str, str]] = set()
     import httpx
     written_chunk_count = 0
