@@ -400,6 +400,40 @@ describe('paper-content-cache storage', () => {
     expect(record?.lastAccessedAt).toBe(55)
   })
 
+  it('keeps a newly opened summary-only paper when the paper cache is already full', async () => {
+    for (let index = 0; index < 50; index += 1) {
+      const paperId = `full-summary-${index}`
+      await writePaperContentRecord({
+        paperId,
+        detail: makeDetail(paperId),
+        detailFreshness: {
+          manifestUrl: `https://example.com/manifest/${paperId}.json?v=1`,
+          summaryUrl: `https://example.com/summary/${paperId}.json?v=1`,
+          summaryUrls: {},
+          translatedMdUrls: {},
+          sourceMdUrl: null,
+        },
+        summaries: {},
+        translations: {},
+        lastAccessedAt: index + 1,
+      })
+    }
+    fetchJsonMock.mockResolvedValueOnce({ summary: 'new paper summary' })
+
+    await getSummaryPayloadCached(
+      'fresh-summary-paper',
+      'deep_read',
+      'https://example.com/summary/fresh-summary-paper/deep_read.json?v=1',
+    )
+
+    const newRecord = await readPaperContentRecord('fresh-summary-paper')
+    const oldestRecord = await readPaperContentRecord('full-summary-0')
+
+    expect(newRecord?.lastAccessedAt).toBeGreaterThan(0)
+    expect(newRecord).not.toBeNull()
+    expect(oldestRecord).toBeNull()
+  })
+
   it('reuses cached summary when the template url is unchanged', async () => {
     await writePaperContentRecord({
       paperId: 'paper-4',
@@ -496,6 +530,40 @@ describe('paper-content-cache storage', () => {
     expect(markdown).toBe('translated body')
     expect(record?.translations.zh?.markdown).toBe('translated body')
     expect(record?.lastAccessedAt).toBe(66)
+  })
+
+  it('keeps a newly opened translation-only paper when the paper cache is already full', async () => {
+    for (let index = 0; index < 50; index += 1) {
+      const paperId = `full-translation-${index}`
+      await writePaperContentRecord({
+        paperId,
+        detail: makeDetail(paperId),
+        detailFreshness: {
+          manifestUrl: `https://example.com/manifest/${paperId}.json?v=1`,
+          summaryUrl: `https://example.com/summary/${paperId}.json?v=1`,
+          summaryUrls: {},
+          translatedMdUrls: {},
+          sourceMdUrl: null,
+        },
+        summaries: {},
+        translations: {},
+        lastAccessedAt: index + 1,
+      })
+    }
+    fetchTextMock.mockResolvedValueOnce('fresh translation body')
+
+    await getTranslatedMarkdownCached(
+      'fresh-translation-paper',
+      'zh',
+      'https://example.com/md_translate/zh/fresh-translation-paper-zh.md',
+    )
+
+    const newRecord = await readPaperContentRecord('fresh-translation-paper')
+    const oldestRecord = await readPaperContentRecord('full-translation-0')
+
+    expect(newRecord?.lastAccessedAt).toBeGreaterThan(0)
+    expect(newRecord).not.toBeNull()
+    expect(oldestRecord).toBeNull()
   })
 
   it('reuses cached translated markdown when the url is unchanged', async () => {
