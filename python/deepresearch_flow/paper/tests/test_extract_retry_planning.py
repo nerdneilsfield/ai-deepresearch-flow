@@ -6,7 +6,10 @@ from deepresearch_flow.paper.extract import (
     build_document_validation_error,
     plan_sequential_stage_tasks,
 )
-from deepresearch_flow.paper.template_registry import StageDefinition
+from deepresearch_flow.paper.template_registry import (
+    get_stage_definitions,
+    StageDefinition,
+)
 
 
 def test_plan_sequential_stage_tasks_only_queues_targeted_retry_stages() -> None:
@@ -149,3 +152,20 @@ def test_build_document_validation_error_is_not_stage_scoped() -> None:
     )
 
     assert error.stage_name is None
+
+
+def test_deep_read_stage_a_requests_archetype_and_module_a() -> None:
+    stage_definitions = get_stage_definitions("deep_read")
+
+    assert stage_definitions
+    assert stage_definitions[0].name == "module_a"
+    assert stage_definitions[0].fields == ["paper_archetype", "module_a"]
+
+
+def test_deep_read_non_module_a_stages_depend_on_module_a() -> None:
+    stage_definitions = get_stage_definitions("deep_read")
+
+    assert stage_definitions
+    for stage_def in stage_definitions[1:]:
+        assert stage_def.depends_on is not None
+        assert "module_a" in stage_def.depends_on
