@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { PaperDetail } from '@/types/api'
 
@@ -9,6 +9,16 @@ import {
   touchPaperContentRecord,
   writePaperContentRecord,
 } from '@/lib/paper-content-cache'
+import { getPaperDetailCached } from '@/lib/api'
+
+const { fetchJsonMock } = vi.hoisted(() => ({
+  fetchJsonMock: vi.fn(),
+}))
+
+vi.mock('@/lib/http', () => ({
+  buildUrl: (path: string) => path,
+  fetchJson: fetchJsonMock,
+}))
 
 const DB_NAME = 'deepresearch_paper_content_cache'
 const STORE_NAME = 'paper_content'
@@ -63,6 +73,20 @@ async function rawWrite(record: unknown, key: string): Promise<void> {
     }
     request.onerror = () => reject(request.error)
   })
+}
+
+async function waitForRecord(
+  paperId: string,
+  predicate: (record: Awaited<ReturnType<typeof readPaperContentRecord>>) => boolean,
+): Promise<Awaited<ReturnType<typeof readPaperContentRecord>>> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const record = await readPaperContentRecord(paperId)
+    if (predicate(record)) {
+      return record
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+  return readPaperContentRecord(paperId)
 }
 
 beforeEach(wipeDb)
@@ -235,5 +259,107 @@ describe('paper-content-cache storage', () => {
     await clearPaperContentCache()
 
     expect(await readPaperContentRecord('paper-1')).toBeNull()
+  })
+
+  it('reuses cached detail immediately and refreshes changed freshness in the background', async () => {
+    const firstAccessAt = 100
+    await writePaperContentRecord({
+      paperId: 'paper-1',
+      detail: {
+        ...makeDetail('paper-1'),
+        title: 'Cached Title',
+      },
+      detailFreshness: {
+        manifestUrl: 'https://example.com/manifest/paper-1.json?v=1',
+        summaryUrl: 'https://example.com/summary/paper-1.json?v=1',
+        summaryUrls: {
+          default: 'https://example.com/summary/paper-1/default.json?v=1',
+        },
+        translatedMdUrls: {
+          zh: 'https://example.com/md_translate/zh/paper-1-zh.md',
+        },
+        sourceMdUrl: 'https://example.com/md/paper-1.md',
+      },
+      summaries: {},
+      translations: {},
+      lastAccessedAt: firstAccessAt,
+    })
+
+    let resolveFetch!: (value: PaperDetail) => void
+    fetchJsonMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveFetch = resolve
+        }),
+    )
+
+    const cachedDetail = await getPaperDetailCached('paper-1')
+    const touchedRecord = await readPaperContentRecord('paper-1')
+
+    expect(cachedDetail.title).toBe('Cached Title')
+    expect(fetchJsonMock).toHaveBeenCalledTimes(1)
+    expect(touchedRecord?.lastAccessedAt).toBeGreaterThan(firstAccessAt)
+
+    resolveFetch({
+      ...makeDetail('paper-1'),
+      title: 'Fresh Title',
+      manifest_url: 'https://example.com/manifest/paper-1.json?v=2',
+    })
+    const refreshedRecord = await waitForRecord(
+      'paper-1',
+      (record) => record?.detail?.title === 'Fresh Title',
+    )
+
+    expect(refreshedRecord?.detail?.title).toBe('Fresh Title')
+    expect(refreshedRecord?.detailFreshness?.manifestUrl).toContain('v=2')
+    expect(refreshedRecord?.lastAccessedAt).toBe(touchedRecord?.lastAccessedAt)
+  })
+
+  it('treats reordered freshness records as unchanged detail freshness', async () => {
+    await writePaperContentRecord({
+      paperId: 'paper-2',
+      detail: {
+        ...makeDetail('paper-2'),
+        title: 'Cached Order Stable',
+      },
+      detailFreshness: {
+        manifestUrl: 'https://example.com/manifest/paper-2.json?v=1',
+        summaryUrl: 'https://example.com/summary/paper-2.json?v=1',
+        summaryUrls: {
+          b: 'https://example.com/summary/paper-2/b.json?v=1',
+          a: 'https://example.com/summary/paper-2/a.json?v=1',
+        },
+        translatedMdUrls: {
+          zh: 'https://example.com/md_translate/zh/paper-2-zh.md',
+          en: 'https://example.com/md_translate/en/paper-2-en.md',
+        },
+        sourceMdUrl: 'https://example.com/md/paper-2.md',
+      },
+      summaries: {},
+      translations: {},
+      lastAccessedAt: 10,
+    })
+
+    fetchJsonMock.mockResolvedValueOnce({
+      ...makeDetail('paper-2'),
+      title: 'Fresh Order Stable',
+      summary_urls: {
+        a: 'https://example.com/summary/paper-2/a.json?v=1',
+        b: 'https://example.com/summary/paper-2/b.json?v=1',
+      },
+      translated_md_urls: {
+        en: 'https://example.com/md_translate/en/paper-2-en.md',
+        zh: 'https://example.com/md_translate/zh/paper-2-zh.md',
+      },
+    })
+
+    const cachedDetail = await getPaperDetailCached('paper-2')
+    const record = await waitForRecord(
+      'paper-2',
+      (current) => current?.detail?.title === 'Cached Order Stable',
+    )
+
+    expect(cachedDetail.title).toBe('Cached Order Stable')
+    expect(record?.detail?.title).toBe('Cached Order Stable')
   })
 })

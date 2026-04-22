@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest'
+import 'fake-indexeddb/auto'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent, ref } from 'vue'
 import { mount } from '@vue/test-utils'
 import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query'
@@ -16,8 +17,18 @@ const mockDetail = {
 }
 
 vi.mock('@/lib/api', () => ({
-  getPaperDetail: vi.fn(async () => mockDetail),
+  getPaperDetailCached: vi.fn(async () => mockDetail),
 }))
+
+async function wipe(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    const req = indexedDB.deleteDatabase('deepresearch_paper_content_cache')
+    req.onsuccess = req.onerror = req.onblocked = () => resolve()
+  })
+}
+
+beforeEach(wipe)
+afterEach(wipe)
 
 describe('usePaperDetail', () => {
   it('fetches detail data via query', async () => {
@@ -39,7 +50,7 @@ describe('usePaperDetail', () => {
     await client.invalidateQueries()
     await new Promise((resolve) => setTimeout(resolve, 0))
 
-    const { getPaperDetail } = await import('@/lib/api')
-    expect(getPaperDetail).toHaveBeenCalledWith('paper-1')
+    const { getPaperDetailCached } = await import('@/lib/api')
+    expect(getPaperDetailCached).toHaveBeenCalledWith('paper-1', expect.any(Object))
   })
 })
