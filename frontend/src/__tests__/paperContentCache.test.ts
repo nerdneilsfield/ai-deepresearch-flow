@@ -9,15 +9,17 @@ import {
   touchPaperContentRecord,
   writePaperContentRecord,
 } from '@/lib/paper-content-cache'
-import { getPaperDetailCached, getSummaryPayloadCached } from '@/lib/api'
+import { getPaperDetailCached, getSummaryPayloadCached, getTranslatedMarkdownCached } from '@/lib/api'
 
-const { fetchJsonMock } = vi.hoisted(() => ({
+const { fetchJsonMock, fetchTextMock } = vi.hoisted(() => ({
   fetchJsonMock: vi.fn(),
+  fetchTextMock: vi.fn(),
 }))
 
 vi.mock('@/lib/http', () => ({
   buildUrl: (path: string) => path,
   fetchJson: fetchJsonMock,
+  fetchText: fetchTextMock,
 }))
 
 const DB_NAME = 'deepresearch_paper_content_cache'
@@ -91,6 +93,7 @@ async function waitForRecord(
 
 beforeEach(async () => {
   fetchJsonMock.mockReset()
+  fetchTextMock.mockReset()
   await wipeDb()
 })
 afterEach(wipeDb)
@@ -462,5 +465,107 @@ describe('paper-content-cache storage', () => {
     expect(payload).toEqual({ summary: 'new summary' })
     expect(record?.summaries.deep_read?.url).toContain('v=2')
     expect(record?.summaries.deep_read?.payload).toEqual({ summary: 'new summary' })
+  })
+
+  it('fetches and writes back the first uncached translation into an existing paper record', async () => {
+    await writePaperContentRecord({
+      paperId: 'paper-6',
+      detail: makeDetail('paper-6'),
+      detailFreshness: {
+        manifestUrl: 'https://example.com/manifest/paper-6.json?v=1',
+        summaryUrl: 'https://example.com/summary/paper-6.json?v=1',
+        summaryUrls: {},
+        translatedMdUrls: {
+          zh: 'https://example.com/md_translate/zh/paper-6-zh.md',
+        },
+        sourceMdUrl: null,
+      },
+      summaries: {},
+      translations: {},
+      lastAccessedAt: 66,
+    })
+    fetchTextMock.mockResolvedValueOnce('translated body')
+
+    const markdown = await getTranslatedMarkdownCached(
+      'paper-6',
+      'zh',
+      'https://example.com/md_translate/zh/paper-6-zh.md',
+    )
+    const record = await readPaperContentRecord('paper-6')
+
+    expect(markdown).toBe('translated body')
+    expect(record?.translations.zh?.markdown).toBe('translated body')
+    expect(record?.lastAccessedAt).toBe(66)
+  })
+
+  it('reuses cached translated markdown when the url is unchanged', async () => {
+    await writePaperContentRecord({
+      paperId: 'paper-7',
+      detail: makeDetail('paper-7'),
+      detailFreshness: {
+        manifestUrl: 'https://example.com/manifest/paper-7.json?v=1',
+        summaryUrl: 'https://example.com/summary/paper-7.json?v=1',
+        summaryUrls: {},
+        translatedMdUrls: {
+          zh: 'https://example.com/md_translate/zh/paper-7-zh.md',
+        },
+        sourceMdUrl: null,
+      },
+      summaries: {},
+      translations: {
+        zh: {
+          url: 'https://example.com/md_translate/zh/paper-7-zh.md',
+          markdown: 'cached translation',
+          cachedAt: 1,
+        },
+      },
+      lastAccessedAt: 77,
+    })
+
+    const markdown = await getTranslatedMarkdownCached(
+      'paper-7',
+      'zh',
+      'https://example.com/md_translate/zh/paper-7-zh.md',
+    )
+
+    expect(markdown).toBe('cached translation')
+    expect(fetchTextMock).not.toHaveBeenCalled()
+  })
+
+  it('replaces cached translated markdown when the url changes', async () => {
+    await writePaperContentRecord({
+      paperId: 'paper-8',
+      detail: makeDetail('paper-8'),
+      detailFreshness: {
+        manifestUrl: 'https://example.com/manifest/paper-8.json?v=1',
+        summaryUrl: 'https://example.com/summary/paper-8.json?v=1',
+        summaryUrls: {},
+        translatedMdUrls: {
+          zh: 'https://example.com/md_translate/zh/paper-8-zh.md',
+        },
+        sourceMdUrl: null,
+      },
+      summaries: {},
+      translations: {
+        zh: {
+          url: 'https://example.com/md_translate/zh/paper-8-zh.md',
+          markdown: 'old translation',
+          cachedAt: 1,
+        },
+      },
+      lastAccessedAt: 88,
+    })
+    fetchTextMock.mockResolvedValueOnce('new translation')
+
+    const markdown = await getTranslatedMarkdownCached(
+      'paper-8',
+      'zh',
+      'https://example.com/md_translate/zh/paper-8-zh-v2.md',
+    )
+    const record = await readPaperContentRecord('paper-8')
+
+    expect(markdown).toBe('new translation')
+    expect(record?.translations.zh?.url).toContain('v2')
+    expect(record?.translations.zh?.markdown).toBe('new translation')
   })
 })
