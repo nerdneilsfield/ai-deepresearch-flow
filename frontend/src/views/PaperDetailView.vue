@@ -2,7 +2,7 @@
 import { onUnmounted, ref, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { fetchJson, getSummaryPayloadCached, type PaperDetail } from '@/lib/api'
+import { getSummaryPayloadCached, type PaperDetail } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
