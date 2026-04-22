@@ -81,21 +81,21 @@ _TEMPLATES: dict[str, TemplateBundle] = {
 
 _STAGES: dict[str, list[StageDefinition]] = {
     "deep_read": [
-        StageDefinition("module_a", ["module_a"]),
-        StageDefinition("module_b", ["module_b"]),
-        StageDefinition("module_c1", ["module_c1"]),
-        StageDefinition("module_c2", ["module_c2"]),
-        StageDefinition("module_c3", ["module_c3"]),
-        StageDefinition("module_c4", ["module_c4"]),
-        StageDefinition("module_c5", ["module_c5"]),
-        StageDefinition("module_c6", ["module_c6"]),
-        StageDefinition("module_c7", ["module_c7"]),
-        StageDefinition("module_c8", ["module_c8"]),
-        StageDefinition("module_d", ["module_d"]),
-        StageDefinition("module_e", ["module_e"]),
-        StageDefinition("module_f", ["module_f"]),
-        StageDefinition("module_g", ["module_g"]),
-        StageDefinition("module_h", ["module_h"]),
+        StageDefinition("module_a", ["paper_archetype", "module_a"]),
+        StageDefinition("module_b", ["module_b"], depends_on=["module_a"]),
+        StageDefinition("module_c1", ["module_c1"], depends_on=["module_a"]),
+        StageDefinition("module_c2", ["module_c2"], depends_on=["module_a"]),
+        StageDefinition("module_c3", ["module_c3"], depends_on=["module_a"]),
+        StageDefinition("module_c4", ["module_c4"], depends_on=["module_a"]),
+        StageDefinition("module_c5", ["module_c5"], depends_on=["module_a"]),
+        StageDefinition("module_c6", ["module_c6"], depends_on=["module_a"]),
+        StageDefinition("module_c7", ["module_c7"], depends_on=["module_a"]),
+        StageDefinition("module_c8", ["module_c8"], depends_on=["module_a"]),
+        StageDefinition("module_d", ["module_d"], depends_on=["module_a"]),
+        StageDefinition("module_e", ["module_e"], depends_on=["module_a"]),
+        StageDefinition("module_f", ["module_f"], depends_on=["module_a"]),
+        StageDefinition("module_g", ["module_g"], depends_on=["module_a"]),
+        StageDefinition("module_h", ["module_h"], depends_on=["module_a"]),
     ],
     "deep_read_phi": [
         StageDefinition("module_m1", ["module_m1"]),
@@ -169,6 +169,7 @@ def load_prompt_templates(
     stage_name: str | None = None,
     stage_fields: list[str] | None = None,
     previous_outputs: str | None = None,
+    paper_archetype_hint: str = "",
 ) -> tuple[str, str]:
     bundle = get_template_bundle(name)
     env = Environment()
@@ -183,6 +184,7 @@ def load_prompt_templates(
             "stage_name": stage_name,
             "stage_fields": stage_fields,
             "previous_outputs": previous_outputs,
+            "paper_archetype_hint": paper_archetype_hint,
         },
     )
     user_text = _render_prompt_template(
@@ -196,6 +198,7 @@ def load_prompt_templates(
             "stage_name": stage_name,
             "stage_fields": stage_fields,
             "previous_outputs": previous_outputs,
+            "paper_archetype_hint": paper_archetype_hint,
         },
     )
     return system_text, user_text

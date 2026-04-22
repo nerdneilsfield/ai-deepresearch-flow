@@ -586,6 +586,7 @@ def build_messages(
     stage_name: str | None = None,
     stage_fields: list[str] | None = None,
     previous_outputs: str | None = None,
+    paper_archetype_hint: str = "",
 ) -> list[dict[str, str]]:
     prompt_schema = schema_to_prompt(schema)
     if custom_prompt and prompt_system_path and prompt_user_path:
@@ -599,6 +600,7 @@ def build_messages(
                 "stage_name": stage_name,
                 "stage_fields": stage_fields or [],
                 "previous_outputs": previous_outputs or "",
+                "paper_archetype_hint": paper_archetype_hint,
             },
         )
     elif prompt_template:
@@ -610,6 +612,7 @@ def build_messages(
             stage_name=stage_name,
             stage_fields=stage_fields,
             previous_outputs=previous_outputs,
+            paper_archetype_hint=paper_archetype_hint,
         )
     else:
         system_prompt = provider.system_prompt or DEFAULT_SYSTEM_PROMPT
@@ -652,6 +655,18 @@ def append_metadata(
     else:
         payload["source_truncated"] = False
     return payload
+
+
+def _paper_archetype_hint_from_stages(stages: dict[str, dict[str, Any]], stage_name: str | None) -> str:
+    if not stage_name or stage_name == "module_a":
+        return ""
+    module_a_payload = stages.get("module_a")
+    if not isinstance(module_a_payload, dict):
+        return ""
+    archetype = module_a_payload.get("paper_archetype")
+    if not isinstance(archetype, str):
+        return ""
+    return archetype.strip()
 
 
 def _normalized_key(key: str) -> str:
@@ -1769,6 +1784,10 @@ async def extract_documents(
                         stage_name=current_stage,
                         stage_fields=task.stage_fields,
                         previous_outputs=previous_outputs,
+                        paper_archetype_hint=_paper_archetype_hint_from_stages(
+                            ctx.stages,
+                            current_stage,
+                        ),
                     )
                     if is_retry_full:
                         mark_attempted_full(ctx.source_path)
@@ -2188,6 +2207,10 @@ async def extract_documents(
                     stage_name=current_stage,
                     stage_fields=task.stage_fields,
                     previous_outputs=previous_outputs,
+                    paper_archetype_hint=_paper_archetype_hint_from_stages(
+                        ctx.stages,
+                        current_stage,
+                    ),
                 )
                 if is_retry_full:
                     mark_attempted_full(ctx.source_path)

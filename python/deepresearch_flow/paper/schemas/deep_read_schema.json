@@ -7,6 +7,7 @@
     "paper_authors",
     "publication_date",
     "publication_venue",
+    "paper_archetype",
     "module_a",
     "module_b",
     "module_c1",
@@ -26,6 +27,10 @@
     "paper_authors": {"type": "array", "items": {"type": "string"}},
     "publication_date": {"type": "string"},
     "publication_venue": {"type": "string"},
+    "paper_archetype": {
+      "type": "string",
+      "enum": ["survey", "method", "system", "other"]
+    },
     "module_a": {"type": "string"},
     "module_b": {"type": "string"},
     "module_c1": {"type": "string"},
