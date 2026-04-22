@@ -133,6 +133,45 @@ def test_multi_part_staging(tmp_path: Path) -> None:
     assert resp1.json()['inserted'] == 2
 
 
+def test_logs_semantic_batch_phase_timings(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    client, headers, _ = _make_app(tmp_path)
+    caplog.set_level("INFO", logger="deepresearch_flow.paper.snapshot.admin")
+
+    resp = client.post('/semantic/chunks/batch', json=_body('d1', 'simple', [_chunk('d1', 'simple', 0)]), headers=headers)
+
+    assert resp.status_code == 200
+    assert "semantic batch request doc=d1 tag=simple part=1/1 chunk_count=1" in caplog.text
+    assert "phase=validate_index_meta" in caplog.text
+    assert "phase=open_store" in caplog.text
+    assert "phase=read_existing_state" in caplog.text
+    assert "phase=delete_groups" in caplog.text
+    assert "phase=write_chunks" in caplog.text
+    assert "phase=save_index_meta" in caplog.text
+    assert "semantic batch done doc=d1 tag=simple" in caplog.text
+
+
+def test_logs_staging_progress_before_final_apply(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    client, headers, _ = _make_app(tmp_path)
+    caplog.set_level("INFO", logger="deepresearch_flow.paper.snapshot.admin")
+    group_hash = compute_group_hash(['h_0', 'h_1'])
+
+    resp0 = client.post(
+        '/semantic/chunks/batch',
+        json=_body('d1', 'deep', [_chunk('d1', 'deep', 0)], group_hash=group_hash, part_index=0, part_count=2),
+        headers=headers,
+    )
+    resp1 = client.post(
+        '/semantic/chunks/batch',
+        json=_body('d1', 'deep', [_chunk('d1', 'deep', 1)], group_hash=group_hash, part_index=1, part_count=2),
+        headers=headers,
+    )
+
+    assert resp0.status_code == 200
+    assert resp1.status_code == 200
+    assert "semantic batch staged doc=d1 tag=deep part=1/2 staged_parts=1/2 waiting_for_more_parts=1" in caplog.text
+    assert "semantic batch ready doc=d1 tag=deep part=2/2 staged_parts=2/2" in caplog.text
+
+
 def test_rejects_oversized_payload(tmp_path: Path) -> None:
     client, headers, _ = _make_app(tmp_path)
     huge_chunks = [_chunk('d1', 'simple', i) for i in range(5)]

@@ -14,6 +14,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+import time
 from typing import Any
 
 from starlette.applications import Starlette
@@ -56,6 +57,8 @@ logger = logging.getLogger(__name__)
 
 MAX_BATCH_SIZE = 200
 _MAX_SEMANTIC_PAYLOAD_BYTES = 32 * 1024 * 1024
+_SLOW_SEMANTIC_PHASE_SECONDS = 1.0
+_SLOW_SEMANTIC_BATCH_SECONDS = 3.0
 
 
 @dataclass(frozen=True)
@@ -64,6 +67,25 @@ class AdminConfig:
     admin_token: str
     embed_db: Path | None = None
     embed_dimensions: int | None = None
+
+
+def _semantic_tag_label(template_tag: str) -> str:
+    return template_tag or "_shared"
+
+
+def _log_semantic_phase(doc_id: str, template_tag: str, phase: str, started_at: float, *, detail: str = "") -> float:
+    elapsed = time.perf_counter() - started_at
+    log_fn = logger.warning if elapsed >= _SLOW_SEMANTIC_PHASE_SECONDS else logger.info
+    suffix = f" {detail}" if detail else ""
+    log_fn(
+        "semantic batch phase doc=%s tag=%s phase=%s elapsed_ms=%.1f%s",
+        doc_id,
+        _semantic_tag_label(template_tag),
+        phase,
+        elapsed * 1000.0,
+        suffix,
+    )
+    return elapsed
 
 
 # ---------------------------------------------------------------------------
@@ -601,7 +623,9 @@ def _apply_semantic_chunk_batch(
         write_chunks,
     )
 
+    batch_started_at = time.perf_counter()
     meta_path = cfg.embed_db / "index_meta.json"
+    phase_started_at = time.perf_counter()
     if meta_path.exists():
         validate_index_meta(
             cfg.embed_db,
@@ -627,18 +651,41 @@ def _apply_semantic_chunk_batch(
                 "last_updated": None,
             },
         )
+    _log_semantic_phase(
+        doc_id,
+        template_tag,
+        "validate_index_meta",
+        phase_started_at,
+        detail=f"meta_exists={int(meta_path.exists())}",
+    )
 
+    phase_started_at = time.perf_counter()
     db = open_store(cfg.embed_db)
+    _log_semantic_phase(doc_id, template_tag, "open_store", phase_started_at)
+
+    phase_started_at = time.perf_counter()
     previous_doc_groups = read_group_hashes_for_doc(db, doc_id)
     existing_rows = read_chunks_for_group(db, doc_id, template_tag)
     existing_by_id = {str(row["id"]): str(row.get("content_hash") or "") for row in existing_rows}
     had_template_elsewhere = has_rows_for_template(db, template_tag, exclude_doc_id=doc_id)
+    _log_semantic_phase(
+        doc_id,
+        template_tag,
+        "read_existing_state",
+        phase_started_at,
+        detail=(
+            f"existing_rows={len(existing_rows)} "
+            f"doc_groups={len(previous_doc_groups)} "
+            f"had_template_elsewhere={int(had_template_elsewhere)}"
+        ),
+    )
 
     inserted = 0
     updated = 0
     skipped = 0
     incoming_ids: set[str] = set()
     current_rows: list[ChunkRow] = []
+    phase_started_at = time.perf_counter()
     for chunk in all_chunks:
         chunk_id = str(chunk.get("id") or "")
         incoming_ids.add(chunk_id)
@@ -677,11 +724,41 @@ def _apply_semantic_chunk_batch(
                 tags=str(chunk.get("tags") or ""),
             )
         )
+    _log_semantic_phase(
+        doc_id,
+        template_tag,
+        "prepare_rows",
+        phase_started_at,
+        detail=f"incoming_rows={len(current_rows)}",
+    )
 
     deleted = len(set(existing_by_id) - incoming_ids)
+    phase_started_at = time.perf_counter()
     delete_groups(db, [(doc_id, template_tag if template_tag else "_shared")])
+    _log_semantic_phase(
+        doc_id,
+        template_tag,
+        "delete_groups",
+        phase_started_at,
+        detail=f"deleted_rows={deleted}",
+    )
     if current_rows:
+        phase_started_at = time.perf_counter()
         write_chunks(db, current_rows, dimensions=dimensions)
+        _log_semantic_phase(
+            doc_id,
+            template_tag,
+            "write_chunks",
+            phase_started_at,
+            detail=f"written_rows={len(current_rows)}",
+        )
+    else:
+        logger.info(
+            "semantic batch phase doc=%s tag=%s phase=write_chunks elapsed_ms=0.0 written_rows=0",
+            doc_id,
+            _semantic_tag_label(template_tag),
+        )
+    phase_started_at = time.perf_counter()
     _update_index_meta_after_group_write(
         cfg.embed_db,
         previous_doc_groups=previous_doc_groups,
@@ -689,6 +766,19 @@ def _apply_semantic_chunk_batch(
         previous_group_count=len(existing_rows),
         new_group_count=len(current_rows),
         had_template_elsewhere=had_template_elsewhere,
+    )
+    _log_semantic_phase(doc_id, template_tag, "save_index_meta", phase_started_at)
+    total_elapsed = time.perf_counter() - batch_started_at
+    done_log_fn = logger.warning if total_elapsed >= _SLOW_SEMANTIC_BATCH_SECONDS else logger.info
+    done_log_fn(
+        "semantic batch done doc=%s tag=%s elapsed_ms=%.1f inserted=%d updated=%d skipped=%d deleted=%d",
+        doc_id,
+        _semantic_tag_label(template_tag),
+        total_elapsed * 1000.0,
+        inserted,
+        updated,
+        skipped,
+        deleted,
     )
     return {
         "received": len(all_chunks),
@@ -738,13 +828,61 @@ async def _admin_ingest_semantic_chunks(request: Request) -> JSONResponse:
     if not doc_id or not group_hash or part_count < 1:
         return JSONResponse({"error": "bad_request", "detail": "invalid group metadata"}, status_code=400)
 
+    request_started_at = time.perf_counter()
+    logger.info(
+        "semantic batch request doc=%s tag=%s part=%d/%d chunk_count=%d payload_bytes=%d",
+        doc_id,
+        _semantic_tag_label(template_tag),
+        part_index + 1,
+        part_count,
+        len(chunks),
+        len(raw_body),
+    )
+
+    lock_wait_started_at = time.perf_counter()
     lock: asyncio.Lock = request.app.state.semantic_ingest_lock
     async with lock:
+        _log_semantic_phase(doc_id, template_tag, "wait_for_lock", lock_wait_started_at)
         if part_count > 1:
+            phase_started_at = time.perf_counter()
             _stage_part(cfg, doc_id, template_tag, group_hash, part_index, part_count, chunks)
-            if _count_staged_parts(cfg, doc_id, template_tag, group_hash) < part_count:
+            _log_semantic_phase(
+                doc_id,
+                template_tag,
+                "stage_part",
+                phase_started_at,
+                detail=f"part={part_index + 1}/{part_count} staged_chunks={len(chunks)}",
+            )
+            staged_parts = _count_staged_parts(cfg, doc_id, template_tag, group_hash)
+            if staged_parts < part_count:
+                logger.info(
+                    "semantic batch staged doc=%s tag=%s part=%d/%d staged_parts=%d/%d waiting_for_more_parts=1",
+                    doc_id,
+                    _semantic_tag_label(template_tag),
+                    part_index + 1,
+                    part_count,
+                    staged_parts,
+                    part_count,
+                )
                 return JSONResponse({"received": len(chunks), "inserted": 0, "updated": 0, "skipped": 0, "deleted": 0})
+            logger.info(
+                "semantic batch ready doc=%s tag=%s part=%d/%d staged_parts=%d/%d",
+                doc_id,
+                _semantic_tag_label(template_tag),
+                part_index + 1,
+                part_count,
+                staged_parts,
+                part_count,
+            )
+            phase_started_at = time.perf_counter()
             all_chunks = _collect_staged_parts(cfg, doc_id, template_tag, group_hash)
+            _log_semantic_phase(
+                doc_id,
+                template_tag,
+                "collect_staged_parts",
+                phase_started_at,
+                detail=f"collected_chunks={len(all_chunks)}",
+            )
         else:
             all_chunks = chunks
 
@@ -781,6 +919,16 @@ async def _admin_ingest_semantic_chunks(request: Request) -> JSONResponse:
 
         if part_count > 1:
             _clear_staged_parts(cfg, doc_id, template_tag, group_hash)
+        total_request_elapsed = time.perf_counter() - request_started_at
+        done_log_fn = logger.warning if total_request_elapsed >= _SLOW_SEMANTIC_BATCH_SECONDS else logger.info
+        done_log_fn(
+            "semantic batch response doc=%s tag=%s part=%d/%d elapsed_ms=%.1f",
+            doc_id,
+            _semantic_tag_label(template_tag),
+            part_index + 1,
+            part_count,
+            total_request_elapsed * 1000.0,
+        )
         return JSONResponse(result)
 
 
