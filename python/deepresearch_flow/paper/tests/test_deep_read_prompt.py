@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from deepresearch_flow.paper.extract import build_stage_schema
 from deepresearch_flow.paper.schema import schema_to_prompt, validate_schema
 from deepresearch_flow.paper.template_registry import (
@@ -254,3 +256,163 @@ def test_deep_read_prompt_is_written_in_english_while_output_language_remains_ex
     assert "当前阶段" not in prompt_before_schema
     assert "请仅输出 JSON" not in prompt_before_schema
     assert "输出语言" not in prompt_before_schema
+
+
+@pytest.mark.parametrize(
+    ("stage", "survey_keywords"),
+    [
+        ("module_c3", ["taxonomy", "classification"]),
+        ("module_c4", ["benchmark", "protocol", "coverage"]),
+        ("module_c5", ["comparison", "consensus"]),
+        ("module_d", ["taxonomy", "representative"]),
+        ("module_e", ["coverage", "blind spot", "gap"]),
+        ("module_h", ["taxonomy", "comparison table"]),
+    ],
+)
+def test_deep_read_survey_hint_adds_survey_specific_guidance(
+    stage: str, survey_keywords: list[str]
+) -> None:
+    schema = load_schema_for_template("deep_read")
+
+    _system_prompt, user_prompt = load_prompt_templates(
+        "deep_read",
+        content="# Test Paper",
+        schema=schema_to_prompt(schema),
+        output_language="zh",
+        stage_name=stage,
+        stage_fields=[
+            "paper_title",
+            "paper_authors",
+            "publication_date",
+            "publication_venue",
+            stage,
+        ],
+        previous_outputs='{"module_a":{"paper_archetype":"survey","module_a":"summary"}}',
+        paper_archetype_hint="survey",
+    )
+    prompt_before_schema = user_prompt.split("JSON Schema:", 1)[0].lower()
+
+    assert any(keyword.lower() in prompt_before_schema for keyword in survey_keywords)
+
+
+@pytest.mark.parametrize(
+    ("stage", "method_keywords"),
+    [
+        ("module_c3", ["process diagram", "step-by-step breakdown"]),
+        ("module_c4", ["training / inference / evaluation environment"]),
+        ("module_c5", ["ablations"]),
+        ("module_d", ["training/inference flow"]),
+        ("module_e", ["pseudocode", "reconstructability"]),
+        ("module_h", ["experiment-setup"]),
+    ],
+)
+def test_deep_read_method_hint_keeps_method_guidance(
+    stage: str, method_keywords: list[str]
+) -> None:
+    schema = load_schema_for_template("deep_read")
+
+    _system_prompt, user_prompt = load_prompt_templates(
+        "deep_read",
+        content="# Test Paper",
+        schema=schema_to_prompt(schema),
+        output_language="zh",
+        stage_name=stage,
+        stage_fields=[
+            "paper_title",
+            "paper_authors",
+            "publication_date",
+            "publication_venue",
+            stage,
+        ],
+        previous_outputs='{"module_a":{"paper_archetype":"method","module_a":"summary"}}',
+        paper_archetype_hint="method",
+    )
+    prompt_before_schema = user_prompt.split("JSON Schema:", 1)[0].lower()
+
+    assert any(keyword.lower() in prompt_before_schema for keyword in method_keywords)
+
+
+def test_deep_read_module_c4_survey_hint_drops_method_only_training_wording() -> None:
+    schema = load_schema_for_template("deep_read")
+
+    _system_prompt, survey_prompt = load_prompt_templates(
+        "deep_read",
+        content="# Test Paper",
+        schema=schema_to_prompt(schema),
+        output_language="zh",
+        stage_name="module_c4",
+        stage_fields=[
+            "paper_title",
+            "paper_authors",
+            "publication_date",
+            "publication_venue",
+            "module_c4",
+        ],
+        previous_outputs='{"module_a":{"paper_archetype":"survey","module_a":"summary"}}',
+        paper_archetype_hint="survey",
+    )
+    prompt_before_schema = survey_prompt.split("JSON Schema:", 1)[0].lower()
+
+    assert "training / inference / evaluation environment" not in prompt_before_schema
+
+
+@pytest.mark.parametrize("hint", ["other", ""])
+def test_deep_read_non_survey_hints_fall_back_to_non_survey_guidance(hint: str) -> None:
+    schema = load_schema_for_template("deep_read")
+
+    _system_prompt, user_prompt = load_prompt_templates(
+        "deep_read",
+        content="# Test Paper",
+        schema=schema_to_prompt(schema),
+        output_language="zh",
+        stage_name="module_c4",
+        stage_fields=[
+            "paper_title",
+            "paper_authors",
+            "publication_date",
+            "publication_venue",
+            "module_c4",
+        ],
+        previous_outputs='{"module_a":{"paper_archetype":"other","module_a":"summary"}}',
+        paper_archetype_hint=hint,
+    )
+    prompt_before_schema = user_prompt.split("JSON Schema:", 1)[0].lower()
+
+    assert "training / inference / evaluation environment" in prompt_before_schema
+    assert "benchmark coverage" not in prompt_before_schema
+
+
+@pytest.mark.parametrize(
+    ("stage", "survey_only_keywords"),
+    [
+        ("module_c5", ["consensus", "evidence strength"]),
+        ("module_d", ["representative clusters", "coverage structure"]),
+        ("module_e", ["coverage bias", "future survey-update directions"]),
+        ("module_h", ["benchmark summary tables", "timeline/grouping visuals"]),
+    ],
+)
+def test_deep_read_method_hint_excludes_survey_only_wording(
+    stage: str, survey_only_keywords: list[str]
+) -> None:
+    schema = load_schema_for_template("deep_read")
+
+    _system_prompt, user_prompt = load_prompt_templates(
+        "deep_read",
+        content="# Test Paper",
+        schema=schema_to_prompt(schema),
+        output_language="zh",
+        stage_name=stage,
+        stage_fields=[
+            "paper_title",
+            "paper_authors",
+            "publication_date",
+            "publication_venue",
+            stage,
+        ],
+        previous_outputs='{"module_a":{"paper_archetype":"method","module_a":"summary"}}',
+        paper_archetype_hint="method",
+    )
+    prompt_before_schema = user_prompt.split("JSON Schema:", 1)[0].lower()
+
+    for keyword in survey_only_keywords:
+        assert keyword.lower() not in prompt_before_schema
