@@ -240,3 +240,33 @@ export async function clearPaperContentCache(): Promise<void> {
     // Ignore clear errors for cache storage.
   }
 }
+
+function sortRecordEntries(record: Record<string, string>): Array<[string, string]> {
+  return Object.entries(record).sort(([left], [right]) => left.localeCompare(right))
+}
+
+export function createPaperDetailFreshness(detail: PaperDetail): PaperDetailFreshness {
+  return {
+    manifestUrl: detail.manifest_url ?? '',
+    summaryUrl: detail.summary_url ?? '',
+    summaryUrls: { ...(detail.summary_urls ?? {}) },
+    translatedMdUrls: { ...(detail.translated_md_urls ?? {}) },
+    sourceMdUrl: detail.source_md_url ?? null,
+  }
+}
+
+export function equalPaperDetailFreshness(
+  left: PaperDetailFreshness | null,
+  right: PaperDetailFreshness | null,
+): boolean {
+  if (!left || !right) return left === right
+  return (
+    left.manifestUrl === right.manifestUrl &&
+    left.summaryUrl === right.summaryUrl &&
+    left.sourceMdUrl === right.sourceMdUrl &&
+    JSON.stringify(sortRecordEntries(left.summaryUrls)) ===
+      JSON.stringify(sortRecordEntries(right.summaryUrls)) &&
+    JSON.stringify(sortRecordEntries(left.translatedMdUrls)) ===
+      JSON.stringify(sortRecordEntries(right.translatedMdUrls))
+  )
+}

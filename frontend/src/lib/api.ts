@@ -1,5 +1,12 @@
 import { buildUrl, fetchJson } from '@/lib/http'
 import {
+  createPaperDetailFreshness,
+  equalPaperDetailFreshness,
+  readPaperContentRecord,
+  touchPaperContentRecord,
+  writePaperContentRecord,
+} from '@/lib/paper-content-cache'
+import {
   FacetResponseSchema,
   FacetStatsResponseSchema,
   ManifestSchema,
@@ -40,6 +47,54 @@ export async function getPaperDetail(paperId: string): Promise<PaperDetail> {
   const url = buildUrl(`/papers/${paperId}`)
   const data = await fetchJson(url)
   return PaperDetailSchema.parse(data)
+}
+
+export interface CachedPaperDetailOptions {
+  onRevalidated?: (detail: PaperDetail) => void
+}
+
+export async function getPaperDetailCached(
+  paperId: string,
+  options: CachedPaperDetailOptions = {},
+): Promise<PaperDetail> {
+  const cachedRecord = await readPaperContentRecord(paperId)
+  if (cachedRecord?.detail && cachedRecord.detailFreshness) {
+    await touchPaperContentRecord(paperId)
+
+    void getPaperDetail(paperId)
+      .then(async (freshDetail) => {
+        const latestRecord = await readPaperContentRecord(paperId)
+        if (!latestRecord) return
+        const nextFreshness = createPaperDetailFreshness(freshDetail)
+        if (equalPaperDetailFreshness(latestRecord.detailFreshness, nextFreshness)) {
+          return
+        }
+        await writePaperContentRecord({
+          paperId,
+          detail: freshDetail,
+          detailFreshness: nextFreshness,
+          summaries: latestRecord.summaries,
+          translations: latestRecord.translations,
+          lastAccessedAt: latestRecord.lastAccessedAt,
+        })
+        options.onRevalidated?.(freshDetail)
+      })
+      .catch(() => {
+        // Ignore background refresh failures and keep serving the cached detail.
+      })
+
+    return cachedRecord.detail
+  }
+
+  const freshDetail = await getPaperDetail(paperId)
+  await writePaperContentRecord({
+    paperId,
+    detail: freshDetail,
+    detailFreshness: createPaperDetailFreshness(freshDetail),
+    summaries: cachedRecord?.summaries ?? {},
+    translations: cachedRecord?.translations ?? {},
+  })
+  return freshDetail
 }
 
 export async function getFacet(facet: string, page: number, pageSize: number): Promise<FacetResponse> {
