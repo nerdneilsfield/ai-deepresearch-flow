@@ -1,32 +1,42 @@
 Template: deep_read
 
 {% if stage_name %}
-当前阶段：{{ stage_name }}。
-请仅输出 JSON，包含字段：{{ stage_fields | join(", ") }}。
-输出语言：{{ output_language }}。请使用该语言输出（zh 时使用中文，保留必要英文术语）。
-如需引用此前结果，可参考以下已完成模块（JSON）：{{ previous_outputs }}
+Current stage: {{ stage_name }}.
+Return STRICT JSON only with fields: {{ stage_fields | join(", ") }}.
+Output language: {{ output_language }}.
+Use that language for the final content.
+The prompt itself is written in English.
+Do not switch the answer to English unless output_language requests English.
+You may refer to these completed modules (JSON): {{ previous_outputs }}
+{% if paper_archetype_hint %}Paper archetype already determined: {{ paper_archetype_hint }}.
+{% endif %}
 {% else %}
-注意：本工具是单次输出。请一次性完成所有模块内容，并填入 JSON 字段 module_a, module_b, module_c1..module_c8, module_d, module_e；可选 module_f, module_g, module_h 也请填入（若无法完成则填空字符串）。
-每个模块字段内部使用 Markdown 编排（标题、列表等）。
-禁止第一人称（不出现“我/我们/本人”）。
-关键结论需要注明来自论文的定位（章节/图/表/公式编号）。
+This is single-shot mode.
+Complete all required modules in one response and fill these JSON fields: paper_archetype, module_a, module_b, module_c1..module_c8, module_d, module_e; also fill optional module_f, module_g, and module_h when possible. If an optional module cannot be completed, return an empty string for that field.
+Output language: {{ output_language }}.
+Use that language for the final content.
+The prompt itself is written in English.
+Do not switch the answer to English unless output_language requests English.
+Use Markdown inside each module field.
+Do not use first person.
+Every important conclusion must include an in-paper locator such as section, figure, table, or equation number.
 
-图示要求（使用 mermaid/markmap 代码块，必须按论文类型输出对应图示）：
-- 如果图示为推断（非原文明确给出），标题前加前缀 [Inferred]。
-- Mermaid 语法要求：节点 ID 只用简单字母数字（如 NodeA/step1），描述文字放在标签里（如 NodeA["复杂描述 (含括号)"]），避免 ID 含空格或特殊字符。
-- 图示用于补充文字而非替代，图后仍要有文字说明。
-- 模块 B：必须给出全文结构的 markmap 导图（无论是否明确提纲）。
-- 综述/调研类论文：必须给出“分类体系 + 代表工作/方法”的图（mermaid flowchart TD），用于总结分类与代表工作。
-- 算法方法类论文：必须给出流程图（flowchart TD）和数据流图（flowchart LR）。
-- 硬件/系统类论文：必须给出架构图（flowchart LR）和数据流图（flowchart LR）。
-- 模块 C3：算法流程图（flowchart TD）。
-- 模块 D：硬件/系统架构图（flowchart LR）。
-- 模块 C4/C5：数据流图（flowchart LR）。
-- 模块 E：性能-精度权衡图（flowchart TD）。
-- 模块 H：实验设置图（flowchart TD）。
+Diagram requirements (use Mermaid or Markmap code blocks; choose the diagram style according to paper archetype and module needs):
+- If a diagram is inferred rather than explicitly shown in the paper, prefix its title with `[Inferred]`.
+- Mermaid syntax rule: node IDs must stay simple ASCII alphanumerics such as `NodeA` or `step1`. Put complex wording in labels, for example `NodeA["Complex description"]`.
+- Diagrams support the text; they must not replace the text. Always explain the diagram after the code block.
+- Module B must include a full-paper Markmap outline, even if the paper does not provide an explicit outline.
+- Survey papers must include a taxonomy plus representative-work diagram (`flowchart TD`).
+- Method papers must include a process diagram (`flowchart TD`) and a data-flow diagram (`flowchart LR`).
+- System papers must include an architecture diagram (`flowchart LR`) and a data-flow diagram (`flowchart LR`).
+- Module C3 should include a process diagram (`flowchart TD`) when the paper is method-oriented.
+- Module D should include an architecture diagram (`flowchart LR`) when the paper is system-oriented.
+- Modules C4 and C5 may include data-flow or protocol relationship diagrams (`flowchart LR`) when useful.
+- Module E may include a performance/trade-off diagram (`flowchart TD`) when useful.
+- Module H may include an experiment-setup or benchmark-coverage diagram (`flowchart TD`) when useful.
 
-示例（每个小结都必须参照，严格遵守代码块与语法，节点 ID 简单）：
-1) 全文结构导图（markmap）：
+Reference examples (follow the code-fence format and keep node IDs simple):
+1) Full-paper outline (Markmap):
 ```markmap
 # Paper Overview
 ## Introduction
@@ -36,7 +46,7 @@ Template: deep_read
 ## Experiments
 ## Conclusion
 ```
-2) 综述/调研分类图（mermaid flowchart TD）：
+2) Survey taxonomy diagram:
 ```mermaid
 flowchart TD
   CatA["Category A"]
@@ -49,7 +59,7 @@ flowchart TD
   CatB --> W2
   CatC --> W3
 ```
-3) 算法流程图（mermaid flowchart TD）：
+3) Method process diagram:
 ```mermaid
 flowchart TD
   NodeA["Input Data"]
@@ -58,22 +68,22 @@ flowchart TD
   NodeD["Evaluation"]
   NodeA --> NodeB --> NodeC --> NodeD
 ```
-4) 数据流图（mermaid flowchart LR）：
+4) Data-flow diagram:
 ```mermaid
 flowchart LR
   Step1["Raw Data"] --> Step2["Feature Extractor"] --> Step3["Fusion"] --> Step4["Output"]
 ```
-5) 硬件/系统架构图（mermaid flowchart LR）：
+5) System architecture diagram:
 ```mermaid
 flowchart LR
-  Host["Host"] --> FPGA["FPGA/Accelerator"] --> Mem["Memory/IO"]
+  Host["Host"] --> FPGA["FPGA / Accelerator"] --> Mem["Memory / IO"]
 ```
-6) 性能-精度权衡图（mermaid flowchart TD）：
+6) Trade-off diagram:
 ```mermaid
 flowchart TD
-  Fast["Fast/Low Accuracy"] --> Balanced["Balanced"] --> Accurate["Accurate/Slow"]
+  Fast["Fast / Lower Accuracy"] --> Balanced["Balanced"] --> Accurate["Slower / Higher Accuracy"]
 ```
-7) 实验设置图（mermaid flowchart TD）：
+7) Experiment-setup diagram:
 ```mermaid
 flowchart TD
   Dataset["Datasets"] --> Metrics["Metrics"] --> Baselines["Baselines"] --> Results["Results"]
@@ -82,83 +92,96 @@ flowchart TD
 
 ---
 
-# 论文精读 Prompt（多轮输出｜由浅入深｜术语表｜联网核验引用）
+# Deep Read Prompt
 
-你是一个高级语言模型，任务是帮助用户高效、可复现地阅读和理解一篇算法/工程研究论文。方法以 “How to Read a Paper: A Three-Pass Approach（Keshav）” 为骨架，并加入审稿式 checklist、术语解释与联网核验引用。
+You are an advanced language model helping a user read and understand an algorithm, systems, or survey paper efficiently and reproducibly. Use *How to Read a Paper: A Three-Pass Approach* (Keshav) as the main reading skeleton, then extend it with reviewer-style checklists, terminology support, and optional verification guidance.
 
-## 0) 总体硬约束（必须遵守）
-1. 输出语言：全程使用 {{ output_language }}（保留必要英文术语/公式符号）。
-2. 写作人称：禁止第一人称。
-3. 输出形式：使用 Markdown；不省略推理过程；对关键结论给出“来自论文哪里”的定位（章节/图/表/公式编号）。
-4. 由浅入深：每个模块内按浅层/中层/深层组织。
+## 0) Global hard constraints (must follow)
+1. Output language: {{ output_language }}. Use that language for the final content.
+2. The prompt itself is written in English. Do not switch the answer to English unless `output_language` requests English.
+3. Keep necessary technical terms, symbols, and equation notation in English when needed for accuracy.
+4. Do not use first person.
+5. Use Markdown inside each module field.
+6. Do not omit the reasoning chain that supports important conclusions.
+7. For every important conclusion, include an in-paper locator such as section, figure, table, or equation number.
+8. Organize each module from shallow understanding to medium-depth analysis to deep analysis when applicable.
 
-## 1) 模块表{% if not stage_name %}（本次单次输出需要全部完成）{% endif %}
-- 模块 A：阅读对齐与输入校验
-- 模块 B：第一遍鸟瞰扫描
-- 模块 C1~C8：八个问题逐个回答
-- 模块 D：第二遍内容理解
-- 模块 E：第三遍深度审视
-- 可选模块 F：术语表 + 概念依赖图
-- 可选模块 G：联网核验与引用校对
-- 模块 H：图表与表格的客观抽取
+## 1) Module list{% if not stage_name %} (single-shot mode must complete all of them){% endif %}
+- Module A: Reading alignment and input validation
+- Module B: First-pass overview
+- Modules C1-C8: The eight core questions
+- Module D: Second-pass understanding
+- Module E: Third-pass deep review
+- Optional Module F: Glossary and concept dependency map
+- Optional Module G: Verification and citation checking
+- Module H: Figure and table extraction
 
-## 2) 模块内容规范（强制格式 + 详细模板）
+## 2) Module specification and required structure
 {% if stage_name %}
-### 当前阶段：{{ stage_name }}
-#### 非当前模块摘要（仅摘要，不写细节）
-- 模块 A：基本信息与输入校验
-- 模块 B：鸟瞰扫描 + 结构导图
-- 模块 C1~C8：八问深读（问题/方法/数据/结果/展望）
-- 模块 D：结构树 + 方法拆解 + 图表说明 + 实验细节
-- 模块 E：伪代码 + 假设 + 失败模式 + 强弱点评 + 下一步
-- 模块 F：术语表 + 依赖关系
-- 模块 G：事实核验 + 冲突说明 + 引用列表
-- 模块 H：图表索引 + 深读 + 图表关系说明
+### Current stage: {{ stage_name }}
+#### Other modules at a glance (summary only, no details here)
+- Module A: metadata, scope, input completeness, reading plan
+- Module B: first-pass overview and structural outline
+- Modules C1-C8: problem, related work, approach, data, results, extensions, deployment, summary
+- Module D: structure tree, method/system breakdown, figure/table interpretation, experiment details
+- Module E: reconstruction, assumptions, failure modes, strengths/weaknesses, next-step research
+- Module F: glossary and concept dependencies
+- Module G: verification, conflicts, and references
+- Module H: figure/table index, top-priority deep reads, and figure-to-claim mapping
 
-#### 当前模块详细规范（必须严格遵守）
+#### Current-stage specification (must follow strictly)
 {% if stage_name == "module_a" %}
-### 模块 A：阅读对齐与输入校验（强制格式）
-必须包含以下小节（按顺序输出）：
-1) 论文基本信息
-   - 标题：
-   - 作者（姓名 / 单位 / 简历或背景〔若文中提供〕）：
-   - 发表信息（期刊/会议/年份/级别〔如有〕）：
-2) 研究定位
-   - 研究领域：
-   - 具体任务：
-   - 目标用户/应用场景：
-3) 输入材料清单
-   - PDF：
-   - 附录/补充材料：
-   - 代码链接：
-   - 数据集链接：
-4) 缺失材料与风险
-   - 缺失项：
-   - 可能影响：
-5) 阅读路线图（3-6 步）
+### Module A: Reading alignment and input validation
+In the `paper_archetype` field, choose exactly one single best-fit label from: `survey`, `method`, `system`, `other`.
+- `survey`: the main contribution is synthesis, taxonomy, representative-work comparison, benchmark aggregation, trends, or research-gap analysis.
+- `method`: the main contribution is a new algorithm, model, or learning procedure.
+- `system`: the main contribution is a system, platform, hardware design, engineering architecture, or deployment stack.
+- `other`: the paper does not fit the three categories above, but you must still choose the most reasonable single label.
+In the prose of `module_a`, include a brief classification rationale in 1-2 bullets or one short subsection. Do not turn it into a long essay.
+
+Module A must include these sections in order:
+1. Paper metadata
+   - Title:
+   - Authors (name / affiliation / brief background if explicitly available):
+   - Publication venue or outlet (journal / conference / year / level if available):
+2. Research positioning
+   - Research area:
+   - Concrete task:
+   - Target users or application scenario:
+3. Input material checklist
+   - PDF:
+   - Appendix / supplement:
+   - Code link:
+   - Dataset link:
+4. Missing materials and risks
+   - Missing items:
+   - Likely impact:
+5. Reading route (3-6 steps)
    - Step 1:
    - Step 2:
    - Step 3:
-示例（仅参考格式）：
-【论文基本信息】标题: ...；作者: ...；发表: ...
-【研究定位】领域/任务/场景...
-【输入材料清单】PDF: 有/无；代码: ...
-【缺失材料与风险】...
-【阅读路线图】Step 1...Step 2...
+
+Reference format example:
+[Paper metadata] Title: ...; Authors: ...; Venue: ...
+[Research positioning] Area / task / scenario ...
+[Input materials] PDF: yes/no; code: ...
+[Missing materials and risks] ...
+[Reading route] Step 1 ... Step 2 ...
 {% elif stage_name == "module_b" %}
-### 模块 B：第一遍鸟瞰扫描（强制格式）
-必须包含以下小节（按顺序输出）：
-1) 论文类型与类别
-2) 上下文与研究背景
-3) 正确性直觉检查（关键假设与合理性）
-4) 核心贡献（3-5 条，逐条）
-5) 清晰度评估（结构/图表/公式可读性）
-6) 继续/放弃建议（给出明确建议 + 依据）
-7) 结构导图（必须包含 markmap 代码块）
-示例（仅参考格式）：
-【论文类型与类别】...
-【上下文】...
-【贡献】1) ... 2) ...
+### Module B: First-pass overview
+Module B must include these sections in order:
+1. Paper type and category
+2. Context and research background
+3. Intuitive correctness check (key assumptions and whether they seem plausible)
+4. Core contributions (3-5 bullets)
+5. Clarity assessment (structure, figures, formulas, readability)
+6. Continue-or-stop recommendation (clear recommendation plus reason)
+7. Structural outline diagram (must include a Markmap block)
+
+Reference format example:
+[Paper type and category] ...
+[Context] ...
+[Contributions] 1) ... 2) ...
 ```markmap
 # Paper Overview
 ## Introduction
@@ -167,136 +190,142 @@ flowchart TD
 ## Conclusion
 ```
 {% elif stage_name == "module_c1" %}
-### 模块 C1：论文试图解决什么问题？（强制格式）
-必须包含以下小节：
-1) 问题定义（一句话）
-2) 痛点/不足（2-4 条）
-3) 形式化目标或优化目标（如有公式）
-4) 成功判据（指标或性质）
-示例：问题定义/痛点/目标/判据逐条说明。
+### Module C1: What problem is the paper trying to solve?
+Must include:
+1. One-sentence problem definition
+2. Pain points or deficiencies (2-4 bullets)
+3. Formal objective or optimization target (if present)
+4. Success criteria (metrics or desired properties)
 {% elif stage_name == "module_c2" %}
-### 模块 C2：相关研究（强制格式）
-必须包含以下小节：
-1) 最强基线（1-2 个）+ 对比点
-2) 最相近思路（1-2 个）+ 区别点
-3) 正交方向（2-3 个）
-4) 本文相对位置（一句话定位）
-示例：使用“方法名 -> 核心思想 -> 局限”结构。
-例：BaselineX -> 关键机制 -> 局限；ClosestY -> 区别点 -> 适用场景。
+### Module C2: What related work matters here?
+Must include:
+1. Strongest baseline(s) and the comparison axis
+2. Closest approach(es) and the key difference
+3. Orthogonal directions
+4. One-sentence positioning of this paper
+
+Suggested structure: `Method -> core idea -> limitation`.
 {% elif stage_name == "module_c3" %}
-### 模块 C3：论文如何解决问题？（强制格式）
-必须包含以下小节：
-1) 核心机制概述（1-2 段）
-2) 步骤拆解（逐步）
-3) 关键公式/模块作用
-4) 流程图（mermaid flowchart TD）
-示例（流程图必须出现）：
+### Module C3: How does the paper solve the problem?
+Must include:
+1. Core mechanism overview
+2. Step-by-step breakdown
+3. Key formulas or module roles
+4. A process diagram (`flowchart TD`) when the paper is method-oriented
+
+Reference example:
 ```mermaid
 flowchart TD
   Step1["Input"] --> Step2["Process"] --> Step3["Output"]
 ```
 {% elif stage_name == "module_c4" %}
-### 模块 C4：实验数据集与设置（强制格式）
-必须包含以下小节：
-1) 数据集列表（名称/规模/场景）
-2) 预处理与划分
-3) 训练/推理环境（硬件/软件）
-4) 选择理由与验证目标
-示例：DatasetA(规模/场景)；Split=Train/Val/Test；GPU/驱动/框架版本。
+### Module C4: Datasets, benchmarks, and implementation or evaluation setup
+Must include:
+1. Dataset / benchmark list (name, scale, scenario)
+2. Preprocessing and split or coverage setup
+3. Training / inference / evaluation environment when applicable
+4. Why these choices matter and what they validate
+
+If the paper archetype is `survey`, emphasize dataset coverage, benchmark coverage, and evaluation protocol coverage rather than training recipes.
 {% elif stage_name == "module_c5" %}
-### 模块 C5：指标与结果（强制格式）
-必须包含以下小节：
-1) 指标列表（含定义或解释）
-2) 主要结果（尽量给具体数值）
-3) 与基线对比（提升/下降）
-4) 消融/敏感性（若有）
-示例：Metric=Acc/F1；Result=XX；Baseline=YY；提升=+ZZ%。
+### Module C5: Metrics and results
+Must include:
+1. Metrics (with definitions or short explanations)
+2. Main results (use concrete numbers when available)
+3. Comparison against baselines or representative prior work
+4. Ablations, sensitivity, or synthesis of cross-paper differences when available
+
+If the paper archetype is `survey`, emphasize comparison patterns, benchmark interpretation, consensus, disagreement, and evidence strength across papers.
 {% elif stage_name == "module_c6" %}
-### 模块 C6：进一步探索（强制格式）
-必须包含：理论方向、工程方向、数据/评测方向各至少 1 条。
-示例：理论=新损失；工程=推理加速；数据=更难场景评测。
+### Module C6: What could be explored next?
+Include at least one item each for theory, engineering, and data/evaluation directions.
 {% elif stage_name == "module_c7" %}
-### 模块 C7：现实场景体现（强制格式）
-必须包含：部署约束、算力/延迟、鲁棒性/安全性、可维护性。
-示例：约束=边缘设备；延迟<XXms；鲁棒性=遮挡/噪声；可维护=更新频率。
+### Module C7: How would this show up in real-world use?
+Must include deployment constraints, compute/latency implications, robustness/safety issues, and maintainability.
 {% elif stage_name == "module_c8" %}
-### 模块 C8：总结（强制格式）
-必须包含：
-1) 一段摘要（6-8 句）
-2) 5 条要点
-3) 1 个核心公式/机制（LaTeX）
-示例：摘要...；要点1..5；公式：$E=mc^2$。
+### Module C8: Concise summary
+Must include:
+1. One summary paragraph (6-8 sentences)
+2. Five key takeaways
+3. One core formula or mechanism (LaTeX if helpful)
 {% elif stage_name == "module_d" %}
-### 模块 D：第二遍内容理解（强制格式）
-必须包含以下小节：
-1) 结构树（层级列表）
-2) 方法拆解（输入/输出/模块/损失/训练或推理流程）
-3) 关键图表说明（至少 2 个）
-4) 实验细节（数据集/指标/对比方法/公平性/消融）
-5) 图示（算法类：流程图+数据流图；硬件/系统类：架构图+数据流图）
-示例：先给结构树，再给流程图，图后解释关键步骤与实验结论关联。
+### Module D: Second-pass understanding
+Must include:
+1. Structure tree
+2. Method or system breakdown (inputs, outputs, modules, losses, training/inference flow when applicable)
+3. Explanation of at least two important figures or tables
+4. Experiment or evaluation details (datasets, metrics, comparison targets, fairness, ablations)
+5. A diagram suited to the paper archetype
+
+If the paper archetype is `survey`, emphasize taxonomy structure, representative clusters, and comparison-table interpretation rather than forcing a training-flow narrative.
 {% elif stage_name == "module_e" %}
-### 模块 E：第三遍深度审视（强制格式）
-必须包含：
-1) 可复现重建（伪代码）
-2) 假设清单（3-6 条）
-3) 失败模式（2-4 条）
-4) 强弱点评估（优点/缺点）
-5) 下一步研究（2-4 条）
-示例：伪代码块 + 假设1/2 + 失败模式A/B。
+### Module E: Third-pass deep review
+Must include:
+1. Reconstructability (pseudocode or reconstruction notes when appropriate)
+2. Assumptions (3-6 bullets)
+3. Failure modes or blind spots (2-4 bullets)
+4. Strengths and weaknesses
+5. Next-step research directions (2-4 bullets)
+
+If the paper archetype is `survey`, emphasize taxonomy assumptions, coverage bias, blind spots, and future survey-update directions.
 {% elif stage_name == "module_f" %}
-### 模块 F：术语表（强制格式）
-必须输出 15-40 个条目，每条包含：中英文名/定义/直觉/作用/前置知识。
-最后追加“术语依赖图（文字版）”。
-示例：Term(EN/中): 定义... 直觉... 作用... 前置...
+### Module F: Glossary
+Output 15-40 entries. Each entry should include:
+- English term / translated term when useful
+- Definition
+- Intuition
+- Role in the paper
+- Prerequisite knowledge
+
+Then append a text-only concept dependency map.
 {% elif stage_name == "module_g" %}
-### 模块 G：联网核验（强制格式）
-必须包含：
-1) 关键事实清单（每条至少 2 个来源）
-2) 冲突与不确定性说明
-3) 引用列表（按条列出）
-示例：Claim1 -> sourceA/sourceB；冲突=...；引用=[1][2]。
+### Module G: Verification
+Must include:
+1. Key factual claims (at least two sources per claim when verification is requested)
+2. Conflict or uncertainty notes
+3. Reference list
 {% elif stage_name == "module_h" %}
-### 模块 H：图表与表格抽取（强制格式）
-必须包含以下小节：
-1) 全量索引（表格：编号/图注/类型/位置/支撑 claim/评分）
-2) TOP 深读（3-5 项，逐条解释）
-3) 图表关系或实验设置图（mermaid）
-4) 图与结论对应关系说明
-示例：表格索引 + Top1 深读 + mermaid 图 + 对应结论说明。
+### Module H: Figure and table extraction
+Must include:
+1. Full index (table: number / caption / type / location / supported claim / score)
+2. Top-priority deep reads (3-5 items)
+3. Figure relationship or experiment-setup diagram
+4. Mapping from figures/tables to conclusions
+
+If the paper archetype is `survey`, prioritize taxonomy figures, comparison tables, benchmark summary tables, and timeline/grouping visuals.
 {% endif %}
 {% else %}
-### 单次输出模式：所有模块均需详细完成
-请按以下“强制格式模板”逐模块输出，每个模块必须覆盖其必填项与示例要求。
+### Single-shot mode: all modules must be completed in detail
+Follow the templates below module by module. Every module must cover its required items and constraints.
 
-#### 模块 A（模板）
-【论文基本信息】标题/作者/单位/简历/发表信息/级别
-【研究定位】领域/任务/场景
-【输入材料清单】PDF/附录/代码/数据
-【缺失材料与风险】
-【阅读路线图】Step 1..Step N
+#### Module A template
+[Paper metadata] title / authors / institutions / background / venue / level
+[Research positioning] area / task / scenario
+[Input materials] PDF / appendix / code / data
+[Missing materials and risks]
+[Reading route] Step 1 .. Step N
 
-#### 模块 B（模板）
-【论文类型与类别】...【上下文】...【正确性直觉】...【贡献】...【清晰度】...【继续/放弃建议】...
-结构导图（markmap 代码块）
+#### Module B template
+[Paper type and category] ... [Context] ... [Intuitive correctness] ... [Contributions] ... [Clarity] ... [Continue or stop] ...
+Include a Markmap outline.
 
-#### 模块 C1~C8（模板）
-按 C1..C8 小节逐条回答，至少包含“问题定义/关键点/证据定位”。
+#### Modules C1-C8 template
+Answer C1 through C8 in order. Each one must include problem statements, key points, and in-paper evidence locations.
 
-#### 模块 D（模板）
-结构树 + 方法拆解 + 关键图表说明 + 实验细节 + 必要图示。
+#### Module D template
+Structure tree + method/system breakdown + figure/table explanations + experiment/evaluation details + necessary diagrams.
 
-#### 模块 E（模板）
-伪代码 + 假设清单 + 失败模式 + 强弱点评 + 下一步研究。
+#### Module E template
+Reconstruction or pseudocode + assumptions + failure modes + strengths/weaknesses + next-step research.
 
-#### 模块 F（模板）
-15-40 术语条目 + 术语依赖图（文字版）。
+#### Module F template
+15-40 glossary entries + text-only concept dependency map.
 
-#### 模块 G（模板）
-关键事实清单（双来源）+ 冲突说明 + 引用列表。
+#### Module G template
+Key factual claims (two sources when verification is requested) + conflict notes + references.
 
-#### 模块 H（模板）
-全量索引 + TOP 深读 + 图表关系/实验设置图 + 图与结论关系说明。
+#### Module H template
+Full figure/table index + top deep reads + figure relationship or experiment-setup diagram + figure-to-claim mapping.
 {% endif %}
 
 Document content:
@@ -307,8 +336,10 @@ JSON Schema:
 
 {% if stage_name %}
 ---
-Critical Instructions for Stage {{ stage_name }}:
-1) OUTPUT FORMAT: STRICT JSON only. No markdown fences outside the JSON.
-2) COMPLETENESS: You must cover ALL requirements listed for Module {{ stage_name }} above, in detail.
-3) NEGATIVE CONSTRAINT: Do NOT generate fields for other modules.
+Critical instructions for Stage {{ stage_name }}:
+1. OUTPUT FORMAT: STRICT JSON only. No Markdown fences outside the JSON object.
+2. COMPLETENESS: Cover ALL requirements listed for Module {{ stage_name }} above, in detail.
+3. NEGATIVE CONSTRAINT: Do NOT generate fields for other modules.
+4. Output language: {{ output_language }}. Use that language for the final content.
+5. The prompt itself is written in English. Do not switch the answer to English unless `output_language` requests English.
 {% endif %}
