@@ -1,4 +1,4 @@
-import { buildUrl, fetchJson } from '@/lib/http'
+import { buildUrl, fetchJson, fetchText } from '@/lib/http'
 import {
   createPaperDetailFreshness,
   equalPaperDetailFreshness,
@@ -125,6 +125,36 @@ export async function getSummaryPayloadCached(
     lastAccessedAt: cachedRecord?.lastAccessedAt ?? 0,
   })
   return payload
+}
+
+export async function getTranslatedMarkdownCached(
+  paperId: string,
+  lang: string,
+  url: string,
+): Promise<string> {
+  const cachedRecord = await readPaperContentRecord(paperId)
+  const cachedTranslation = cachedRecord?.translations?.[lang]
+  if (cachedTranslation && cachedTranslation.url === url) {
+    return cachedTranslation.markdown
+  }
+
+  const markdown = await fetchText(url)
+  await writePaperContentRecord({
+    paperId,
+    detail: cachedRecord?.detail ?? null,
+    detailFreshness: cachedRecord?.detailFreshness ?? null,
+    summaries: cachedRecord?.summaries ?? {},
+    translations: {
+      ...(cachedRecord?.translations ?? {}),
+      [lang]: {
+        url,
+        markdown,
+        cachedAt: Date.now(),
+      },
+    },
+    lastAccessedAt: cachedRecord?.lastAccessedAt ?? 0,
+  })
+  return markdown
 }
 
 export async function getFacet(facet: string, page: number, pageSize: number): Promise<FacetResponse> {

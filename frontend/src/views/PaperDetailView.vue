@@ -244,6 +244,11 @@ function resolveMarkdownUrl(view: string) {
   return ''
 }
 
+function translationLangForView(view: string): string | null {
+  if (!view.startsWith('translated:')) return null
+  return view.replace('translated:', '') || null
+}
+
 function goFacet(facet: string, value: string) {
   router.push(`/facet/${facet}/${encodeURIComponent(value)}`)
 }
@@ -575,6 +580,8 @@ watch([viewMode, leftView, rightView, summaryTemplate], () => {
                     <MarkdownPanel
                       :url="resolveMarkdownUrl(contentTab)"
                       :images-base-url="imagesBaseUrl"
+                      :cache-paper-id="translationLangForView(contentTab) ? paperId : undefined"
+                      :cache-translation-lang="translationLangForView(contentTab) || undefined"
                       placeholder="No markdown available."
                     />
                   </TabsContent>
@@ -645,6 +652,8 @@ watch([viewMode, leftView, rightView, summaryTemplate], () => {
                     v-else
                     :url="resolveMarkdownUrl(leftView)"
                     :images-base-url="imagesBaseUrl"
+                    :cache-paper-id="translationLangForView(leftView) ? paperId : undefined"
+                    :cache-translation-lang="translationLangForView(leftView) || undefined"
                     placeholder="No markdown available."
                   />
                 </CardContent>
@@ -699,6 +708,8 @@ watch([viewMode, leftView, rightView, summaryTemplate], () => {
                     v-else
                     :url="resolveMarkdownUrl(rightView)"
                     :images-base-url="imagesBaseUrl"
+                    :cache-paper-id="translationLangForView(rightView) ? paperId : undefined"
+                    :cache-translation-lang="translationLangForView(rightView) || undefined"
                     placeholder="No markdown available."
                   />
                 </CardContent>

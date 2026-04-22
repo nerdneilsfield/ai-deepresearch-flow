@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import { fetchText } from '@/lib/api'
+import { fetchText, getTranslatedMarkdownCached } from '@/lib/api'
 import MarkdownContent from './MarkdownContent.vue'
 
 const MAX_CACHE_SIZE = 50
@@ -19,6 +19,8 @@ const props = defineProps<{
   url?: string | null
   imagesBaseUrl?: string | null
   placeholder?: string
+  cachePaperId?: string | null
+  cacheTranslationLang?: string | null
 }>()
 
 const markdown = ref('')
@@ -38,7 +40,9 @@ async function load(url: string) {
   error.value = ''
   console.log('[MarkdownPanel] Fetching from server...')
   try {
-    const raw = await fetchText(url)
+    const raw = props.cachePaperId && props.cacheTranslationLang
+      ? await getTranslatedMarkdownCached(props.cachePaperId, props.cacheTranslationLang, url)
+      : await fetchText(url)
     // Guard against stale responses when URL changed during fetch
     if (gen !== loadGeneration) {
       console.log('[MarkdownPanel] ✗ Stale response, ignoring')
