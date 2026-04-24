@@ -1042,6 +1042,22 @@ uv run deepresearch-flow paper db api push \
   --static-export-dir ./dist/paper-static \
   --config remote.toml \
   --retry-failed push-static-errors.json
+
+# Retry only failed semantic batches from the last push
+uv run deepresearch-flow paper db api push \
+  --snapshot-db ./dist/paper_snapshot.db \
+  --embed-db ./dist/paper_vectors \
+  --config remote.toml \
+  --retry-failed push-semantic-errors.json
+
+# Slice the paper list before pushing metadata + semantic chunks
+uv run deepresearch-flow paper db api push \
+  --snapshot-db ./dist/paper_snapshot.db \
+  --embed-db ./dist/paper_vectors \
+  --config remote.toml \
+  --only-api \
+  --start-idx 100 \
+  --end-idx 200
 ```
 
 - `--static-export-dir` is optional — when provided, summary JSON payloads are included so the remote side can build FTS indexes and preview text.
@@ -1062,8 +1078,41 @@ uv run deepresearch-flow paper db api push \
 - `--only-api` and `--only-storage` are mutually exclusive.
 - `--dry-run` cannot be combined with `--only-storage`.
 - `--dry-run` silently skips semantic push even if `--embed-db` is provided.
-- `--retry-failed` applies only to static storage and cannot be combined with `--only-api`.
+- `--retry-failed` accepts either `push-static-errors.json` or `push-semantic-errors.json` and routes retry behavior by report type.
+- Semantic retry via `api push --retry-failed push-semantic-errors.json` requires `--embed-db`.
+- `--start-idx/--end-idx` use paper-list indices derived from the local snapshot export, not semantic chunk indices.
+- `--start-idx/--end-idx` cannot be combined with `--only-storage`.
 - If updated `summary` / `manifest` JSON behaves differently in one browser only, try a hard refresh or clear that browser's site cache first; stale browser cache can make static JSON appear inconsistent after a push.
+
+#### Push Semantic Only from a Local Embed DB
+
+Use `push-semantic` when you already have a local LanceDB semantic index and only want to sync semantic rows:
+
+```bash
+# Push all semantic groups from a local embed DB
+uv run deepresearch-flow paper db api push-semantic \
+  --embed-db ./dist/paper_vectors \
+  --config remote.toml
+
+# Retry failed semantic batches only
+uv run deepresearch-flow paper db api push-semantic \
+  --embed-db ./dist/paper_vectors \
+  --config remote.toml \
+  --retry-failed push-semantic-errors.json
+
+# Select a semantic chunk window, then expand to full remote groups before push
+uv run deepresearch-flow paper db api push-semantic \
+  --embed-db ./dist/paper_vectors \
+  --config remote.toml \
+  --start-chunk-idx 1000 \
+  --end-chunk-idx 2000
+```
+
+- `push-semantic` is semantic-only: it does not push metadata or static files.
+- `--start-chunk-idx/--end-chunk-idx` are `0`-based, `end` is exclusive, and `-1` means “to the end”.
+- Chunk-window selection is only used to choose groups; the command expands back to full `(doc_id, template_tag)` groups before pushing, so the remote semantic index is never updated with half a group.
+- `--retry-failed` on `push-semantic` accepts semantic retry reports only.
+- `--retry-failed` cannot be combined with `--start-chunk-idx/--end-chunk-idx`.
 
 ### 3.2) MCP (FastMCP Streamable HTTP + SSE)
 

@@ -1081,6 +1081,22 @@ uv run deepresearch-flow paper db api push \
   --static-export-dir ./dist/paper-static \
   --config remote.toml \
   --retry-failed push-static-errors.json
+
+# 仅重试上次语义分块推送失败的批次
+uv run deepresearch-flow paper db api push \
+  --snapshot-db ./dist/paper_snapshot.db \
+  --embed-db ./dist/paper_vectors \
+  --config remote.toml \
+  --retry-failed push-semantic-errors.json
+
+# 在推送元数据 + 语义分块前先按论文列表切片
+uv run deepresearch-flow paper db api push \
+  --snapshot-db ./dist/paper_snapshot.db \
+  --embed-db ./dist/paper_vectors \
+  --config remote.toml \
+  --only-api \
+  --start-idx 100 \
+  --end-idx 200
 ```
 
 - `--static-export-dir` 可选 — 提供后会将 summary JSON 内容一并推送，使远端可构建 FTS 索引和预览文本。
@@ -1101,8 +1117,41 @@ uv run deepresearch-flow paper db api push \
 - `--only-api` 与 `--only-storage` 互斥，不能同时使用。
 - `--dry-run` 不能与 `--only-storage` 一起使用。
 - 即使提供了 `--embed-db`，`--dry-run` 也会跳过语义分块推送。
-- `--retry-failed` 只作用于静态存储，不能与 `--only-api` 一起使用。
+- `--retry-failed` 现在既可以接收 `push-static-errors.json`，也可以接收 `push-semantic-errors.json`，CLI 会按报告类型自动分流。
+- 通过 `api push --retry-failed push-semantic-errors.json` 重试语义分块时，必须同时提供 `--embed-db`。
+- `--start-idx/--end-idx` 使用的是本地 snapshot 导出的论文列表索引，不是 semantic chunk 的索引。
+- `--start-idx/--end-idx` 不能和 `--only-storage` 一起使用。
 - 如果更新后的 `summary` / `manifest` JSON 只在某一个浏览器里表现异常，先尝试强制刷新或清理该浏览器的站点缓存；静态 JSON 在 push 之后可能会被陈旧浏览器缓存影响。
+
+#### 仅从本地 Embed DB 推送语义分块
+
+如果你已经有本地 LanceDB 向量库，只想同步 semantic 数据，可以使用单独的 `push-semantic`：
+
+```bash
+# 推送本地 embed DB 中的全部语义 group
+uv run deepresearch-flow paper db api push-semantic \
+  --embed-db ./dist/paper_vectors \
+  --config remote.toml
+
+# 仅重试失败的语义批次
+uv run deepresearch-flow paper db api push-semantic \
+  --embed-db ./dist/paper_vectors \
+  --config remote.toml \
+  --retry-failed push-semantic-errors.json
+
+# 按 semantic chunk 窗口选择，再自动扩展为完整 group 推送
+uv run deepresearch-flow paper db api push-semantic \
+  --embed-db ./dist/paper_vectors \
+  --config remote.toml \
+  --start-chunk-idx 1000 \
+  --end-chunk-idx 2000
+```
+
+- `push-semantic` 只处理语义分块，不会推送元数据或静态文件。
+- `--start-chunk-idx/--end-chunk-idx` 是 `0` 基，`end` 为排他上界，`-1` 表示到末尾。
+- chunk 窗口只用于选中 group；真正推送前会自动扩展回完整的 `(doc_id, template_tag)` group，避免远端 semantic 索引只收到半个 group。
+- `push-semantic` 的 `--retry-failed` 只接受 semantic 错误报告。
+- `--retry-failed` 不能与 `--start-chunk-idx/--end-chunk-idx` 一起使用。
 
 ### 4) 前端（开发 / 构建）
 
