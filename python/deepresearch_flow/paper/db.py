@@ -57,6 +57,64 @@ def write_json(path: Path, data: Any) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _slice_by_index_range[T](items: list[T], start_idx: int, end_idx: int) -> list[T]:
+    slice_end = end_idx if end_idx != -1 else None
+    return items[start_idx:slice_end]
+
+
+def _load_api_push_retry_report(path: Path) -> tuple[str, list[Any]]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise click.ClickException(f"Invalid JSON in retry report {path}: {exc}") from exc
+
+    if not isinstance(data, list):
+        raise click.ClickException("Retry report must be a JSON list")
+    if not data:
+        return "empty", []
+    if all(isinstance(entry, dict) and isinstance(entry.get("path"), str) for entry in data):
+        return "static", [str(entry["path"]) for entry in data]
+    if all(isinstance(entry, dict) and isinstance(entry.get("request"), dict) for entry in data):
+        return "semantic", [entry["request"] for entry in data]
+    raise click.ClickException(
+        "Unsupported retry report format. Expected static entries with 'path' or semantic entries with 'request'."
+    )
+
+
+def _semantic_group_key(chunk: dict[str, Any]) -> tuple[str, str]:
+    return str(chunk.get("doc_id") or ""), str(chunk.get("template_tag") or "")
+
+
+def _sort_semantic_chunks(chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(
+        chunks,
+        key=lambda chunk: (
+            str(chunk.get("doc_id") or ""),
+            str(chunk.get("template_tag") or ""),
+            str(chunk.get("chunk_type") or ""),
+            int(chunk.get("chunk_index") or 0),
+            str(chunk.get("id") or ""),
+        ),
+    )
+
+
+def _expand_semantic_chunk_window(
+    chunks: list[dict[str, Any]],
+    *,
+    start_chunk_idx: int,
+    end_chunk_idx: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], set[tuple[str, str]]]:
+    ordered_chunks = _sort_semantic_chunks(chunks)
+    selected_window = _slice_by_index_range(ordered_chunks, start_chunk_idx, end_chunk_idx)
+    selected_groups = {_semantic_group_key(chunk) for chunk in selected_window}
+    expanded_chunks = [
+        chunk
+        for chunk in ordered_chunks
+        if _semantic_group_key(chunk) in selected_groups
+    ]
+    return ordered_chunks, expanded_chunks, selected_groups
+
+
 def load_json_payload(path: Path) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -1137,6 +1195,15 @@ def register_db_commands(db_group: click.Group) -> None:
         show_default=True,
         help="Concurrent workers for static storage push",
     )
+    @click.option("--start-idx", "start_idx", type=int, default=0, show_default=True, help="0-based start index for papers")
+    @click.option(
+        "--end-idx",
+        "end_idx",
+        type=int,
+        default=-1,
+        show_default=True,
+        help="0-based exclusive end index for papers (-1 = all)",
+    )
     def api_push(
         snapshot_db: str,
         static_export_dir: str | None,
@@ -1147,6 +1214,8 @@ def register_db_commands(db_group: click.Group) -> None:
         only_api: bool,
         storage_concurrency: int,
         embed_db: str | None,
+        start_idx: int,
+        end_idx: int,
     ) -> None:
         """Push papers from a local snapshot DB to a remote admin API."""
         from rich.console import Console
@@ -1179,33 +1248,68 @@ def register_db_commands(db_group: click.Group) -> None:
             raise click.ClickException("--dry-run cannot be used with --only-storage")
         if embed_db and only_storage:
             raise click.ClickException("--embed-db cannot be combined with --only-storage")
+        if start_idx < 0:
+            raise click.ClickException("--start-idx must be >= 0")
+        if end_idx < -1:
+            raise click.ClickException("--end-idx must be -1 or >= 0")
+        if only_storage and (start_idx != 0 or end_idx != -1):
+            raise click.ClickException("--start-idx/--end-idx cannot be used with --only-storage")
         if embed_db and dry_run:
             embed_db = None
         if storage_concurrency < 1:
             raise click.ClickException("--storage-concurrency must be at least 1")
         if only_api and retry_failed_path:
             raise click.ClickException("--retry-failed cannot be used with --only-api")
-        if retry_failed_path and not static_export_dir:
-            raise click.ClickException("--retry-failed requires --static-export-dir")
+        if retry_failed_path and not static_export_dir and not embed_db:
+            raise click.ClickException("--retry-failed requires --static-export-dir or --embed-db")
         if only_storage and not static_dir:
             raise click.ClickException("--only-storage requires --static-export-dir")
 
         config = load_remote_config(config_file)
 
-        if retry_failed_path and not config.storage:
-            raise click.ClickException("--retry-failed requires [remote.storage] in config")
+        retry_mode = "none"
+        retry_static_files: list[str] | None = None
+        retry_semantic_requests: list[dict[str, Any]] | None = None
+        if retry_failed_path:
+            retry_mode, retry_payload = _load_api_push_retry_report(Path(retry_failed_path))
+            if retry_mode == "static":
+                retry_static_files = [str(item) for item in retry_payload]
+            elif retry_mode == "semantic":
+                retry_semantic_requests = [item for item in retry_payload if isinstance(item, dict)]
+            elif retry_mode == "empty":
+                console.print("[yellow]Retry report is empty; nothing to push.[/yellow]")
+                return
+
+        if retry_mode == "static" and not config.storage:
+            raise click.ClickException("--retry-failed static retry requires [remote.storage] in config")
+        if retry_mode == "static" and not static_dir:
+            raise click.ClickException("Static retry report requires --static-export-dir")
+        if retry_mode == "semantic" and not embed_db:
+            raise click.ClickException("Semantic retry report requires --embed-db")
         if only_storage and not config.storage:
             raise click.ClickException("--only-storage requires [remote.storage] in config")
 
         console.print(f"[cyan]Remote:[/cyan] {config.api_base_url}")
         console.print(f"[cyan]Batch size:[/cyan] {config.batch_size}")
 
-        should_push_api = not only_storage and not retry_failed_path
-        should_push_storage = not only_api and static_dir and config.storage
+        should_push_api = not only_storage and retry_mode == "none"
+        should_push_storage = not only_api and static_dir and config.storage and retry_mode in {"none", "static"}
+        should_push_semantic = embed_db is not None and retry_mode != "static"
+
+        selected_doc_ids: set[str] | None = None
+        if start_idx != 0 or end_idx != -1:
+            indexed_papers = extract_papers_from_db(db_path, static_export_dir=static_dir)
+            indexed_papers = _slice_by_index_range(indexed_papers, start_idx, end_idx)
+            selected_doc_ids = {
+                str(paper["paper_id"])
+                for paper in indexed_papers
+                if isinstance(paper, dict) and paper.get("paper_id") is not None
+            }
 
         if should_push_api:
             console.print("[cyan]Extracting papers from local DB...[/cyan]")
             papers = extract_papers_from_db(db_path, static_export_dir=static_dir)
+            papers = _slice_by_index_range(papers, start_idx, end_idx)
             console.print(f"[green]Found {len(papers)} papers[/green]")
 
             if not papers:
@@ -1272,15 +1376,14 @@ def register_db_commands(db_group: click.Group) -> None:
         if should_push_storage:
             from deepresearch_flow.paper.snapshot.push_static import (
                 discover_static_files,
-                load_retry_files,
                 push_static_files,
                 write_error_report,
             )
             from deepresearch_flow.storage.base import StorageAuthError
             from deepresearch_flow.storage.factory import create_storage
 
-            if retry_failed_path:
-                only_files = load_retry_files(Path(retry_failed_path))
+            if retry_mode == "static":
+                only_files = retry_static_files
                 console.print(f"[cyan]Retrying {len(only_files)} failed static files...[/cyan]")
             else:
                 only_files = None
@@ -1356,8 +1459,7 @@ def register_db_commands(db_group: click.Group) -> None:
                     f"{len(static_stats.failed_files)} static file(s) failed to upload"
                 )
 
-
-        if embed_db:
+        if should_push_semantic:
             from deepresearch_flow.paper.snapshot.push_semantic import (
                 SemanticPushError,
                 group_chunks_for_push,
@@ -1371,16 +1473,35 @@ def register_db_commands(db_group: click.Group) -> None:
                 raise click.ClickException(f"Embed DB not found: {embed_path}")
 
             index_meta = load_index_meta(embed_path)
-            embed_store = open_store(embed_path)
-            all_chunks = read_all_chunks(embed_store)
-            if all_chunks:
+            if retry_semantic_requests is not None:
+                semantic_requests = retry_semantic_requests
+                if selected_doc_ids is not None:
+                    semantic_requests = [
+                        request
+                        for request in semantic_requests
+                        if str(request.get("group", {}).get("doc_id") or "") in selected_doc_ids
+                    ]
+                all_chunks: list[dict[str, Any]] = []
+                semantic_chunk_total = sum(len(list(request.get("chunks") or [])) for request in semantic_requests)
+            else:
+                embed_store = open_store(embed_path)
+                all_chunks = read_all_chunks(embed_store)
+                if selected_doc_ids is not None:
+                    all_chunks = [
+                        chunk
+                        for chunk in all_chunks
+                        if str(chunk.get("doc_id") or "") in selected_doc_ids
+                    ]
                 semantic_cfg = config.semantic
                 semantic_requests = group_chunks_for_push(
                     all_chunks,
                     max_rows=semantic_cfg.max_rows,
                     max_payload_bytes=semantic_cfg.max_payload_bytes,
                 )
-                console.print(f"[cyan]Pushing {len(all_chunks)} semantic chunks...[/cyan]")
+                semantic_chunk_total = len(all_chunks)
+            if semantic_requests:
+                semantic_cfg = config.semantic
+                console.print(f"[cyan]Pushing {semantic_chunk_total} semantic chunks...[/cyan]")
                 console.print(
                     "[cyan]Semantic config:[/cyan] "
                     f"max_rows={semantic_cfg.max_rows} "
@@ -1390,7 +1511,7 @@ def register_db_commands(db_group: click.Group) -> None:
                     f"retry_backoff_seconds={semantic_cfg.retry_backoff_seconds}"
                 )
                 console.print(f"[cyan]Semantic requests:[/cyan] {len(semantic_requests)}")
-                progress = tqdm(total=len(all_chunks), desc="Semantic push", unit="chunk")
+                progress = tqdm(total=semantic_chunk_total, desc="Semantic push", unit="chunk")
                 progress_counts = {"requests": 0, "retries": 0, "ins": 0, "upd": 0, "skip": 0, "del": 0}
 
                 def on_semantic_batch(batch_idx: int, chunk_count: int, data: dict[str, Any]) -> None:
@@ -1453,6 +1574,208 @@ def register_db_commands(db_group: click.Group) -> None:
                 )
             else:
                 console.print("[yellow]No semantic chunks to push.[/yellow]")
+
+    @api_group.command("push-semantic")
+    @click.option(
+        "--embed-db",
+        "embed_db",
+        required=True,
+        type=click.Path(path_type=str),
+        help="Path to local semantic LanceDB directory",
+    )
+    @click.option(
+        "--config",
+        "config_path",
+        default="remote.toml",
+        show_default=True,
+        help="Path to remote config TOML file",
+    )
+    @click.option(
+        "--retry-failed",
+        "retry_failed_path",
+        default=None,
+        type=click.Path(exists=True),
+        help="Path to push-semantic-errors.json to retry only failed semantic requests",
+    )
+    @click.option(
+        "--start-chunk-idx",
+        "start_chunk_idx",
+        type=int,
+        default=0,
+        show_default=True,
+        help="0-based start chunk index",
+    )
+    @click.option(
+        "--end-chunk-idx",
+        "end_chunk_idx",
+        type=int,
+        default=-1,
+        show_default=True,
+        help="0-based exclusive end chunk index (-1 = all)",
+    )
+    def api_push_semantic(
+        embed_db: str,
+        config_path: str,
+        retry_failed_path: str | None,
+        start_chunk_idx: int,
+        end_chunk_idx: int,
+    ) -> None:
+        """Push only semantic rows from a local embed DB to the remote admin API."""
+        from deepresearch_flow.paper.snapshot.push import load_remote_config
+        from deepresearch_flow.paper.snapshot.push_semantic import (
+            SemanticPushError,
+            group_chunks_for_push,
+            push_semantic_chunks,
+            write_error_report as write_semantic_error_report,
+        )
+        from deepresearch_flow.paper.vector_store import load_index_meta, open_store, read_all_chunks
+
+        console = Console()
+
+        config_file = Path(config_path)
+        if not config_file.exists():
+            raise click.ClickException(f"Config file not found: {config_file}")
+
+        if start_chunk_idx < 0:
+            raise click.ClickException("--start-chunk-idx must be >= 0")
+        if end_chunk_idx < -1:
+            raise click.ClickException("--end-chunk-idx must be -1 or >= 0")
+        if retry_failed_path and (start_chunk_idx != 0 or end_chunk_idx != -1):
+            raise click.ClickException(
+                "--retry-failed cannot be combined with --start-chunk-idx/--end-chunk-idx"
+            )
+
+        config = load_remote_config(config_file)
+        console.print(f"[cyan]Remote:[/cyan] {config.api_base_url}")
+
+        retry_semantic_requests: list[dict[str, Any]] | None = None
+        if retry_failed_path:
+            retry_mode, retry_payload = _load_api_push_retry_report(Path(retry_failed_path))
+            if retry_mode == "empty":
+                console.print("[yellow]Retry report is empty; nothing to push.[/yellow]")
+                return
+            if retry_mode != "semantic":
+                raise click.ClickException("push-semantic only accepts semantic retry reports")
+            retry_semantic_requests = [item for item in retry_payload if isinstance(item, dict)]
+
+        embed_path = Path(embed_db)
+        if not embed_path.exists():
+            raise click.ClickException(f"Embed DB not found: {embed_path}")
+
+        index_meta = load_index_meta(embed_path)
+        semantic_cfg = config.semantic
+
+        if retry_semantic_requests is not None:
+            semantic_requests = retry_semantic_requests
+            semantic_chunk_total = sum(len(list(request.get("chunks") or [])) for request in semantic_requests)
+            selected_groups = {
+                (
+                    str(request.get("group", {}).get("doc_id") or ""),
+                    str(request.get("group", {}).get("template_tag") or ""),
+                )
+                for request in semantic_requests
+            }
+            all_chunks: list[dict[str, Any]] = []
+            console.print(f"[cyan]Retrying semantic requests:[/cyan] {len(semantic_requests)}")
+        else:
+            embed_store = open_store(embed_path)
+            local_chunks = read_all_chunks(embed_store)
+            ordered_chunks, all_chunks, selected_groups = _expand_semantic_chunk_window(
+                local_chunks,
+                start_chunk_idx=start_chunk_idx,
+                end_chunk_idx=end_chunk_idx,
+            )
+            semantic_chunk_total = len(all_chunks)
+            console.print(f"[cyan]Local semantic chunks:[/cyan] {len(ordered_chunks)}")
+            slice_end = end_chunk_idx if end_chunk_idx != -1 else len(ordered_chunks)
+            console.print(f"[cyan]Chunk window:[/cyan] [{start_chunk_idx}, {slice_end})")
+            console.print(f"[cyan]Selected groups:[/cyan] {len(selected_groups)}")
+            console.print(f"[cyan]Expanded chunks:[/cyan] {semantic_chunk_total}")
+            if not all_chunks:
+                console.print("[yellow]Nothing to push.[/yellow]")
+                return
+            semantic_requests = group_chunks_for_push(
+                all_chunks,
+                max_rows=semantic_cfg.max_rows,
+                max_payload_bytes=semantic_cfg.max_payload_bytes,
+            )
+
+        if not semantic_requests:
+            console.print("[yellow]Nothing to push.[/yellow]")
+            return
+
+        console.print(
+            "[cyan]Semantic config:[/cyan] "
+            f"max_rows={semantic_cfg.max_rows} "
+            f"max_payload_bytes={semantic_cfg.max_payload_bytes} "
+            f"timeout={semantic_cfg.timeout} "
+            f"retries={semantic_cfg.retries} "
+            f"retry_backoff_seconds={semantic_cfg.retry_backoff_seconds}"
+        )
+        console.print(f"[cyan]Semantic requests:[/cyan] {len(semantic_requests)}")
+        progress = tqdm(total=semantic_chunk_total, desc="Semantic push", unit="chunk")
+        progress_counts = {"requests": 0, "retries": 0, "ins": 0, "upd": 0, "skip": 0, "del": 0}
+
+        def on_semantic_batch(batch_idx: int, chunk_count: int, data: dict[str, Any]) -> None:
+            progress_counts["requests"] = batch_idx + 1
+            progress_counts["ins"] += int(data.get("inserted", 0))
+            progress_counts["upd"] += int(data.get("updated", 0))
+            progress_counts["skip"] += int(data.get("skipped", 0))
+            progress_counts["del"] += int(data.get("deleted", 0))
+            progress.update(chunk_count)
+            progress.set_postfix(progress_counts, refresh=False)
+
+        def on_semantic_retry(batch_idx: int, attempt: int, failure: dict[str, Any]) -> None:
+            progress_counts["retries"] += 1
+            progress.set_postfix(progress_counts, refresh=False)
+            console.print(
+                "  [yellow]semantic retry[/yellow] "
+                f"{attempt}/{semantic_cfg.retries} "
+                f"batch={batch_idx + 1}/{len(semantic_requests)} "
+                f"doc={failure.get('doc_id') or '?'} "
+                f"tag={failure.get('template_tag') or '_shared'} "
+                f"chunks={failure.get('chunk_count', 0)} "
+                f"payload_bytes={failure.get('payload_bytes', 0)} "
+                f"error={failure.get('error')}"
+            )
+
+        try:
+            semantic_stats = push_semantic_chunks(
+                all_chunks,
+                index_meta,
+                config,
+                requests=semantic_requests,
+                on_batch=on_semantic_batch,
+                on_retry=on_semantic_retry,
+            )
+        except SemanticPushError as exc:
+            error_path = Path("push-semantic-errors.json")
+            write_semantic_error_report(exc.stats.errors, error_path)
+            failure = exc.failure
+            console.print("\n[red]Semantic batch failed:[/red]")
+            console.print(
+                f"  batch={int(failure.get('batch_index', 0)) + 1}/{failure.get('total_batches', 0)} "
+                f"doc={failure.get('doc_id') or '?'} "
+                f"tag={failure.get('template_tag') or '_shared'}"
+            )
+            console.print(
+                f"  chunks={failure.get('chunk_count', 0)} "
+                f"payload_bytes={failure.get('payload_bytes', 0)} "
+                f"attempts={failure.get('attempts', 0)}"
+            )
+            console.print(f"  error={failure.get('error')}")
+            console.print(f"\nFull error list saved to [bold]{error_path}[/bold]")
+            raise click.ClickException(f"Semantic push failed: {exc}") from exc
+        except Exception as exc:
+            raise click.ClickException(f"Semantic push failed: {exc}") from exc
+        finally:
+            progress.close()
+
+        console.print(
+            f"[green]Semantic:[/green] requests={semantic_stats.batches_sent} "
+            f"ins={semantic_stats.inserted} upd={semantic_stats.updated} "
+            f"skip={semantic_stats.skipped} del={semantic_stats.deleted}"
+        )
 
     @db_group.command("append-bibtex")
     @click.option("-i", "--input", "input_path", required=True, help="Input JSON file path")
