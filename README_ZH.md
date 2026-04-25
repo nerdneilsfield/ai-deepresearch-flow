@@ -1379,7 +1379,7 @@ uv run deepresearch-flow paper db snapshot build ...
 - OCR 修复：`--fix-level` 支持断段合并与引用修复（`[1]` -> `[^1]`）。
 - 失败恢复：支持失败重试与后备模型。
 - 多文档调度：文档首轮、重试、fallback 现在分开走独立队列。
-- 并发控制：使用 `--document-window`、`--initial-workers`、`--retry-workers`，以及 `--main-concurrency` / `--retry-concurrency` / fallback 并发参数。
+- 并发控制：使用 `--document-window`、`--initial-workers`、`--retry-workers`，以及 `--main-concurrency` / `--retry-concurrency` / fallback 并发参数。`--max-concurrency` 是可选总上限；不设置时默认等于已启用 stage 的并发数之和。
 - 配置默认值：可以把 `model` / `retry_model` / `fallback_model` / `fallback_model_2` 以及同一套并发默认值写到 `config.toml` 的 `[translator_config]` 里。
 - 兼容提示：`--group-concurrency` 已废弃，会映射到 `--initial-workers`。
 

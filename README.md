@@ -1406,7 +1406,7 @@ The translator module is built for scientific documents. It uses a node-based ar
 - OCR Repair: use `--fix-level` to merge broken paragraphs and convert text references (`[1]`) to clickable Markdown footnotes (`[^1]`).
 - Context-Aware: supports retries for failed chunks and falls back gracefully.
 - Multi-document Scheduler: documents, retries, and fallback stages now run through separate worker queues.
-- Concurrency Controls: use `--document-window`, `--initial-workers`, `--retry-workers`, and provider-level `--main-concurrency` / `--retry-concurrency` / fallback concurrency flags.
+- Concurrency Controls: use `--document-window`, `--initial-workers`, `--retry-workers`, and provider-level `--main-concurrency` / `--retry-concurrency` / fallback concurrency flags. `--max-concurrency` is an optional total cap; when omitted, it defaults to the sum of enabled stage concurrencies.
 - Config Defaults: put `model` / `retry_model` / `fallback_model` / `fallback_model_2` and the same scheduler defaults in `[translator_config]` inside `config.toml`.
 - Backward Compatibility: `--group-concurrency` is deprecated and maps to `--initial-workers`.
 

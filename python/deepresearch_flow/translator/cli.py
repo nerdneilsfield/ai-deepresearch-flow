@@ -133,7 +133,13 @@ def translator() -> None:
 @click.option("--output-dir", "output_dir", default=None, help="Directory for translated markdown outputs")
 @click.option("--fix-level", "fix_level", default="moderate", type=click.Choice(["off", "moderate", "aggressive"]))
 @click.option("--max-chunk-chars", "max_chunk_chars", default=4000, show_default=True, type=int)
-@click.option("--max-concurrency", "max_concurrency", default=4, show_default=True, type=int)
+@click.option(
+    "--max-concurrency",
+    "max_concurrency",
+    default=None,
+    type=int,
+    help="Total provider request concurrency (default: sum of enabled stage concurrencies)",
+)
 @click.option(
     "--group-concurrency",
     "group_concurrency",
@@ -265,7 +271,7 @@ def translate(
     output_dir: str | None,
     fix_level: str,
     max_chunk_chars: int,
-    max_concurrency: int,
+    max_concurrency: int | None,
     group_concurrency: int | None,
     document_window: int | None,
     initial_workers: int | None,
@@ -486,7 +492,7 @@ def translate(
 
     if max_chunk_chars <= 0:
         raise click.ClickException("--max-chunk-chars must be positive")
-    if max_concurrency <= 0:
+    if max_concurrency is not None and max_concurrency <= 0:
         raise click.ClickException("--max-concurrency must be positive")
     if initial_workers is None:
         initial_workers = 1
@@ -647,15 +653,29 @@ def translate(
         from deepresearch_flow.translator.scheduler import DocStage, QueueConfig, Scheduler
 
         nonlocal_document_window = document_window if document_window is not None else len(to_process)
-        global_sem = asyncio.Semaphore(max_concurrency)
-        main_sem = asyncio.Semaphore(main_concurrency or max_concurrency)
+        main_capacity = main_concurrency or max_concurrency or initial_workers
+        retry_capacity = retry_concurrency_val
+        fallback_capacity = fallback_concurrency_val or max_concurrency or fallback_workers
+        fallback_2_capacity = fallback_2_concurrency_val or max_concurrency or fallback_2_workers
+        global_capacity = max_concurrency
+        if global_capacity is None:
+            global_capacity = main_capacity
+            if retry_capacity is not None:
+                global_capacity += retry_capacity
+            if fallback_provider and fallback_model_name:
+                global_capacity += fallback_capacity
+            if fallback_provider_2 and fallback_model_name_2:
+                global_capacity += fallback_2_capacity
+
+        global_sem = asyncio.Semaphore(global_capacity)
+        main_sem = asyncio.Semaphore(main_capacity)
         retry_sem = (
-            asyncio.Semaphore(retry_concurrency_val)
-            if retry_concurrency_val is not None
+            asyncio.Semaphore(retry_capacity)
+            if retry_capacity is not None
             else main_sem
         )
-        fb_sem = asyncio.Semaphore(fallback_concurrency_val or max_concurrency)
-        fb2_sem = asyncio.Semaphore(fallback_2_concurrency_val or max_concurrency)
+        fb_sem = asyncio.Semaphore(fallback_capacity)
+        fb2_sem = asyncio.Semaphore(fallback_2_capacity)
 
         queue_configs: list[QueueConfig] = [
             QueueConfig(
@@ -709,6 +729,42 @@ def translate(
                     retry_limit=fallback_retry_times_2 or max(retry_times, 1),
                 )
             )
+
+        global_mode = "explicit" if max_concurrency is not None else "auto=sum(enabled stages)"
+        retry_mode = "dedicated" if retry_capacity is not None else "shared-main"
+        fallback_desc = (
+            f"workers:{fallback_workers}/concurrency:{fallback_capacity}"
+            if fallback_provider and fallback_model_name
+            else "disabled"
+        )
+        fallback_2_desc = (
+            f"workers:{fallback_2_workers}/concurrency:{fallback_2_capacity}"
+            if fallback_provider_2 and fallback_model_name_2
+            else "disabled"
+        )
+        logger.info(
+            "Translator scheduler concurrency: global=%d (%s), document_window=%d, "
+            "initial=workers:%d/concurrency:%d, retry=workers:%d/concurrency:%d/%s, "
+            "fallback=%s, fallback_2=%s",
+            global_capacity,
+            global_mode,
+            nonlocal_document_window,
+            initial_workers,
+            main_capacity,
+            retry_workers,
+            retry_capacity if retry_capacity is not None else main_capacity,
+            retry_mode,
+            fallback_desc,
+            fallback_2_desc,
+        )
+        logger.info(
+            "Translator scheduler models: main=%s, retry=%s (%s), fallback=%s, fallback_2=%s",
+            model_name,
+            retry_model_name,
+            retry_mode,
+            fallback_model_name or "disabled",
+            fallback_model_name_2 or "disabled",
+        )
 
         progress = ProgressReporter(len(to_process), [qc.stage.value for qc in queue_configs])
         try:

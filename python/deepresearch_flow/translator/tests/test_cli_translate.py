@@ -523,6 +523,175 @@ def test_translate_retry_cli_options_override_config_defaults(
     }
 
 
+def test_translate_defaults_global_concurrency_to_enabled_stage_sum(
+    tmp_path: Path, monkeypatch
+) -> None:
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    source_path = input_dir / "doc.md"
+    source_path.write_text("source content", encoding="utf-8")
+    config_path = _write_config(
+        tmp_path,
+        extra="""
+        [translator_config]
+        model = "openai/gpt-4.1"
+        retry_model = "openai/gpt-4.1-fallback"
+        fallback_model = "openai/gpt-4.1-fallback"
+        main_concurrency = 4
+        retry_concurrency = 2
+        fallback_concurrency = 3
+        """,
+    )
+    seen: dict[str, int] = {}
+
+    async def fake_run(self, *, paths, output_map, **kwargs):
+        _ = (paths, output_map, kwargs)
+        seen["global_concurrency"] = await _available_permits(self._global_sem)
+        seen["main_concurrency"] = await _available_permits(
+            self._configs[DocStage.TRANSLATING].provider_semaphore
+        )
+        seen["retry_concurrency"] = await _available_permits(
+            self._configs[DocStage.RETRYING].provider_semaphore
+        )
+        seen["fallback_concurrency"] = await _available_permits(
+            self._configs[DocStage.FALLBACK_1].provider_semaphore
+        )
+        return []
+
+    monkeypatch.setattr("deepresearch_flow.translator.scheduler.Scheduler.run", fake_run)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "translator",
+            "translate",
+            "--config",
+            str(config_path),
+            "--input",
+            str(input_dir),
+            "--output-dir",
+            str(output_dir),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert seen == {
+        "global_concurrency": 9,
+        "main_concurrency": 4,
+        "retry_concurrency": 2,
+        "fallback_concurrency": 3,
+    }
+
+
+def test_translate_explicit_max_concurrency_overrides_stage_sum(
+    tmp_path: Path, monkeypatch
+) -> None:
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    source_path = input_dir / "doc.md"
+    source_path.write_text("source content", encoding="utf-8")
+    config_path = _write_config(
+        tmp_path,
+        extra="""
+        [translator_config]
+        model = "openai/gpt-4.1"
+        retry_model = "openai/gpt-4.1-fallback"
+        fallback_model = "openai/gpt-4.1-fallback"
+        main_concurrency = 4
+        retry_concurrency = 2
+        fallback_concurrency = 3
+        """,
+    )
+    seen: dict[str, int] = {}
+
+    async def fake_run(self, *, paths, output_map, **kwargs):
+        _ = (paths, output_map, kwargs)
+        seen["global_concurrency"] = await _available_permits(self._global_sem)
+        return []
+
+    monkeypatch.setattr("deepresearch_flow.translator.scheduler.Scheduler.run", fake_run)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "translator",
+            "translate",
+            "--config",
+            str(config_path),
+            "--input",
+            str(input_dir),
+            "--output-dir",
+            str(output_dir),
+            "--max-concurrency",
+            "5",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert seen == {"global_concurrency": 5}
+
+
+def test_translate_logs_resolved_scheduler_concurrency(
+    tmp_path: Path, monkeypatch, caplog
+) -> None:
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    source_path = input_dir / "doc.md"
+    source_path.write_text("source content", encoding="utf-8")
+    config_path = _write_config(
+        tmp_path,
+        extra="""
+        [translator_config]
+        model = "openai/gpt-4.1"
+        retry_model = "openai/gpt-4.1-fallback"
+        fallback_model = "openai/gpt-4.1-fallback"
+        document_window = 7
+        initial_workers = 4
+        retry_workers = 2
+        fallback_workers = 3
+        main_concurrency = 4
+        retry_concurrency = 2
+        fallback_concurrency = 3
+        """,
+    )
+
+    async def fake_run(self, *, paths, output_map, **kwargs):
+        _ = (self, paths, output_map, kwargs)
+        return []
+
+    monkeypatch.setattr("deepresearch_flow.translator.scheduler.Scheduler.run", fake_run)
+    caplog.set_level(logging.INFO, logger="deepresearch_flow.translator.cli")
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "translator",
+            "translate",
+            "--config",
+            str(config_path),
+            "--input",
+            str(input_dir),
+            "--output-dir",
+            str(output_dir),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    log_text = "\n".join(caplog.messages)
+    assert "Translator scheduler concurrency: global=9 (auto=sum(enabled stages))" in log_text
+    assert "document_window=7" in log_text
+    assert "initial=workers:4/concurrency:4" in log_text
+    assert "retry=workers:2/concurrency:2/dedicated" in log_text
+    assert "fallback=workers:3/concurrency:3" in log_text
+    assert "Translator scheduler models: main=gpt-4.1, retry=gpt-4.1-fallback (dedicated)" in log_text
+
+
 def test_group_concurrency_maps_to_initial_workers(tmp_path: Path, monkeypatch) -> None:
     input_dir = tmp_path / "input"
     output_dir = tmp_path / "out"
