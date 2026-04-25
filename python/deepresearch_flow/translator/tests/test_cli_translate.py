@@ -107,6 +107,16 @@ async def _identity_format_markdown(self, text, stage):
     return text
 
 
+async def _available_permits(semaphore) -> int:
+    count = 0
+    while not semaphore.locked():
+        await semaphore.acquire()
+        count += 1
+    for _ in range(count):
+        semaphore.release()
+    return count
+
+
 def test_configure_logging_quiets_httpx_debug_noise(monkeypatch) -> None:
     calls: dict[str, str] = {}
     monkeypatch.setattr(
@@ -270,7 +280,9 @@ def test_translate_uses_translator_config_defaults_for_scheduler(tmp_path: Path,
         seen["document_window"] = self._document_window
         seen["initial_workers"] = self._configs[DocStage.TRANSLATING].workers
         seen["retry_workers"] = self._configs[DocStage.RETRYING].workers
-        seen["main_concurrency"] = self._configs[DocStage.TRANSLATING].provider_semaphore._value
+        seen["main_concurrency"] = await _available_permits(
+            self._configs[DocStage.TRANSLATING].provider_semaphore
+        )
         return []
 
     monkeypatch.setattr("deepresearch_flow.translator.scheduler.Scheduler.run", fake_run)
@@ -295,6 +307,219 @@ def test_translate_uses_translator_config_defaults_for_scheduler(tmp_path: Path,
         "initial_workers": 3,
         "retry_workers": 2,
         "main_concurrency": 2,
+    }
+
+
+def test_translate_uses_translator_config_retry_model_and_concurrency(
+    tmp_path: Path, monkeypatch
+) -> None:
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    source_path = input_dir / "doc.md"
+    source_path.write_text("source content", encoding="utf-8")
+    config_path = _write_config(
+        tmp_path,
+        extra="""
+        [translator_config]
+        model = "openai/gpt-4.1"
+        retry_model = "openai/gpt-4.1-fallback"
+        retry_workers = 3
+        retry_concurrency = 5
+        """,
+    )
+    seen: dict[str, object] = {}
+
+    async def fake_run(self, *, paths, output_map, **kwargs):
+        _ = (paths, output_map, kwargs)
+        seen["initial_model"] = self._configs[DocStage.TRANSLATING].model
+        seen["retry_model"] = self._configs[DocStage.RETRYING].model
+        seen["retry_workers"] = self._configs[DocStage.RETRYING].workers
+        seen["retry_concurrency"] = await _available_permits(
+            self._configs[DocStage.RETRYING].provider_semaphore
+        )
+        seen["shares_main_semaphore"] = (
+            self._configs[DocStage.RETRYING].provider_semaphore
+            is self._configs[DocStage.TRANSLATING].provider_semaphore
+        )
+        return []
+
+    monkeypatch.setattr("deepresearch_flow.translator.scheduler.Scheduler.run", fake_run)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "translator",
+            "translate",
+            "--config",
+            str(config_path),
+            "--input",
+            str(input_dir),
+            "--output-dir",
+            str(output_dir),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert seen == {
+        "initial_model": "gpt-4.1",
+        "retry_model": "gpt-4.1-fallback",
+        "retry_workers": 3,
+        "retry_concurrency": 5,
+        "shares_main_semaphore": False,
+    }
+
+
+def test_translate_keeps_retry_on_main_model_when_retry_model_omitted(
+    tmp_path: Path, monkeypatch
+) -> None:
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    source_path = input_dir / "doc.md"
+    source_path.write_text("source content", encoding="utf-8")
+    config_path = _write_config(
+        tmp_path,
+        extra="""
+        [translator_config]
+        model = "openai/gpt-4.1"
+        main_concurrency = 4
+        retry_workers = 2
+        """,
+    )
+    seen: dict[str, object] = {}
+
+    async def fake_run(self, *, paths, output_map, **kwargs):
+        _ = (paths, output_map, kwargs)
+        seen["initial_model"] = self._configs[DocStage.TRANSLATING].model
+        seen["retry_model"] = self._configs[DocStage.RETRYING].model
+        seen["shares_main_route_pool"] = (
+            self._configs[DocStage.RETRYING].route_pool
+            is self._configs[DocStage.TRANSLATING].route_pool
+        )
+        seen["shares_main_semaphore"] = (
+            self._configs[DocStage.RETRYING].provider_semaphore
+            is self._configs[DocStage.TRANSLATING].provider_semaphore
+        )
+        seen["retry_concurrency"] = await _available_permits(
+            self._configs[DocStage.RETRYING].provider_semaphore
+        )
+        return []
+
+    monkeypatch.setattr("deepresearch_flow.translator.scheduler.Scheduler.run", fake_run)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "translator",
+            "translate",
+            "--config",
+            str(config_path),
+            "--input",
+            str(input_dir),
+            "--output-dir",
+            str(output_dir),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert seen == {
+        "initial_model": "gpt-4.1",
+        "retry_model": "gpt-4.1",
+        "shares_main_route_pool": True,
+        "shares_main_semaphore": True,
+        "retry_concurrency": 4,
+    }
+
+
+def test_translate_rejects_retry_concurrency_without_retry_model(tmp_path: Path) -> None:
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    source_path = input_dir / "doc.md"
+    source_path.write_text("source content", encoding="utf-8")
+    config_path = _write_config(
+        tmp_path,
+        extra="""
+        [translator_config]
+        model = "openai/gpt-4.1"
+        retry_concurrency = 5
+        """,
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "translator",
+            "translate",
+            "--config",
+            str(config_path),
+            "--input",
+            str(input_dir),
+            "--output-dir",
+            str(output_dir),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "retry_concurrency requires retry_model" in result.output
+
+
+def test_translate_retry_cli_options_override_config_defaults(
+    tmp_path: Path, monkeypatch
+) -> None:
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    source_path = input_dir / "doc.md"
+    source_path.write_text("source content", encoding="utf-8")
+    config_path = _write_config(
+        tmp_path,
+        extra="""
+        [translator_config]
+        model = "openai/gpt-4.1"
+        retry_model = "openai/gpt-4.1-fallback"
+        retry_concurrency = 2
+        """,
+    )
+    seen: dict[str, object] = {}
+
+    async def fake_run(self, *, paths, output_map, **kwargs):
+        _ = (paths, output_map, kwargs)
+        seen["retry_model"] = self._configs[DocStage.RETRYING].model
+        seen["retry_concurrency"] = await _available_permits(
+            self._configs[DocStage.RETRYING].provider_semaphore
+        )
+        return []
+
+    monkeypatch.setattr("deepresearch_flow.translator.scheduler.Scheduler.run", fake_run)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "translator",
+            "translate",
+            "--config",
+            str(config_path),
+            "--input",
+            str(input_dir),
+            "--output-dir",
+            str(output_dir),
+            "--retry-model",
+            "openai/gpt-4.1",
+            "--retry-concurrency",
+            "6",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert seen == {
+        "retry_model": "gpt-4.1",
+        "retry_concurrency": 6,
     }
 
 

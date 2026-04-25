@@ -103,6 +103,11 @@ Optional translator CLI and scheduler defaults can live under `[translator_confi
 ```toml
 [translator_config]
 model = "openai/gpt-4o-mini"
+# Optional: same format as model/--model; omit to keep retry on the main model.
+# If retry_model uses a different provider from model, also set retry_concurrency;
+# otherwise retry requests share the main model semaphore.
+# retry_model = "openai/gpt-4.1-mini"
+# retry_model = '[{"model":"openai/gpt-4.1-mini","weight":3},{"model":"claude/claude-sonnet-4-5-20250929","weight":1}]'
 fallback_model = "claude/claude-sonnet-4-5-20250929"
 # fallback_model_2 = "ollama/llama3.1"
 document_window = 8
@@ -111,6 +116,8 @@ retry_workers = 2
 fallback_workers = 2
 fallback_2_workers = 2
 main_concurrency = 4
+# Optional: omit to share main_concurrency with retry requests.
+# retry_concurrency = 2
 fallback_concurrency = 2
 fallback_2_concurrency = 2
 ```
@@ -1399,8 +1406,8 @@ The translator module is built for scientific documents. It uses a node-based ar
 - OCR Repair: use `--fix-level` to merge broken paragraphs and convert text references (`[1]`) to clickable Markdown footnotes (`[^1]`).
 - Context-Aware: supports retries for failed chunks and falls back gracefully.
 - Multi-document Scheduler: documents, retries, and fallback stages now run through separate worker queues.
-- Concurrency Controls: use `--document-window`, `--initial-workers`, `--retry-workers`, and provider-level `--main-concurrency` / fallback concurrency flags.
-- Config Defaults: put `model` / `fallback_model` / `fallback_model_2` and the same scheduler defaults in `[translator_config]` inside `config.toml`.
+- Concurrency Controls: use `--document-window`, `--initial-workers`, `--retry-workers`, and provider-level `--main-concurrency` / `--retry-concurrency` / fallback concurrency flags.
+- Config Defaults: put `model` / `retry_model` / `fallback_model` / `fallback_model_2` and the same scheduler defaults in `[translator_config]` inside `config.toml`.
 - Backward Compatibility: `--group-concurrency` is deprecated and maps to `--initial-workers`.
 
 ```bash

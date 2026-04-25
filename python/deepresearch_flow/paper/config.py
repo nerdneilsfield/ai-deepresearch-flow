@@ -300,6 +300,7 @@ class SearchConfig:
 @dataclass(frozen=True)
 class TranslatorConfig:
     model: str | None = None
+    retry_model: str | None = None
     fallback_model: str | None = None
     fallback_model_2: str | None = None
     document_window: int | None = None
@@ -308,6 +309,7 @@ class TranslatorConfig:
     fallback_workers: int | None = None
     fallback_2_workers: int | None = None
     main_concurrency: int | None = None
+    retry_concurrency: int | None = None
     fallback_concurrency: int | None = None
     fallback_2_concurrency: int | None = None
 
@@ -790,6 +792,7 @@ def _parse_translator_config(value: Any) -> TranslatorConfig | None:
 
     return TranslatorConfig(
         model=_as_str(value.get("model"), None),
+        retry_model=_as_str(value.get("retry_model"), None),
         fallback_model=_as_str(value.get("fallback_model"), None),
         fallback_model_2=_as_str(value.get("fallback_model_2"), None),
         document_window=opt_int("document_window"),
@@ -798,6 +801,7 @@ def _parse_translator_config(value: Any) -> TranslatorConfig | None:
         fallback_workers=opt_int("fallback_workers"),
         fallback_2_workers=opt_int("fallback_2_workers"),
         main_concurrency=opt_int("main_concurrency"),
+        retry_concurrency=opt_int("retry_concurrency"),
         fallback_concurrency=opt_int("fallback_concurrency"),
         fallback_2_concurrency=opt_int("fallback_2_concurrency"),
     )

@@ -186,6 +186,13 @@ def translator() -> None:
     help="Provider-level concurrency for main model",
 )
 @click.option(
+    "--retry-concurrency",
+    "retry_concurrency_val",
+    default=None,
+    type=int,
+    help="Provider-level concurrency for retry model",
+)
+@click.option(
     "--fallback-concurrency",
     "fallback_concurrency_val",
     default=None,
@@ -201,6 +208,12 @@ def translator() -> None:
 )
 @click.option("--timeout", "timeout", default=120.0, show_default=True, type=float)
 @click.option("--retry-times", "retry_times", default=3, show_default=True, type=int)
+@click.option(
+    "--retry-model",
+    "retry_model_ref",
+    default=None,
+    help="Retry provider/model or JSON model pool",
+)
 @click.option("--fallback-model", "fallback_model_ref", default=None, help="Fallback provider/model")
 @click.option(
     "--fallback-model-2",
@@ -260,10 +273,12 @@ def translate(
     fallback_workers: int,
     fallback_2_workers: int,
     main_concurrency: int | None,
+    retry_concurrency_val: int | None,
     fallback_concurrency_val: int | None,
     fallback_2_concurrency_val: int | None,
     timeout: float,
     retry_times: int,
+    retry_model_ref: str | None,
     fallback_model_ref: str | None,
     fallback_model_ref_2: str | None,
     fallback_retry_times: int | None,
@@ -310,6 +325,8 @@ def translate(
     translator_defaults = config.translator_config
     if model_ref is None and translator_defaults is not None:
         model_ref = translator_defaults.model
+    if retry_model_ref is None and translator_defaults is not None:
+        retry_model_ref = translator_defaults.retry_model
     if fallback_model_ref is None and translator_defaults is not None:
         fallback_model_ref = translator_defaults.fallback_model
     if fallback_model_ref_2 is None and translator_defaults is not None:
@@ -335,6 +352,8 @@ def translate(
             retry_workers = translator_defaults.retry_workers
         if main_concurrency is None:
             main_concurrency = translator_defaults.main_concurrency
+        if retry_concurrency_val is None:
+            retry_concurrency_val = translator_defaults.retry_concurrency
         if fallback_concurrency_val is None:
             fallback_concurrency_val = translator_defaults.fallback_concurrency
         if fallback_2_concurrency_val is None:
@@ -343,6 +362,8 @@ def translate(
             fallback_workers = translator_defaults.fallback_workers
         if fallback_2_workers == 2 and translator_defaults.fallback_2_workers is not None:
             fallback_2_workers = translator_defaults.fallback_2_workers
+    if retry_concurrency_val is not None and not retry_model_ref:
+        raise click.ClickException("retry_concurrency requires retry_model")
     if not model_ref:
         raise click.ClickException("--model is required unless [translator_config].model is set")
     try:
@@ -363,6 +384,39 @@ def translate(
     }:
         if not resolve_api_keys(provider.api_keys):
             raise click.ClickException(f"{provider.type} providers require api_keys")
+    retry_provider = provider
+    retry_model_name = model_name
+    retry_route_pool = route_pool
+    if retry_model_ref:
+        try:
+            retry_selector = parse_model_selector(retry_model_ref, config)
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
+        with provider_window_error_as_click():
+            retry_route = select_runtime_route(config, retry_selector)
+        retry_provider = replace(
+            retry_route.provider,
+            base=[retry_route.base],
+            models=[retry_route.model],
+        )
+        retry_model_name = retry_route.model.model_name
+        retry_route_pool = RoutePool.from_selector(
+            config,
+            retry_selector,
+            cooldown_seconds=1.0,
+            verbose=verbose,
+        )
+        if retry_provider.type in {
+            "openai_compatible",
+            "dashscope",
+            "gemini_ai_studio",
+            "azure_openai",
+            "claude",
+        }:
+            if not resolve_api_keys(retry_provider.api_keys):
+                raise click.ClickException(
+                    f"{retry_provider.type} retry providers require api_keys"
+                )
     fallback_provider: ProviderConfig | None = None
     fallback_model_name: str | None = None
     fallback_route_pool: RoutePool | None = None
@@ -450,6 +504,8 @@ def translate(
         raise click.ClickException("--document-window must be positive")
     if main_concurrency is not None and main_concurrency <= 0:
         raise click.ClickException("--main-concurrency must be positive")
+    if retry_concurrency_val is not None and retry_concurrency_val <= 0:
+        raise click.ClickException("--retry-concurrency must be positive")
     if fallback_concurrency_val is not None and fallback_concurrency_val <= 0:
         raise click.ClickException("--fallback-concurrency must be positive")
     if fallback_2_concurrency_val is not None and fallback_2_concurrency_val <= 0:
@@ -575,6 +631,7 @@ def translate(
         throttle = RequestThrottle(int(sleep_every), float(sleep_time))
 
     max_tokens = provider.max_tokens if provider.type == "claude" else None
+    retry_max_tokens = retry_provider.max_tokens if retry_provider.type == "claude" else None
     fallback_max_tokens = (
         fallback_provider.max_tokens if fallback_provider and fallback_provider.type == "claude" else None
     )
@@ -592,6 +649,11 @@ def translate(
         nonlocal_document_window = document_window if document_window is not None else len(to_process)
         global_sem = asyncio.Semaphore(max_concurrency)
         main_sem = asyncio.Semaphore(main_concurrency or max_concurrency)
+        retry_sem = (
+            asyncio.Semaphore(retry_concurrency_val)
+            if retry_concurrency_val is not None
+            else main_sem
+        )
         fb_sem = asyncio.Semaphore(fallback_concurrency_val or max_concurrency)
         fb2_sem = asyncio.Semaphore(fallback_2_concurrency_val or max_concurrency)
 
@@ -610,12 +672,12 @@ def translate(
             QueueConfig(
                 stage=DocStage.RETRYING,
                 workers=retry_workers,
-                provider_semaphore=main_sem,
-                route_pool=route_pool,
-                provider=provider,
-                model=model_name,
-                api_keys=provider.api_keys,
-                max_tokens=max_tokens,
+                provider_semaphore=retry_sem,
+                route_pool=retry_route_pool,
+                provider=retry_provider,
+                model=retry_model_name,
+                api_keys=retry_provider.api_keys,
+                max_tokens=retry_max_tokens,
                 retry_limit=max(retry_times, 1),
             ),
         ]

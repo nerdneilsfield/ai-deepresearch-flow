@@ -102,6 +102,11 @@ Breaking change：旧的 `api_keys`、`model_list`、`structured_mode` 字段已
 ```toml
 [translator_config]
 model = "openai/gpt-4o-mini"
+# 可选：格式与 model/--model 相同；不设置时 retry 继续使用主模型。
+# 如果 retry_model 与 model 使用不同 provider，建议同时设置 retry_concurrency；
+# 否则 retry 请求会与主模型共用 semaphore。
+# retry_model = "openai/gpt-4.1-mini"
+# retry_model = '[{"model":"openai/gpt-4.1-mini","weight":3},{"model":"claude/claude-sonnet-4-5-20250929","weight":1}]'
 fallback_model = "claude/claude-sonnet-4-5-20250929"
 # fallback_model_2 = "ollama/llama3.1"
 document_window = 8
@@ -110,6 +115,8 @@ retry_workers = 2
 fallback_workers = 2
 fallback_2_workers = 2
 main_concurrency = 4
+# 可选：不设置时 retry 请求共享 main_concurrency。
+# retry_concurrency = 2
 fallback_concurrency = 2
 fallback_2_concurrency = 2
 ```
@@ -1372,8 +1379,8 @@ uv run deepresearch-flow paper db snapshot build ...
 - OCR 修复：`--fix-level` 支持断段合并与引用修复（`[1]` -> `[^1]`）。
 - 失败恢复：支持失败重试与后备模型。
 - 多文档调度：文档首轮、重试、fallback 现在分开走独立队列。
-- 并发控制：使用 `--document-window`、`--initial-workers`、`--retry-workers`，以及 `--main-concurrency` / fallback 并发参数。
-- 配置默认值：可以把 `model` / `fallback_model` / `fallback_model_2` 以及同一套并发默认值写到 `config.toml` 的 `[translator_config]` 里。
+- 并发控制：使用 `--document-window`、`--initial-workers`、`--retry-workers`，以及 `--main-concurrency` / `--retry-concurrency` / fallback 并发参数。
+- 配置默认值：可以把 `model` / `retry_model` / `fallback_model` / `fallback_model_2` 以及同一套并发默认值写到 `config.toml` 的 `[translator_config]` 里。
 - 兼容提示：`--group-concurrency` 已废弃，会映射到 `--initial-workers`。
 
 ```bash
