@@ -77,6 +77,7 @@ def _test_config(
     api_key: str = "ollama",
     batch_size: int = 2,
     max_concurrency: int = 1,
+    document_window: int | None = None,
     chunk_max_tokens: int = 512,
 ) -> PaperConfig:
     # These pipeline tests exercise embedding-only plumbing and intentionally bypass
@@ -93,6 +94,7 @@ def _test_config(
             normalized=True,
             batch_size=batch_size,
             max_concurrency=max_concurrency,
+            document_window=document_window,
             chunk_max_tokens=chunk_max_tokens,
             chunk_overlap_tokens=64,
             providers=[
@@ -323,6 +325,93 @@ def test_pipeline_embeds_batches_concurrently_with_configured_limit(tmp_path: Pa
 
     assert peak_requests == 2
     assert scan_rows(open_store(vector_dir))
+
+
+def test_pipeline_embeds_batches_concurrently_across_document_window(tmp_path: Path, monkeypatch) -> None:
+    json_path = _write_two_doc_json(tmp_path)
+    vector_dir = tmp_path / "vectors"
+    active_requests = 0
+    peak_requests = 0
+    started_requests = 0
+    release = asyncio.Event()
+
+    async def delayed_embed(base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None):  # noqa: ARG001, ANN001
+        nonlocal active_requests, peak_requests, started_requests
+        if all(text.startswith("Test Paper ") for text in texts):
+            return EmbeddingResult(
+                vectors=[[0.1] * 1024 for _ in texts],
+                model=model,
+                usage_tokens=len(texts),
+            )
+        active_requests += 1
+        started_requests += 1
+        peak_requests = max(peak_requests, active_requests)
+        if started_requests >= 2:
+            release.set()
+        await release.wait()
+        await asyncio.sleep(0)
+        active_requests -= 1
+        return EmbeddingResult(
+            vectors=[[0.1] * 1024 for _ in texts],
+            model=model,
+            usage_tokens=len(texts),
+        )
+
+    monkeypatch.setattr("deepresearch_flow.paper.embedding.call_embedding", delayed_embed)
+
+    asyncio.run(
+        asyncio.wait_for(
+            run_embed_pipeline(
+                config=_test_config(batch_size=10, max_concurrency=2, document_window=2),
+                input_paths=[json_path],
+                vector_dir=vector_dir,
+            ),
+            timeout=1.0,
+        )
+    )
+
+    assert peak_requests == 2
+    assert {row["source_path"] for row in scan_rows(open_store(vector_dir))} == {
+        "papers/a.md",
+        "papers/b.md",
+    }
+
+
+def test_pipeline_document_window_limits_cross_document_concurrency(tmp_path: Path, monkeypatch) -> None:
+    json_path = _write_two_doc_json(tmp_path)
+    vector_dir = tmp_path / "vectors"
+    active_requests = 0
+    peak_requests = 0
+
+    async def delayed_embed(base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None):  # noqa: ARG001, ANN001
+        nonlocal active_requests, peak_requests
+        if all(text.startswith("Test Paper ") for text in texts):
+            return EmbeddingResult(
+                vectors=[[0.1] * 1024 for _ in texts],
+                model=model,
+                usage_tokens=len(texts),
+            )
+        active_requests += 1
+        peak_requests = max(peak_requests, active_requests)
+        await asyncio.sleep(0.01)
+        active_requests -= 1
+        return EmbeddingResult(
+            vectors=[[0.1] * 1024 for _ in texts],
+            model=model,
+            usage_tokens=len(texts),
+        )
+
+    monkeypatch.setattr("deepresearch_flow.paper.embedding.call_embedding", delayed_embed)
+
+    asyncio.run(
+        run_embed_pipeline(
+            config=_test_config(batch_size=10, max_concurrency=2, document_window=1),
+            input_paths=[json_path],
+            vector_dir=vector_dir,
+        )
+    )
+
+    assert peak_requests == 1
 
 
 def test_pipeline_keeps_existing_rows_when_reembed_fails(tmp_path: Path, monkeypatch) -> None:

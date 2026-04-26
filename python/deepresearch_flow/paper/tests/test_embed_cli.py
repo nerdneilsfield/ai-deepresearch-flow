@@ -71,6 +71,7 @@ def test_paper_embed_help() -> None:
     assert "--template-tag" in result.output
     assert "--embedding" in result.output
     assert "--max-concurrency" in result.output
+    assert "--document-window" in result.output
 
 
 def test_paper_search_help() -> None:
@@ -179,11 +180,14 @@ def test_paper_embed_passes_max_concurrency_override(tmp_path: Path, monkeypatch
             str(tmp_path / "vectors"),
             "--max-concurrency",
             "3",
+            "--document-window",
+            "5",
         ],
     )
 
     assert result.exit_code == 0
     assert seen["max_concurrency_override"] == 3
+    assert seen["document_window_override"] == 5
 
 
 def test_paper_embed_rejects_nonpositive_max_concurrency(tmp_path: Path) -> None:
@@ -208,6 +212,30 @@ def test_paper_embed_rejects_nonpositive_max_concurrency(tmp_path: Path) -> None
 
     assert result.exit_code != 0
     assert "--max-concurrency must be positive" in result.output
+
+
+def test_paper_embed_rejects_nonpositive_document_window(tmp_path: Path) -> None:
+    runner = CliRunner()
+    config_path = _write_embed_config(tmp_path)
+    json_path = tmp_path / "papers.json"
+    json_path.write_text("[]", encoding="utf-8")
+
+    result = runner.invoke(
+        cli,
+        [
+            "paper",
+            "embed",
+            "-c",
+            str(config_path),
+            "-i",
+            str(json_path),
+            "--document-window",
+            "0",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "--document-window must be positive" in result.output
 
 
 def test_paper_search_rejects_invalid_venue_filter(tmp_path: Path) -> None:
