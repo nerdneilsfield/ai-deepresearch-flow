@@ -642,6 +642,13 @@ def extract(
     default=None,
     help="Embedding request concurrency",
 )
+@click.option(
+    "--document-window",
+    "document_window",
+    type=int,
+    default=None,
+    help="Max paper documents prepared for global embedding concurrency",
+)
 @click.option("--template-tag", "template_tag", default=None, help="Override template tag for all JSON inputs")
 @click.option("--force", is_flag=True, help="Delete existing index and rebuild from scratch")
 @click.option("-v", "--verbose", is_flag=True, help="Verbose logging")
@@ -655,6 +662,7 @@ def embed(
     output_embed_db: str | None,
     embedding_override: str | None,
     max_concurrency: int | None,
+    document_window: int | None,
     template_tag: str | None,
     force: bool,
     verbose: bool,
@@ -674,6 +682,8 @@ def embed(
         raise click.ClickException("--snapshot-db requires --static-export-dir")
     if max_concurrency is not None and max_concurrency <= 0:
         raise click.ClickException("--max-concurrency must be positive")
+    if document_window is not None and document_window <= 0:
+        raise click.ClickException("--document-window must be positive")
     if embedding_override:
         provider, model = _resolve_provider_model_override(
             config.embedding.providers,
@@ -716,6 +726,7 @@ def embed(
             vector_dir=vector_dir,
             template_tag_override=template_tag,
             max_concurrency_override=max_concurrency,
+            document_window_override=document_window,
             verbose=verbose,
             )
         )

@@ -6,6 +6,7 @@ import json
 import hashlib
 import logging
 import asyncio
+from dataclasses import dataclass, field
 from pathlib import Path
 import signal
 
@@ -33,6 +34,25 @@ from deepresearch_flow.paper.vector_store import (
 logger = logging.getLogger(__name__)
 _SHARED_KEY = "_shared"
 _CHECKPOINT_FILE = "embed_resume_checkpoint.json"
+
+
+@dataclass
+class _EmbedGroupState:
+    doc_id: str
+    template_key: str
+    group_hash: str
+    should_replace_existing: bool
+    staged_rows: list[ChunkRow]
+    pending_batch_count: int
+    batch_results: dict[int, list[ChunkRow]] = field(default_factory=dict)
+    finalized: bool = False
+
+
+@dataclass(frozen=True)
+class _EmbedBatchJob:
+    group: _EmbedGroupState
+    start: int
+    batch_rows: list[ChunkRow]
 
 
 def _build_searchable_fields(doc: EmbedDocument) -> list[SearchableField]:
@@ -200,6 +220,7 @@ async def run_embed_pipeline(
     vector_dir: Path,
     template_tag_override: str | None = None,
     max_concurrency_override: int | None = None,
+    document_window_override: int | None = None,
     verbose: bool = False,
 ) -> None:
     embedding_config = config.embedding
@@ -220,9 +241,24 @@ async def run_embed_pipeline(
 
     provider_config, model_config = embedding_config.resolve_active()
     route_pool = RoutePool.from_embedding_provider(config.embedding, verbose=verbose)
-    max_concurrency = max_concurrency_override or embedding_config.max_concurrency
+    max_concurrency = (
+        max_concurrency_override
+        if max_concurrency_override is not None
+        else embedding_config.max_concurrency
+    )
     if max_concurrency <= 0:
         raise ValueError("Embedding max_concurrency must be positive")
+    document_window = (
+        document_window_override
+        if document_window_override is not None
+        else (
+            embedding_config.document_window
+            if embedding_config.document_window is not None
+            else max_concurrency
+        )
+    )
+    if document_window <= 0:
+        raise ValueError("Embedding document_window must be positive")
 
     validate_index_meta(
         vector_dir,
@@ -255,132 +291,153 @@ async def run_embed_pipeline(
     async with httpx.AsyncClient() as client:
         try:
             with tqdm(total=len(docs), desc="prepare chunks", unit="doc") as progress:
-                for doc in docs:
-                    existing_hashes = read_group_hashes_for_doc(db, doc.doc_id)
-                    fields = _build_searchable_fields(doc)
-                    chunks = chunk_fields(
-                        fields,
-                        max_tokens=embedding_config.chunk_max_tokens,
-                        overlap_tokens=embedding_config.chunk_overlap_tokens,
-                    )
-                    grouped = _group_chunks_by_template_key(chunks)
-                    for template_key, group_chunks in grouped.items():
-                        source_group_keys.add((doc.doc_id, template_key))
-                        content_hashes = [
-                            hashlib.sha256(chunk.text.encode("utf-8")).hexdigest()
-                            for chunk in group_chunks
-                        ]
-                        group_hash = compute_group_hash(content_hashes)
-                        if existing_hashes.get(template_key) == group_hash:
-                            continue
+                for wave_doc_start in range(0, len(docs), document_window):
+                    wave_docs = docs[wave_doc_start : wave_doc_start + document_window]
+                    batch_jobs: list[_EmbedBatchJob] = []
 
-                        pending_rows = _build_group_rows(
-                            doc=doc,
-                            group_chunks=group_chunks,
-                            content_hashes=content_hashes,
+                    for doc in wave_docs:
+                        existing_hashes = read_group_hashes_for_doc(db, doc.doc_id)
+                        fields = _build_searchable_fields(doc)
+                        chunks = chunk_fields(
+                            fields,
+                            max_tokens=embedding_config.chunk_max_tokens,
+                            overlap_tokens=embedding_config.chunk_overlap_tokens,
                         )
-                        embed_progress.total = (embed_progress.total or 0) + len(pending_rows)
-                        embed_progress.refresh()
-                        should_replace_existing = template_key in existing_hashes
-                        staged_rows: list[ChunkRow] = []
-                        start_offset = 0
-                        if (
-                            should_replace_existing
-                            and checkpoint is not None
-                            and checkpoint.get("doc_id") == doc.doc_id
-                            and checkpoint.get("template_key") == template_key
-                            and checkpoint.get("group_hash") == group_hash
-                        ):
-                            start_offset = int(checkpoint.get("next_offset") or 0)
-                            staged_rows = [
-                                _deserialize_chunk_row(item)
-                                for item in list(checkpoint.get("staged_rows") or [])
-                                if isinstance(item, dict)
+                        grouped = _group_chunks_by_template_key(chunks)
+                        for template_key, group_chunks in grouped.items():
+                            source_group_keys.add((doc.doc_id, template_key))
+                            content_hashes = [
+                                hashlib.sha256(chunk.text.encode("utf-8")).hexdigest()
+                                for chunk in group_chunks
                             ]
-                        batch_specs = [
-                            (
-                                start,
-                                pending_rows[start : start + embedding_config.batch_size],
-                            )
-                            for start in range(
-                                start_offset, len(pending_rows), embedding_config.batch_size
-                            )
-                        ]
-                        for wave_start in range(0, len(batch_specs), max_concurrency):
-                            wave_specs = batch_specs[wave_start : wave_start + max_concurrency]
+                            group_hash = compute_group_hash(content_hashes)
+                            if existing_hashes.get(template_key) == group_hash:
+                                continue
 
-                            async def embed_batch(start: int, batch_rows: list[ChunkRow]):
-                                batch = [row.text for row in batch_rows]
-                                result = await call_embedding_with_route_pool(
-                                    route_pool=route_pool,
-                                    texts=batch,
-                                    dimensions=embedding_config.dimensions,
-                                    client=client,
-                                )
-                                return start, batch_rows, batch, result
-
-                            wave_results = await asyncio.gather(
-                                *(
-                                    embed_batch(start, batch_rows)
-                                    for start, batch_rows in wave_specs
-                                )
+                            pending_rows = _build_group_rows(
+                                doc=doc,
+                                group_chunks=group_chunks,
+                                content_hashes=content_hashes,
                             )
-
-                            for start, batch_rows, batch, result in wave_results:
-                                if len(result.vectors) != len(batch):
-                                    raise ValueError(
-                                        f"Embedding provider returned {len(result.vectors)} vectors for batch of {len(batch)} texts "
-                                        f"(starting at offset {start})"
-                                    )
-                                embedded_batch_rows = [
-                                    ChunkRow(
-                                        id=row.id,
-                                        doc_id=row.doc_id,
-                                        source_path=row.source_path,
-                                        template_tag=row.template_tag,
-                                        chunk_type=row.chunk_type,
-                                        chunk_index=row.chunk_index,
-                                        field_name=row.field_name,
-                                        lang=row.lang,
-                                        text=row.text,
-                                        content_hash=row.content_hash,
-                                        vector=vector,
-                                        title=row.title,
-                                        year=row.year,
-                                        authors=row.authors,
-                                        venue=row.venue,
-                                        tags=row.tags,
-                                    )
-                                    for row, vector in zip(batch_rows, result.vectors, strict=True)
+                            should_replace_existing = template_key in existing_hashes
+                            staged_rows: list[ChunkRow] = []
+                            start_offset = 0
+                            if (
+                                should_replace_existing
+                                and checkpoint is not None
+                                and checkpoint.get("doc_id") == doc.doc_id
+                                and checkpoint.get("template_key") == template_key
+                                and checkpoint.get("group_hash") == group_hash
+                            ):
+                                start_offset = int(checkpoint.get("next_offset") or 0)
+                                staged_rows = [
+                                    _deserialize_chunk_row(item)
+                                    for item in list(checkpoint.get("staged_rows") or [])
+                                    if isinstance(item, dict)
                                 ]
-                                if should_replace_existing:
-                                    staged_rows.extend(embedded_batch_rows)
-                                    _save_checkpoint(
-                                        vector_dir,
-                                        doc_id=doc.doc_id,
-                                        template_key=template_key,
-                                        group_hash=group_hash,
-                                        next_offset=start + len(batch_rows),
-                                        staged_rows=staged_rows,
-                                    )
-                                else:
-                                    write_chunks(
-                                        db,
-                                        embedded_batch_rows,
-                                        dimensions=embedding_config.dimensions,
-                                    )
-                                    written_chunk_count += len(embedded_batch_rows)
-                                embed_progress.update(len(batch_rows))
-                            if stop_requested:
-                                raise KeyboardInterrupt
+                            batch_specs = [
+                                (
+                                    start,
+                                    pending_rows[start : start + embedding_config.batch_size],
+                                )
+                                for start in range(
+                                    start_offset, len(pending_rows), embedding_config.batch_size
+                                )
+                            ]
+                            embed_progress.total = (embed_progress.total or 0) + sum(
+                                len(batch_rows) for _, batch_rows in batch_specs
+                            )
+                            embed_progress.refresh()
+                            group = _EmbedGroupState(
+                                doc_id=doc.doc_id,
+                                template_key=template_key,
+                                group_hash=group_hash,
+                                should_replace_existing=should_replace_existing,
+                                staged_rows=staged_rows,
+                                pending_batch_count=len(batch_specs),
+                            )
+                            if not batch_specs and should_replace_existing and staged_rows:
+                                delete_groups(db, [(doc.doc_id, template_key)])
+                                write_chunks(db, staged_rows, dimensions=embedding_config.dimensions)
+                                written_chunk_count += len(staged_rows)
+                                _clear_checkpoint(vector_dir)
+                                checkpoint = None
+                            for start, batch_rows in batch_specs:
+                                batch_jobs.append(
+                                    _EmbedBatchJob(group=group, start=start, batch_rows=batch_rows)
+                                )
+                        progress.update(1)
 
-                        if should_replace_existing:
-                            delete_groups(db, [(doc.doc_id, template_key)])
-                            write_chunks(db, staged_rows, dimensions=embedding_config.dimensions)
-                            written_chunk_count += len(staged_rows)
-                            _clear_checkpoint(vector_dir)
-                            checkpoint = None
-                    progress.update(1)
+                    semaphore = asyncio.Semaphore(max_concurrency)
+
+                    async def embed_job(job: _EmbedBatchJob) -> None:
+                        nonlocal checkpoint, written_chunk_count
+                        async with semaphore:
+                            batch = [row.text for row in job.batch_rows]
+                            result = await call_embedding_with_route_pool(
+                                route_pool=route_pool,
+                                texts=batch,
+                                dimensions=embedding_config.dimensions,
+                                client=client,
+                            )
+                        if len(result.vectors) != len(batch):
+                            raise ValueError(
+                                f"Embedding provider returned {len(result.vectors)} vectors for batch of {len(batch)} texts "
+                                f"(starting at offset {job.start})"
+                            )
+                        embedded_batch_rows = [
+                            ChunkRow(
+                                id=row.id,
+                                doc_id=row.doc_id,
+                                source_path=row.source_path,
+                                template_tag=row.template_tag,
+                                chunk_type=row.chunk_type,
+                                chunk_index=row.chunk_index,
+                                field_name=row.field_name,
+                                lang=row.lang,
+                                text=row.text,
+                                content_hash=row.content_hash,
+                                vector=vector,
+                                title=row.title,
+                                year=row.year,
+                                authors=row.authors,
+                                venue=row.venue,
+                                tags=row.tags,
+                            )
+                            for row, vector in zip(job.batch_rows, result.vectors, strict=True)
+                        ]
+                        group = job.group
+                        group.batch_results[job.start] = embedded_batch_rows
+                        group.pending_batch_count -= 1
+                        if group.pending_batch_count == 0 and not group.finalized:
+                            ordered_rows = [
+                                row
+                                for start in sorted(group.batch_results)
+                                for row in group.batch_results[start]
+                            ]
+                            rows_to_write = group.staged_rows + ordered_rows
+                            if group.should_replace_existing:
+                                delete_groups(db, [(group.doc_id, group.template_key)])
+                                write_chunks(db, rows_to_write, dimensions=embedding_config.dimensions)
+                                _clear_checkpoint(vector_dir)
+                                checkpoint = None
+                            else:
+                                write_chunks(db, rows_to_write, dimensions=embedding_config.dimensions)
+                            written_chunk_count += len(rows_to_write)
+                            group.finalized = True
+                        embed_progress.update(len(job.batch_rows))
+
+                    if batch_jobs:
+                        tasks = [asyncio.create_task(embed_job(job)) for job in batch_jobs]
+                        try:
+                            await asyncio.gather(*tasks)
+                        except Exception:
+                            for task in tasks:
+                                task.cancel()
+                            await asyncio.gather(*tasks, return_exceptions=True)
+                            raise
+                    if stop_requested:
+                        raise KeyboardInterrupt
         finally:
             embed_progress.close()
             signal.signal(signal.SIGINT, previous_sigint)
