@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import replace
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from deepresearch_flow.paper.config import (
 )
 from deepresearch_flow.paper.extract import (
     ExtractionError,
+    RequestThrottle,
     call_with_retries,
     extract_documents,
     filter_results_with_errors,
@@ -57,6 +59,26 @@ def test_merge_retry_error_entries_replaces_only_retried_stages() -> None:
     )
 
     assert merged == [baseline[1]]
+
+
+def test_request_throttle_logs_sleep_banner(monkeypatch: pytest.MonkeyPatch, caplog) -> None:
+    sleep_calls: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleep_calls.append(delay)
+
+    monkeypatch.setattr("deepresearch_flow.paper.extract.asyncio.sleep", fake_sleep)
+    caplog.set_level(logging.WARNING, logger="deepresearch_flow.paper.extract")
+
+    throttle = RequestThrottle(sleep_every=2, sleep_time=1.5)
+
+    asyncio.run(throttle.tick())
+    asyncio.run(throttle.tick())
+
+    log_text = "\n".join(caplog.messages)
+    assert sleep_calls == [1.5]
+    assert "============================================================" in log_text
+    assert "Paper extract sleep: sleeping 1.50s until " in log_text
 
 
 def test_merge_retry_error_entries_replaces_full_doc_entries_with_new_failures() -> None:
