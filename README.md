@@ -151,6 +151,7 @@ default_provider = "ollama"
 dimensions = 1024
 normalized = true
 batch_size = 32
+max_concurrency = 1
 chunk_max_tokens = 512
 chunk_overlap_tokens = 64
 
@@ -346,6 +347,7 @@ Build a LanceDB vector index from extracted JSON or an existing snapshot:
 uv run deepresearch-flow paper embed \
   --config ./config.toml \
   --input ./paper_infos.json \
+  --max-concurrency 4 \
   --output-embed-db ./paper_vectors
 
 # Or build later from an existing snapshot + static export

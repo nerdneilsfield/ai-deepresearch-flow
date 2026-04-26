@@ -124,6 +124,7 @@ default_provider = "ollama"
 dimensions = 1024
 normalized = true
 batch_size = 32
+max_concurrency = 1
 chunk_max_tokens = 512
 chunk_overlap_tokens = 64
 
