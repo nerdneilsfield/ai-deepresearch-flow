@@ -8,7 +8,7 @@ import json
 import math
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 import importlib.resources as resources
@@ -282,6 +282,14 @@ class KeyRotator:
 
 logger = logging.getLogger(__name__)
 _console = Console()
+_SLEEP_BANNER_LINE = "=" * 60
+
+
+def _log_sleep_banner(label: str, sleep_seconds: float) -> None:
+    wake_at = datetime.now(timezone.utc).astimezone() + timedelta(seconds=sleep_seconds)
+    logger.warning(_SLEEP_BANNER_LINE)
+    logger.warning("%s: sleeping %.2fs until %s", label, sleep_seconds, wake_at.isoformat())
+    logger.warning(_SLEEP_BANNER_LINE)
 
 
 def log_extraction_failure(
@@ -949,6 +957,7 @@ class RequestThrottle:
         async with self._lock:
             self._count += 1
             if self._count % self.sleep_every == 0:
+                _log_sleep_banner("Paper extract sleep", self.sleep_time)
                 await asyncio.sleep(self.sleep_time)
 
 
