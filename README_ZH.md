@@ -150,6 +150,8 @@ default_provider = "ollama"
 dimensions = 1024
 normalized = true
 batch_size = 32
+max_concurrency = 1
+# document_window = 8  # 不设置时默认等于 max_concurrency。
 chunk_max_tokens = 512
 chunk_overlap_tokens = 64
 
@@ -339,6 +341,8 @@ uv run deepresearch-flow paper db serve \
 uv run deepresearch-flow paper embed \
   --config ./config.toml \
   --input ./paper_infos.json \
+  --max-concurrency 4 \
+  --document-window 8 \
   --output-embed-db ./paper_vectors
 
 # 或对已经构建好的 snapshot + static export 补建/重建向量库

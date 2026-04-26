@@ -152,6 +152,7 @@ dimensions = 1024
 normalized = true
 batch_size = 32
 max_concurrency = 1
+# document_window = 8  # Defaults to max_concurrency when omitted.
 chunk_max_tokens = 512
 chunk_overlap_tokens = 64
 
@@ -348,6 +349,7 @@ uv run deepresearch-flow paper embed \
   --config ./config.toml \
   --input ./paper_infos.json \
   --max-concurrency 4 \
+  --document-window 8 \
   --output-embed-db ./paper_vectors
 
 # Or build later from an existing snapshot + static export
