@@ -1179,7 +1179,7 @@ def register_db_commands(db_group: click.Group) -> None:
         help="Path to push-static-errors.json to retry only failed static files",
     )
     @click.option("--only-storage", is_flag=True, default=False, help="Push only static storage; skip admin API")
-    @click.option("--only-api", is_flag=True, default=False, help="Push only admin API; skip static storage")
+    @click.option("--only-api", is_flag=True, default=False, help="Push only admin API; skip static storage and semantic chunks")
     @click.option(
         "--embed-db",
         "embed_db",
@@ -1294,7 +1294,7 @@ def register_db_commands(db_group: click.Group) -> None:
 
         should_push_api = not only_storage and retry_mode == "none"
         should_push_storage = not only_api and static_dir and config.storage and retry_mode in {"none", "static"}
-        should_push_semantic = embed_db is not None and retry_mode != "static"
+        should_push_semantic = embed_db is not None and not only_api and retry_mode != "static"
 
         selected_doc_ids: set[str] | None = None
         if start_idx != 0 or end_idx != -1:
