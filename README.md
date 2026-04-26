@@ -1032,13 +1032,6 @@ uv run deepresearch-flow paper db api push \
   --config remote.toml \
   --only-api
 
-# Push only admin API metadata + semantic chunks
-uv run deepresearch-flow paper db api push \
-  --snapshot-db ./dist/paper_snapshot.db \
-  --embed-db ./dist/paper_vectors \
-  --config remote.toml \
-  --only-api
-
 # Push only static storage assets
 uv run deepresearch-flow paper db api push \
   --snapshot-db ./dist/paper_snapshot.db \
@@ -1066,13 +1059,12 @@ uv run deepresearch-flow paper db api push \
   --snapshot-db ./dist/paper_snapshot.db \
   --embed-db ./dist/paper_vectors \
   --config remote.toml \
-  --only-api \
   --start-idx 100 \
   --end-idx 200
 ```
 
 - `--static-export-dir` is optional — when provided, summary JSON payloads are included so the remote side can build FTS indexes and preview text.
-- `--embed-db` is optional — when provided, `api push` reads the local LanceDB snapshot and uploads semantic chunks after the metadata/static phases.
+- `--embed-db` is optional — when provided, `api push` reads the local LanceDB snapshot and uploads semantic chunks after the metadata/static phases, unless `--only-api` is set.
 - `[remote.semantic]` tunes semantic sync batching and retries. Defaults are `max_rows = 25`, `max_payload_bytes = 4000000`, `timeout = 120`, `retries = 3`, and `retry_backoff_seconds = 2`.
 - Duplicate papers (same `paper_id`) are automatically skipped.
 - When `[remote.storage]` is configured, static files under the export dir are pushed after the metadata API sync.
@@ -1081,8 +1073,8 @@ uv run deepresearch-flow paper db api push \
 - Static file push prints per-file status logs: `uploaded`, `skipped`, and `failed`.
 - Semantic push now shows a `tqdm` progress bar by chunk and writes `push-semantic-errors.json` when a semantic batch still fails after retries.
 - If some static uploads fail, a `push-static-errors.json` report is written and can be retried with `--retry-failed`.
-- `--only-api` pushes only the admin API metadata and skips static storage.
-- `--only-api` can be combined with `--embed-db` to push metadata plus semantic chunks only.
+- `--only-api` pushes only the admin API metadata and skips static storage and semantic chunks.
+- Use `paper db api push-semantic` to push semantic chunks by themselves.
 - `--only-storage` pushes only static storage and skips the admin API metadata step.
 - `--embed-db` cannot be combined with `--only-storage`.
 - `--storage-concurrency` controls the number of concurrent workers used for static storage push.
