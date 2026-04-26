@@ -635,6 +635,13 @@ def extract(
 @click.option("--md-translated-root", "md_translated_roots", multiple=True, help="Translated markdown root directory")
 @click.option("--output-embed-db", "output_embed_db", default=None, help="LanceDB output directory")
 @click.option("--embedding", "embedding_override", default=None, help="Override embedding provider/model")
+@click.option(
+    "--max-concurrency",
+    "max_concurrency",
+    type=int,
+    default=None,
+    help="Embedding request concurrency",
+)
 @click.option("--template-tag", "template_tag", default=None, help="Override template tag for all JSON inputs")
 @click.option("--force", is_flag=True, help="Delete existing index and rebuild from scratch")
 @click.option("-v", "--verbose", is_flag=True, help="Verbose logging")
@@ -647,6 +654,7 @@ def embed(
     md_translated_roots: tuple[str, ...],
     output_embed_db: str | None,
     embedding_override: str | None,
+    max_concurrency: int | None,
     template_tag: str | None,
     force: bool,
     verbose: bool,
@@ -664,6 +672,8 @@ def embed(
         raise click.ClickException("-i and --snapshot-db are mutually exclusive")
     if has_snapshot and not static_export_dir:
         raise click.ClickException("--snapshot-db requires --static-export-dir")
+    if max_concurrency is not None and max_concurrency <= 0:
+        raise click.ClickException("--max-concurrency must be positive")
     if embedding_override:
         provider, model = _resolve_provider_model_override(
             config.embedding.providers,
@@ -705,6 +715,7 @@ def embed(
             md_translated_roots=[Path(p) for p in md_translated_roots],
             vector_dir=vector_dir,
             template_tag_override=template_tag,
+            max_concurrency_override=max_concurrency,
             verbose=verbose,
             )
         )

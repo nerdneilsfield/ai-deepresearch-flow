@@ -131,6 +131,7 @@ class EmbeddingConfig:
     dimensions: int
     normalized: bool
     batch_size: int
+    max_concurrency: int
     chunk_max_tokens: int
     chunk_overlap_tokens: int
     providers: list[EmbeddingProviderConfig]
@@ -143,6 +144,7 @@ class EmbeddingConfig:
         dimensions: int = 1024,
         normalized: bool = True,
         batch_size: int = 32,
+        max_concurrency: int = 1,
         chunk_max_tokens: int = 512,
         chunk_overlap_tokens: int = 64,
         providers: list[EmbeddingProviderConfig] | None = None,
@@ -155,6 +157,7 @@ class EmbeddingConfig:
         object.__setattr__(self, "dimensions", dimensions)
         object.__setattr__(self, "normalized", normalized)
         object.__setattr__(self, "batch_size", batch_size)
+        object.__setattr__(self, "max_concurrency", max_concurrency)
         object.__setattr__(self, "chunk_max_tokens", chunk_max_tokens)
         object.__setattr__(self, "chunk_overlap_tokens", chunk_overlap_tokens)
         object.__setattr__(self, "providers", providers or [])
@@ -646,6 +649,7 @@ def _parse_embedding_config(value: Any) -> EmbeddingConfig | None:
         dimensions=dimensions,
         normalized=_as_bool(value.get("normalized"), True),
         batch_size=_as_int(value.get("batch_size"), 32),
+        max_concurrency=_as_int(value.get("max_concurrency"), 1),
         chunk_max_tokens=_as_int(value.get("chunk_max_tokens"), 512),
         chunk_overlap_tokens=_as_int(value.get("chunk_overlap_tokens"), 64),
         providers=_parse_embedding_provider_configs(value.get("providers"), dimensions),

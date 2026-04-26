@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import hashlib
 import logging
+import asyncio
 from pathlib import Path
 import signal
 
@@ -198,6 +199,7 @@ async def run_embed_pipeline(
     md_translated_roots: list[Path] | None = None,
     vector_dir: Path,
     template_tag_override: str | None = None,
+    max_concurrency_override: int | None = None,
     verbose: bool = False,
 ) -> None:
     embedding_config = config.embedding
@@ -218,6 +220,9 @@ async def run_embed_pipeline(
 
     provider_config, model_config = embedding_config.resolve_active()
     route_pool = RoutePool.from_embedding_provider(config.embedding, verbose=verbose)
+    max_concurrency = max_concurrency_override or embedding_config.max_concurrency
+    if max_concurrency <= 0:
+        raise ValueError("Embedding max_concurrency must be positive")
 
     validate_index_meta(
         vector_dir,
@@ -292,59 +297,80 @@ async def run_embed_pipeline(
                                 for item in list(checkpoint.get("staged_rows") or [])
                                 if isinstance(item, dict)
                             ]
-                        for start in range(start_offset, len(pending_rows), embedding_config.batch_size):
-                            batch_rows = pending_rows[start : start + embedding_config.batch_size]
-                            batch = [row.text for row in batch_rows]
-                            result = await call_embedding_with_route_pool(
-                                route_pool=route_pool,
-                                texts=batch,
-                                dimensions=embedding_config.dimensions,
-                                client=client,
+                        batch_specs = [
+                            (
+                                start,
+                                pending_rows[start : start + embedding_config.batch_size],
                             )
-                            if len(result.vectors) != len(batch):
-                                raise ValueError(
-                                    f"Embedding provider returned {len(result.vectors)} vectors for batch of {len(batch)} texts "
-                                    f"(starting at offset {start})"
-                                )
-                            embedded_batch_rows = [
-                                ChunkRow(
-                                    id=row.id,
-                                    doc_id=row.doc_id,
-                                    source_path=row.source_path,
-                                    template_tag=row.template_tag,
-                                    chunk_type=row.chunk_type,
-                                    chunk_index=row.chunk_index,
-                                    field_name=row.field_name,
-                                    lang=row.lang,
-                                    text=row.text,
-                                    content_hash=row.content_hash,
-                                    vector=vector,
-                                    title=row.title,
-                                    year=row.year,
-                                    authors=row.authors,
-                                    venue=row.venue,
-                                    tags=row.tags,
-                                )
-                                for row, vector in zip(batch_rows, result.vectors, strict=True)
-                            ]
-                            if should_replace_existing:
-                                staged_rows.extend(embedded_batch_rows)
-                                _save_checkpoint(
-                                    vector_dir,
-                                    doc_id=doc.doc_id,
-                                    template_key=template_key,
-                                    group_hash=group_hash,
-                                    next_offset=start + len(batch_rows),
-                                    staged_rows=staged_rows,
-                                )
-                            else:
-                                write_chunks(
-                                    db,
-                                    embedded_batch_rows,
+                            for start in range(
+                                start_offset, len(pending_rows), embedding_config.batch_size
+                            )
+                        ]
+                        for wave_start in range(0, len(batch_specs), max_concurrency):
+                            wave_specs = batch_specs[wave_start : wave_start + max_concurrency]
+
+                            async def embed_batch(start: int, batch_rows: list[ChunkRow]):
+                                batch = [row.text for row in batch_rows]
+                                result = await call_embedding_with_route_pool(
+                                    route_pool=route_pool,
+                                    texts=batch,
                                     dimensions=embedding_config.dimensions,
+                                    client=client,
                                 )
-                                written_chunk_count += len(embedded_batch_rows)
-                            embed_progress.update(len(batch_rows))
+                                return start, batch_rows, batch, result
+
+                            wave_results = await asyncio.gather(
+                                *(
+                                    embed_batch(start, batch_rows)
+                                    for start, batch_rows in wave_specs
+                                )
+                            )
+
+                            for start, batch_rows, batch, result in wave_results:
+                                if len(result.vectors) != len(batch):
+                                    raise ValueError(
+                                        f"Embedding provider returned {len(result.vectors)} vectors for batch of {len(batch)} texts "
+                                        f"(starting at offset {start})"
+                                    )
+                                embedded_batch_rows = [
+                                    ChunkRow(
+                                        id=row.id,
+                                        doc_id=row.doc_id,
+                                        source_path=row.source_path,
+                                        template_tag=row.template_tag,
+                                        chunk_type=row.chunk_type,
+                                        chunk_index=row.chunk_index,
+                                        field_name=row.field_name,
+                                        lang=row.lang,
+                                        text=row.text,
+                                        content_hash=row.content_hash,
+                                        vector=vector,
+                                        title=row.title,
+                                        year=row.year,
+                                        authors=row.authors,
+                                        venue=row.venue,
+                                        tags=row.tags,
+                                    )
+                                    for row, vector in zip(batch_rows, result.vectors, strict=True)
+                                ]
+                                if should_replace_existing:
+                                    staged_rows.extend(embedded_batch_rows)
+                                    _save_checkpoint(
+                                        vector_dir,
+                                        doc_id=doc.doc_id,
+                                        template_key=template_key,
+                                        group_hash=group_hash,
+                                        next_offset=start + len(batch_rows),
+                                        staged_rows=staged_rows,
+                                    )
+                                else:
+                                    write_chunks(
+                                        db,
+                                        embedded_batch_rows,
+                                        dimensions=embedding_config.dimensions,
+                                    )
+                                    written_chunk_count += len(embedded_batch_rows)
+                                embed_progress.update(len(batch_rows))
                             if stop_requested:
                                 raise KeyboardInterrupt
 
