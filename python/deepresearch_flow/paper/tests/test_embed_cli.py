@@ -70,6 +70,7 @@ def test_paper_embed_help() -> None:
     assert "--force" in result.output
     assert "--template-tag" in result.output
     assert "--embedding" in result.output
+    assert "--max-concurrency" in result.output
 
 
 def test_paper_search_help() -> None:
@@ -145,6 +146,68 @@ def test_paper_embed_fails_fast_when_vector_store_preflight_fails(tmp_path: Path
 
     assert result.exit_code != 0
     assert "preflight failed" in result.output.lower()
+
+
+def test_paper_embed_passes_max_concurrency_override(tmp_path: Path, monkeypatch) -> None:
+    runner = CliRunner()
+    config_path = _write_embed_config(tmp_path)
+    json_path = tmp_path / "papers.json"
+    json_path.write_text("[]", encoding="utf-8")
+    seen: dict[str, object] = {}
+
+    def ok_preflight(*args, **kwargs):  # noqa: ANN002, ANN003
+        return None
+
+    async def fake_run_embed_pipeline(**kwargs):  # noqa: ANN003
+        seen.update(kwargs)
+
+    monkeypatch.setattr("deepresearch_flow.paper.vector_store.preflight_vector_store", ok_preflight)
+    monkeypatch.setattr(
+        "deepresearch_flow.paper.embed_pipeline.run_embed_pipeline", fake_run_embed_pipeline
+    )
+
+    result = runner.invoke(
+        cli,
+        [
+            "paper",
+            "embed",
+            "-c",
+            str(config_path),
+            "-i",
+            str(json_path),
+            "--output-embed-db",
+            str(tmp_path / "vectors"),
+            "--max-concurrency",
+            "3",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert seen["max_concurrency_override"] == 3
+
+
+def test_paper_embed_rejects_nonpositive_max_concurrency(tmp_path: Path) -> None:
+    runner = CliRunner()
+    config_path = _write_embed_config(tmp_path)
+    json_path = tmp_path / "papers.json"
+    json_path.write_text("[]", encoding="utf-8")
+
+    result = runner.invoke(
+        cli,
+        [
+            "paper",
+            "embed",
+            "-c",
+            str(config_path),
+            "-i",
+            str(json_path),
+            "--max-concurrency",
+            "0",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "--max-concurrency must be positive" in result.output
 
 
 def test_paper_search_rejects_invalid_venue_filter(tmp_path: Path) -> None:

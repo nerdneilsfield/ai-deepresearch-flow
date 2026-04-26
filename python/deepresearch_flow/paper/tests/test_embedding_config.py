@@ -25,6 +25,7 @@ def _write_config(tmp_path: Path, *, embedding_section: str, rerank_section: str
         dimensions = 1024
         normalized = true
         batch_size = 32
+        max_concurrency = 4
         chunk_max_tokens = 512
         chunk_overlap_tokens = 64
         __EMBEDDING__
@@ -73,6 +74,7 @@ def test_loads_embedding_providers_with_bases_and_keys(tmp_path: Path, monkeypat
     assert config.embedding is not None
     assert config.embedding.default_model == "bge-m3"
     assert config.embedding.default_provider == "ollama"
+    assert config.embedding.max_concurrency == 4
     assert config.embedding.providers[0].type == "openai_compatible"
 
     ollama = config.embedding.providers[0]
