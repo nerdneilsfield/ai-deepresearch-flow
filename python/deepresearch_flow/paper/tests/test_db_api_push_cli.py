@@ -501,7 +501,7 @@ class TestApiPushCli:
         mock_push.assert_not_called()
         mock_push_semantic.assert_not_called()
 
-    def test_embed_db_pushes_semantic_chunks(self, tmp_path: Path) -> None:
+    def test_only_api_with_embed_db_skips_semantic_chunks(self, tmp_path: Path) -> None:
         config_path = tmp_path / "remote.toml"
         snapshot_db = tmp_path / "paper_snapshot.db"
         embed_dir = tmp_path / "embed_vectors"
@@ -529,6 +529,40 @@ class TestApiPushCli:
                     "--config", str(config_path),
                     "--embed-db", str(embed_dir),
                     "--only-api",
+                ],
+            )
+
+        assert result.exit_code == 0
+        mock_push.assert_called_once()
+        mock_push_semantic.assert_not_called()
+
+    def test_embed_db_pushes_semantic_chunks(self, tmp_path: Path) -> None:
+        config_path = tmp_path / "remote.toml"
+        snapshot_db = tmp_path / "paper_snapshot.db"
+        embed_dir = tmp_path / "embed_vectors"
+        _write_config(config_path)
+        snapshot_db.write_text("")
+        embed_dir.mkdir()
+
+        config = RemoteConfig(api_base_url="https://api.example.com", admin_token="token", batch_size=10)
+
+        with (
+            patch("deepresearch_flow.paper.snapshot.push.load_remote_config", return_value=config),
+            patch("deepresearch_flow.paper.snapshot.push.extract_papers_from_db", return_value=[{"paper_id": "paper-1", "paper_title": "Paper"}]),
+            patch("deepresearch_flow.paper.snapshot.push.push_papers", return_value=PushStats(total=1, added=1, batches_sent=1)) as mock_push,
+            patch("deepresearch_flow.paper.vector_store.load_index_meta", return_value={"model": "m", "dimensions": 4, "normalized": True, "provider": "p", "index_version": 1}),
+            patch("deepresearch_flow.paper.vector_store.open_store", return_value=object()),
+            patch("deepresearch_flow.paper.vector_store.read_all_chunks", return_value=[{"doc_id": "paper-1", "template_tag": "", "content_hash": "h", "vector": [0.1, 0.2, 0.3, 0.4]}]),
+            patch("deepresearch_flow.paper.snapshot.push_semantic.push_semantic_chunks", return_value=MagicMock(batches_sent=1, inserted=1, updated=0, skipped=0, deleted=0)) as mock_push_semantic,
+        ):
+            runner = CliRunner()
+            result = runner.invoke(
+                paper,
+                [
+                    "db", "api", "push",
+                    "--snapshot-db", str(snapshot_db),
+                    "--config", str(config_path),
+                    "--embed-db", str(embed_dir),
                 ],
             )
 
@@ -644,7 +678,6 @@ class TestApiPushCli:
                     "--snapshot-db", str(snapshot_db),
                     "--config", str(config_path),
                     "--embed-db", str(embed_dir),
-                    "--only-api",
                 ],
             )
 
@@ -713,7 +746,6 @@ class TestApiPushCli:
                     "--snapshot-db", str(snapshot_db),
                     "--config", str(config_path),
                     "--embed-db", str(embed_dir),
-                    "--only-api",
                 ],
             )
 
@@ -1019,7 +1051,6 @@ class TestApiPushSemanticCli:
                     str(config_path),
                     "--embed-db",
                     str(embed_dir),
-                    "--only-api",
                     "--start-idx",
                     "1",
                     "--end-idx",
