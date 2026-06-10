@@ -120,6 +120,18 @@ class TestMcpTransportAuth(unittest.IsolatedAsyncioTestCase):
     def tearDownClass(cls) -> None:
         cls.tmpdir.cleanup()
 
+    def _initialize_payload(self) -> dict[str, object]:
+        return {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "test-client", "version": "0"},
+            },
+        }
+
     async def test_mcp_mounts_require_bearer_before_transport_semantics(self) -> None:
         app = create_app(
             snapshot_db=self.snapshot_db,
@@ -181,6 +193,58 @@ class TestMcpTransportAuth(unittest.IsolatedAsyncioTestCase):
 
                 response = await client.post("/mcp-sse/", headers=headers, json={})
                 self.assertEqual(response.status_code, 405)
+
+    async def test_streamable_mcp_accepts_authorized_initialize_without_trailing_slash(self) -> None:
+        app = create_app(
+            snapshot_db=self.snapshot_db,
+            static_base_url="",
+            cors_allowed_origins=["*"],
+            limits=ApiLimits(),
+            mcp_access_token=self.access_token,
+        )
+        transport = httpx.ASGITransport(app=app)
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(
+                transport=transport,
+                base_url="http://testserver",
+                follow_redirects=False,
+            ) as client:
+                response = await client.post(
+                    "/mcp",
+                    headers={
+                        "Authorization": f"Bearer {self.access_token}",
+                        "Accept": "application/json, text/event-stream",
+                        "Content-Type": "application/json",
+                    },
+                    json=self._initialize_payload(),
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["result"]["serverInfo"]["name"], "Paper DB MCP")
+
+    async def test_streamable_mcp_accepts_case_insensitive_bearer_scheme(self) -> None:
+        app = create_app(
+            snapshot_db=self.snapshot_db,
+            static_base_url="",
+            cors_allowed_origins=["*"],
+            limits=ApiLimits(),
+            mcp_access_token=self.access_token,
+        )
+        transport = httpx.ASGITransport(app=app)
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+                response = await client.post(
+                    "/mcp/",
+                    headers={
+                        "Authorization": f"bearer {self.access_token}",
+                        "Accept": "application/json, text/event-stream",
+                        "Content-Type": "application/json",
+                    },
+                    json=self._initialize_payload(),
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["result"]["serverInfo"]["name"], "Paper DB MCP")
 
 
 if __name__ == "__main__":

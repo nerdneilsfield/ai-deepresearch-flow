@@ -17,6 +17,30 @@ from deepresearch_flow.paper.snapshot.common import ApiLimits, _column_exists, _
 from deepresearch_flow.paper.snapshot.text import merge_adjacent_markers, remove_cjk_spaces, rewrite_search_query
 
 _WHITESPACE_RE = re.compile(r"\s+")
+_MCP_CANONICAL_PATHS = {"/mcp": "/mcp/", "/mcp-sse": "/mcp-sse/"}
+
+
+class _McpTrailingSlashMiddleware:
+    """Route exact MCP mount paths without forcing clients through redirects."""
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        path = scope.get("path")
+        canonical = _MCP_CANONICAL_PATHS.get(path)
+        if canonical is None:
+            await self.app(scope, receive, send)
+            return
+
+        rewritten = dict(scope)
+        rewritten["path"] = canonical
+        rewritten["raw_path"] = canonical.encode("latin-1")
+        await self.app(rewritten, receive, send)
 
 
 def _normalize_facet_value(value: str) -> str:
@@ -1066,6 +1090,7 @@ def create_app(
         routes=routes,
         lifespan=mcp_lifespan,
     )
+    app.add_middleware(_McpTrailingSlashMiddleware)
     if cfg.cors_allowed_origins:
         app.add_middleware(
             CORSMiddleware,

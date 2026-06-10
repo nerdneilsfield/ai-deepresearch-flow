@@ -7,7 +7,7 @@ from typing import Literal
 
 from starlette.responses import JSONResponse
 
-_BEARER_PREFIX = "Bearer "
+_BEARER_SCHEME = "bearer"
 
 
 class BearerAuthError(Exception):
@@ -20,9 +20,11 @@ class BearerAuthError(Exception):
 
 def verify_bearer(header_value: str | None, expected: str) -> None:
     """Validate ``Authorization: Bearer <token>`` using constant-time compare."""
-    if not header_value or not header_value.startswith(_BEARER_PREFIX):
+    if not header_value:
         raise BearerAuthError("missing")
-    candidate = header_value[len(_BEARER_PREFIX) :]
+    scheme, sep, candidate = header_value.partition(" ")
+    if sep != " " or scheme.lower() != _BEARER_SCHEME:
+        raise BearerAuthError("missing")
     if not hmac.compare_digest(candidate, expected):
         raise BearerAuthError("invalid")
 
