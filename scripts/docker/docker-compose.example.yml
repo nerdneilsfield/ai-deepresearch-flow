@@ -1,13 +1,11 @@
-version: "3.9"
-
 services:
   deploy-local-static:
     image: ghcr.io/nerdneilsfield/deepresearch-flow:deploy-latest
     ports:
       - "8080:8899"
     volumes:
-      - ./paper_snapshot.db:/db/papers.db
-      - ./paper-static:/static
+      - ${PWD}/paper_snapshot.db:/db/papers.db
+      - ${PWD}/paper-static:/static
     environment:
       PAPER_DB_API_BASE: http://127.0.0.1:8000
       PAPER_DB_STATIC_BASE: /static
@@ -20,10 +18,10 @@ services:
     ports:
       - "8080:8899"
     volumes:
-      - ./paper_snapshot.db:/db/papers.db
-      - ./paper-static:/static
-      - ./paper_vectors:/db/paper_vectors
-      - ./config.toml:/app/config.toml:ro
+      - ${PWD}/paper_snapshot.db:/db/papers.db
+      - ${PWD}/paper-static:/static
+      - ${PWD}/paper_vectors:/db/paper_vectors
+      - ${PWD}/config.toml:/app/config.toml:ro
     environment:
       PAPER_DB_API_BASE: http://127.0.0.1:8000
       PAPER_DB_STATIC_BASE: /static
@@ -39,7 +37,7 @@ services:
     ports:
       - "8080:8899"
     volumes:
-      - ./paper_snapshot.db:/db/papers.db
+      - ${PWD}/paper_snapshot.db:/db/papers.db
     environment:
       PAPER_DB_API_BASE: http://127.0.0.1:8000
       PAPER_DB_STATIC_BASE: https://static.example.com
@@ -52,9 +50,9 @@ services:
     ports:
       - "8080:8899"
     volumes:
-      - ./paper_snapshot.db:/db/papers.db
-      - ./paper_vectors:/db/paper_vectors
-      - ./config.toml:/app/config.toml:ro
+      - ${PWD}/paper_snapshot.db:/db/papers.db
+      - ${PWD}/paper_vectors:/db/paper_vectors
+      - ${PWD}/config.toml:/app/config.toml:ro
     environment:
       PAPER_DB_API_BASE: http://127.0.0.1:8000
       PAPER_DB_STATIC_BASE: https://static.example.com

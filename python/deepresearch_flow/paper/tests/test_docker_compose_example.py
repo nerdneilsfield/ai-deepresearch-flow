@@ -15,3 +15,5 @@ def test_docker_compose_example_sets_mcp_access_token_for_all_profiles() -> None
     assert "deploy-external-static:" in content
     assert "deploy-external-static-advanced:" in content
     assert content.count("MCP_ACCESS_TOKEN: your-mcp-token") == 4
+    assert content.count("${PWD}/paper_snapshot.db:/db/papers.db") == 4
+    assert "./paper_snapshot.db:/db/papers.db" not in content
