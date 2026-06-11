@@ -1,5 +1,6 @@
 import MarkdownIt from 'markdown-it'
 import DOMPurify from 'dompurify'
+import type { Config } from 'dompurify'
 import markdownItFootnote from 'markdown-it-footnote'
 import markdownItKatex from 'markdown-it-katex'
 import { normalizeMarkdown } from './markdown-normalize'
@@ -13,8 +14,7 @@ md.use(markdownItFootnote)
 md.use(markdownItKatex, { throwOnError: false })
 md.enable('table')
 
-// @ts-ignore
-const PURIFY_CONFIG: any = {
+const PURIFY_CONFIG: Config = {
   ALLOWED_TAGS: [
     'p', 'br', 'strong', 'em', 'u', 's', 'del', 'ins', 
     'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 

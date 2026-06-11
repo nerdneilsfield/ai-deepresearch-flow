@@ -24,6 +24,7 @@ from deepresearch_flow.paper.snapshot.mcp_server import (
     resource_metadata,
     resource_source,
     resource_summary_default,
+    resource_translation,
     resolve_static_export_dir,
     search_papers,
 )
@@ -317,6 +318,12 @@ class TestMcpSnapshotPublicBehavior(unittest.TestCase):
         source_file.write_text("# Paper Title\n\nSource body", encoding="utf-8")
 
         self.assertEqual(resource_source("p1"), "# Paper Title\n\nSource body")
+
+    def test_resource_translation_rejects_unsafe_language_path(self) -> None:
+        with self.assertRaises(McpToolError) as ctx:
+            resource_translation("p1", "../zh")
+
+        self.assertEqual(ctx.exception.code, "invalid_lang")
 
     def test_create_mcp_app_exposes_streamable_http_route(self) -> None:
         app, lifespan = create_mcp_app(self._base_config())

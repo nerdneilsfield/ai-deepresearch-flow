@@ -126,6 +126,8 @@ watch(() => props.detail.paper_id, () => {
             variant="outline"
             class="cursor-pointer bg-sci-50 text-sci-800 border-sci-200 hover:bg-sci-100 dark:bg-sci-900/30 dark:text-sci-200 dark:border-sci-800 dark:hover:bg-sci-900/50 transition-colors"
             @click="onFacetClick('keywords', kw)"
+            @keydown.enter.prevent="onFacetClick('keywords', kw)"
+            @keydown.space.prevent="onFacetClick('keywords', kw)"
           >
             {{ kw }}
           </Badge>
@@ -144,6 +146,8 @@ watch(() => props.detail.paper_id, () => {
             variant="outline"
             class="cursor-pointer bg-ink-100 text-ink-700 border-ink-200 hover:bg-ink-200 dark:bg-ink-800 dark:text-ink-300 dark:border-ink-700 dark:hover:bg-ink-700 transition-colors"
             @click="onFacetClick('institutions', inst)"
+            @keydown.enter.prevent="onFacetClick('institutions', inst)"
+            @keydown.space.prevent="onFacetClick('institutions', inst)"
           >
             {{ inst }}
           </Badge>
@@ -162,6 +166,8 @@ watch(() => props.detail.paper_id, () => {
             variant="outline"
             class="cursor-pointer bg-accent-50 text-accent-700 border-accent-200 hover:bg-accent-100 dark:bg-accent-900/30 dark:text-accent-200 dark:border-accent-800 dark:hover:bg-accent-900/50 transition-colors"
             @click="onFacetClick('tags', tag)"
+            @keydown.enter.prevent="onFacetClick('tags', tag)"
+            @keydown.space.prevent="onFacetClick('tags', tag)"
           >
             {{ tag }}
           </Badge>
@@ -177,6 +183,8 @@ watch(() => props.detail.paper_id, () => {
           variant="outline"
           class="cursor-pointer bg-ink-50 text-ink-600 border-ink-200 hover:bg-ink-100 dark:bg-ink-800 dark:text-ink-300 dark:border-ink-700 dark:hover:bg-ink-700 transition-colors"
           @click="onFacetClick('output_languages', detail.output_language)"
+          @keydown.enter.prevent="onFacetClick('output_languages', detail.output_language)"
+          @keydown.space.prevent="onFacetClick('output_languages', detail.output_language)"
         >
           {{ t('outputLang') }}: {{ detail.output_language }}
         </Badge>
@@ -187,6 +195,8 @@ watch(() => props.detail.paper_id, () => {
           variant="outline"
           class="cursor-pointer bg-ink-50 text-ink-600 border-ink-200 hover:bg-ink-100 dark:bg-ink-800 dark:text-ink-300 dark:border-ink-700 dark:hover:bg-ink-700 transition-colors"
           @click="onFacetClick('providers', detail.provider)"
+          @keydown.enter.prevent="onFacetClick('providers', detail.provider)"
+          @keydown.space.prevent="onFacetClick('providers', detail.provider)"
         >
           {{ t('providers') }}: {{ detail.provider }}
         </Badge>
@@ -197,6 +207,8 @@ watch(() => props.detail.paper_id, () => {
           variant="outline"
           class="cursor-pointer bg-ink-50 text-ink-600 border-ink-200 hover:bg-ink-100 dark:bg-ink-800 dark:text-ink-300 dark:border-ink-700 dark:hover:bg-ink-700 transition-colors"
           @click="onFacetClick('models', detail.model)"
+          @keydown.enter.prevent="onFacetClick('models', detail.model)"
+          @keydown.space.prevent="onFacetClick('models', detail.model)"
         >
           {{ t('models') }}: {{ detail.model }}
         </Badge>
@@ -210,6 +222,8 @@ watch(() => props.detail.paper_id, () => {
           variant="outline"
           class="cursor-pointer bg-sci-50 text-sci-700 border-sci-200 hover:bg-sci-100 dark:bg-sci-900/30 dark:text-sci-200 dark:border-sci-800 dark:hover:bg-sci-900/50 transition-colors"
           @click="onFacetClick('prompt_templates', detail.prompt_template)"
+          @keydown.enter.prevent="onFacetClick('prompt_templates', detail.prompt_template)"
+          @keydown.space.prevent="onFacetClick('prompt_templates', detail.prompt_template)"
         >
           {{ t('promptTemplate') }}: {{ detail.prompt_template }}
         </Badge>
@@ -225,6 +239,8 @@ watch(() => props.detail.paper_id, () => {
           variant="outline"
           class="cursor-pointer bg-sci-50 text-sci-700 border-sci-200 hover:bg-sci-100 dark:bg-sci-900/30 dark:text-sci-200 dark:border-sci-800 dark:hover:bg-sci-900/50 transition-colors"
           @click="onFacetClick('translation_langs', lang)"
+          @keydown.enter.prevent="onFacetClick('translation_langs', lang)"
+          @keydown.space.prevent="onFacetClick('translation_langs', lang)"
         >
           {{ t('translationLang') }}: {{ lang }}
         </Badge>

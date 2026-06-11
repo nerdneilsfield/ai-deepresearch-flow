@@ -14,7 +14,7 @@ const expanded = ref(false)
 const tokenInput = ref('')
 const queryInput = ref('')
 const lastVerifyInvalid = ref(false)
-const { state, token, verify, hydrate } = useAdvancedSearchToken()
+const { state, token, failureReason, verify, hydrate } = useAdvancedSearchToken()
 const ui = useUiStore()
 const isVerified = computed(() => state.value === 'verified')
 const isVerifying = computed(() => state.value === 'verifying')
@@ -32,6 +32,10 @@ watch(token, (value, previous) => {
   } else if (previous) {
     tokenInput.value = ''
   }
+})
+
+watch(failureReason, (value) => {
+  lastVerifyInvalid.value = value === 'invalid'
 })
 
 async function onVerify() {

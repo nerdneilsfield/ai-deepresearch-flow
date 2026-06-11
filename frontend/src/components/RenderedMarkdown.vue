@@ -4,7 +4,6 @@ import { MdPreview, config } from 'md-editor-v3'
 import 'md-editor-v3/lib/preview.css'
 import DOMPurify from 'dompurify'
 import footnote from 'markdown-it-footnote'
-// @ts-ignore
 import taskLists from 'markdown-it-task-lists'
 import { normalizeMarkdown } from '@/lib/markdown-normalize'
 import type { HeadList } from 'md-editor-v3'
@@ -265,8 +264,7 @@ async function handleHtmlChanged() {
           const mmInstance = Markmap.create(svg, undefined, tree)
           div.replaceWith(wrapper)
           setTimeout(() => {
-            // @ts-ignore
-            mmInstance?.fit()
+            ;(mmInstance as { fit?: () => void })?.fit?.()
           }, 200)
         } catch (err) {
           div.replaceWith(wrapper)

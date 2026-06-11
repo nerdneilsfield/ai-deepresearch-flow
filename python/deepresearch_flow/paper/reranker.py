@@ -10,12 +10,10 @@ import httpx
 
 from deepresearch_flow.paper.routing import RoutePool
 
-try:
-    import tiktoken
-except ImportError:  # pragma: no cover - exercised when dependency is unavailable
-    tiktoken = None
-
 _TOKEN_RE = re.compile(r"\w+|[^\w\s]", re.UNICODE)
+_ENCODING: Any | None = None
+_TIKTOKEN_AVAILABLE: bool | None = None
+tiktoken: Any | None = None
 
 
 @dataclass(frozen=True)
@@ -67,17 +65,33 @@ def _parse_results(data: object) -> RerankResult:
 
 
 def _encode_tokens(text: str) -> list[int] | list[str]:
-    if tiktoken is not None:
-        encoding = tiktoken.get_encoding("cl100k_base")
+    encoding = _get_encoding()
+    if encoding is not None:
         return encoding.encode(text, disallowed_special=())
     return _TOKEN_RE.findall(text)
 
 
 def _decode_tokens(tokens: list[int] | list[str]) -> str:
-    if tiktoken is not None:
-        encoding = tiktoken.get_encoding("cl100k_base")
+    encoding = _get_encoding()
+    if encoding is not None:
         return encoding.decode(tokens)
     return " ".join(str(token) for token in tokens)
+
+
+def _get_encoding() -> Any | None:
+    global _ENCODING, _TIKTOKEN_AVAILABLE, tiktoken
+    if _TIKTOKEN_AVAILABLE is False:
+        return None
+    if _ENCODING is not None:
+        return _ENCODING
+    try:
+        import tiktoken
+    except ImportError:  # pragma: no cover - exercised when dependency is unavailable
+        _TIKTOKEN_AVAILABLE = False
+        return None
+    _TIKTOKEN_AVAILABLE = True
+    _ENCODING = tiktoken.get_encoding("cl100k_base")
+    return _ENCODING
 
 
 def _truncate_to_max_context(text: str, max_context: int) -> str:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from deepresearch_flow.paper.providers.base import ProviderError
@@ -31,6 +32,7 @@ async def chat(
     model: str,
     messages: list[dict[str, str]],
     anthropic_version: str,
+    timeout: float,
     max_tokens: int = 2048,
 ) -> str:
     try:
@@ -56,12 +58,17 @@ async def chat(
     )
 
     try:
-        response = await client.messages.create(
-            model=model,
-            max_tokens=max_tokens,
-            system=system_prompt,
-            messages=claude_messages,
+        response = await asyncio.wait_for(
+            client.messages.create(
+                model=model,
+                max_tokens=max_tokens,
+                system=system_prompt,
+                messages=claude_messages,
+            ),
+            timeout=timeout,
         )
+    except TimeoutError as exc:
+        raise ProviderError("Claude request timed out", retryable=True) from exc
     except Exception as exc:  # pragma: no cover - SDK error
         raise ProviderError(str(exc), retryable=True) from exc
 

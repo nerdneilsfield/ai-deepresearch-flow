@@ -21,6 +21,7 @@ _SHARED_KEY = "_shared"
 SHARED_TEMPLATE_KEY = _SHARED_KEY
 _META_FILE = "index_meta.json"
 _CHUNKS_TABLE = "paper_chunks"
+_WRITE_CHUNK_BATCH_SIZE = 2_000
 _ADMIN_SCALAR_INDICES = {
     "doc_id": "idx_chunks_doc_id",
     "template_tag": "idx_chunks_template_tag",
@@ -309,34 +310,45 @@ def _chunks_schema(dimensions: int) -> pa.Schema:
     )
 
 
+def _chunk_row_to_dict(row: ChunkRow) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "doc_id": row.doc_id,
+        "source_path": row.source_path,
+        "template_tag": row.template_tag,
+        "chunk_type": row.chunk_type,
+        "chunk_index": row.chunk_index,
+        "field_name": row.field_name,
+        "lang": row.lang,
+        "text": row.text,
+        "content_hash": row.content_hash,
+        "vector": row.vector,
+        "title": row.title,
+        "year": row.year,
+        "authors": row.authors,
+        "venue": row.venue,
+        "tags": row.tags,
+    }
+
+
+def _chunk_row_batches(rows: list[ChunkRow], batch_size: int = _WRITE_CHUNK_BATCH_SIZE):
+    for start in range(0, len(rows), batch_size):
+        yield [_chunk_row_to_dict(row) for row in rows[start : start + batch_size]]
+
+
 def write_chunks(db: lancedb.DBConnection, rows: list[ChunkRow], *, dimensions: int) -> None:
     if not rows:
         return
-    data = [
-        {
-            "id": row.id,
-            "doc_id": row.doc_id,
-            "source_path": row.source_path,
-            "template_tag": row.template_tag,
-            "chunk_type": row.chunk_type,
-            "chunk_index": row.chunk_index,
-            "field_name": row.field_name,
-            "lang": row.lang,
-            "text": row.text,
-            "content_hash": row.content_hash,
-            "vector": row.vector,
-            "title": row.title,
-            "year": row.year,
-            "authors": row.authors,
-            "venue": row.venue,
-            "tags": row.tags,
-        }
-        for row in rows
-    ]
+    batches = _chunk_row_batches(rows)
     if _CHUNKS_TABLE in _table_names(db):
-        db.open_table(_CHUNKS_TABLE).add(data)
+        table = db.open_table(_CHUNKS_TABLE)
+        for batch in batches:
+            table.add(batch)
     else:
-        db.create_table(_CHUNKS_TABLE, data=data, schema=_chunks_schema(dimensions))
+        first_batch = next(batches)
+        table = db.create_table(_CHUNKS_TABLE, data=first_batch, schema=_chunks_schema(dimensions))
+        for batch in batches:
+            table.add(batch)
         ensure_admin_scalar_indices(db)
 
 
@@ -353,7 +365,7 @@ def read_group_hashes(db: lancedb.DBConnection) -> dict[tuple[str, str], str]:
     if _CHUNKS_TABLE not in _table_names(db):
         return {}
     table = db.open_table(_CHUNKS_TABLE)
-    rows = table.to_arrow().to_pylist()
+    rows = table.search().select(["doc_id", "template_tag", "content_hash"]).to_list()
     grouped: dict[tuple[str, str], list[str]] = {}
     for row in rows:
         template_key = row.get("template_tag") or _SHARED_KEY

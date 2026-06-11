@@ -38,6 +38,13 @@ def init_snapshot_db(conn: sqlite3.Connection) -> None:
           pdf_content_hash TEXT,
           source_md_content_hash TEXT
         );
+        CREATE INDEX IF NOT EXISTS idx_paper_key ON paper(paper_key);
+        CREATE INDEX IF NOT EXISTS idx_paper_year ON paper(year);
+        CREATE INDEX IF NOT EXISTS idx_paper_month ON paper(month);
+        CREATE INDEX IF NOT EXISTS idx_paper_venue ON paper(venue);
+        CREATE INDEX IF NOT EXISTS idx_paper_index ON paper(paper_index);
+        CREATE INDEX IF NOT EXISTS idx_paper_source_hash ON paper(source_hash);
+        CREATE INDEX IF NOT EXISTS idx_paper_preferred_summary_template ON paper(preferred_summary_template);
 
         CREATE TABLE IF NOT EXISTS paper_summary (
           paper_id TEXT NOT NULL,

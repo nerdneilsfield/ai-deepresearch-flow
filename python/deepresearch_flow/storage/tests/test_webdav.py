@@ -116,3 +116,30 @@ class TestUrlConstruction:
         storage = WebDavStorage("https://cdn.example.com/static/", "user", "pass", _transport=transport)
         storage.exists("pdf/abc.pdf")
         assert str(captured[0].url) == "https://cdn.example.com/static/pdf/abc.pdf"
+
+    def test_path_segments_are_url_encoded(self) -> None:
+        captured: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured.append(request)
+            return httpx.Response(200)
+
+        transport = httpx.MockTransport(handler)
+        storage = WebDavStorage("https://cdn.example.com/static", "user", "pass", _transport=transport)
+        storage.exists("pdf/a b.pdf")
+        assert str(captured[0].url) == "https://cdn.example.com/static/pdf/a%20b.pdf"
+
+    def test_parent_path_traversal_is_rejected(self) -> None:
+        transport = _mock_transport({"HEAD": 200})
+        storage = WebDavStorage("https://cdn.example.com/static", "user", "pass", _transport=transport)
+        with pytest.raises(ValueError):
+            storage.exists("../secret.txt")
+
+    def test_non_local_http_basic_auth_is_rejected(self) -> None:
+        with pytest.raises(ValueError):
+            WebDavStorage("http://cdn.example.com/static", "user", "pass")
+
+    def test_localhost_http_basic_auth_is_allowed_for_tests(self) -> None:
+        transport = _mock_transport({"HEAD": 200})
+        storage = WebDavStorage("http://localhost/static", "user", "pass", _transport=transport)
+        assert storage.exists("pdf/abc.pdf") is True

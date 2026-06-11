@@ -453,9 +453,16 @@ function detectLocale() {
   return nav.toLowerCase().startsWith('zh') ? 'zh' : 'en'
 }
 
+function toDocumentLang(locale: string) {
+  return locale.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en'
+}
+
+const initialLocale = detectLocale()
+document.documentElement.lang = toDocumentLang(initialLocale)
+
 const i18n = createI18n({
   legacy: false,
-  locale: detectLocale(),
+  locale: initialLocale,
   fallbackLocale: 'en',
   messages,
 })
@@ -463,6 +470,7 @@ const i18n = createI18n({
 export function setLocale(locale: string) {
   i18n.global.locale.value = locale as 'en' | 'zh'
   window.localStorage.setItem('paperdb_lang', locale)
+  document.documentElement.lang = toDocumentLang(locale)
 }
 
 export default i18n

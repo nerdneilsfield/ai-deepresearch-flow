@@ -128,7 +128,7 @@ async function onAdvancedSearch(params: AdvancedSearchParams) {
     advancedDegradationMessage.value = null
     if (error instanceof AdvancedSearchHTTPError) {
       if (error.status === 401) {
-        await onAuthFailure()
+        void onAuthFailure()
         ui.pushToast('Advanced search token is invalid. Please re-verify.', 'error')
       } else if (error.status === 400) {
         ui.pushToast(`Invalid request: ${error.message}`, 'error')

@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import threading
 from typing import Any, Literal
+from urllib.parse import quote
 import uuid
 
 import httpx
@@ -37,6 +38,7 @@ from deepresearch_flow.paper.snapshot.text import merge_adjacent_markers, remove
 _DEFAULT_TIMEOUT = 10.0
 _DEFAULT_CONTENT_MAX_CHARS = 8_000
 _PAPER_ID_PATTERN = re.compile(r'^[a-zA-Z0-9_-]+$')
+_LANG_PATTERN = re.compile(r'^[a-zA-Z0-9_-]{1,32}$')
 
 
 class McpToolError(FastMCPToolError):
@@ -359,11 +361,31 @@ def _resolve_content_max_chars(cfg: McpSnapshotConfig, max_chars: int | None) ->
 def _read_static_text(rel_path: str) -> str | None:
     """Read static text from local export directory if available."""
     cfg = _get_config()
+    safe_rel_path = _validate_static_rel_path(rel_path)
     if cfg.static_export_dir:
-        path = cfg.static_export_dir / rel_path
+        root = cfg.static_export_dir.resolve()
+        path = (root / safe_rel_path).resolve()
+        if root not in path.parents and path != root:
+            raise FileNotFoundError("static asset path escapes export directory")
         if path.exists():
             return path.read_text(encoding="utf-8")
     return None
+
+
+def _validate_static_rel_path(rel_path: str) -> str:
+    normalized = str(rel_path or "").replace("\\", "/").strip("/")
+    parts = [part for part in normalized.split("/") if part]
+    if (
+        not parts
+        or normalized.startswith("/")
+        or any(part in {"", ".", ".."} for part in parts)
+    ):
+        raise FileNotFoundError("invalid static asset path")
+    return "/".join(parts)
+
+
+def _quote_static_rel_path(rel_path: str) -> str:
+    return "/".join(quote(part, safe="") for part in _validate_static_rel_path(rel_path).split("/"))
 
 
 def _fetch_static_text(rel_path: str) -> str:
@@ -371,7 +393,7 @@ def _fetch_static_text(rel_path: str) -> str:
     cfg = _get_config()
     if cfg.static_base_url:
         base = cfg.static_base_url.rstrip("/")
-        url = f"{base}/{rel_path.lstrip('/')}"
+        url = f"{base}/{_quote_static_rel_path(rel_path)}"
         client = cfg.get_http_client()
         response = client.get(url)
         response.raise_for_status()
@@ -443,6 +465,8 @@ def _load_source_markdown(paper_id: str) -> str | None:
 def _load_translation_markdown(paper_id: str, lang: str) -> str | None:
     """Load translation markdown for paper and language."""
     cfg = _get_config()
+    if not _LANG_PATTERN.fullmatch(lang):
+        raise McpToolError("invalid_lang", "Language must contain only alphanumeric characters, hyphens, and underscores", lang=lang)
     conn = _open_ro_conn(cfg.snapshot_db)
     try:
         row = conn.execute(
@@ -1237,6 +1261,7 @@ def resource_translation(paper_id: str, lang: str) -> str:
     """Resource: translated markdown text."""
     cfg = _get_config()
     paper_id = _validate_paper_id(paper_id, cfg)
+    lang = (lang or "").strip().lower()
     
     try:
         content = _load_translation_markdown(paper_id, lang.lower())

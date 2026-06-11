@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -12,6 +13,7 @@ async def chat(
     api_key: str,
     model: str,
     messages: list[dict[str, str]],
+    timeout: float,
 ) -> str:
     try:
         from dashscope.aigc.generation import AioGeneration, Message
@@ -21,12 +23,17 @@ async def chat(
     ds_messages = [Message(role=item["role"], content=item["content"]) for item in messages]
 
     try:
-        response = await AioGeneration.call(
-            api_key=api_key,
-            model=model,
-            messages=ds_messages,
-            result_format="message",
+        response = await asyncio.wait_for(
+            AioGeneration.call(
+                api_key=api_key,
+                model=model,
+                messages=ds_messages,
+                result_format="message",
+            ),
+            timeout=timeout,
         )
+    except TimeoutError as exc:
+        raise ProviderError("DashScope request timed out", retryable=True) from exc
     except Exception as exc:  # pragma: no cover - SDK error
         raise ProviderError(str(exc), retryable=True) from exc
 

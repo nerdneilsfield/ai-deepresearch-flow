@@ -49,6 +49,7 @@ async def chat_ai_studio(
     api_key: str,
     model: str,
     messages: list[dict[str, str]],
+    timeout: float,
 ) -> str:
     try:
         from google import genai
@@ -59,11 +60,16 @@ async def chat_ai_studio(
     client = genai.Client(api_key=api_key)
 
     try:
-        response = await asyncio.to_thread(
-            client.models.generate_content,
-            model=model,
-            contents=prompt,
+        response = await asyncio.wait_for(
+            asyncio.to_thread(
+                client.models.generate_content,
+                model=model,
+                contents=prompt,
+            ),
+            timeout=timeout,
         )
+    except TimeoutError as exc:
+        raise ProviderError("Gemini request timed out", retryable=True) from exc
     except Exception as exc:  # pragma: no cover - SDK error
         raise ProviderError(str(exc), retryable=True) from exc
 
@@ -79,6 +85,7 @@ async def chat_vertex(
     credentials_path: str | None,
     model: str,
     messages: list[dict[str, str]],
+    timeout: float,
 ) -> str:
     try:
         from google import genai
@@ -102,11 +109,16 @@ async def chat_vertex(
     )
 
     try:
-        response = await asyncio.to_thread(
-            client.models.generate_content,
-            model=model,
-            contents=prompt,
+        response = await asyncio.wait_for(
+            asyncio.to_thread(
+                client.models.generate_content,
+                model=model,
+                contents=prompt,
+            ),
+            timeout=timeout,
         )
+    except TimeoutError as exc:
+        raise ProviderError("Gemini request timed out", retryable=True) from exc
     except Exception as exc:  # pragma: no cover - SDK error
         raise ProviderError(str(exc), retryable=True) from exc
 

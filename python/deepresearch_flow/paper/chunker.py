@@ -6,12 +6,6 @@ from dataclasses import dataclass
 import re
 from typing import Any, Callable
 
-try:
-    import tiktoken
-except ImportError:  # pragma: no cover - exercised when dependency is unavailable
-    tiktoken = None
-
-
 @dataclass(frozen=True)
 class SearchableField:
     field_name: str
@@ -34,9 +28,15 @@ class Chunk:
 _SHARED = ""
 _NO_SPLIT_TYPES = {"title", "qa"}
 _TOKEN_RE = re.compile(r"\w+|[^\w\s]", re.UNICODE)
+_ENCODER: tuple[Callable[[str], list[Any]], Callable[[list[Any]], str]] | None = None
 
 
 def _build_encoder() -> tuple[Callable[[str], list[Any]], Callable[[list[Any]], str]]:
+    try:
+        import tiktoken
+    except ImportError:  # pragma: no cover - exercised when dependency is unavailable
+        tiktoken = None
+
     if tiktoken is not None:
         encoding = tiktoken.get_encoding("cl100k_base")
 
@@ -57,7 +57,11 @@ def _build_encoder() -> tuple[Callable[[str], list[Any]], Callable[[list[Any]], 
     return encode, decode
 
 
-_ENCODE, _DECODE = _build_encoder()
+def _get_encoder() -> tuple[Callable[[str], list[Any]], Callable[[list[Any]], str]]:
+    global _ENCODER
+    if _ENCODER is None:
+        _ENCODER = _build_encoder()
+    return _ENCODER
 
 
 def _resolve_title(record: dict[str, Any]) -> str | None:
@@ -77,11 +81,13 @@ def _first_text(record: dict[str, Any], keys: tuple[str, ...]) -> str | None:
 
 
 def _count_tokens(text: str) -> int:
-    return len(_ENCODE(text))
+    encode, _ = _get_encoder()
+    return len(encode(text))
 
 
 def _sliding_window_split(text: str, *, max_tokens: int, overlap_tokens: int) -> list[str]:
-    tokens = _ENCODE(text)
+    encode, decode = _get_encoder()
+    tokens = encode(text)
     if len(tokens) <= max_tokens:
         return [text]
 
@@ -91,7 +97,7 @@ def _sliding_window_split(text: str, *, max_tokens: int, overlap_tokens: int) ->
         segment = tokens[start : start + max_tokens]
         if not segment:
             break
-        chunks.append(_DECODE(segment))
+        chunks.append(decode(segment))
         if start + max_tokens >= len(tokens):
             break
     return chunks

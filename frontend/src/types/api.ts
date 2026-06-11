@@ -138,6 +138,38 @@ export const PaperBibtexSchema = z
   })
   .passthrough()
 
+export const BibtexMatchedItemSchema = z
+  .object({
+    bibtex_key: z.string(),
+    paper_id: z.string(),
+    match_method: z.enum(['doi', 'title']),
+    title: z.string(),
+    year: StringOrNumber.nullable(),
+    venue: z.string().nullable(),
+    authors: z.array(z.string()),
+  })
+  .passthrough()
+
+export const BibtexUnmatchedItemSchema = z
+  .object({
+    bibtex_key: z.string(),
+    title: z.string().nullable(),
+    search_query: z.string(),
+  })
+  .passthrough()
+
+export const BibtexMatchResultSchema = z
+  .object({
+    matched: z.array(BibtexMatchedItemSchema),
+    unmatched: z.array(BibtexUnmatchedItemSchema),
+    stats: z.object({
+      total: z.number(),
+      matched: z.number(),
+      unmatched: z.number(),
+    }),
+  })
+  .passthrough()
+
 export const FacetStatsResponseSchema = z
   .object({
     facet_type: z.string(),
@@ -155,4 +187,7 @@ export type StatsResponse = z.infer<typeof StatsResponseSchema>
 export type PaperDetail = z.infer<typeof PaperDetailSchema>
 export type Manifest = z.infer<typeof ManifestSchema>
 export type PaperBibtex = z.infer<typeof PaperBibtexSchema>
+export type BibtexMatchedItem = z.infer<typeof BibtexMatchedItemSchema>
+export type BibtexUnmatchedItem = z.infer<typeof BibtexUnmatchedItemSchema>
+export type BibtexMatchResult = z.infer<typeof BibtexMatchResultSchema>
 export type FacetStatsResponse = z.infer<typeof FacetStatsResponseSchema>

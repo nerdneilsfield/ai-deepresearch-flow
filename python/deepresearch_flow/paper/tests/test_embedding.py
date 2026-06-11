@@ -138,7 +138,8 @@ def test_call_embedding_with_route_pool_passes_provider_type(monkeypatch: pytest
         models=[EmbeddingModelConfig(model_name="embeddinggemma", dimensions=768, max_context=8192)],
     )
     route_pool = RoutePool.from_embedding_provider(
-        type("ResolvedConfig", (), {"resolve_active": lambda self: (provider, provider.models[0])})()
+        type("ResolvedConfig", (), {"resolve_active": lambda self: (provider, provider.models[0])})(),
+        cooldown_seconds=0.0,
     )
 
     async def _run() -> EmbeddingResult:
@@ -160,3 +161,48 @@ def test_call_embedding_with_route_pool_passes_provider_type(monkeypatch: pytest
         "dimensions": 4,
         "provider_type": "ollama",
     }
+
+
+def test_call_embedding_with_route_pool_waits_before_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = 0
+    delays: list[float] = []
+
+    async def fake_call_embedding(*args, **kwargs):  # noqa: ANN002, ANN003
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            request = httpx.Request("POST", "http://localhost/embeddings")
+            response = httpx.Response(503, request=request, text="busy")
+            raise httpx.HTTPStatusError("busy", request=request, response=response)
+        return EmbeddingResult(vectors=[[0.1] * 4], model="embeddinggemma", usage_tokens=1)
+
+    async def fake_sleep(delay: float) -> None:
+        delays.append(delay)
+
+    monkeypatch.setattr("deepresearch_flow.paper.embedding.call_embedding", fake_call_embedding)
+    monkeypatch.setattr("deepresearch_flow.paper.embedding.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("deepresearch_flow.paper.embedding.backoff_delay", lambda base, attempt, max_delay: 0.5)
+
+    provider = EmbeddingProviderConfig(
+        name="ollama",
+        type="ollama",
+        base=[BaseConfig(url="http://localhost:11434", weight=1, key=[KeyConfig(value="placeholder", weight=1)])],
+        models=[EmbeddingModelConfig(model_name="embeddinggemma", dimensions=768, max_context=8192)],
+    )
+    route_pool = RoutePool.from_embedding_provider(
+        type("ResolvedConfig", (), {"resolve_active": lambda self: (provider, provider.models[0])})(),
+        cooldown_seconds=0.0,
+    )
+
+    async def _run() -> EmbeddingResult:
+        async with httpx.AsyncClient() as client:
+            return await call_embedding_with_route_pool(
+                route_pool=route_pool,
+                texts=["hello"],
+                dimensions=4,
+                client=client,
+            )
+
+    result = asyncio.run(_run())
+    assert result.vectors == [[0.1] * 4]
+    assert delays == [0.5]

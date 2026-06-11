@@ -9,6 +9,7 @@ import {
 import {
   FacetResponseSchema,
   FacetStatsResponseSchema,
+  BibtexMatchResultSchema,
   ManifestSchema,
   PaperBibtexSchema,
   PaperDetailSchema,
@@ -18,6 +19,7 @@ import {
 import type {
   FacetResponse,
   FacetStatsResponse,
+  BibtexMatchResult,
   Manifest,
   PaperBibtex,
   PaperDetail,
@@ -219,28 +221,6 @@ export async function fetchManifest(url: string): Promise<Manifest> {
   return ManifestSchema.parse(data)
 }
 
-export interface BibtexMatchedItem {
-  bibtex_key: string
-  paper_id: string
-  match_method: 'doi' | 'title'
-  title: string
-  year: string | null
-  venue: string | null
-  authors: string[]
-}
-
-export interface BibtexUnmatchedItem {
-  bibtex_key: string
-  title: string | null
-  search_query: string
-}
-
-export interface BibtexMatchResult {
-  matched: BibtexMatchedItem[]
-  unmatched: BibtexUnmatchedItem[]
-  stats: { total: number; matched: number; unmatched: number }
-}
-
 export async function matchBibtex(bibtexRaw: string): Promise<BibtexMatchResult> {
   const url = buildUrl('/papers/match-bibtex')
   const data = await fetchJson(url, {
@@ -248,12 +228,15 @@ export async function matchBibtex(bibtexRaw: string): Promise<BibtexMatchResult>
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ bibtex_raw: bibtexRaw }),
   })
-  return data as BibtexMatchResult
+  return BibtexMatchResultSchema.parse(data)
 }
 
 export type {
   FacetResponse,
   FacetStatsResponse,
+  BibtexMatchResult,
+  BibtexMatchedItem,
+  BibtexUnmatchedItem,
   Manifest,
   PaperBibtex,
   PaperDetail,

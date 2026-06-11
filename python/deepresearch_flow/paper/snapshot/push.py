@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
+from urllib.parse import urlparse
 
 import httpx
 
@@ -21,6 +23,9 @@ DEFAULT_SEMANTIC_MAX_PAYLOAD_BYTES = 4_000_000
 DEFAULT_SEMANTIC_TIMEOUT = 120.0
 DEFAULT_SEMANTIC_RETRIES = 3
 DEFAULT_SEMANTIC_RETRY_BACKOFF_SECONDS = 2.0
+DEFAULT_PUSH_RETRIES = 2
+DEFAULT_PUSH_RETRY_BACKOFF_SECONDS = 1.0
+_LOCAL_HTTP_HOSTS = {"localhost", "127.0.0.1", "::1", "testserver"}
 
 
 @dataclass(frozen=True)
@@ -39,6 +44,18 @@ class RemoteConfig:
     batch_size: int = DEFAULT_BATCH_SIZE
     storage: StorageConfig | None = None
     semantic: RemoteSemanticConfig = field(default_factory=RemoteSemanticConfig)
+
+
+def _requires_secure_transport(url: str) -> bool:
+    parsed = urlparse(url)
+    if parsed.scheme != "http":
+        return False
+    return (parsed.hostname or "").lower() not in _LOCAL_HTTP_HOSTS
+
+
+def _validate_authenticated_url(url: str) -> None:
+    if _requires_secure_transport(url):
+        raise ValueError("remote.api_base_url must use HTTPS when sending admin_token outside localhost")
 
 
 @dataclass
@@ -82,6 +99,7 @@ def load_remote_config(config_path: Path) -> RemoteConfig:
     api_base_url = str(remote.get("api_base_url") or "").rstrip("/")
     if not api_base_url:
         raise ValueError(f"remote.api_base_url is required in {config_path}")
+    _validate_authenticated_url(api_base_url)
 
     admin_token = str(remote.get("admin_token") or "")
     if admin_token.startswith("env:"):
@@ -304,12 +322,49 @@ def extract_papers_from_db(
 # Push to remote
 # ---------------------------------------------------------------------------
 
+
+def _should_retry_status(status_code: int) -> bool:
+    return status_code in {408, 409, 425, 429} or 500 <= status_code < 600
+
+
+def _post_batch_with_retries(
+    client: httpx.Client,
+    url: str,
+    batch: list[dict[str, Any]],
+    headers: dict[str, str],
+    *,
+    retries: int,
+    retry_backoff_seconds: float,
+    sleep_fn: Callable[[float], None],
+) -> dict[str, Any]:
+    attempt = 0
+    while True:
+        try:
+            resp = client.post(url, json={"papers": batch}, headers=headers)
+            if attempt < retries and _should_retry_status(resp.status_code):
+                attempt += 1
+                sleep_fn(retry_backoff_seconds * attempt)
+                continue
+            resp.raise_for_status()
+            data = resp.json()
+            if isinstance(data, dict):
+                return data
+            raise ValueError("admin API response must be a JSON object")
+        except httpx.TransportError:
+            if attempt >= retries:
+                raise
+            attempt += 1
+            sleep_fn(retry_backoff_seconds * attempt)
+
 def push_papers(
     papers: list[dict[str, Any]],
     config: RemoteConfig,
     *,
     timeout: float = DEFAULT_TIMEOUT,
     on_batch: Any | None = None,
+    retries: int = DEFAULT_PUSH_RETRIES,
+    retry_backoff_seconds: float = DEFAULT_PUSH_RETRY_BACKOFF_SECONDS,
+    sleep_fn: Callable[[float], None] = time.sleep,
 ) -> PushStats:
     """Push papers to the remote admin API in batches.
 
@@ -323,6 +378,12 @@ def push_papers(
     Returns:
         Aggregated push statistics.
     """
+    _validate_authenticated_url(config.api_base_url)
+    if retries < 0:
+        raise ValueError(f"retries must be >= 0, got {retries}")
+    if retry_backoff_seconds < 0:
+        raise ValueError(f"retry_backoff_seconds must be >= 0, got {retry_backoff_seconds}")
+
     stats = PushStats(total=len(papers))
     url = f"{config.api_base_url}/api/v1/admin/papers"
     headers = {
@@ -333,9 +394,15 @@ def push_papers(
     with httpx.Client(timeout=timeout) as client:
         for batch_idx in range(0, len(papers), config.batch_size):
             batch = papers[batch_idx : batch_idx + config.batch_size]
-            resp = client.post(url, json={"papers": batch}, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
+            data = _post_batch_with_retries(
+                client,
+                url,
+                batch,
+                headers,
+                retries=retries,
+                retry_backoff_seconds=retry_backoff_seconds,
+                sleep_fn=sleep_fn,
+            )
 
             stats.added += data.get("added", 0)
             stats.skipped += data.get("skipped", 0)

@@ -203,6 +203,20 @@ class TestLoadRemoteConfig(TestCase):
                 cfg = load_remote_config(Path(f.name))
         assert cfg.admin_token == "resolved-secret"
 
+    def test_non_local_http_url_rejected(self) -> None:
+        with tempfile.NamedTemporaryFile(suffix=".toml", mode="w", delete=False) as f:
+            f.write('[remote]\napi_base_url = "http://api.example.com"\nadmin_token = "my-token"\n')
+            f.flush()
+            with self.assertRaises(ValueError):
+                load_remote_config(Path(f.name))
+
+    def test_local_http_url_allowed(self) -> None:
+        with tempfile.NamedTemporaryFile(suffix=".toml", mode="w", delete=False) as f:
+            f.write('[remote]\napi_base_url = "http://localhost:8080"\nadmin_token = "my-token"\n')
+            f.flush()
+            cfg = load_remote_config(Path(f.name))
+        assert cfg.api_base_url == "http://localhost:8080"
+
     def test_missing_url_raises(self) -> None:
         with tempfile.NamedTemporaryFile(suffix=".toml", mode="w", delete=False) as f:
             f.write('[remote]\nadmin_token = "tok"\n')
@@ -377,6 +391,50 @@ class TestPushPapers(TestCase):
         assert stats.batches_sent == 2
         assert batch_calls == [1, 1]
         assert stats.added == 2
+
+    def test_push_retries_server_error_before_success(self) -> None:
+        papers = [{"paper_id": "paper-alpha"}]
+        calls: list[int] = []
+        sleeps: list[float] = []
+
+        def mock_post(url: str, json: dict, headers: dict) -> mock.MagicMock:
+            calls.append(len(json.get("papers", [])))
+            result = mock.MagicMock()
+            if len(calls) == 1:
+                result.status_code = 503
+                result.raise_for_status = mock.MagicMock()
+                result.json.return_value = {"added": 0}
+            else:
+                result.status_code = 200
+                result.raise_for_status = mock.MagicMock()
+                result.json.return_value = {"added": 1, "skipped": 0, "errors": [], "paper_ids": ["paper-alpha"]}
+            return result
+
+        config = RemoteConfig(api_base_url="http://testserver", admin_token=ADMIN_TOKEN, batch_size=10)
+
+        with mock.patch("deepresearch_flow.paper.snapshot.push.httpx.Client") as mock_cls:
+            inst = mock.MagicMock()
+            inst.post = mock_post
+            inst.__enter__ = mock.MagicMock(return_value=inst)
+            inst.__exit__ = mock.MagicMock(return_value=False)
+            mock_cls.return_value = inst
+
+            stats = push_papers(
+                papers,
+                config,
+                retries=1,
+                retry_backoff_seconds=0.25,
+                sleep_fn=sleeps.append,
+            )
+
+        assert stats.added == 1
+        assert calls == [1, 1]
+        assert sleeps == [0.25]
+
+    def test_push_rejects_non_local_http_url(self) -> None:
+        config = RemoteConfig(api_base_url="http://api.example.com", admin_token=ADMIN_TOKEN)
+        with pytest.raises(ValueError, match="HTTPS"):
+            push_papers([], config)
 
 
 class TestStorageConfigLoading:

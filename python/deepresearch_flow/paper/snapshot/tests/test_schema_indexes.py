@@ -1,0 +1,24 @@
+from __future__ import annotations
+
+import sqlite3
+
+from deepresearch_flow.paper.snapshot.schema import init_snapshot_db
+
+
+def test_snapshot_schema_creates_paper_lookup_indexes() -> None:
+    conn = sqlite3.connect(":memory:")
+    try:
+        init_snapshot_db(conn)
+        index_names = {row[1] for row in conn.execute("PRAGMA index_list('paper')").fetchall()}
+    finally:
+        conn.close()
+
+    assert {
+        "idx_paper_key",
+        "idx_paper_year",
+        "idx_paper_month",
+        "idx_paper_venue",
+        "idx_paper_index",
+        "idx_paper_source_hash",
+        "idx_paper_preferred_summary_template",
+    } <= index_names

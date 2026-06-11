@@ -11,6 +11,7 @@ from typing import Any, Callable
 
 import httpx
 
+from deepresearch_flow.paper.llm import backoff_delay
 from deepresearch_flow.paper.snapshot.push import RemoteConfig
 from deepresearch_flow.paper.vector_store import compute_group_hash, encode_vector_b64
 
@@ -235,7 +236,7 @@ def push_semantic_chunks(
                         if on_retry is not None:
                             on_retry(batch_index, attempts, failure)
                         if effective_retry_backoff_seconds > 0:
-                            sleep_fn(effective_retry_backoff_seconds * attempts)
+                            sleep_fn(backoff_delay(effective_retry_backoff_seconds, attempts, 60.0))
                         continue
                     stats.errors.append(failure)
                     raise SemanticPushError(failure, stats) from exc
