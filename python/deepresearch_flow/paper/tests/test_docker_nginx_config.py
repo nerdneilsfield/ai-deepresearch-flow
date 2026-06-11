@@ -34,6 +34,39 @@ def test_nginx_api_proxy_locations_allow_long_running_requests() -> None:
             assert "proxy_send_timeout 300s;" in block
 
 
+def test_nginx_templates_set_baseline_browser_security_headers() -> None:
+    expected = (
+        "server_tokens off;",
+        "add_header X-Content-Type-Options nosniff always;",
+        "add_header Referrer-Policy no-referrer always;",
+        "add_header X-Frame-Options DENY always;",
+        "add_header Permissions-Policy",
+        "add_header Content-Security-Policy-Report-Only",
+    )
+    for template_name in ("nginx.conf.root.template", "nginx.conf.prefix.template"):
+        rendered = _render_template(template_name)
+
+        for directive in expected:
+            assert directive in rendered
+
+
+def test_nginx_mcp_sse_redeclares_security_headers_with_streaming_header() -> None:
+    expected = (
+        "add_header X-Accel-Buffering no always;",
+        "add_header X-Content-Type-Options nosniff always;",
+        "add_header Referrer-Policy no-referrer always;",
+        "add_header X-Frame-Options DENY always;",
+        "add_header Permissions-Policy",
+        "add_header Content-Security-Policy-Report-Only",
+    )
+    for template_name in ("nginx.conf.root.template", "nginx.conf.prefix.template"):
+        rendered = _render_template(template_name)
+        sse_block = _location_block(rendered, "^~ /mcp-sse")
+
+        for directive in expected:
+            assert directive in sse_block
+
+
 def _proxy_pass_target(config_text: str, location_prefix: str) -> str:
     block = _location_block(config_text, location_prefix)
     marker = "proxy_pass "

@@ -17,6 +17,13 @@ export interface AdvancedSearchTokenAPI {
 const _state = ref<TokenState>('not-verified')
 const _token = ref<string | null>(null)
 let _opVersion = 0
+let _storageMutation: Promise<void> = Promise.resolve()
+
+function enqueueStorageMutation(operation: () => Promise<void>): Promise<void> {
+  const next = _storageMutation.catch(() => undefined).then(operation)
+  _storageMutation = next.catch(() => undefined)
+  return next
+}
 
 export function useAdvancedSearchToken(): AdvancedSearchTokenAPI {
   async function hydrate(): Promise<void> {
@@ -39,7 +46,9 @@ export function useAdvancedSearchToken(): AdvancedSearchTokenAPI {
       } else {
         _token.value = null
         _state.value = 'not-verified'
-        void clearToken()
+        await enqueueStorageMutation(async () => {
+          if (opVersion === _opVersion) await clearToken()
+        })
       }
     } catch {
       if (opVersion !== _opVersion) return
@@ -58,12 +67,16 @@ export function useAdvancedSearchToken(): AdvancedSearchTokenAPI {
       if (result.valid) {
         _token.value = candidate
         _state.value = 'verified'
-        void setToken(candidate)
-        return true
+        await enqueueStorageMutation(async () => {
+          if (opVersion === _opVersion) await setToken(candidate)
+        })
+        return opVersion === _opVersion
       }
       _token.value = null
       _state.value = 'not-verified'
-      void clearToken()
+      await enqueueStorageMutation(async () => {
+        if (opVersion === _opVersion) await clearToken()
+      })
       return false
     } catch (error) {
       if (opVersion !== _opVersion) return false
@@ -75,9 +88,9 @@ export function useAdvancedSearchToken(): AdvancedSearchTokenAPI {
 
   async function clear(): Promise<void> {
     _opVersion += 1
-    await clearToken()
     _token.value = null
     _state.value = 'not-verified'
+    await enqueueStorageMutation(clearToken)
   }
 
   async function onAuthFailure(): Promise<void> {

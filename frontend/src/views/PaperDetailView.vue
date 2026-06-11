@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onUnmounted, ref, computed, watch } from 'vue'
+import { defineAsyncComponent, onUnmounted, ref, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { getSummaryPayloadCached, type PaperDetail } from '@/lib/api'
@@ -11,14 +11,15 @@ import { useUiStore } from '@/stores/ui'
 import { useSelectionStore } from '@/stores/selection'
 import { useRuntimeConfigStore } from '@/stores/runtime-config'
 import { useElementBounding, useMediaQuery, useWindowSize, refDebounced } from '@vueuse/core'
-import SummaryPanel from '@/components/SummaryPanel.vue'
-import MarkdownPanel from '@/components/MarkdownPanel.vue'
-import PdfViewer from '@/components/PdfViewer.vue'
 import { usePaperDetail } from '@/composables/usePaperDetail'
 import { useSplitView, type ViewMode } from '@/composables/useSplitView'
-import MetadataPanel from '@/components/paper-detail/MetadataPanel.vue'
 import { resolveStaticBaseUrl } from '@/lib/static-base'
 import { ChevronLeft, ChevronRight } from 'lucide-vue-next'
+
+const SummaryPanel = defineAsyncComponent(() => import('@/components/SummaryPanel.vue'))
+const MarkdownPanel = defineAsyncComponent(() => import('@/components/MarkdownPanel.vue'))
+const PdfViewer = defineAsyncComponent(() => import('@/components/PdfViewer.vue'))
+const MetadataPanel = defineAsyncComponent(() => import('@/components/paper-detail/MetadataPanel.vue'))
 
 const route = useRoute()
 const router = useRouter()

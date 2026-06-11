@@ -308,6 +308,7 @@ class TestAdminMountedInMainApp(unittest.TestCase):
         app = create_app(
             snapshot_db=cls.db_path,
             static_base_url="https://cdn.example.com",
+            mcp_access_token="test-mcp-token",
             admin_token=ADMIN_TOKEN,
         )
         cls.client = TestClient(app, raise_server_exceptions=False)
@@ -330,6 +331,7 @@ class TestAdminMountedInMainApp(unittest.TestCase):
         app = create_app(
             snapshot_db=self.db_path,
             static_base_url="https://cdn.example.com",
+            mcp_access_token="test-mcp-token",
         )
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.post(

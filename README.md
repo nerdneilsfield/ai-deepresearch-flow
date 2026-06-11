@@ -1634,20 +1634,22 @@ Deploy image (API + frontend via nginx):
 
 ```bash
 # Basic mode: no advanced-search env vars
-docker run --rm -p 8899:8899 \
+docker run --rm -p 127.0.0.1:8899:8899 \
   -v $(pwd)/paper_snapshot.db:/db/papers.db \
   -v $(pwd)/paper-static:/static \
+  -e MCP_ACCESS_TOKEN="$(openssl rand -hex 32)" \
   ghcr.io/nerdneilsfield/deepresearch-flow:deploy-latest
 
 # Embedded mode: set at least two advanced env vars
-docker run --rm -p 8899:8899 \
+docker run --rm -p 127.0.0.1:8899:8899 \
   -v $(pwd)/paper_snapshot.db:/db/papers.db \
   -v $(pwd)/paper-static:/static \
   -v $(pwd)/paper_vectors:/db/paper_vectors \
   -v $(pwd)/config.toml:/app/config.toml:ro \
   -e PAPER_DB_EMBED_DB=/db/paper_vectors \
   -e PAPER_DB_CONFIG=/app/config.toml \
-  -e SEARCH_ACCESS_TOKEN=your-token \
+  -e SEARCH_ACCESS_TOKEN="$(openssl rand -hex 32)" \
+  -e MCP_ACCESS_TOKEN="$(openssl rand -hex 32)" \
   ghcr.io/nerdneilsfield/deepresearch-flow:deploy-latest
 ```
 
@@ -1657,6 +1659,7 @@ Notes:
 - Mount snapshot static assets to `/static` when serving assets from this container (default `PAPER_DB_STATIC_BASE` is `/static`).
 - If `PAPER_DB_STATIC_BASE` is a full URL (e.g. `https://static.example.com`), nginx still serves the frontend locally, while API responses use that external static base for asset links.
 - `scripts/docker/start-api.sh` switches mode by counting advanced env vars: `PAPER_DB_EMBED_DB`, `PAPER_DB_CONFIG`, `SEARCH_ACCESS_TOKEN`.
+- `MCP_ACCESS_TOKEN` is required for `/mcp` and `/mcp-sse`. Set a private random value before deploying; `MCP_PUBLIC_UNSAFE=1` is only for isolated local testing.
 - `0` set → basic mode.
 - `1` set → fail fast as partial advanced configuration.
 - `>=2` set → embedded mode; the script passes `--embed-db` and `--config` when present, and `SEARCH_ACCESS_TOKEN` is consumed via the existing CLI envvar.
@@ -1665,6 +1668,8 @@ Notes:
 Docker Compose example (four profiles, run from the repository root so `${PWD}` volume paths resolve to your data files):
 
 ```bash
+export MCP_ACCESS_TOKEN="$(openssl rand -hex 32)"
+export SEARCH_ACCESS_TOKEN="$(openssl rand -hex 32)"  # required for advanced profiles only
 docker compose -f scripts/docker/docker-compose.example.yml --profile local-static up
 # or
 docker compose -f scripts/docker/docker-compose.example.yml --profile external-static up
@@ -1677,9 +1682,10 @@ docker compose -f scripts/docker/docker-compose.example.yml --profile external-s
 External static assets example:
 
 ```bash
-docker run --rm -p 8899:8899 \
+docker run --rm -p 127.0.0.1:8899:8899 \
   -v $(pwd)/paper_snapshot.db:/db/papers.db \
   -e PAPER_DB_STATIC_BASE=https://static.example.com \
+  -e MCP_ACCESS_TOKEN="$(openssl rand -hex 32)" \
   ghcr.io/nerdneilsfield/deepresearch-flow:deploy-latest
 ```
 

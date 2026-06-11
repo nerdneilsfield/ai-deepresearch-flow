@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import httpx
+import os
 import tempfile
 from pathlib import Path
 from contextlib import suppress
@@ -87,6 +88,7 @@ class TestMcpTransport(unittest.TestCase):
             static_export_dir=None,
             limits=ApiLimits(),
             origin_allowlist=["*"],
+            mcp_access_token="test-mcp-token",
         )
 
     @classmethod
@@ -105,7 +107,53 @@ class TestMcpTransport(unittest.TestCase):
             static_base_url="",
             cors_allowed_origins=["*"],
             limits=ApiLimits(),
+            mcp_access_token="test-mcp-token",
         )
+        mount_paths = sorted(getattr(route, "path", "") for route in app.routes)
+        self.assertIn("/mcp", mount_paths)
+        self.assertIn("/mcp-sse", mount_paths)
+
+
+    def test_api_rejects_public_mcp_without_explicit_unsafe_override(self) -> None:
+        previous = os.environ.pop("MCP_PUBLIC_UNSAFE", None)
+        try:
+            with self.assertRaises(ValueError):
+                create_app(
+                    snapshot_db=self.snapshot_db,
+                    static_base_url="",
+                    cors_allowed_origins=["*"],
+                    limits=ApiLimits(),
+                )
+            with self.assertRaises(ValueError):
+                create_app(
+                    snapshot_db=self.snapshot_db,
+                    static_base_url="",
+                    cors_allowed_origins=["*"],
+                    limits=ApiLimits(),
+                    mcp_access_token="your-mcp-token",
+                )
+        finally:
+            if previous is None:
+                os.environ.pop("MCP_PUBLIC_UNSAFE", None)
+            else:
+                os.environ["MCP_PUBLIC_UNSAFE"] = previous
+
+    def test_api_allows_public_mcp_only_with_explicit_unsafe_override(self) -> None:
+        previous = os.environ.get("MCP_PUBLIC_UNSAFE")
+        try:
+            os.environ["MCP_PUBLIC_UNSAFE"] = "1"
+            app = create_app(
+                snapshot_db=self.snapshot_db,
+                static_base_url="",
+                cors_allowed_origins=["*"],
+                limits=ApiLimits(),
+            )
+        finally:
+            if previous is None:
+                os.environ.pop("MCP_PUBLIC_UNSAFE", None)
+            else:
+                os.environ["MCP_PUBLIC_UNSAFE"] = previous
+
         mount_paths = sorted(getattr(route, "path", "") for route in app.routes)
         self.assertIn("/mcp", mount_paths)
         self.assertIn("/mcp-sse", mount_paths)

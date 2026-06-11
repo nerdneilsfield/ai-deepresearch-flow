@@ -167,6 +167,17 @@ def _safe_read_text(path: Path) -> str:
         return path.read_text(encoding="latin-1")
 
 
+def _parse_positive_int_param(value: str | None, *, default: int, maximum: int) -> tuple[int | None, JSONResponse | None]:
+    raw = str(value if value is not None else default).strip()
+    try:
+        parsed = int(raw)
+    except ValueError:
+        return None, JSONResponse({"error": "Invalid integer parameter"}, status_code=400)
+    if parsed <= 0:
+        return None, JSONResponse({"error": "Integer parameter must be positive"}, status_code=400)
+    return min(parsed, maximum), None
+
+
 def _paper_doc_id(paper: dict[str, Any]) -> str | None:
     try:
         candidates = build_paper_key_candidates(paper)
@@ -309,13 +320,24 @@ async def api_papers_semantic(request: Request) -> JSONResponse:
     if not query_text:
         return JSONResponse({"error": "Query parameter q is required"}, status_code=400)
 
-    top_n = min(int(request.query_params.get("top_n", "10")), 100)
+    top_n, param_error = _parse_positive_int_param(
+        request.query_params.get("top_n"),
+        default=10,
+        maximum=100,
+    )
+    if param_error is not None:
+        return param_error
+    assert top_n is not None
 
     where_parts: list[str] = []
     safe_venue: str | None = None
     year = request.query_params.get("year")
     if year:
-        where_parts.append(f"year = {int(year)}")
+        try:
+            year_value = int(year)
+        except ValueError:
+            return JSONResponse({"error": "Invalid year parameter"}, status_code=400)
+        where_parts.append(f"year = {year_value}")
     venue = request.query_params.get("venue")
     if venue:
         try:

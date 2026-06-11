@@ -2,21 +2,21 @@ services:
   deploy-local-static:
     image: ghcr.io/nerdneilsfield/deepresearch-flow:deploy-latest
     ports:
-      - "8080:8899"
+      - "127.0.0.1:8080:8899"
     volumes:
       - ${PWD}/paper_snapshot.db:/db/papers.db
       - ${PWD}/paper-static:/static
     environment:
       PAPER_DB_API_BASE: http://127.0.0.1:8000
       PAPER_DB_STATIC_BASE: /static
-      MCP_ACCESS_TOKEN: your-mcp-token
+      MCP_ACCESS_TOKEN: "${MCP_ACCESS_TOKEN:?set MCP_ACCESS_TOKEN}"
     # Exposes frontend + API, including MCP streamable (/mcp) and SSE (/mcp-sse).
     profiles: ["local-static"]
 
   deploy-local-static-advanced:
     image: ghcr.io/nerdneilsfield/deepresearch-flow:deploy-latest
     ports:
-      - "8080:8899"
+      - "127.0.0.1:8080:8899"
     volumes:
       - ${PWD}/paper_snapshot.db:/db/papers.db
       - ${PWD}/paper-static:/static
@@ -25,30 +25,30 @@ services:
     environment:
       PAPER_DB_API_BASE: http://127.0.0.1:8000
       PAPER_DB_STATIC_BASE: /static
-      MCP_ACCESS_TOKEN: your-mcp-token
+      MCP_ACCESS_TOKEN: "${MCP_ACCESS_TOKEN:?set MCP_ACCESS_TOKEN}"
       PAPER_DB_EMBED_DB: /db/paper_vectors
       PAPER_DB_CONFIG: /app/config.toml
-      SEARCH_ACCESS_TOKEN: your-token
+      SEARCH_ACCESS_TOKEN: "${SEARCH_ACCESS_TOKEN:?set SEARCH_ACCESS_TOKEN}"
     # With >=2 advanced env vars set, start-api.sh enters embedded mode.
     profiles: ["local-static-advanced"]
 
   deploy-external-static:
     image: ghcr.io/nerdneilsfield/deepresearch-flow:deploy-latest
     ports:
-      - "8080:8899"
+      - "127.0.0.1:8080:8899"
     volumes:
       - ${PWD}/paper_snapshot.db:/db/papers.db
     environment:
       PAPER_DB_API_BASE: http://127.0.0.1:8000
       PAPER_DB_STATIC_BASE: https://static.example.com
-      MCP_ACCESS_TOKEN: your-mcp-token
+      MCP_ACCESS_TOKEN: "${MCP_ACCESS_TOKEN:?set MCP_ACCESS_TOKEN}"
     # Exposes frontend + API, including MCP streamable (/mcp) and SSE (/mcp-sse).
     profiles: ["external-static"]
 
   deploy-external-static-advanced:
     image: ghcr.io/nerdneilsfield/deepresearch-flow:deploy-latest
     ports:
-      - "8080:8899"
+      - "127.0.0.1:8080:8899"
     volumes:
       - ${PWD}/paper_snapshot.db:/db/papers.db
       - ${PWD}/paper_vectors:/db/paper_vectors
@@ -56,9 +56,9 @@ services:
     environment:
       PAPER_DB_API_BASE: http://127.0.0.1:8000
       PAPER_DB_STATIC_BASE: https://static.example.com
-      MCP_ACCESS_TOKEN: your-mcp-token
+      MCP_ACCESS_TOKEN: "${MCP_ACCESS_TOKEN:?set MCP_ACCESS_TOKEN}"
       PAPER_DB_EMBED_DB: /db/paper_vectors
       PAPER_DB_CONFIG: /app/config.toml
-      SEARCH_ACCESS_TOKEN: your-token
+      SEARCH_ACCESS_TOKEN: "${SEARCH_ACCESS_TOKEN:?set SEARCH_ACCESS_TOKEN}"
     # With >=2 advanced env vars set, start-api.sh enters embedded mode.
     profiles: ["external-static-advanced"]

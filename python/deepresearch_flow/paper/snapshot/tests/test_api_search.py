@@ -81,6 +81,7 @@ class TestApiSearchEndpoint(unittest.TestCase):
             static_base_url="",
             cors_allowed_origins=["*"],
             limits=ApiLimits(),
+            mcp_access_token="test-mcp-token",
         )
         cls.client = TestClient(app, raise_server_exceptions=False)
 

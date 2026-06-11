@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import inspect
 import json
 import hmac
-from typing import Literal
+import os
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 from fastmcp.server.auth import AccessToken, MultiAuth, TokenVerifier
@@ -13,6 +15,25 @@ from fastmcp.server.auth.providers.github import GitHubProvider
 from starlette.responses import JSONResponse
 
 _BEARER_SCHEME = "bearer"
+_MCP_PUBLIC_UNSAFE_ENV = "MCP_PUBLIC_UNSAFE"
+_PLACEHOLDER_STATIC_TOKENS = {"your-mcp-token"}
+
+
+def is_mcp_public_unsafe_allowed() -> bool:
+    """Return whether MCP may intentionally run without static bearer auth."""
+    return os.environ.get(_MCP_PUBLIC_UNSAFE_ENV) == "1"
+
+
+def validate_mcp_static_access_token(access_token: str | None, *, context: str = "MCP") -> None:
+    """Fail closed for exposed MCP static bearer protection unless explicitly unsafe."""
+    if is_mcp_public_unsafe_allowed():
+        return
+    token = (access_token or "").strip()
+    if not token or token in _PLACEHOLDER_STATIC_TOKENS:
+        raise ValueError(
+            f"MCP_ACCESS_TOKEN is required for {context}; "
+            "set MCP_PUBLIC_UNSAFE=1 only for isolated local testing"
+        )
 
 
 class BearerAuthError(Exception):
@@ -217,16 +238,18 @@ def build_mcp_github_oauth_provider(
     static_access_token: str | None = None,
 ):
     """Build the FastMCP auth provider for GitHub OAuth plus optional static bearer."""
-    github_provider = _AllowedGitHubProvider(
-        allowed_github_user_ids=config.allowed_github_user_ids,
-        client_id=config.client_id,
-        client_secret=config.client_secret,
-        base_url=config.public_base_url,
-        issuer_url=config.public_base_url,
-        required_scopes=list(config.required_scopes),
-        jwt_signing_key=config.jwt_signing_key,
-        enable_cimd=False,
-    )
+    github_kwargs: dict[str, Any] = {
+        "allowed_github_user_ids": config.allowed_github_user_ids,
+        "client_id": config.client_id,
+        "client_secret": config.client_secret,
+        "base_url": config.public_base_url,
+        "issuer_url": config.public_base_url,
+        "required_scopes": list(config.required_scopes),
+        "jwt_signing_key": config.jwt_signing_key,
+    }
+    if "enable_cimd" in inspect.signature(GitHubProvider.__init__).parameters:
+        github_kwargs["enable_cimd"] = False
+    github_provider = _AllowedGitHubProvider(**github_kwargs)
     verifiers = []
     if static_access_token:
         verifiers.append(

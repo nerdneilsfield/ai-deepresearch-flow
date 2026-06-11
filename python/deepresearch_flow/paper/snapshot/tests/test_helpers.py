@@ -5,6 +5,7 @@ import json
 import os
 import sqlite3
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -18,10 +19,13 @@ from deepresearch_flow.paper.snapshot.mcp_server import (
     create_mcp_app,
     create_mcp_apps,
     create_mcp_transport_app,
+    filter_papers,
+    list_top_facets,
     resource_metadata,
     resource_source,
     resource_summary_default,
     resolve_static_export_dir,
+    search_papers,
 )
 from deepresearch_flow.paper.snapshot.schema import init_snapshot_db
 
@@ -46,6 +50,7 @@ class TestMcpSnapshotPublicBehavior(unittest.TestCase):
             static_export_dir=self.static_dir,
             limits=ApiLimits(max_query_length=8),
             origin_allowlist=["*"],
+            mcp_access_token="test-mcp-token",
             max_paper_id_length=12,
         )
 
@@ -154,6 +159,22 @@ class TestMcpSnapshotPublicBehavior(unittest.TestCase):
         client2 = cfg.get_http_client()
         self.assertIs(client1, client2)
 
+    def test_http_client_is_reused_under_concurrent_initialization(self) -> None:
+        cfg = self._base_config()
+        clients = []
+        threads = [
+            threading.Thread(target=lambda: clients.append(cfg.get_http_client()))
+            for _ in range(8)
+        ]
+
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        self.assertEqual(len(clients), 8)
+        self.assertTrue(all(client is clients[0] for client in clients))
+
     def test_http_client_can_be_closed_and_recreated(self) -> None:
         cfg = self._base_config()
         client1 = cfg.get_http_client()
@@ -179,6 +200,7 @@ class TestMcpSnapshotPublicBehavior(unittest.TestCase):
             static_export_dir=alt_static_dir,
             limits=ApiLimits(max_query_length=8),
             origin_allowlist=["*"],
+            mcp_access_token="test-mcp-token",
             max_paper_id_length=12,
         )
 
@@ -215,6 +237,41 @@ class TestMcpSnapshotPublicBehavior(unittest.TestCase):
         self.assertEqual(payload["preferred_summary_template"], "deep_read")
         self.assertEqual(payload["available_summary_templates"], ["deep_read"])
         self.assertTrue(payload["has_bibtex"])
+
+    def test_list_top_facets_clamps_limit_to_configured_page_size(self) -> None:
+        configure(
+            McpSnapshotConfig(
+                snapshot_db=self.db_path,
+                static_base_url="",
+                static_export_dir=self.static_dir,
+                limits=ApiLimits(max_page_size=1),
+                origin_allowlist=["*"],
+            )
+        )
+        values = list_top_facets("venue", limit=1000)
+
+        self.assertLessEqual(len(values), 1)
+
+    def test_list_top_facets_rejects_non_integer_limit(self) -> None:
+        for invalid_limit in ("many", "10", 1.5, True, 0, -1):
+            with self.subTest(invalid_limit=invalid_limit):
+                with self.assertRaises(McpToolError) as ctx:
+                    list_top_facets("venue", limit=invalid_limit)  # type: ignore[arg-type]
+                self.assertEqual(ctx.exception.code, "invalid_limit")
+
+    def test_search_papers_rejects_non_integer_limit(self) -> None:
+        for invalid_limit in ("many", "10", 1.5, True, 0, -1):
+            with self.subTest(invalid_limit=invalid_limit):
+                with self.assertRaises(McpToolError) as ctx:
+                    search_papers("Paper", limit=invalid_limit)  # type: ignore[arg-type]
+                self.assertEqual(ctx.exception.code, "invalid_limit")
+
+    def test_filter_papers_rejects_non_integer_limit(self) -> None:
+        for invalid_limit in ("many", "10", 1.5, True, 0, -1):
+            with self.subTest(invalid_limit=invalid_limit):
+                with self.assertRaises(McpToolError) as ctx:
+                    filter_papers(venue="Test", limit=invalid_limit)  # type: ignore[arg-type]
+                self.assertEqual(ctx.exception.code, "invalid_limit")
 
     def test_resource_metadata_missing_paper_raises_public_error(self) -> None:
         with self.assertRaises(McpToolError) as ctx:

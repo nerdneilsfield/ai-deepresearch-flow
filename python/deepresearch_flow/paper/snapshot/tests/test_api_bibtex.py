@@ -116,6 +116,7 @@ class TestApiBibtexEndpoint(unittest.TestCase):
             static_base_url="",
             cors_allowed_origins=["*"],
             limits=ApiLimits(),
+            mcp_access_token="test-mcp-token",
         )
         cls.client = TestClient(app)
 
@@ -244,6 +245,7 @@ class TestApiLegacyFallback(unittest.TestCase):
             static_base_url="",
             cors_allowed_origins=["*"],
             limits=ApiLimits(),
+            mcp_access_token="test-mcp-token",
         )
         cls.client = TestClient(app)
 

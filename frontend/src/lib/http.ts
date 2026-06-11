@@ -1,7 +1,20 @@
 import { API_BASE, SEARCH_TIMEOUT_MS } from '@/lib/config'
 
-async function sleep(ms: number) {
-  await new Promise((resolve) => setTimeout(resolve, ms))
+async function sleep(ms: number, signal?: AbortSignal) {
+  if (signal?.aborted) {
+    throw signal.reason ?? new DOMException('Aborted', 'AbortError')
+  }
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      signal?.removeEventListener('abort', abort)
+      resolve()
+    }, ms)
+    const abort = () => {
+      clearTimeout(timeout)
+      reject(signal?.reason ?? new DOMException('Aborted', 'AbortError'))
+    }
+    signal?.addEventListener('abort', abort, { once: true })
+  })
 }
 
 export type FetchOptions = RequestInit & { timeoutMs?: number; retry?: number }
@@ -10,30 +23,43 @@ export async function fetchResponse(
   url: string,
   options: FetchOptions = {}
 ): Promise<Response> {
-  const { timeoutMs = SEARCH_TIMEOUT_MS, retry = 2, ...rest } = options
+  const { timeoutMs = SEARCH_TIMEOUT_MS, retry = 2, signal, ...rest } = options
   let attempt = 0
   let lastError: unknown
 
   while (attempt <= retry) {
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), timeoutMs)
+    const abortFromCaller = () => controller.abort(signal?.reason)
+    if (signal?.aborted) controller.abort(signal.reason)
+    signal?.addEventListener('abort', abortFromCaller, { once: true })
+    let timeoutAborted = false
+    const timeout = setTimeout(() => {
+      timeoutAborted = true
+      controller.abort(new DOMException('Request timed out', 'TimeoutError'))
+    }, timeoutMs)
     try {
       const response = await fetch(url, { ...rest, signal: controller.signal })
       clearTimeout(timeout)
+      signal?.removeEventListener('abort', abortFromCaller)
       if (!response.ok && response.status >= 500 && response.status < 600 && attempt < retry) {
         attempt += 1
-        await sleep(300 * Math.pow(2, attempt))
+        await sleep(300 * Math.pow(2, attempt), signal ?? undefined)
         continue
       }
       return response
     } catch (err) {
       clearTimeout(timeout)
+      signal?.removeEventListener('abort', abortFromCaller)
       lastError = err
-      if (attempt >= retry) {
+      if (
+        signal?.aborted ||
+        (!timeoutAborted && err instanceof DOMException && err.name === 'AbortError') ||
+        attempt >= retry
+      ) {
         throw err
       }
       attempt += 1
-      await sleep(300 * Math.pow(2, attempt))
+      await sleep(300 * Math.pow(2, attempt), signal ?? undefined)
     }
   }
 

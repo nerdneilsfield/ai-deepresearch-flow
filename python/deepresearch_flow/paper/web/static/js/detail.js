@@ -180,7 +180,7 @@
     if (window.DOMPurify) {
       return window.DOMPurify.sanitize(parsed, DOMPURIFY_CONFIG);
     }
-    return parsed;
+    return '<pre><code>' + escapeHtml(markdown) + '</code></pre>';
   }
 
   function rewriteImageUrl(url, imagesBaseUrl) {

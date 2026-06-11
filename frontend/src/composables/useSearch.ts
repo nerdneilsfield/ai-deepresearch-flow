@@ -164,13 +164,14 @@ export function useSearchData(state: ReturnType<typeof useSearchState>) {
         facetByValue: state.facetByValue.value,
       },
     ]),
-    queryFn: () => {
+    queryFn: ({ signal }) => {
       if (mode.value === 'query') {
         return searchPapers(
           debouncedQuery.value,
           state.page.value,
           state.pageSizeNum.value,
-          state.effectiveSort.value
+          state.effectiveSort.value,
+          signal
         )
       }
       if (mode.value === 'facet') {
@@ -179,17 +180,19 @@ export function useSearchData(state: ReturnType<typeof useSearchState>) {
             state.facet.value,
             state.facetId.value,
             state.page.value,
-            state.pageSizeNum.value
+            state.pageSizeNum.value,
+            signal
           )
         }
         return getFacetPapers(
           state.facet.value,
           state.facetId.value,
           state.page.value,
-          state.pageSizeNum.value
+          state.pageSizeNum.value,
+          signal
         )
       }
-      return listPapers(state.page.value, state.pageSizeNum.value, state.effectiveSort.value)
+      return listPapers(state.page.value, state.pageSizeNum.value, state.effectiveSort.value, signal)
     },
     placeholderData: keepPreviousData,
     staleTime: QUERY_CACHE_POLICY.search.staleTime,

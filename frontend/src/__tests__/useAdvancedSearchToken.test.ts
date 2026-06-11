@@ -9,10 +9,12 @@ beforeEach(async () => {
   await tokenDb.clearToken()
   vi.restoreAllMocks()
   await useAdvancedSearchToken().clear()
+
 })
 
 afterEach(async () => {
   await tokenDb.clearToken()
+
 })
 
 describe('useAdvancedSearchToken', () => {
@@ -107,4 +109,31 @@ describe('useAdvancedSearchToken', () => {
     await pending
     expect(token.state.value).toBe('verified')
   })
+
+
+  it('clear wins over an in-flight verified token persistence', async () => {
+    const originalSetToken = tokenDb.setToken
+    let finishSetToken: (() => void) | null = null
+    vi.spyOn(api, 'verifyToken').mockResolvedValueOnce({ valid: true })
+    vi.spyOn(tokenDb, 'setToken').mockImplementationOnce(
+      (candidate: string) => new Promise<void>((resolve) => {
+        finishSetToken = () => {
+          originalSetToken(candidate).then(resolve)
+        }
+      }),
+    )
+
+    const token = useAdvancedSearchToken()
+    const verifyPromise = token.verify('old-token')
+    await vi.waitFor(() => expect(finishSetToken).toBeTypeOf('function'))
+    const clearPromise = token.clear()
+
+    ;(finishSetToken as unknown as () => void)()
+    await Promise.all([verifyPromise, clearPromise])
+
+    expect(token.state.value).toBe('not-verified')
+    expect(token.token.value).toBeNull()
+    expect(await tokenDb.getToken()).toBeNull()
+  })
+
 })

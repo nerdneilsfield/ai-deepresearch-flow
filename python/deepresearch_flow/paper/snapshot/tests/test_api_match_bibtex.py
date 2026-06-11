@@ -52,6 +52,7 @@ class TestApiMatchBibtex(unittest.TestCase):
             snapshot_db=cls.db_path,
             static_base_url="http://localhost/static",
             limits=ApiLimits(),
+            mcp_access_token="test-mcp-token",
         )
         cls.client = TestClient(app)
 

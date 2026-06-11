@@ -105,10 +105,12 @@ export async function getSummaryPayloadCached(
   const cachedRecord = await readPaperContentRecord(paperId)
   const cachedSummary = cachedRecord?.summaries?.[template]
   if (cachedSummary && cachedSummary.url === url) {
+    await touchPaperContentRecord(paperId)
     return JSON.parse(JSON.stringify(cachedSummary.payload))
   }
 
   const payload = (await fetchJson(url)) as Record<string, unknown>
+  const accessedAt = Date.now()
   await writePaperContentRecord({
     paperId,
     detail: cachedRecord?.detail ?? null,
@@ -122,7 +124,7 @@ export async function getSummaryPayloadCached(
       },
     },
     translations: cachedRecord?.translations ?? {},
-    lastAccessedAt: cachedRecord?.lastAccessedAt ?? Date.now(),
+    lastAccessedAt: Math.max(accessedAt, (cachedRecord?.lastAccessedAt ?? 0) + 1),
   })
   return payload
 }
@@ -135,10 +137,12 @@ export async function getTranslatedMarkdownCached(
   const cachedRecord = await readPaperContentRecord(paperId)
   const cachedTranslation = cachedRecord?.translations?.[lang]
   if (cachedTranslation && cachedTranslation.url === url) {
+    await touchPaperContentRecord(paperId)
     return cachedTranslation.markdown
   }
 
   const markdown = await fetchText(url)
+  const accessedAt = Date.now()
   await writePaperContentRecord({
     paperId,
     detail: cachedRecord?.detail ?? null,
@@ -152,7 +156,7 @@ export async function getTranslatedMarkdownCached(
         cachedAt: Date.now(),
       },
     },
-    lastAccessedAt: cachedRecord?.lastAccessedAt ?? Date.now(),
+    lastAccessedAt: Math.max(accessedAt, (cachedRecord?.lastAccessedAt ?? 0) + 1),
   })
   return markdown
 }
@@ -167,10 +171,11 @@ export async function getFacetPapers(
   facet: string,
   facetId: string | number,
   page: number,
-  pageSize: number
+  pageSize: number,
+  signal?: AbortSignal
 ): Promise<SearchResponse> {
   const url = buildUrl(`/facets/${facet}/${facetId}/papers`, { page, page_size: pageSize })
-  const data = await fetchJson(url)
+  const data = await fetchJson(url, { signal })
   return SearchResponseSchema.parse(data)
 }
 
@@ -178,11 +183,12 @@ export async function getFacetByValuePapers(
   facet: string,
   value: string,
   page: number,
-  pageSize: number
+  pageSize: number,
+  signal?: AbortSignal
 ): Promise<SearchResponse> {
   const encoded = encodeURIComponent(value)
   const url = buildUrl(`/facets/${facet}/by-value/${encoded}/papers`, { page, page_size: pageSize })
-  const data = await fetchJson(url)
+  const data = await fetchJson(url, { signal })
   return SearchResponseSchema.parse(data)
 }
 

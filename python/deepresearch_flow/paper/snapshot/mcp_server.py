@@ -21,6 +21,7 @@ from deepresearch_flow.paper.snapshot.auth import (
     bearer_auth_app,
     build_mcp_github_oauth_provider,
     oauth_metadata_compat_app,
+    validate_mcp_static_access_token,
 )
 from deepresearch_flow.paper.snapshot.common import ApiLimits, _column_exists, _open_ro_conn, _table_exists
 from deepresearch_flow.paper.snapshot.mcp_content import (
@@ -67,30 +68,33 @@ class McpSnapshotConfig:
     max_paper_id_length: int = 64
     # HTTP client stored in object __dict__ to avoid dataclass frozen restriction
     _http_client: httpx.Client | None = field(default=None, repr=False, compare=False)
+    _http_client_lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
     
     def get_http_client(self) -> httpx.Client:
         """Get or create a shared HTTP client with connection pooling."""
-        if self._http_client is None:
-            object.__setattr__(
-                self,
-                '_http_client',
-                httpx.Client(
-                    timeout=self.http_timeout,
-                    follow_redirects=True,
-                    limits=httpx.Limits(
-                        max_keepalive_connections=10,
-                        max_connections=20
+        with self._http_client_lock:
+            if self._http_client is None:
+                object.__setattr__(
+                    self,
+                    '_http_client',
+                    httpx.Client(
+                        timeout=self.http_timeout,
+                        follow_redirects=True,
+                        limits=httpx.Limits(
+                            max_keepalive_connections=10,
+                            max_connections=20
+                        )
                     )
                 )
-            )
-        return self._http_client
+            return self._http_client
 
     def close_http_client(self) -> None:
         """Close and clear the lazily-created shared HTTP client if present."""
-        client = self._http_client
-        if client is not None:
-            client.close()
-            object.__setattr__(self, "_http_client", None)
+        with self._http_client_lock:
+            client = self._http_client
+            if client is not None:
+                client.close()
+                object.__setattr__(self, "_http_client", None)
 
 
 
@@ -135,6 +139,7 @@ def create_mcp_transport_app(
     *,
     transport: Literal["streamable-http", "sse"] = "streamable-http",
 ) -> tuple[Any, Any]:
+    validate_mcp_static_access_token(config.mcp_access_token, context=f"/{transport}")
     if config.mcp_auth_mode == "github-oauth":
         raise ValueError("GitHub OAuth requires create_mcp_apps() so /mcp and OAuth routes share one app")
     bound_app, transport_lifespan = _create_mcp_transport_binding(config, transport=transport)
@@ -199,11 +204,10 @@ def create_mcp_apps(config: McpSnapshotConfig) -> tuple[dict[str, Any], Any]:
     Returns:
         A tuple of (apps_by_transport, lifespan_context).
     """
+    validate_mcp_static_access_token(config.mcp_access_token, context="/mcp and /mcp-sse")
     if config.mcp_auth_mode == "github-oauth":
         if config.mcp_github_oauth is None:
             raise ValueError("GitHub OAuth config is required when mcp_auth_mode='github-oauth'")
-        if not config.mcp_access_token:
-            raise ValueError("MCP access token is required for /mcp-sse when GitHub OAuth is enabled")
         oauth_provider = build_mcp_github_oauth_provider(
             config.mcp_github_oauth,
             static_access_token=config.mcp_access_token,
@@ -267,6 +271,13 @@ def _validate_query(query: str, cfg: McpSnapshotConfig) -> str:
             max_length=cfg.limits.max_query_length
         )
     return normalized
+
+
+def _parse_limit(limit: Any, cfg: McpSnapshotConfig) -> int:
+    if type(limit) is not int or limit < 1:
+        raise McpToolError("invalid_limit", "Limit must be a positive integer", limit=limit)
+    limit_value = limit
+    return min(max(1, limit_value), cfg.limits.max_page_size)
 
 
 def _normalize_advanced_filter_params(filters: dict[str, Any] | None) -> dict[str, list[str]]:
@@ -457,7 +468,7 @@ def search_papers(query: str, limit: int = 10) -> list[dict[str, Any]]:
     """
     cfg = _get_config()
     query = _validate_query(query, cfg)
-    limit = min(max(1, int(limit)), cfg.limits.max_page_size)
+    limit = _parse_limit(limit, cfg)
     
     conn = _open_ro_conn(cfg.snapshot_db)
     try:
@@ -506,7 +517,7 @@ def search_papers_by_keyword(keyword: str, limit: int = 10) -> list[dict[str, An
     Use when you know specific keywords or tags.
     """
     cfg = _get_config()
-    limit = min(max(1, int(limit)), cfg.limits.max_page_size)
+    limit = _parse_limit(limit, cfg)
     
     conn = _open_ro_conn(cfg.snapshot_db)
     try:
@@ -1033,8 +1044,8 @@ def list_top_facets(category: str, limit: int = 20) -> list[dict[str, Any]]:
             category=category
         )
     
-    limit = max(1, int(limit))
     cfg = _get_config()
+    limit = _parse_limit(limit, cfg)
     conn = _open_ro_conn(cfg.snapshot_db)
     try:
         rows = conn.execute(
@@ -1060,7 +1071,7 @@ def filter_papers(
     Use for precise filtering by author, venue, year, keyword, or tag.
     """
     cfg = _get_config()
-    limit = min(max(1, int(limit)), cfg.limits.max_page_size)
+    limit = _parse_limit(limit, cfg)
     
     query = "SELECT DISTINCT p.paper_id, p.title, p.year, p.venue FROM paper p"
     joins: list[str] = []

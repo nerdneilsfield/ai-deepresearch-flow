@@ -9,10 +9,16 @@ http {
     default_type application/octet-stream;
     sendfile on;
     keepalive_timeout 65;
+    server_tokens off;
 
     server {
         listen 8899;
         server_name _;
+        add_header X-Content-Type-Options nosniff always;
+        add_header Referrer-Policy no-referrer always;
+        add_header X-Frame-Options DENY always;
+        add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
+        add_header Content-Security-Policy-Report-Only "default-src 'self'; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline' https:; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; connect-src 'self' http: https:; worker-src 'self' blob:; font-src 'self' data: https:" always;
 
         location /api/ {
             proxy_pass ${PAPER_DB_API_BASE};
@@ -51,7 +57,12 @@ http {
             proxy_read_timeout 3600s;
             proxy_send_timeout 3600s;
             chunked_transfer_encoding off;
-            add_header X-Accel-Buffering no;
+            add_header X-Accel-Buffering no always;
+            add_header X-Content-Type-Options nosniff always;
+            add_header Referrer-Policy no-referrer always;
+            add_header X-Frame-Options DENY always;
+            add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
+            add_header Content-Security-Policy-Report-Only "default-src 'self'; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline' https:; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; connect-src 'self' http: https:; worker-src 'self' blob:; font-src 'self' data: https:" always;
         }
 
         location ^~ /mcp {

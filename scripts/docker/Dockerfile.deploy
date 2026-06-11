@@ -27,4 +27,7 @@ COPY scripts/docker/robots.txt /frontend/robots.txt
 
 EXPOSE 8899
 
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8899/api/v1/config', timeout=5).read()" || exit 1
+
 ENTRYPOINT ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]

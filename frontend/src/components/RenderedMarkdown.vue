@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount } from 'vue'
 import { MdPreview, config } from 'md-editor-v3'
 import 'md-editor-v3/lib/preview.css'
+import DOMPurify from 'dompurify'
 import footnote from 'markdown-it-footnote'
 // @ts-ignore
 import taskLists from 'markdown-it-task-lists'
@@ -39,6 +40,56 @@ const editorTheme = computed(() => {
 
 const editorId = `md-preview-${Math.random().toString(36).slice(2, 9)}`
 const effectiveImagesBase = computed(() => props.imagesBaseUrl || STATIC_BASE || '')
+const safeUriPattern = /^(?:(?:https?|mailto):|data:image\/|blob:|\/|#|\.{1,2}\/|[a-z0-9+.-]+(?:[/?#]|$)|[^a-z])/i
+const forbiddenHtmlAttrs = [
+  'style',
+  'onerror',
+  'onload',
+  'onclick',
+  'onmouseover',
+  'onfocus',
+  'onmouseenter',
+  'onmouseleave',
+]
+
+function sanitizeHtml(html: string) {
+  return DOMPurify.sanitize(String(html || ''), {
+    ADD_ATTR: ['target', 'rel', 'class'],
+    FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed'],
+    FORBID_ATTR: forbiddenHtmlAttrs,
+    ALLOW_DATA_ATTR: false,
+    ALLOWED_URI_REGEXP: safeUriPattern,
+  })
+}
+
+async function sanitizeMermaidSvg(svg: string) {
+  return DOMPurify.sanitize(String(svg || ''), {
+    USE_PROFILES: { svg: true, svgFilters: true },
+    FORBID_TAGS: ['script', 'foreignObject'],
+    FORBID_ATTR: forbiddenHtmlAttrs,
+    ALLOW_DATA_ATTR: false,
+    ALLOWED_URI_REGEXP: safeUriPattern,
+  })
+}
+
+function sanitizeMarkmapNodeContent(html: string) {
+  return DOMPurify.sanitize(String(html || ''), {
+    ALLOWED_TAGS: ['a', 'br', 'code', 'em', 'span', 'strong', 'sub', 'sup'],
+    ALLOWED_ATTR: ['class', 'href', 'rel', 'target', 'title'],
+    ALLOW_DATA_ATTR: false,
+    ALLOWED_URI_REGEXP: safeUriPattern,
+  })
+}
+
+function sanitizeMarkmapTree(node: any) {
+  if (!node || typeof node !== 'object') return
+  if (typeof node.content === 'string') {
+    node.content = sanitizeMarkmapNodeContent(node.content)
+  }
+  if (Array.isArray(node.children)) {
+    node.children.forEach(sanitizeMarkmapTree)
+  }
+}
 
 // Image URL rewriting
 const processedMarkdown = computed(() => {
@@ -208,16 +259,17 @@ async function handleHtmlChanged() {
         svg.setAttribute('class', 'w-full h-full')
         wrapper.appendChild(svg)
 
-        div.replaceWith(wrapper)
-
         try {
           const { root: tree } = transformer.transform(source)
+          sanitizeMarkmapTree(tree)
           const mmInstance = Markmap.create(svg, undefined, tree)
+          div.replaceWith(wrapper)
           setTimeout(() => {
             // @ts-ignore
             mmInstance?.fit()
           }, 200)
         } catch (err) {
+          div.replaceWith(wrapper)
           wrapper.textContent = 'Failed to render markmap.'
         }
       })
@@ -236,6 +288,9 @@ onBeforeUnmount(() => {
       :editorId="editorId"
       :modelValue="processedMarkdown"
       :noMermaid="false"
+      :noEcharts="true"
+      :sanitize="sanitizeHtml"
+      :sanitizeMermaid="sanitizeMermaidSvg"
       :theme="editorTheme"
       @onGetCatalog="handleCatalog"
       @onHtmlChanged="handleHtmlChanged"

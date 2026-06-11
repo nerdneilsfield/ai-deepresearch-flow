@@ -1040,7 +1040,7 @@ def create_app(
     )
 
     # Lazy import to avoid circular dependency
-    from deepresearch_flow.paper.snapshot.auth import McpGitHubOAuthConfig
+    from deepresearch_flow.paper.snapshot.auth import McpGitHubOAuthConfig, validate_mcp_static_access_token
     from deepresearch_flow.paper.snapshot.mcp_server import (
         McpSnapshotConfig,
         create_mcp_apps,
@@ -1049,10 +1049,10 @@ def create_app(
 
     if mcp_auth_mode not in {"static", "github-oauth"}:
         raise ValueError("mcp_auth_mode must be 'static' or 'github-oauth'")
+    validate_mcp_static_access_token(mcp_access_token, context="/mcp and /mcp-sse")
+
     mcp_github_oauth = None
     if mcp_auth_mode == "github-oauth":
-        if not mcp_access_token:
-            raise ValueError("MCP_ACCESS_TOKEN is required for /mcp-sse when GitHub OAuth is enabled")
         mcp_github_oauth = McpGitHubOAuthConfig(
             public_base_url=mcp_public_base_url or "",
             client_id=github_oauth_client_id or "",

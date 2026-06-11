@@ -1612,20 +1612,22 @@ Deploy 镜像（nginx + API + 前端）：
 
 ```bash
 # 基础模式：不设置高级搜索相关环境变量
-docker run --rm -p 8899:8899 \
+docker run --rm -p 127.0.0.1:8899:8899 \
   -v $(pwd)/paper_snapshot.db:/db/papers.db \
   -v $(pwd)/paper-static:/static \
+  -e MCP_ACCESS_TOKEN="$(openssl rand -hex 32)" \
   ghcr.io/nerdneilsfield/deepresearch-flow:deploy-latest
 
 # 嵌入式模式：至少设置两个高级搜索环境变量
-docker run --rm -p 8899:8899 \
+docker run --rm -p 127.0.0.1:8899:8899 \
   -v $(pwd)/paper_snapshot.db:/db/papers.db \
   -v $(pwd)/paper-static:/static \
   -v $(pwd)/paper_vectors:/db/paper_vectors \
   -v $(pwd)/config.toml:/app/config.toml:ro \
   -e PAPER_DB_EMBED_DB=/db/paper_vectors \
   -e PAPER_DB_CONFIG=/app/config.toml \
-  -e SEARCH_ACCESS_TOKEN=your-token \
+  -e SEARCH_ACCESS_TOKEN="$(openssl rand -hex 32)" \
+  -e MCP_ACCESS_TOKEN="$(openssl rand -hex 32)" \
   ghcr.io/nerdneilsfield/deepresearch-flow:deploy-latest
 ```
 
@@ -1635,6 +1637,7 @@ docker run --rm -p 8899:8899 \
 - 如果静态资源由此容器提供，请将 snapshot 静态目录挂载到 `/static`（默认 `PAPER_DB_STATIC_BASE` 为 `/static`）。
 - 如果 `PAPER_DB_STATIC_BASE` 是完整 URL（例如 `https://static.example.com`），nginx 仍仅提供本地前端，API 响应中的静态资源链接会使用该外部域名。
 - `scripts/docker/start-api.sh` 会根据高级搜索环境变量数量自动判定模式：`PAPER_DB_EMBED_DB`、`PAPER_DB_CONFIG`、`SEARCH_ACCESS_TOKEN`。
+- `/mcp` 和 `/mcp-sse` 必须配置 `MCP_ACCESS_TOKEN`。部署时设置私有随机值；`MCP_PUBLIC_UNSAFE=1` 仅用于隔离的本地测试。
 - `0` 个 → 基础模式。
 - `1` 个 → 视为高级搜索配置不完整，直接启动失败。
 - `>=2` 个 → 进入嵌入式模式；脚本会在存在时自动追加 `--embed-db` 和 `--config`，`SEARCH_ACCESS_TOKEN` 继续通过现有 CLI envvar 读取。
@@ -1643,6 +1646,8 @@ docker run --rm -p 8899:8899 \
 Docker Compose 示例（四个 profile；从仓库根目录运行，使 `${PWD}` volume 路径指向你的数据文件）：
 
 ```bash
+export MCP_ACCESS_TOKEN="$(openssl rand -hex 32)"
+export SEARCH_ACCESS_TOKEN="$(openssl rand -hex 32)"  # 仅高级 profile 需要
 docker compose -f scripts/docker/docker-compose.example.yml --profile local-static up
 # 或者
 docker compose -f scripts/docker/docker-compose.example.yml --profile external-static up
@@ -1655,9 +1660,10 @@ docker compose -f scripts/docker/docker-compose.example.yml --profile external-s
 外部静态资源示例：
 
 ```bash
-docker run --rm -p 8899:8899 \
+docker run --rm -p 127.0.0.1:8899:8899 \
   -v $(pwd)/paper_snapshot.db:/db/papers.db \
   -e PAPER_DB_STATIC_BASE=https://static.example.com \
+  -e MCP_ACCESS_TOKEN="$(openssl rand -hex 32)" \
   ghcr.io/nerdneilsfield/deepresearch-flow:deploy-latest
 ```
 

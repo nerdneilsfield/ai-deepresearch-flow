@@ -397,7 +397,7 @@ describe('paper-content-cache storage', () => {
 
     expect(payload).toEqual({ summary: 'template body' })
     expect(record?.summaries.deep_read?.payload).toEqual({ summary: 'template body' })
-    expect(record?.lastAccessedAt).toBe(55)
+    expect(record?.lastAccessedAt).toBeGreaterThan(55)
   })
 
   it('keeps a newly opened summary-only paper when the paper cache is already full', async () => {
@@ -529,7 +529,7 @@ describe('paper-content-cache storage', () => {
 
     expect(markdown).toBe('translated body')
     expect(record?.translations.zh?.markdown).toBe('translated body')
-    expect(record?.lastAccessedAt).toBe(66)
+    expect(record?.lastAccessedAt).toBeGreaterThan(66)
   })
 
   it('keeps a newly opened translation-only paper when the paper cache is already full', async () => {

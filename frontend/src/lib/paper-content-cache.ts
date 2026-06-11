@@ -45,6 +45,8 @@ const STORE_NAME = 'paper_content'
 const LAST_ACCESSED_INDEX = 'lastAccessedAt'
 const SCHEMA_VERSION = 1 as const
 const MAX_PAPER_RECORDS = 50
+const MAX_RECORD_BYTES = 2 * 1024 * 1024
+const MAX_TOTAL_BYTES = 20 * 1024 * 1024
 const HOT_CACHE_LIMIT = 2
 
 const hotCache = new Map<string, PaperContentRecord>()
@@ -60,6 +62,44 @@ function cloneRecord(record: PaperContentRecord): PaperContentRecord {
       : null,
     summaries: JSON.parse(JSON.stringify(record.summaries)),
     translations: JSON.parse(JSON.stringify(record.translations)),
+    lastAccessedAt: record.lastAccessedAt,
+  }
+}
+
+function recordByteSize(record: PaperContentRecord): number {
+  return new Blob([JSON.stringify(record)]).size
+}
+
+function trimOversizedRecord(record: PaperContentRecord): PaperContentRecord {
+  let next = cloneRecord(record)
+  if (recordByteSize(next) <= MAX_RECORD_BYTES) return next
+
+  const translationEntries = Object.entries(next.translations)
+    .sort(([, left], [, right]) => left.cachedAt - right.cachedAt)
+  for (const [lang] of translationEntries) {
+    delete next.translations[lang]
+    if (recordByteSize(next) <= MAX_RECORD_BYTES) return next
+  }
+
+  const summaryEntries = Object.entries(next.summaries)
+    .sort(([, left], [, right]) => left.cachedAt - right.cachedAt)
+  for (const [template] of summaryEntries) {
+    delete next.summaries[template]
+    if (recordByteSize(next) <= MAX_RECORD_BYTES) return next
+  }
+
+  next = {
+    ...next,
+    detail: null,
+    detailFreshness: null,
+  }
+  return recordByteSize(next) <= MAX_RECORD_BYTES ? next : {
+    schemaVersion: SCHEMA_VERSION,
+    paperId: record.paperId,
+    detail: null,
+    detailFreshness: null,
+    summaries: {},
+    translations: {},
     lastAccessedAt: record.lastAccessedAt,
   }
 }
@@ -127,11 +167,23 @@ function enqueuePaperLimitEnforcement(
       )
       .map((record) => cloneRecord(record))
 
-    if (records.length <= MAX_PAPER_RECORDS) return
+    let totalBytes = records.reduce((sum, record) => sum + recordByteSize(record), 0)
+    let removeCount = Math.max(0, records.length - MAX_PAPER_RECORDS)
 
     records
       .sort((left, right) => left.lastAccessedAt - right.lastAccessedAt)
-      .slice(0, records.length - MAX_PAPER_RECORDS)
+      .filter((record) => {
+        if (removeCount > 0) {
+          removeCount -= 1
+          totalBytes -= recordByteSize(record)
+          return true
+        }
+        if (totalBytes > MAX_TOTAL_BYTES) {
+          totalBytes -= recordByteSize(record)
+          return true
+        }
+        return false
+      })
       .forEach((record) => {
         const deleteReq = store.delete(record.paperId)
         deleteReq.onsuccess = () => {
@@ -175,7 +227,7 @@ export async function readPaperContentRecord(paperId: string): Promise<PaperCont
 }
 
 export async function writePaperContentRecord(input: WritePaperContentInput): Promise<void> {
-  const record: PaperContentRecord = {
+  const record: PaperContentRecord = trimOversizedRecord({
     schemaVersion: SCHEMA_VERSION,
     paperId: input.paperId,
     detail: input.detail ? JSON.parse(JSON.stringify(input.detail)) : null,
@@ -185,7 +237,7 @@ export async function writePaperContentRecord(input: WritePaperContentInput): Pr
     summaries: JSON.parse(JSON.stringify(input.summaries)),
     translations: JSON.parse(JSON.stringify(input.translations)),
     lastAccessedAt: input.lastAccessedAt ?? Date.now(),
-  }
+  })
 
   const db = await openDb()
   await new Promise<void>((resolve, reject) => {
