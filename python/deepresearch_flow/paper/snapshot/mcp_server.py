@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 import json
@@ -24,21 +24,33 @@ from deepresearch_flow.paper.snapshot.auth import (
     oauth_metadata_compat_app,
     validate_mcp_static_access_token,
 )
-from deepresearch_flow.paper.snapshot.common import ApiLimits, _column_exists, _open_ro_conn, _table_exists
+from deepresearch_flow.paper.snapshot.common import (
+    ApiLimits,
+    _column_exists,
+    _open_ro_conn,
+    _table_exists,
+)
 from deepresearch_flow.paper.snapshot.mcp_content import (
     DEFAULT_MAX_CHARS as _DEFAULT_MAX_CHARS,
     MarkdownContentError,
     SummaryContentError,
+    compute_content_window as _compute_content_window,
     get_markdown_line_range as _get_markdown_line_range,
     get_markdown_outline as _get_markdown_outline,
     get_summary_key as _get_summary_key,
     get_summary_keys as _get_summary_keys,
+    resolve_content_language as _resolve_content_language,
 )
-from deepresearch_flow.paper.snapshot.text import merge_adjacent_markers, remove_cjk_spaces, rewrite_search_query
+from deepresearch_flow.paper.snapshot.text import (
+    merge_adjacent_markers,
+    remove_cjk_spaces,
+    rewrite_search_query,
+)
+
 _DEFAULT_TIMEOUT = 10.0
 _DEFAULT_CONTENT_MAX_CHARS = 8_000
-_PAPER_ID_PATTERN = re.compile(r'^[a-zA-Z0-9_-]+$')
-_LANG_PATTERN = re.compile(r'^[a-zA-Z0-9_-]{1,32}$')
+_PAPER_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
+_LANG_PATTERN = re.compile(r"^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$")
 
 
 class McpToolError(FastMCPToolError):
@@ -70,23 +82,22 @@ class McpSnapshotConfig:
     max_paper_id_length: int = 64
     # HTTP client stored in object __dict__ to avoid dataclass frozen restriction
     _http_client: httpx.Client | None = field(default=None, repr=False, compare=False)
-    _http_client_lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
-    
+    _http_client_lock: threading.Lock = field(
+        default_factory=threading.Lock, repr=False, compare=False
+    )
+
     def get_http_client(self) -> httpx.Client:
         """Get or create a shared HTTP client with connection pooling."""
         with self._http_client_lock:
             if self._http_client is None:
                 object.__setattr__(
                     self,
-                    '_http_client',
+                    "_http_client",
                     httpx.Client(
                         timeout=self.http_timeout,
                         follow_redirects=True,
-                        limits=httpx.Limits(
-                            max_keepalive_connections=10,
-                            max_connections=20
-                        )
-                    )
+                        limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
+                    ),
                 )
             return self._http_client
 
@@ -97,7 +108,6 @@ class McpSnapshotConfig:
             if client is not None:
                 client.close()
                 object.__setattr__(self, "_http_client", None)
-
 
 
 _CONFIG: McpSnapshotConfig | None = None
@@ -143,7 +153,9 @@ def create_mcp_transport_app(
 ) -> tuple[Any, Any]:
     validate_mcp_static_access_token(config.mcp_access_token, context=f"/{transport}")
     if config.mcp_auth_mode == "github-oauth":
-        raise ValueError("GitHub OAuth requires create_mcp_apps() so /mcp and OAuth routes share one app")
+        raise ValueError(
+            "GitHub OAuth requires create_mcp_apps() so /mcp and OAuth routes share one app"
+        )
     bound_app, transport_lifespan = _create_mcp_transport_binding(config, transport=transport)
 
     @asynccontextmanager
@@ -207,41 +219,50 @@ def create_mcp_apps(config: McpSnapshotConfig) -> tuple[dict[str, Any], Any]:
         A tuple of (apps_by_transport, lifespan_context).
     """
     validate_mcp_static_access_token(config.mcp_access_token, context="/mcp and /mcp-sse")
-    if config.mcp_auth_mode == "github-oauth":
-        if config.mcp_github_oauth is None:
-            raise ValueError("GitHub OAuth config is required when mcp_auth_mode='github-oauth'")
-        oauth_provider = build_mcp_github_oauth_provider(
-            config.mcp_github_oauth,
-            static_access_token=config.mcp_access_token,
-        )
-        streamable_app, streamable_lifespan = _create_mcp_transport_binding(
-            config,
-            transport="streamable-http",
-            path="/mcp",
-            auth_provider=oauth_provider,
-            static_bearer=False,
-        )
-    else:
-        streamable_app, streamable_lifespan = _create_mcp_transport_binding(
-            config,
-            transport="streamable-http",
-        )
+    apps: dict[str, Any] = {}
+    lifespans: list[Any] = []
+
+    streamable_app, streamable_lifespan = _create_mcp_transport_binding(
+        config,
+        transport="streamable-http",
+    )
+    apps["bearer-streamable-http"] = streamable_app
+    lifespans.append(streamable_lifespan)
 
     sse_app, sse_lifespan = _create_mcp_transport_binding(
         config,
         transport="sse",
     )
+    apps["bearer-sse"] = sse_app
+    lifespans.append(sse_lifespan)
+
+    if config.mcp_auth_mode == "github-oauth":
+        if config.mcp_github_oauth is None:
+            raise ValueError("GitHub OAuth config is required when mcp_auth_mode='github-oauth'")
+        oauth_provider = build_mcp_github_oauth_provider(
+            config.mcp_github_oauth,
+        )
+        oauth_streamable_app, oauth_streamable_lifespan = _create_mcp_transport_binding(
+            config,
+            transport="streamable-http",
+            path="/oauth/mcp",
+            auth_provider=oauth_provider,
+            static_bearer=False,
+        )
+        apps["oauth-streamable-http"] = oauth_streamable_app
+        lifespans.append(oauth_streamable_lifespan)
 
     @asynccontextmanager
     async def lifespan(app):
         try:
-            async with streamable_lifespan(app):
-                async with sse_lifespan(app):
-                    yield
+            async with AsyncExitStack() as stack:
+                for app_lifespan in lifespans:
+                    await stack.enter_async_context(app_lifespan(app))
+                yield
         finally:
             config.close_http_client()
 
-    return {"streamable-http": streamable_app, "sse": sse_app}, lifespan
+    return apps, lifespan
 
 
 def create_mcp_app(config: McpSnapshotConfig) -> tuple[Any, Any]:
@@ -258,7 +279,7 @@ def _get_config() -> McpSnapshotConfig:
 
 def _validate_query(query: str, cfg: McpSnapshotConfig) -> str:
     """Validate search query string.
-    
+
     Raises:
         ToolError: If query is invalid or too long.
     """
@@ -270,7 +291,7 @@ def _validate_query(query: str, cfg: McpSnapshotConfig) -> str:
             "query_too_long",
             f"Query exceeds maximum length of {cfg.limits.max_query_length}",
             length=len(normalized),
-            max_length=cfg.limits.max_query_length
+            max_length=cfg.limits.max_query_length,
         )
     return normalized
 
@@ -295,17 +316,13 @@ def _normalize_advanced_filter_params(filters: dict[str, Any] | None) -> dict[st
             values: list[str] = []
             for item in raw_value:
                 if isinstance(item, bool) or not isinstance(item, (str, int, float)):
-                    raise ValueError(
-                        f"Filter '{normalized_key}' must use string or numeric values"
-                    )
+                    raise ValueError(f"Filter '{normalized_key}' must use string or numeric values")
                 text = str(item).strip()
                 if text:
                     values.append(text)
         else:
             if isinstance(raw_value, bool) or not isinstance(raw_value, (str, int, float)):
-                raise ValueError(
-                    f"Filter '{normalized_key}' must use string or numeric values"
-                )
+                raise ValueError(f"Filter '{normalized_key}' must use string or numeric values")
             value = str(raw_value).strip()
             values = [value] if value else []
         if values:
@@ -315,7 +332,7 @@ def _normalize_advanced_filter_params(filters: dict[str, Any] | None) -> dict[st
 
 def _validate_paper_id(paper_id: str, cfg: McpSnapshotConfig) -> str:
     """Validate paper ID format.
-    
+
     Raises:
         ToolError: If paper_id is invalid.
     """
@@ -326,13 +343,13 @@ def _validate_paper_id(paper_id: str, cfg: McpSnapshotConfig) -> str:
             "paper_id_too_long",
             f"Paper ID exceeds maximum length of {cfg.max_paper_id_length}",
             length=len(paper_id),
-            max_length=cfg.max_paper_id_length
+            max_length=cfg.max_paper_id_length,
         )
     if not _PAPER_ID_PATTERN.match(paper_id):
         raise McpToolError(
             "invalid_paper_id_format",
             "Paper ID must contain only alphanumeric characters, hyphens, and underscores",
-            paper_id=paper_id
+            paper_id=paper_id,
         )
     return paper_id
 
@@ -375,11 +392,7 @@ def _read_static_text(rel_path: str) -> str | None:
 def _validate_static_rel_path(rel_path: str) -> str:
     normalized = str(rel_path or "").replace("\\", "/").strip("/")
     parts = [part for part in normalized.split("/") if part]
-    if (
-        not parts
-        or normalized.startswith("/")
-        or any(part in {"", ".", ".."} for part in parts)
-    ):
+    if not parts or normalized.startswith("/") or any(part in {"", ".", ".."} for part in parts):
         raise FileNotFoundError("invalid static asset path")
     return "/".join(parts)
 
@@ -416,7 +429,9 @@ def _load_static_text(rel_path: str) -> str:
         raise RuntimeError("asset_fetch_failed:not_configured") from exc
 
 
-def _load_summary_json(paper_id: str, template: str | None) -> tuple[str | None, list[str] | None, str | None]:
+def _load_summary_json(
+    paper_id: str, template: str | None
+) -> tuple[str | None, list[str] | None, str | None]:
     """Load summary JSON content and return available templates list."""
     cfg = _get_config()
     conn = _open_ro_conn(cfg.snapshot_db)
@@ -466,7 +481,11 @@ def _load_translation_markdown(paper_id: str, lang: str) -> str | None:
     """Load translation markdown for paper and language."""
     cfg = _get_config()
     if not _LANG_PATTERN.fullmatch(lang):
-        raise McpToolError("invalid_lang", "Language must contain only alphanumeric characters, hyphens, and underscores", lang=lang)
+        raise McpToolError(
+            "invalid_lang",
+            "Language must contain only alphanumeric characters and hyphens",
+            lang=lang,
+        )
     conn = _open_ro_conn(cfg.snapshot_db)
     try:
         row = conn.execute(
@@ -481,19 +500,174 @@ def _load_translation_markdown(paper_id: str, lang: str) -> str | None:
         conn.close()
 
 
+def _get_translation_langs(paper_id: str) -> list[str]:
+    cfg = _get_config()
+    conn = _open_ro_conn(cfg.snapshot_db)
+    try:
+        if not _table_exists(conn, "paper_translation"):
+            return []
+        rows = conn.execute(
+            "SELECT lang FROM paper_translation WHERE paper_id = ?",
+            (paper_id,),
+        ).fetchall()
+        return [str(row["lang"]) for row in rows if str(row["lang"]).strip()]
+    finally:
+        conn.close()
+
+
+def _get_available_translation_langs(paper_id: str) -> list[str]:
+    raw_langs = _get_translation_langs(paper_id)
+    normalized_counts: dict[str, int] = {}
+    for raw_lang in raw_langs:
+        try:
+            selection = _resolve_content_language("translation", raw_lang, [raw_lang])
+        except MarkdownContentError:
+            continue
+        normalized = str(selection["lang"])
+        normalized_counts[normalized] = normalized_counts.get(normalized, 0) + 1
+    return sorted(lang for lang, count in normalized_counts.items() if count == 1)
+
+
+def _load_markdown_for_content(
+    paper_id: str, content_type: str, lang: str | None
+) -> tuple[str, str | None]:
+    try:
+        selection = _resolve_content_language(
+            content_type,
+            lang,
+            _get_translation_langs(paper_id),
+        )
+        normalized_type = str(selection["content_type"])
+        normalized_lang = selection["lang"]
+        content = (
+            _load_source_markdown(paper_id)
+            if normalized_type == "source"
+            else _load_translation_markdown(paper_id, str(normalized_lang))
+        )
+    except MarkdownContentError as exc:
+        details = {"paper_id": paper_id}
+        details.update(exc.details)
+        raise McpToolError(exc.code, exc.message, **details) from exc
+    except RuntimeError as exc:
+        raise McpToolError(
+            "asset_fetch_failed",
+            "Failed to fetch content asset",
+            paper_id=paper_id,
+            content_type=content_type,
+            lang=lang,
+            detail=str(exc),
+        ) from exc
+
+    if content is None:
+        if normalized_type == "source":
+            raise McpToolError(
+                "source_not_available", "Source markdown not available", paper_id=paper_id
+            )
+        raise McpToolError(
+            "translation_not_available",
+            "Translation not available",
+            paper_id=paper_id,
+            lang=normalized_lang,
+        )
+    return content, normalized_lang
+
+
+def _require_actual_int(value: Any, *, name: str, code: str, minimum: int, maximum: int) -> int:
+    if type(value) is not int or value < minimum or value > maximum:
+        raise McpToolError(
+            code, f"{name} must be an integer between {minimum} and {maximum}", **{name: value}
+        )
+    return value
+
+
+def _require_actual_bool(value: Any, *, name: str, code: str) -> bool:
+    if type(value) is not bool:
+        raise McpToolError(code, f"{name} must be a boolean", **{name: value})
+    return value
+
+
+def _parse_summary_path(key: str) -> list[tuple[str, int | str]]:
+    if key == "$":
+        raise SummaryContentError(
+            "invalid_summary_key", "Root summary selector is not available", key=key
+        )
+    # Reuse the public summary-key behavior and errors by resolving against an
+    # empty object only for syntax, then do real traversal below.
+    try:
+        _get_summary_key("{}", key, max_chars=1)
+    except SummaryContentError as exc:
+        if exc.code != "summary_key_not_found":
+            raise
+
+    segments: list[tuple[str, int | str]] = []
+    text = key.strip()
+    i = 0
+    while i < len(text):
+        if text[i] == "[":
+            end = text.find("]", i + 1)
+            segments.append(("index", int(text[i + 1 : end])))
+            i = end + 1
+            if i < len(text) and text[i] == ".":
+                i += 1
+            continue
+        start = i
+        while i < len(text) and text[i] not in ".[":
+            i += 1
+        segments.append(("field", text[start:i]))
+        if i < len(text) and text[i] == ".":
+            i += 1
+    return segments
+
+
+def _resolve_summary_value(summary_json: str, key: str) -> Any:
+    try:
+        node: Any = json.loads(summary_json)
+    except json.JSONDecodeError as exc:
+        raise SummaryContentError(
+            "invalid_summary_json", "Summary JSON is invalid", detail=str(exc)
+        ) from exc
+    for kind, value in _parse_summary_path(key):
+        if kind == "field":
+            if not isinstance(node, dict) or value not in node:
+                raise SummaryContentError("summary_key_not_found", "Summary key not found", key=key)
+            node = node[value]
+        else:
+            if not isinstance(node, list) or int(value) >= len(node):
+                raise SummaryContentError("summary_key_not_found", "Summary key not found", key=key)
+            node = node[int(value)]
+    return node
+
+
+def _summary_value_type(value: Any) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, dict):
+        return "object"
+    return type(value).__name__
+
+
 # ==================== MCP Tools ====================
+
 
 @mcp.tool()
 def search_papers(query: str, limit: int = 10) -> list[dict[str, Any]]:
     """Full-text search for papers (relevance-ranked).
-    
+
     Use when you only have topic keywords.
     Returns paper_id, title, year, venue, snippet_markdown.
     """
     cfg = _get_config()
     query = _validate_query(query, cfg)
     limit = _parse_limit(limit, cfg)
-    
+
     conn = _open_ro_conn(cfg.snapshot_db)
     try:
         match_expr = rewrite_search_query(query)
@@ -522,13 +696,15 @@ def search_papers(query: str, limit: int = 10) -> list[dict[str, Any]]:
             snippet = str(row["snippet_markdown"] or "")
             snippet = remove_cjk_spaces(snippet)
             snippet = merge_adjacent_markers(snippet)
-            results.append({
-                "paper_id": str(row["paper_id"]),
-                "title": str(row["title"]),
-                "year": str(row["year"]),
-                "venue": str(row["venue"]),
-                "snippet_markdown": snippet,
-            })
+            results.append(
+                {
+                    "paper_id": str(row["paper_id"]),
+                    "title": str(row["title"]),
+                    "year": str(row["year"]),
+                    "venue": str(row["venue"]),
+                    "snippet_markdown": snippet,
+                }
+            )
         return results
     finally:
         conn.close()
@@ -537,12 +713,12 @@ def search_papers(query: str, limit: int = 10) -> list[dict[str, Any]]:
 @mcp.tool()
 def search_papers_by_keyword(keyword: str, limit: int = 10) -> list[dict[str, Any]]:
     """Search papers by keyword/tag (exact match).
-    
+
     Use when you know specific keywords or tags.
     """
     cfg = _get_config()
     limit = _parse_limit(limit, cfg)
-    
+
     conn = _open_ro_conn(cfg.snapshot_db)
     try:
         rows = conn.execute(
@@ -562,13 +738,15 @@ def search_papers_by_keyword(keyword: str, limit: int = 10) -> list[dict[str, An
             snippet = str(row["summary_preview"] or "")
             snippet = remove_cjk_spaces(snippet)
             snippet = merge_adjacent_markers(snippet)
-            results.append({
-                "paper_id": str(row["paper_id"]),
-                "title": str(row["title"]),
-                "year": str(row["year"]),
-                "venue": str(row["venue"]),
-                "snippet_markdown": snippet,
-            })
+            results.append(
+                {
+                    "paper_id": str(row["paper_id"]),
+                    "title": str(row["title"]),
+                    "year": str(row["year"]),
+                    "venue": str(row["venue"]),
+                    "snippet_markdown": snippet,
+                }
+            )
         return results
     finally:
         conn.close()
@@ -577,19 +755,19 @@ def search_papers_by_keyword(keyword: str, limit: int = 10) -> list[dict[str, An
 @mcp.tool()
 def get_paper_metadata(paper_id: str) -> dict[str, Any]:
     """Get paper metadata and available summary templates.
-    
+
     Call this first before requesting a summary to discover available templates.
     """
     cfg = _get_config()
     paper_id = _validate_paper_id(paper_id, cfg)
-    
+
     conn = _open_ro_conn(cfg.snapshot_db)
     try:
         has_doi_column = _column_exists(conn, "paper", "doi")
         doi_select = "doi" if has_doi_column else "NULL AS doi"
         row = conn.execute(
             f"""
-            SELECT paper_id, title, year, venue, preferred_summary_template, {doi_select}
+            SELECT paper_id, title, year, venue, preferred_summary_template, source_md_content_hash, {doi_select}
             FROM paper WHERE paper_id = ?
             """,
             (paper_id,),
@@ -601,6 +779,8 @@ def get_paper_metadata(paper_id: str) -> dict[str, Any]:
             (paper_id,),
         ).fetchall()
         available = sorted((str(item["template_tag"]) for item in template_rows), key=str.lower)
+        has_source = bool(row["source_md_content_hash"])
+        available_translations = _get_available_translation_langs(paper_id)
         has_bibtex = False
         if _table_exists(conn, "paper_bibtex"):
             bib_row = conn.execute(
@@ -619,6 +799,8 @@ def get_paper_metadata(paper_id: str) -> dict[str, Any]:
             "paper_pw_url": None,
             "preferred_summary_template": row["preferred_summary_template"],
             "available_summary_templates": available,
+            "has_source": has_source,
+            "available_translations": available_translations,
             "has_bibtex": has_bibtex,
         }
     finally:
@@ -666,17 +848,18 @@ def get_paper_bibtex(paper_id: str) -> dict[str, Any]:
         conn.close()
 
 
-@mcp.tool()
-def get_paper_summary(paper_id: str, template: str | None = None, max_chars: int | None = None) -> str:
+def get_paper_summary(
+    paper_id: str, template: str | None = None, max_chars: int | None = None
+) -> str:
     """Get summary JSON as raw string.
-    
+
     Uses preferred template if template is not specified.
     Returns the full JSON content (not a URL).
     """
     cfg = _get_config()
     paper_id = _validate_paper_id(paper_id, cfg)
     max_chars = _resolve_content_max_chars(cfg, max_chars)
-    
+
     try:
         payload, available, _ = _load_summary_json(paper_id, template)
     except RuntimeError as exc:
@@ -687,7 +870,7 @@ def get_paper_summary(paper_id: str, template: str | None = None, max_chars: int
             template=template,
             detail=str(exc),
         ) from exc
-    
+
     if payload is None:
         raise McpToolError(
             "template_not_available",
@@ -696,7 +879,7 @@ def get_paper_summary(paper_id: str, template: str | None = None, max_chars: int
             template=template,
             available_summary_templates=available,
         )
-    
+
     return _truncate(payload, max_chars)
 
 
@@ -706,10 +889,20 @@ def get_paper_summary_keys(
     template: str | None = None,
     max_depth: int = 2,
     include_preview: bool = False,
+    max_paths: int = 200,
 ) -> dict[str, Any]:
     """Get recursive summary key paths in document order."""
     cfg = _get_config()
     paper_id = _validate_paper_id(paper_id, cfg)
+    max_depth = _require_actual_int(
+        max_depth, name="max_depth", code="invalid_max_depth", minimum=0, maximum=4
+    )
+    include_preview = _require_actual_bool(
+        include_preview, name="include_preview", code="invalid_include_preview"
+    )
+    max_paths = _require_actual_int(
+        max_paths, name="max_paths", code="invalid_max_paths", minimum=1, maximum=500
+    )
 
     try:
         payload, available, selected_template = _load_summary_json(paper_id, template)
@@ -734,32 +927,35 @@ def get_paper_summary_keys(
     try:
         content = _get_summary_keys(
             payload,
-            max_depth=max(0, int(max_depth)),
-            include_preview=bool(include_preview),
+            max_depth=max_depth,
+            include_preview=include_preview,
+            max_paths=max_paths,
         )
     except SummaryContentError as exc:
         details = {"paper_id": paper_id, "template": selected_template}
         details.update(exc.details)
         raise McpToolError(exc.code, exc.message, **details) from exc
 
-    return {
-        "paper_id": paper_id,
-        "template": selected_template,
-        **content,
-    }
+    return {"paper_id": paper_id, "template": selected_template, **content}
 
 
 @mcp.tool()
-def get_paper_summary_key(
+def get_paper_summary_value(
     paper_id: str,
     key: str,
     template: str | None = None,
-    max_chars: int | None = None,
+    max_chars: int = 4_000,
+    include_subtree: bool = False,
 ) -> dict[str, Any]:
-    """Get a single addressed summary node."""
+    """Get a bounded addressed summary value."""
     cfg = _get_config()
     paper_id = _validate_paper_id(paper_id, cfg)
-    max_chars = _resolve_content_max_chars(cfg, max_chars)
+    max_chars = _require_actual_int(
+        max_chars, name="max_chars", code="invalid_max_chars", minimum=1, maximum=16_000
+    )
+    include_subtree = _require_actual_bool(
+        include_subtree, name="include_subtree", code="invalid_include_subtree"
+    )
 
     try:
         payload, available, selected_template = _load_summary_json(paper_id, template)
@@ -782,30 +978,169 @@ def get_paper_summary_key(
         )
 
     try:
-        content = _get_summary_key(payload, key, max_chars=max_chars)
+        node = _resolve_summary_value(payload, key)
     except SummaryContentError as exc:
         details = {"paper_id": paper_id, "template": selected_template}
         details.update(exc.details)
         details.setdefault("key", key)
         raise McpToolError(exc.code, exc.message, **details) from exc
 
-    return {
+    value_type = _summary_value_type(node)
+    result: dict[str, Any] = {
         "paper_id": paper_id,
         "template": selected_template,
-        **content,
+        "key": key,
+        "value_type": value_type,
+        "truncated": False,
+    }
+    if isinstance(node, (dict, list)) and not include_subtree:
+        child_keys = (
+            [str(key) for key in node.keys()]
+            if isinstance(node, dict)
+            else [f"[{idx}]" for idx in range(len(node))]
+        )
+        returned: list[str] = []
+        used_chars = 0
+        for child_key in child_keys[:300]:
+            bounded = child_key[:256]
+            if used_chars + len(bounded) > 8_000 or len(returned) >= 100:
+                break
+            returned.append(bounded)
+            used_chars += len(bounded)
+        result.update(
+            {
+                "content_format": None,
+                "content": None,
+                "child_keys": returned,
+                "child_count": len(child_keys),
+                "returned_child_keys": len(returned),
+                "children_truncated": len(returned) < len(child_keys),
+            }
+        )
+        return result
+
+    if isinstance(node, (dict, list)):
+        content = json.dumps(node, ensure_ascii=False, separators=(",", ":"))
+        content_format = "application/json"
+        content_is_valid_json: bool | None = True
+    elif isinstance(node, str):
+        content = node
+        content_format = "text/plain"
+        content_is_valid_json = None
+    else:
+        content = json.dumps(node, ensure_ascii=False, separators=(",", ":"))
+        content_format = "text/plain"
+        content_is_valid_json = None
+
+    if len(content) > max_chars:
+        content = content[:max_chars]
+        result["truncated"] = True
+        if isinstance(node, (dict, list)):
+            content_format = "text/plain"
+            content_is_valid_json = False
+
+    result.update({"content_format": content_format, "content": content})
+    if content_is_valid_json is not None:
+        result["content_is_valid_json"] = content_is_valid_json
+    return result
+
+
+def get_paper_summary_key(
+    paper_id: str,
+    key: str,
+    template: str | None = None,
+    max_chars: int | None = None,
+) -> dict[str, Any]:
+    """Backward-compatible direct Python helper for a single addressed summary node."""
+    return get_paper_summary_value(
+        paper_id,
+        key,
+        template=template,
+        max_chars=4_000 if max_chars is None else max_chars,
+        include_subtree=True,
+    )
+
+
+@mcp.tool()
+def get_paper_content_outline(
+    paper_id: str,
+    content_type: Literal["source", "translation"],
+    lang: str | None = None,
+    max_sections: int = 200,
+) -> dict[str, Any]:
+    """Get a bounded heading outline for source or translated markdown."""
+    cfg = _get_config()
+    paper_id = _validate_paper_id(paper_id, cfg)
+    content, normalized_lang = _load_markdown_for_content(paper_id, content_type, lang)
+    try:
+        outline = _get_markdown_outline(content, max_sections=max_sections)
+    except MarkdownContentError as exc:
+        details = {"paper_id": paper_id, "content_type": content_type, "lang": normalized_lang}
+        details.update(exc.details)
+        raise McpToolError(exc.code, exc.message, **details) from exc
+    normalized_type = "translation" if content_type == "translation" else "source"
+    return {
+        "paper_id": paper_id,
+        "content_type": normalized_type,
+        "lang": normalized_lang,
+        **outline,
     }
 
 
 @mcp.tool()
+def get_paper_content_window(
+    paper_id: str,
+    content_type: Literal["source", "translation"],
+    lang: str | None = None,
+    mode: Literal["range", "head", "tail", "head_tail", "around"] = "head",
+    start_line: int | None = None,
+    end_line: int | None = None,
+    line_count: int = 80,
+    head_lines: int = 40,
+    tail_lines: int = 40,
+    center_line: int | None = None,
+    before_lines: int = 40,
+    after_lines: int = 40,
+) -> dict[str, Any]:
+    """Get a bounded line window for source or translated markdown."""
+    cfg = _get_config()
+    paper_id = _validate_paper_id(paper_id, cfg)
+    content, normalized_lang = _load_markdown_for_content(paper_id, content_type, lang)
+    try:
+        window = _compute_content_window(
+            content,
+            mode=mode,
+            start_line=start_line,
+            end_line=end_line,
+            line_count=line_count,
+            head_lines=head_lines,
+            tail_lines=tail_lines,
+            center_line=center_line,
+            before_lines=before_lines,
+            after_lines=after_lines,
+        )
+    except MarkdownContentError as exc:
+        details = {"paper_id": paper_id, "content_type": content_type, "lang": normalized_lang}
+        details.update(exc.details)
+        raise McpToolError(exc.code, exc.message, **details) from exc
+    normalized_type = "translation" if content_type == "translation" else "source"
+    return {
+        "paper_id": paper_id,
+        "content_type": normalized_type,
+        "lang": normalized_lang,
+        **window,
+    }
+
+
 def get_paper_source(paper_id: str, max_chars: int | None = None) -> str:
     """Get source markdown text.
-    
+
     Content may be large; use max_chars to limit size.
     """
     cfg = _get_config()
     paper_id = _validate_paper_id(paper_id, cfg)
     max_chars = _resolve_content_max_chars(cfg, max_chars)
-    
+
     try:
         content = _load_source_markdown(paper_id)
     except RuntimeError as exc:
@@ -815,18 +1150,15 @@ def get_paper_source(paper_id: str, max_chars: int | None = None) -> str:
             paper_id=paper_id,
             detail=str(exc),
         ) from exc
-    
+
     if content is None:
         raise McpToolError(
-            "source_not_available",
-            "Source markdown not available",
-            paper_id=paper_id
+            "source_not_available", "Source markdown not available", paper_id=paper_id
         )
-    
+
     return _truncate(content, max_chars)
 
 
-@mcp.tool()
 def get_paper_source_outline(paper_id: str) -> dict[str, Any]:
     """Get the source markdown outline as section ranges."""
     cfg = _get_config()
@@ -862,7 +1194,6 @@ def get_paper_source_outline(paper_id: str) -> dict[str, Any]:
     }
 
 
-@mcp.tool()
 def get_paper_source_lines(paper_id: str, start_line: int, end_line: int) -> dict[str, Any]:
     """Get a 1-based inclusive slice of the source markdown."""
     cfg = _get_config()
@@ -902,7 +1233,6 @@ def get_paper_source_lines(paper_id: str, start_line: int, end_line: int) -> dic
     }
 
 
-@mcp.tool()
 def get_paper_translation_outline(paper_id: str, lang: str) -> dict[str, Any]:
     """Get the translated markdown outline as section ranges."""
     cfg = _get_config()
@@ -945,7 +1275,6 @@ def get_paper_translation_outline(paper_id: str, lang: str) -> dict[str, Any]:
     }
 
 
-@mcp.tool()
 def get_paper_translation_lines(
     paper_id: str,
     lang: str,
@@ -998,7 +1327,7 @@ def get_paper_translation_lines(
 @mcp.tool()
 def get_database_stats() -> dict[str, Any]:
     """Get database statistics.
-    
+
     Returns totals, year/month distributions, and top facets
     (authors, venues, keywords, institutions, tags).
     """
@@ -1007,14 +1336,14 @@ def get_database_stats() -> dict[str, Any]:
     try:
         total_row = conn.execute("SELECT COUNT(*) AS c FROM paper").fetchone()
         total = int(total_row["c"]) if total_row else 0
-        
+
         def top(table: str, limit: int = 20) -> list[dict[str, Any]]:
             rows = conn.execute(
                 f"SELECT value, paper_count FROM {table} ORDER BY paper_count DESC, value ASC LIMIT ?",
                 (limit,),
             ).fetchall()
             return [{"value": str(r["value"]), "paper_count": int(r["paper_count"])} for r in rows]
-        
+
         years = conn.execute(
             """
             SELECT year AS value, paper_count
@@ -1032,11 +1361,15 @@ def get_database_stats() -> dict[str, Any]:
                      CAST(month AS INT) ASC, month ASC
             """,
         ).fetchall()
-        
+
         return {
             "total": total,
-            "years": [{"value": str(r["value"]), "paper_count": int(r["paper_count"])} for r in years],
-            "months": [{"value": str(r["value"]), "paper_count": int(r["paper_count"])} for r in months],
+            "years": [
+                {"value": str(r["value"]), "paper_count": int(r["paper_count"])} for r in years
+            ],
+            "months": [
+                {"value": str(r["value"]), "paper_count": int(r["paper_count"])} for r in months
+            ],
             "authors": top("author"),
             "venues": top("venue"),
             "institutions": top("institution"),
@@ -1050,7 +1383,7 @@ def get_database_stats() -> dict[str, Any]:
 @mcp.tool()
 def list_top_facets(category: str, limit: int = 20) -> list[dict[str, Any]]:
     """List top facet values.
-    
+
     Category: author | venue | keyword | institution | tag
     """
     table_map = {
@@ -1065,9 +1398,9 @@ def list_top_facets(category: str, limit: int = 20) -> list[dict[str, Any]]:
         raise McpToolError(
             "invalid_category",
             f"Invalid category: {category}. Must be one of: {', '.join(table_map.keys())}",
-            category=category
+            category=category,
         )
-    
+
     cfg = _get_config()
     limit = _parse_limit(limit, cfg)
     conn = _open_ro_conn(cfg.snapshot_db)
@@ -1091,17 +1424,17 @@ def filter_papers(
     limit: int = 10,
 ) -> list[dict[str, Any]]:
     """Filter papers by structured fields.
-    
+
     Use for precise filtering by author, venue, year, keyword, or tag.
     """
     cfg = _get_config()
     limit = _parse_limit(limit, cfg)
-    
+
     query = "SELECT DISTINCT p.paper_id, p.title, p.year, p.venue FROM paper p"
     joins: list[str] = []
     conditions: list[str] = []
     params: list[Any] = []
-    
+
     if author:
         joins.append("JOIN paper_author pa ON pa.paper_id = p.paper_id")
         joins.append("JOIN author a ON a.author_id = pa.author_id")
@@ -1123,14 +1456,14 @@ def filter_papers(
     if year:
         conditions.append("p.year = ?")
         params.append(str(year))
-    
+
     if joins:
         query += " " + " ".join(joins)
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
     query += " ORDER BY p.year DESC, p.title ASC LIMIT ?"
     params.append(limit)
-    
+
     conn = _open_ro_conn(cfg.snapshot_db)
     try:
         rows = conn.execute(query, tuple(params)).fetchall()
@@ -1176,9 +1509,7 @@ async def search_papers_semantic(
             query_raw=query,
             top_n=top_n,
             mmr_lambda=(
-                search_cfg.advanced_mmr_lambda_default
-                if mmr_lambda is None
-                else mmr_lambda
+                search_cfg.advanced_mmr_lambda_default if mmr_lambda is None else mmr_lambda
             ),
             rerank_mode=rerank,
             filter_params=_normalize_advanced_filter_params(filters),
@@ -1208,10 +1539,11 @@ async def search_papers_semantic(
 
 # ==================== MCP Resources ====================
 
+
 @mcp.resource(
     "paper://{paper_id}/metadata",
     description="Get paper metadata including title, authors, year, venue, DOI, and available summary templates",
-    mime_type="application/json"
+    mime_type="application/json",
 )
 def resource_metadata(paper_id: str) -> str:
     """Resource: metadata as JSON string."""
@@ -1219,50 +1551,30 @@ def resource_metadata(paper_id: str) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
-@mcp.resource(
-    "paper://{paper_id}/summary",
-    description="Get paper summary using the preferred template as JSON",
-    mime_type="application/json"
-)
 def resource_summary_default(paper_id: str) -> str:
     """Resource: preferred summary JSON string."""
     payload = get_paper_summary(paper_id)
     return payload  # Already a JSON string
 
 
-@mcp.resource(
-    "paper://{paper_id}/summary/{template}",
-    description="Get paper summary using a specific template as JSON",
-    mime_type="application/json"
-)
 def resource_summary_template(paper_id: str, template: str) -> str:
     """Resource: summary JSON string for a specific template."""
     payload = get_paper_summary(paper_id, template=template)
     return payload  # Already a JSON string
 
 
-@mcp.resource(
-    "paper://{paper_id}/source",
-    description="Get the source markdown content of the paper",
-    mime_type="text/markdown"
-)
 def resource_source(paper_id: str) -> str:
     """Resource: source markdown text."""
     payload = get_paper_source(paper_id)
     return payload
 
 
-@mcp.resource(
-    "paper://{paper_id}/translation/{lang}",
-    description="Get the translated markdown content of the paper in the specified language",
-    mime_type="text/markdown"
-)
 def resource_translation(paper_id: str, lang: str) -> str:
     """Resource: translated markdown text."""
     cfg = _get_config()
     paper_id = _validate_paper_id(paper_id, cfg)
     lang = (lang or "").strip().lower()
-    
+
     try:
         content = _load_translation_markdown(paper_id, lang.lower())
     except RuntimeError as exc:
@@ -1273,7 +1585,7 @@ def resource_translation(paper_id: str, lang: str) -> str:
             lang=lang,
             detail=str(exc),
         ) from exc
-    
+
     if content is None:
         raise McpToolError(
             "translation_not_available",
@@ -1281,7 +1593,7 @@ def resource_translation(paper_id: str, lang: str) -> str:
             paper_id=paper_id,
             lang=lang,
         )
-    
+
     return _truncate(content, _resolve_content_max_chars(cfg, None))
 
 

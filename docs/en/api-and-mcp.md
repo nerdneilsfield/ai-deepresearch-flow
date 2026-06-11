@@ -161,37 +161,66 @@ Notes: Chunk-window auto-expands to full `(doc_id, template_tag)` groups. `--ret
 
 ### Overview
 
-The project exposes MCP tools and resources for AI agent access via FastMCP.
+The project exposes MCP tools for AI agent access via FastMCP. The recommended public surface is tool-based and bounded: discover metadata, discover outlines or summary keys, then read specific line windows or specific summary values.
 
 **Endpoints:**
 
-- Streamable HTTP: `http://<host>:8001/mcp`
-- SSE: `http://<host>:8001/mcp-sse`
+- Static bearer Streamable HTTP: `http://<host>:8001/mcp`
+- Static bearer SSE: `http://<host>:8001/mcp-sse`
+- GitHub OAuth Streamable HTTP: `https://<public-host>/oauth/mcp`
+- OAuth SSE: currently absent/unsupported. Do not configure `/oauth/mcp-sse` unless a future gate explicitly adds it.
+- OAuth discovery/protocol routes: `/.well-known/`, `/.well-known/oauth-protected-resource/oauth/mcp`, `/authorize`, `/token`, `/register`, `/auth/callback`, `/consent`
 - Optional protocol header: `mcp-protocol-version` (`2025-03-26` or `2025-06-18`)
 
 **Static reads priority:** `PAPER_DB_STATIC_EXPORT_DIR` → `PAPER_DB_STATIC_BASE` / `PAPER_DB_STATIC_BASE_URL`
+
+Full-content MCP reads and full-content paper URI resources are old/removed/archived public-surface patterns. Do not recommend `get_paper_summary`, `get_paper_source`, source/translation line-specific legacy tools, or full-content `paper://...` resources for agent workflows; use the bounded tools below instead. The small `paper://{paper_id}/metadata` resource may remain for compatibility, but agents should prefer `get_paper_metadata`.
 
 ### Auth Modes
 
 #### Static Bearer
 
-Use `--mcp-access-token` or `MCP_ACCESS_TOKEN`; `Authorization: Bearer <token>`. Applies to both `/mcp` and `/mcp-sse`.
+Use `--mcp-access-token` or `MCP_ACCESS_TOKEN`; send `Authorization: Bearer <token>`. Applies to both `/mcp` and `/mcp-sse`.
+
+CLI example:
+
+```bash
+MCP_ACCESS_TOKEN=your-token \
+uv run deepresearch-flow paper db api serve \
+  --snapshot-db papers.db \
+  --mcp-access-token "$MCP_ACCESS_TOKEN"
+```
+
+Client URL: `https://<public-host>/mcp` for Streamable HTTP, or `https://<public-host>/mcp-sse` for SSE.
 
 #### GitHub OAuth
 
-Set `MCP_AUTH_MODE=github-oauth`. OAuth only for Streamable HTTP `/mcp`.
+Set `MCP_AUTH_MODE=github-oauth`. OAuth clients use Streamable HTTP at `/oauth/mcp`; static bearer tokens are rejected there. `/mcp` and `/mcp-sse` remain static bearer endpoints.
 
 Required environment variables:
 
-- `MCP_PUBLIC_BASE_URL`
+- `MCP_AUTH_MODE=github-oauth`
+- `MCP_PUBLIC_BASE_URL` (origin only, for example `https://papers.example.com`; do not include `/oauth/mcp`)
 - `GITHUB_OAUTH_CLIENT_ID`
 - `GITHUB_OAUTH_CLIENT_SECRET`
 - `MCP_GITHUB_ALLOWED_USER_IDS` (numeric GitHub user IDs, required)
-- `MCP_ACCESS_TOKEN`
+- `MCP_ACCESS_TOKEN` (still required for static bearer `/mcp` and `/mcp-sse`)
 
-OAuth routes: `/.well-known/`, `/authorize`, `/token`, `/register`, `/auth/callback`, `/consent`
+OAuth client setup summary:
 
-> **Note:** MCP token, advanced-search token, and admin token are separate credentials.
+1. Configure the MCP client URL as `https://<public-host>/oauth/mcp`.
+2. Let the client discover protected-resource metadata at `https://<public-host>/.well-known/oauth-protected-resource/oauth/mcp`.
+3. Complete GitHub OAuth through the server routes: `/authorize`, `/token`, `/register`, `/auth/callback`, `/consent`.
+4. Do not use `/oauth/mcp-sse`; the OAuth SSE gate currently makes it absent/unsupported.
+
+> **Note:** MCP token, advanced-search token, admin token, and GitHub OAuth credentials are separate credentials.
+
+### Recommended Agent Workflow
+
+1. Search with `search_papers`, `search_papers_by_keyword`, or `search_papers_semantic`.
+2. Call `get_paper_metadata` to discover availability fields.
+3. For source or translation markdown, call `get_paper_content_outline`, then `get_paper_content_window`.
+4. For summaries, call `get_paper_summary_keys`, then `get_paper_summary_value` for the exact key.
 
 ### MCP Tools
 
@@ -224,9 +253,16 @@ Run the full advanced semantic search pipeline and return its payload. Requires 
 <details>
 <summary><code>get_paper_metadata(paper_id) → dict</code></summary>
 
-Get paper metadata and available summary templates. Call this first before requesting a summary to discover available templates.
+Get paper metadata and availability flags. Call this before reading source, translations, summaries, or BibTeX.
 
-Returns: `paper_id`, `title`, `year`, `venue`, `doi`, `arxiv_id`, `openreview_id`, `paper_pw_url`, `preferred_summary_template`, `available_summary_templates`, `has_bibtex`.
+Returns: `paper_id`, `title`, `year`, `venue`, `doi`, `arxiv_id`, `openreview_id`, `paper_pw_url`, `preferred_summary_template`, `has_source`, `available_translations`, `available_summary_templates`, `has_bibtex`.
+
+Availability fields:
+
+- `has_source`: source markdown can be read with content window tools.
+- `available_translations`: normalized language tags accepted by content tools when `content_type="translation"`.
+- `available_summary_templates`: summary template tags accepted by summary tools.
+- `has_bibtex`: BibTeX is available through `get_paper_bibtex`.
 </details>
 
 <details>
@@ -238,66 +274,52 @@ Returns: `paper_id`, `doi`, `bibtex_raw`, `bibtex_key`, `entry_type`.
 </details>
 
 <details>
-<summary><code>get_paper_summary(paper_id, template=None, max_chars=None) → str</code></summary>
+<summary><code>get_paper_content_outline(paper_id, content_type, lang=None, max_sections=200) → dict</code></summary>
 
-Get summary JSON as raw string. Uses preferred template if `template` is not specified. Returns the full JSON content (not a URL).
+Get a bounded heading outline for source or translated markdown.
+
+- `content_type`: `"source"` or `"translation"`
+- `lang`: required for translations, omitted for source; use tags from `available_translations`
+- `max_sections`: default `200`, hard-capped by the server
+
+Returns: `paper_id`, `content_type`, `lang`, `total_lines`, `sections` with heading levels and line ranges.
 </details>
 
 <details>
-<summary><code>get_paper_summary_keys(paper_id, template=None, max_depth=2, include_preview=False) → dict</code></summary>
+<summary><code>get_paper_content_window(..., mode="head", line_count=80, ...) → dict</code></summary>
+
+Get a bounded line window for source or translated markdown.
+
+- Common arguments: `paper_id`, `content_type`, optional `lang`
+- Modes: `head`, `tail`, `head_tail`, `around`, `range`
+- Range arguments: `start_line`, `end_line`
+- Around arguments: `center_line`, `before_lines`, `after_lines`
+- Tail/head arguments: `line_count`, or `head_lines` and `tail_lines` for `head_tail`
+
+Returns: `paper_id`, `content_type`, `lang`, line bounds, `total_lines`, `content`, and truncation/window metadata.
+</details>
+
+<details>
+<summary><code>get_paper_summary_keys(paper_id, template=None, max_depth=2, include_preview=False, max_paths=200) → dict</code></summary>
 
 Get recursive summary key paths in document order.
 
-- `max_depth`: Maximum nesting depth (default 2)
-- `include_preview`: Include value previews when `True`
+- `template`: uses the preferred template when omitted
+- `max_depth`: maximum nesting depth (default `2`)
+- `include_preview`: include bounded value previews when `True`
+- `max_paths`: maximum paths returned
 
-Returns: `paper_id`, `template`, `keys` (list of key paths with types and optional previews).
+Returns: `paper_id`, `template`, `paths`, `total_paths`, `returned_paths`, `truncated`.
 </details>
 
 <details>
-<summary><code>get_paper_summary_key(paper_id, key, template=None, max_chars=None) → dict</code></summary>
+<summary><code>get_paper_summary_value(paper_id, key, template=None, max_chars=4000, include_subtree=False) → dict</code></summary>
 
-Get a single addressed summary node.
+Get one addressed summary value. For object or array nodes, the default returns child-key metadata instead of a large subtree; set `include_subtree=True` only when needed.
 
-Returns: `paper_id`, `template`, `key`, `value`, `type`.
-</details>
+Returns: `paper_id`, `template`, `key`, `value_type`, `content_format`, `content`, child-key metadata when applicable, and `truncated`.
 
-<details>
-<summary><code>get_paper_source(paper_id, max_chars=None) → str</code></summary>
-
-Get source markdown text. Content may be large; use `max_chars` to limit size.
-</details>
-
-<details>
-<summary><code>get_paper_source_outline(paper_id) → dict</code></summary>
-
-Get the source markdown outline as section ranges.
-
-Returns: `paper_id`, `sections` (list of `{ heading, level, start_line, end_line }`).
-</details>
-
-<details>
-<summary><code>get_paper_source_lines(paper_id, start_line, end_line) → dict</code></summary>
-
-Get a 1-based inclusive slice of the source markdown.
-
-Returns: `paper_id`, `start_line`, `end_line`, `content`.
-</details>
-
-<details>
-<summary><code>get_paper_translation_outline(paper_id, lang) → dict</code></summary>
-
-Get the translated markdown outline as section ranges.
-
-Returns: `paper_id`, `lang`, `sections` (list of `{ heading, level, start_line, end_line }`).
-</details>
-
-<details>
-<summary><code>get_paper_translation_lines(paper_id, lang, start_line, end_line) → dict</code></summary>
-
-Get a 1-based inclusive slice of the translated markdown.
-
-Returns: `paper_id`, `lang`, `start_line`, `end_line`, `content`.
+Long summary strings are prefix-bounded by `max_chars`. Middle/tail summary reads require the future `get_paper_summary_window` tool.
 </details>
 
 <details>
@@ -324,12 +346,34 @@ Filter papers by structured fields. Use for precise filtering by author, venue, 
 Returns: `paper_id`, `title`, `year`, `venue`.
 </details>
 
-### MCP Resources (URI Access)
+### Examples
 
-| URI | Description | MIME Type |
-|-----|-------------|-----------|
-| `paper://{paper_id}/metadata` | Paper metadata including title, authors, year, venue, DOI, and available summary templates | `application/json` |
-| `paper://{paper_id}/summary` | Paper summary using the preferred template | `application/json` |
-| `paper://{paper_id}/summary/{template}` | Paper summary using a specific template | `application/json` |
-| `paper://{paper_id}/source` | Source markdown content of the paper | `text/markdown` |
-| `paper://{paper_id}/translation/{lang}` | Translated markdown content in the specified language | `text/markdown` |
+Read first 80 lines of source:
+
+```json
+{"tool":"get_paper_content_window","arguments":{"paper_id":"paper-123","content_type":"source","mode":"head","line_count":80}}
+```
+
+Find sections, then read around a section line:
+
+```json
+{"tool":"get_paper_content_outline","arguments":{"paper_id":"paper-123","content_type":"source"}}
+{"tool":"get_paper_content_window","arguments":{"paper_id":"paper-123","content_type":"source","mode":"around","center_line":245,"before_lines":30,"after_lines":50}}
+```
+
+Read the tail of a Chinese translation:
+
+```json
+{"tool":"get_paper_content_window","arguments":{"paper_id":"paper-123","content_type":"translation","lang":"zh","mode":"tail","line_count":80}}
+```
+
+Discover summary keys, then read one value:
+
+```json
+{"tool":"get_paper_summary_keys","arguments":{"paper_id":"paper-123","template":"deep_read","max_depth":3,"include_preview":true}}
+{"tool":"get_paper_summary_value","arguments":{"paper_id":"paper-123","template":"deep_read","key":"experiments.main_result","max_chars":4000}}
+```
+
+### Archived MCP resources
+
+`paper://{paper_id}/summary`, `paper://{paper_id}/summary/{template}`, `paper://{paper_id}/source`, and `paper://{paper_id}/translation/{lang}` are historical full-content resource patterns. They are not the recommended MCP public surface for current agents. Prefer bounded tools: `get_paper_content_outline`, `get_paper_content_window`, `get_paper_summary_keys`, and `get_paper_summary_value`.

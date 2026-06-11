@@ -13,11 +13,24 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Mount, Route
 
-from deepresearch_flow.paper.snapshot.common import ApiLimits, _column_exists, _open_ro_conn, _table_exists
-from deepresearch_flow.paper.snapshot.text import merge_adjacent_markers, remove_cjk_spaces, rewrite_search_query
+from deepresearch_flow.paper.snapshot.common import (
+    ApiLimits,
+    _column_exists,
+    _open_ro_conn,
+    _table_exists,
+)
+from deepresearch_flow.paper.snapshot.text import (
+    merge_adjacent_markers,
+    remove_cjk_spaces,
+    rewrite_search_query,
+)
 
 _WHITESPACE_RE = re.compile(r"\s+")
-_MCP_CANONICAL_PATHS = {"/mcp": "/mcp/", "/mcp-sse": "/mcp-sse/"}
+_MCP_CANONICAL_PATHS = {
+    "/mcp": "/mcp/",
+    "/mcp-sse": "/mcp-sse/",
+    "/mcp-sse/messages": "/mcp-sse/messages/",
+}
 
 
 class _McpTrailingSlashMiddleware:
@@ -42,6 +55,60 @@ class _McpTrailingSlashMiddleware:
         rewritten["path"] = canonical
         rewritten["raw_path"] = canonical.encode("latin-1")
         await self.app(rewritten, receive, send)
+
+
+class _ExactAsgiBridge:
+    """Forward a single public route to an ASGI app without mounting a catch-all."""
+
+    def __init__(self, app, *, forward_path: str | None = None) -> None:
+        self.app = app
+        self.forward_path = forward_path
+
+    async def __call__(self, scope, receive, send) -> None:
+        if self.forward_path is None or scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+        rewritten = dict(scope)
+        rewritten["path"] = self.forward_path
+        rewritten["raw_path"] = self.forward_path.encode("latin-1")
+        await self.app(rewritten, receive, send)
+
+
+def _oauth_protocol_routes(oauth_app, *, public_base_url: str) -> list[Route]:
+    """Expose only proven FastMCP/GitHub OAuth protocol routes at root."""
+
+    resource_metadata_url = (
+        f"{public_base_url.rstrip('/')}/.well-known/oauth-protected-resource/oauth/mcp"
+    )
+
+    async def oauth_mcp_probe_challenge(request: Request) -> Response:
+        return Response(
+            status_code=401,
+            headers={"WWW-Authenticate": f'Bearer resource_metadata="{resource_metadata_url}"'},
+        )
+
+    def bridge(
+        path: str, *, forward_path: str | None = None, methods: list[str] | None = None
+    ) -> Route:
+        return Route(
+            path,
+            _ExactAsgiBridge(oauth_app, forward_path=forward_path),
+            methods=methods,
+        )
+
+    return [
+        Route("/oauth/mcp", oauth_mcp_probe_challenge, methods=["GET", "HEAD", "OPTIONS"]),
+        Route("/oauth/mcp/", oauth_mcp_probe_challenge, methods=["GET", "HEAD", "OPTIONS"]),
+        bridge("/oauth/mcp", methods=["POST", "DELETE"]),
+        bridge("/oauth/mcp/", forward_path="/oauth/mcp", methods=["POST", "DELETE"]),
+        bridge("/.well-known/oauth-protected-resource/oauth/mcp", methods=["GET", "OPTIONS"]),
+        bridge("/.well-known/oauth-authorization-server", methods=["GET", "OPTIONS"]),
+        bridge("/register", methods=["POST", "OPTIONS"]),
+        bridge("/authorize", methods=["GET", "POST"]),
+        bridge("/token", methods=["POST", "OPTIONS"]),
+        bridge("/auth/callback", methods=["GET"]),
+        bridge("/consent", methods=["GET", "POST"]),
+    ]
 
 
 def _normalize_facet_value(value: str) -> str:
@@ -129,8 +196,6 @@ def _json_error(status_code: int, *, error: str, detail: str) -> JSONResponse:
     return JSONResponse({"error": error, "detail": detail}, status_code=status_code)
 
 
-
-
 def _snapshot_build_id(conn: sqlite3.Connection) -> str:
     row = conn.execute(
         "SELECT value FROM snapshot_meta WHERE key = 'snapshot_build_id' LIMIT 1"
@@ -213,9 +278,13 @@ def _parse_pagination(request: Request, limits: ApiLimits) -> tuple[int, int] | 
         page = int(page_raw)
         page_size = int(page_size_raw)
     except ValueError:
-        return _json_error(400, error="invalid_pagination", detail="page and page_size must be integers")
+        return _json_error(
+            400, error="invalid_pagination", detail="page and page_size must be integers"
+        )
     if page <= 0 or page_size <= 0:
-        return _json_error(400, error="invalid_pagination", detail="page and page_size must be positive")
+        return _json_error(
+            400, error="invalid_pagination", detail="page and page_size must be positive"
+        )
     if page_size > limits.max_page_size:
         return _json_error(
             400,
@@ -265,7 +334,15 @@ async def _api_search(request: Request) -> Response:
         if q:
             match_expr = rewrite_search_query(q)
             if not match_expr:
-                return JSONResponse({"page": page, "page_size": page_size, "total": 0, "has_more": False, "items": []})
+                return JSONResponse(
+                    {
+                        "page": page,
+                        "page_size": page_size,
+                        "total": 0,
+                        "has_more": False,
+                        "items": [],
+                    }
+                )
 
             total_row = conn.execute(
                 "SELECT COUNT(*) AS c FROM paper_fts WHERE paper_fts MATCH ?",
@@ -273,7 +350,11 @@ async def _api_search(request: Request) -> Response:
             ).fetchone()
             total = int(total_row["c"]) if total_row else 0
 
-            order_by = "rank" if sort_key == "relevance" else _SEARCH_SORTS.get(sort_key, _SEARCH_SORTS["year_desc"])
+            order_by = (
+                "rank"
+                if sort_key == "relevance"
+                else _SEARCH_SORTS.get(sort_key, _SEARCH_SORTS["year_desc"])
+            )
             rows = conn.execute(
                 f"""
                 SELECT
@@ -307,13 +388,21 @@ async def _api_search(request: Request) -> Response:
                     (paper_id,),
                 ).fetchall()
                 translated = {str(r["lang"]): str(r["md_content_hash"]) for r in translated_rows}
-                authors = _list_facet_values(conn, paper_id=paper_id, join_table="paper_author", facet_table="author", facet_id="author_id")
+                authors = _list_facet_values(
+                    conn,
+                    paper_id=paper_id,
+                    join_table="paper_author",
+                    facet_table="author",
+                    facet_id="author_id",
+                )
                 assets = _asset_urls(
                     static_base_url=cfg.static_base_url,
                     snapshot_build_id=build_id,
                     paper_id=paper_id,
                     pdf_hash=str(row["pdf_content_hash"]) if row["pdf_content_hash"] else None,
-                    source_md_hash=str(row["source_md_content_hash"]) if row["source_md_content_hash"] else None,
+                    source_md_hash=str(row["source_md_content_hash"])
+                    if row["source_md_content_hash"]
+                    else None,
                     translated=translated,
                 )
                 items.append(
@@ -354,13 +443,21 @@ async def _api_search(request: Request) -> Response:
                     (paper_id,),
                 ).fetchall()
                 translated = {str(r["lang"]): str(r["md_content_hash"]) for r in translated_rows}
-                authors = _list_facet_values(conn, paper_id=paper_id, join_table="paper_author", facet_table="author", facet_id="author_id")
+                authors = _list_facet_values(
+                    conn,
+                    paper_id=paper_id,
+                    join_table="paper_author",
+                    facet_table="author",
+                    facet_id="author_id",
+                )
                 assets = _asset_urls(
                     static_base_url=cfg.static_base_url,
                     snapshot_build_id=build_id,
                     paper_id=paper_id,
                     pdf_hash=str(row["pdf_content_hash"]) if row["pdf_content_hash"] else None,
-                    source_md_hash=str(row["source_md_content_hash"]) if row["source_md_content_hash"] else None,
+                    source_md_hash=str(row["source_md_content_hash"])
+                    if row["source_md_content_hash"]
+                    else None,
                     translated=translated,
                 )
                 items.append(
@@ -381,7 +478,15 @@ async def _api_search(request: Request) -> Response:
                 )
 
         has_more = (page * page_size) < total and bool(items)
-        return JSONResponse({"page": page, "page_size": page_size, "total": total, "has_more": has_more, "items": items})
+        return JSONResponse(
+            {
+                "page": page,
+                "page_size": page_size,
+                "total": total,
+                "has_more": has_more,
+                "items": items,
+            }
+        )
     finally:
         conn.close()
 
@@ -418,7 +523,9 @@ async def _api_paper_detail(request: Request) -> Response:
             snapshot_build_id=build_id,
             paper_id=paper_id,
             pdf_hash=str(row["pdf_content_hash"]) if row["pdf_content_hash"] else None,
-            source_md_hash=str(row["source_md_content_hash"]) if row["source_md_content_hash"] else None,
+            source_md_hash=str(row["source_md_content_hash"])
+            if row["source_md_content_hash"]
+            else None,
             translated=translated,
         )
 
@@ -435,10 +542,30 @@ async def _api_paper_detail(request: Request) -> Response:
             template_tags=template_tags,
         )
 
-        authors = _list_facet_values(conn, paper_id=paper_id, join_table="paper_author", facet_table="author", facet_id="author_id")
-        keywords = _list_facet_values(conn, paper_id=paper_id, join_table="paper_keyword", facet_table="keyword", facet_id="keyword_id")
-        institutions = _list_facet_values(conn, paper_id=paper_id, join_table="paper_institution", facet_table="institution", facet_id="institution_id")
-        tags = _list_facet_values(conn, paper_id=paper_id, join_table="paper_tag", facet_table="tag", facet_id="tag_id")
+        authors = _list_facet_values(
+            conn,
+            paper_id=paper_id,
+            join_table="paper_author",
+            facet_table="author",
+            facet_id="author_id",
+        )
+        keywords = _list_facet_values(
+            conn,
+            paper_id=paper_id,
+            join_table="paper_keyword",
+            facet_table="keyword",
+            facet_id="keyword_id",
+        )
+        institutions = _list_facet_values(
+            conn,
+            paper_id=paper_id,
+            join_table="paper_institution",
+            facet_table="institution",
+            facet_id="institution_id",
+        )
+        tags = _list_facet_values(
+            conn, paper_id=paper_id, join_table="paper_tag", facet_table="tag", facet_id="tag_id"
+        )
 
         return JSONResponse(
             {
@@ -521,42 +648,49 @@ async def _api_match_bibtex(request: Request) -> Response:
     if not isinstance(bibtex_raw, str):
         return _json_error(400, error="invalid_field", detail="bibtex_raw must be a string")
 
-    from deepresearch_flow.paper.snapshot.bibtex_match import match_bibtex_entries, _parse_bibtex_entries
+    from deepresearch_flow.paper.snapshot.bibtex_match import (
+        match_bibtex_entries,
+        _parse_bibtex_entries,
+    )
 
     # Enforce batch size limit (spec: up to 50 entries per request)
     entries = _parse_bibtex_entries(bibtex_raw)
     if len(entries) > 50:
-        return _json_error(400, error="too_many_entries", detail=f"batch limit is 50 entries, got {len(entries)}")
+        return _json_error(
+            400, error="too_many_entries", detail=f"batch limit is 50 entries, got {len(entries)}"
+        )
 
     result = match_bibtex_entries(bibtex_raw, cfg.snapshot_db)
 
-    return JSONResponse({
-        "matched": [
-            {
-                "bibtex_key": m.bibtex_key,
-                "paper_id": m.paper_id,
-                "match_method": m.match_method,
-                "title": m.title,
-                "year": m.year,
-                "venue": m.venue,
-                "authors": m.authors,
-            }
-            for m in result.matched
-        ],
-        "unmatched": [
-            {
-                "bibtex_key": u.bibtex_key,
-                "title": u.title,
-                "search_query": u.search_query,
-            }
-            for u in result.unmatched
-        ],
-        "stats": {
-            "total": len(result.matched) + len(result.unmatched),
-            "matched": len(result.matched),
-            "unmatched": len(result.unmatched),
-        },
-    })
+    return JSONResponse(
+        {
+            "matched": [
+                {
+                    "bibtex_key": m.bibtex_key,
+                    "paper_id": m.paper_id,
+                    "match_method": m.match_method,
+                    "title": m.title,
+                    "year": m.year,
+                    "venue": m.venue,
+                    "authors": m.authors,
+                }
+                for m in result.matched
+            ],
+            "unmatched": [
+                {
+                    "bibtex_key": u.bibtex_key,
+                    "title": u.title,
+                    "search_query": u.search_query,
+                }
+                for u in result.unmatched
+            ],
+            "stats": {
+                "total": len(result.matched) + len(result.unmatched),
+                "matched": len(result.matched),
+                "unmatched": len(result.unmatched),
+            },
+        }
+    )
 
 
 async def _api_facet_list(request: Request) -> Response:
@@ -585,7 +719,10 @@ async def _api_facet_list(request: Request) -> Response:
                 """,
                 (page_size, offset),
             ).fetchall()
-            items = [{"id": str(r["id"]), "value": str(r["value"]), "paper_count": int(r["paper_count"])} for r in rows]
+            items = [
+                {"id": str(r["id"]), "value": str(r["value"]), "paper_count": int(r["paper_count"])}
+                for r in rows
+            ]
         elif facet == "months":
             total_row = conn.execute("SELECT COUNT(*) AS c FROM month_count").fetchone()
             total = int(total_row["c"]) if total_row else 0
@@ -601,7 +738,10 @@ async def _api_facet_list(request: Request) -> Response:
                 """,
                 (page_size, offset),
             ).fetchall()
-            items = [{"id": str(r["id"]), "value": str(r["value"]), "paper_count": int(r["paper_count"])} for r in rows]
+            items = [
+                {"id": str(r["id"]), "value": str(r["value"]), "paper_count": int(r["paper_count"])}
+                for r in rows
+            ]
         else:
             mapping = {
                 "authors": ("author", "author_id"),
@@ -624,7 +764,12 @@ async def _api_facet_list(request: Request) -> Response:
                     (page_size, offset),
                 ).fetchall()
                 items = [
-                    {"id": int(r["id"]), "value": str(r["value"]), "paper_count": int(r["paper_count"])} for r in rows
+                    {
+                        "id": int(r["id"]),
+                        "value": str(r["value"]),
+                        "paper_count": int(r["paper_count"]),
+                    }
+                    for r in rows
                 ]
             else:
                 facet_type = _FACET_TYPE_BY_NAME.get(facet)
@@ -646,12 +791,24 @@ async def _api_facet_list(request: Request) -> Response:
                     (facet_type, page_size, offset),
                 ).fetchall()
                 items = [
-                    {"id": str(r["value"]), "value": str(r["value"]), "paper_count": int(r["paper_count"])}
+                    {
+                        "id": str(r["value"]),
+                        "value": str(r["value"]),
+                        "paper_count": int(r["paper_count"]),
+                    }
                     for r in rows
                 ]
 
         has_more = (page * page_size) < total and bool(items)
-        return JSONResponse({"page": page, "page_size": page_size, "total": total, "has_more": has_more, "items": items})
+        return JSONResponse(
+            {
+                "page": page,
+                "page_size": page_size,
+                "total": total,
+                "has_more": has_more,
+                "items": items,
+            }
+        )
     finally:
         conn.close()
 
@@ -676,7 +833,9 @@ async def _api_facet_papers(request: Request) -> Response:
             "venues": ("paper_venue", "venue_id"),
         }
         if facet == "years":
-            total_row = conn.execute("SELECT paper_count AS c FROM year_count WHERE year = ?", (facet_id,)).fetchone()
+            total_row = conn.execute(
+                "SELECT paper_count AS c FROM year_count WHERE year = ?", (facet_id,)
+            ).fetchone()
             total = int(total_row["c"]) if total_row else 0
             rows = conn.execute(
                 """
@@ -740,13 +899,21 @@ async def _api_facet_papers(request: Request) -> Response:
                 (paper_id,),
             ).fetchall()
             translated = {str(r["lang"]): str(r["md_content_hash"]) for r in translated_rows}
-            authors = _list_facet_values(conn, paper_id=paper_id, join_table="paper_author", facet_table="author", facet_id="author_id")
+            authors = _list_facet_values(
+                conn,
+                paper_id=paper_id,
+                join_table="paper_author",
+                facet_table="author",
+                facet_id="author_id",
+            )
             assets = _asset_urls(
                 static_base_url=cfg.static_base_url,
                 snapshot_build_id=build_id,
                 paper_id=paper_id,
                 pdf_hash=str(row["pdf_content_hash"]) if row["pdf_content_hash"] else None,
-                source_md_hash=str(row["source_md_content_hash"]) if row["source_md_content_hash"] else None,
+                source_md_hash=str(row["source_md_content_hash"])
+                if row["source_md_content_hash"]
+                else None,
                 translated=translated,
             )
             items.append(
@@ -765,7 +932,15 @@ async def _api_facet_papers(request: Request) -> Response:
             )
 
         has_more = (page * page_size) < total and bool(items)
-        return JSONResponse({"page": page, "page_size": page_size, "total": total, "has_more": has_more, "items": items})
+        return JSONResponse(
+            {
+                "page": page,
+                "page_size": page_size,
+                "total": total,
+                "has_more": has_more,
+                "items": items,
+            }
+        )
     finally:
         conn.close()
 
@@ -781,11 +956,18 @@ def _facet_node_id(conn: sqlite3.Connection, facet_type: str, value: str) -> int
     return int(row["node_id"]) if row else None
 
 
-def _facet_stats_for_node(conn: sqlite3.Connection, *, facet_type: str, value: str) -> dict[str, Any]:
+def _facet_stats_for_node(
+    conn: sqlite3.Connection, *, facet_type: str, value: str
+) -> dict[str, Any]:
     node_id = _facet_node_id(conn, facet_type, value)
     related: dict[str, list[dict[str, Any]]] = {key: [] for key in _FACET_TYPE_TO_KEY.values()}
     if node_id is None:
-        return {"facet_type": facet_type, "value": _normalize_facet_value(value), "total": 0, "related": related}
+        return {
+            "facet_type": facet_type,
+            "value": _normalize_facet_value(value),
+            "total": 0,
+            "related": related,
+        }
 
     total_row = conn.execute(
         "SELECT paper_count FROM facet_node WHERE node_id = ?",
@@ -838,7 +1020,9 @@ async def _api_facet_by_value_papers(request: Request) -> Response:
     try:
         node_id = _facet_node_id(conn, facet_type, raw_value)
         if node_id is None:
-            return JSONResponse({"page": page, "page_size": page_size, "total": 0, "has_more": False, "items": []})
+            return JSONResponse(
+                {"page": page, "page_size": page_size, "total": 0, "has_more": False, "items": []}
+            )
 
         total_row = conn.execute(
             "SELECT paper_count FROM facet_node WHERE node_id = ?",
@@ -870,13 +1054,21 @@ async def _api_facet_by_value_papers(request: Request) -> Response:
                 (paper_id,),
             ).fetchall()
             translated = {str(r["lang"]): str(r["md_content_hash"]) for r in translated_rows}
-            authors = _list_facet_values(conn, paper_id=paper_id, join_table="paper_author", facet_table="author", facet_id="author_id")
+            authors = _list_facet_values(
+                conn,
+                paper_id=paper_id,
+                join_table="paper_author",
+                facet_table="author",
+                facet_id="author_id",
+            )
             assets = _asset_urls(
                 static_base_url=cfg.static_base_url,
                 snapshot_build_id=build_id,
                 paper_id=paper_id,
                 pdf_hash=str(row["pdf_content_hash"]) if row["pdf_content_hash"] else None,
-                source_md_hash=str(row["source_md_content_hash"]) if row["source_md_content_hash"] else None,
+                source_md_hash=str(row["source_md_content_hash"])
+                if row["source_md_content_hash"]
+                else None,
                 translated=translated,
             )
             items.append(
@@ -895,7 +1087,15 @@ async def _api_facet_by_value_papers(request: Request) -> Response:
             )
 
         has_more = (page * page_size) < total and bool(items)
-        return JSONResponse({"page": page, "page_size": page_size, "total": total, "has_more": has_more, "items": items})
+        return JSONResponse(
+            {
+                "page": page,
+                "page_size": page_size,
+                "total": total,
+                "has_more": has_more,
+                "items": items,
+            }
+        )
     finally:
         conn.close()
 
@@ -997,8 +1197,12 @@ async def _api_stats(request: Request) -> Response:
         return JSONResponse(
             {
                 "total": total,
-                "years": [{"value": str(r["value"]), "paper_count": int(r["paper_count"])} for r in years],
-                "months": [{"value": str(r["value"]), "paper_count": int(r["paper_count"])} for r in months],
+                "years": [
+                    {"value": str(r["value"]), "paper_count": int(r["paper_count"])} for r in years
+                ],
+                "months": [
+                    {"value": str(r["value"]), "paper_count": int(r["paper_count"])} for r in months
+                ],
                 "authors": top("author"),
                 "venues": top("venue"),
                 "institutions": top("institution"),
@@ -1040,7 +1244,10 @@ def create_app(
     )
 
     # Lazy import to avoid circular dependency
-    from deepresearch_flow.paper.snapshot.auth import McpGitHubOAuthConfig, validate_mcp_static_access_token
+    from deepresearch_flow.paper.snapshot.auth import (
+        McpGitHubOAuthConfig,
+        validate_mcp_static_access_token,
+    )
     from deepresearch_flow.paper.snapshot.mcp_server import (
         McpSnapshotConfig,
         create_mcp_apps,
@@ -1081,14 +1288,23 @@ def create_app(
         Route("/api/v1/papers/{paper_id:str}", _api_paper_detail, methods=["GET"]),
         Route("/api/v1/papers/{paper_id:str}/bibtex", _api_paper_bibtex, methods=["GET"]),
         Route("/api/v1/facets/{facet:str}", _api_facet_list, methods=["GET"]),
-        Route("/api/v1/facets/{facet:str}/{facet_id:str}/papers", _api_facet_papers, methods=["GET"]),
+        Route(
+            "/api/v1/facets/{facet:str}/{facet_id:str}/papers", _api_facet_papers, methods=["GET"]
+        ),
         Route("/api/v1/facets/{facet:str}/{facet_id:str}/stats", _api_facet_stats, methods=["GET"]),
-        Route("/api/v1/facets/{facet:str}/by-value/{value:str}/papers", _api_facet_by_value_papers, methods=["GET"]),
-        Route("/api/v1/facets/{facet:str}/by-value/{value:str}/stats", _api_facet_by_value_stats, methods=["GET"]),
+        Route(
+            "/api/v1/facets/{facet:str}/by-value/{value:str}/papers",
+            _api_facet_by_value_papers,
+            methods=["GET"],
+        ),
+        Route(
+            "/api/v1/facets/{facet:str}/by-value/{value:str}/stats",
+            _api_facet_by_value_stats,
+            methods=["GET"],
+        ),
     ]
-    if mcp_auth_mode != "github-oauth":
-        routes.append(Mount("/mcp", app=mcp_apps["streamable-http"]))
-    routes.append(Mount("/mcp-sse", app=mcp_apps["sse"]))
+    routes.append(Mount("/mcp", app=mcp_apps["bearer-streamable-http"]))
+    routes.append(Mount("/mcp-sse", app=mcp_apps["bearer-sse"]))
 
     if admin_token:
         from deepresearch_flow.paper.snapshot.admin import create_admin_app
@@ -1107,7 +1323,12 @@ def create_app(
         routes.extend(create_advanced_routes(advanced_config))
 
     if mcp_auth_mode == "github-oauth":
-        routes.append(Mount("", app=mcp_apps["streamable-http"]))
+        routes.extend(
+            _oauth_protocol_routes(
+                mcp_apps["oauth-streamable-http"],
+                public_base_url=mcp_github_oauth.public_base_url if mcp_github_oauth else "",
+            )
+        )
 
     # Pass MCP lifespan to ensure session manager initializes properly
     # https://gofastmcp.com/deployment/http#mounting-in-starlette
@@ -1115,10 +1336,7 @@ def create_app(
         routes=routes,
         lifespan=mcp_lifespan,
     )
-    if mcp_auth_mode == "github-oauth":
-        app.add_middleware(_McpTrailingSlashMiddleware, canonical_paths={"/mcp/": "/mcp", "/mcp-sse": "/mcp-sse/"})
-    else:
-        app.add_middleware(_McpTrailingSlashMiddleware)
+    app.add_middleware(_McpTrailingSlashMiddleware)
     if cfg.cors_allowed_origins:
         app.add_middleware(
             CORSMiddleware,

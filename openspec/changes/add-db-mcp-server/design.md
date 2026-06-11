@@ -1,3 +1,5 @@
+> **Archived historical change:** This OpenSpec change documents the original MCP implementation. Current MCP public docs supersede its full-content tools/resources: use `get_paper_content_outline`, `get_paper_content_window`, `get_paper_summary_keys`, and `get_paper_summary_value`; OAuth Streamable HTTP is `/oauth/mcp`; OAuth SSE `/oauth/mcp-sse` is currently absent/unsupported.
+
 ## Context
 - The snapshot API serves read-only data from `paper_snapshot.db` via HTTP endpoints and powers the static frontend.
 - LLM clients require a standardized MCP interface to search and read paper data.

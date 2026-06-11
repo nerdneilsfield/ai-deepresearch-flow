@@ -92,14 +92,16 @@ server {
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
   }
 
+  # Static-bearer MCP Streamable HTTP
   location ^~ /mcp {
     proxy_pass http://127.0.0.1:8001;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
   }
 
-  # SSE transport for MCP clients that require Server-Sent Events
+  # Static-bearer SSE transport for MCP clients that require Server-Sent Events
   location ^~ /mcp-sse {
     proxy_pass http://127.0.0.1:8001;
     proxy_http_version 1.1;
@@ -107,12 +109,39 @@ server {
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
     proxy_buffering off;
     proxy_cache off;
     proxy_read_timeout 3600s;
     proxy_send_timeout 3600s;
     chunked_transfer_encoding off;
     add_header X-Accel-Buffering no;
+  }
+
+  # OAuth MCP Streamable HTTP and OAuth protocol/discovery routes.
+  # /oauth/mcp-sse is currently absent/unsupported; do not proxy it unless a future gate adds it.
+  location = /oauth/mcp {
+    proxy_pass http://127.0.0.1:8001;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+
+  location ^~ /.well-known/ {
+    proxy_pass http://127.0.0.1:8001;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+
+  location ~ ^/(authorize|token|register|auth/callback|consent)$ {
+    proxy_pass http://127.0.0.1:8001;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
   }
 }
 
@@ -298,7 +327,7 @@ docker compose -f scripts/docker/docker-compose.example.yml --profile local-stat
 
 **Runtime notes:**
 
-- Nginx listens on `8899`, proxies `/api`, `/mcp`, `/mcp-sse`, and OAuth routes to internal API at `127.0.0.1:8000`.
+- Nginx listens on `8899`, proxies `/api`, static-bearer MCP (`/mcp`, `/mcp-sse`), OAuth MCP (`/oauth/mcp`), and OAuth discovery/protocol routes (`/.well-known/`, `/authorize`, `/token`, `/register`, `/auth/callback`, `/consent`) to internal API at `127.0.0.1:8000`. OAuth SSE `/oauth/mcp-sse` is currently absent/unsupported.
 - Mount snapshot DB to `/db/papers.db`, static assets to `/static`.
 - `start-api.sh` auto-detects advanced mode by checking whether `PAPER_DB_EMBED_DB`, `PAPER_DB_CONFIG`, and `SEARCH_ACCESS_TOKEN` are set.
 - Set `MCP_ACCESS_TOKEN` before deploying. `MCP_PUBLIC_UNSAFE=1` is intended for isolated local testing only.

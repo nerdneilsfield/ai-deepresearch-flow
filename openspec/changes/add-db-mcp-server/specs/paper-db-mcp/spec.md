@@ -1,4 +1,8 @@
+> **Archived historical change:** This OpenSpec change documents the original MCP implementation. Current MCP public docs supersede its full-content tools/resources: use `get_paper_content_outline`, `get_paper_content_window`, `get_paper_summary_keys`, and `get_paper_summary_value`; OAuth Streamable HTTP is `/oauth/mcp`; OAuth SSE `/oauth/mcp-sse` is currently absent/unsupported.
+
 ## ADDED Requirements
+
+> Historical/not current: requirements below describe the original MCP surface. Current public MCP docs supersede full-content tools/resources.
 
 ### Requirement: Streamable HTTP MCP endpoint
 The system SHALL expose an MCP server over Streamable HTTP under the `/mcp` path.
@@ -49,7 +53,7 @@ The search tools SHALL honor a `limit` parameter and default to a safe value.
 - **THEN** the server returns papers tagged with matching keyword values
 
 ### Requirement: Paper detail tools with static asset proxy
-The MCP server SHALL provide tools `get_paper_metadata`, `get_paper_summary`, and `get_paper_source`.
+Historical/not current: the original MCP server SHALL provide tools `get_paper_metadata`, removed `get_paper_summary`, and removed `get_paper_source`.
 The metadata tool SHALL return structured fields for the requested `paper_id` and include `preferred_summary_template` plus `available_summary_templates`.
 The summary tool SHALL accept an optional `template` parameter; when omitted, it SHALL use `preferred_summary_template`.
 The summary tool SHALL fetch summary content from static assets (using internal URL or local filesystem read) and SHALL return the **full JSON string** content to the client (no URL leakage).
@@ -82,9 +86,9 @@ The MCP server SHALL provide a `list_top_facets` tool that returns top values fo
 ### Requirement: Paper resources with template-aware summaries
 The MCP server SHALL expose resources using the scheme `paper://{paper_id}/{resource}` for:
 - `metadata`
-- `summary` and `summary/{template}`
-- `source`
-- `translation/{lang}`
+- historical removed `summary` and `summary/{template}`
+- historical removed `source`
+- historical removed `translation/{lang}`
 The resource handlers SHALL resolve static asset locations internally and SHALL return content directly (no URLs).
 The `paper://{paper_id}/summary` resource SHALL return the preferred summary template JSON by default.
 

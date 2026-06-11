@@ -63,7 +63,7 @@ DeepResearch Flow provides a unified pipeline to **Repair**, **Translate**, **Ex
 - **Snapshot + API Serve** — Production-ready SQLite snapshot with static assets and read-only JSON API.
 - **OCR Post-Processing** — Fix broken references, merge split paragraphs, repair LaTeX and Mermaid diagrams.
 - **Semantic Search** — LanceDB-backed vector search with hybrid recall and cloud reranking.
-- **MCP Integration** — FastMCP server for AI agent access with Streamable HTTP + SSE, GitHub OAuth auth.
+- **MCP Integration** — FastMCP server for AI agent access with bounded read tools, static-bearer Streamable HTTP/SSE, and GitHub OAuth at `/oauth/mcp`.
 
 ---
 
@@ -258,7 +258,7 @@ uv run deepresearch-flow paper db serve \
 
 #### Step 5: MCP Integration (Optional)
 
-The project exposes MCP tools and resources for AI agent access via FastMCP. See the [MCP documentation](docs/en/api-and-mcp.md#mcp) for setup and tool reference.
+The project exposes bounded MCP tools for AI agent access via FastMCP. See the [MCP documentation](docs/en/api-and-mcp.md#mcp) for endpoint, auth, and tool reference.
 
 ---
 
@@ -266,7 +266,7 @@ The project exposes MCP tools and resources for AI agent access via FastMCP. See
 
 - **[Advanced Workflows](docs/en/workflow.md)** — Incremental builds, merging JSON/BibTeX, supplementing templates
 - **[Deployment](docs/en/deployment.md)** — CDN serving, Nginx/Caddy config, Docker, Compose
-- **[API & MCP](docs/en/api-and-mcp.md)** — Admin API, push/push-semantic, MCP tools & resources
+- **[API & MCP](docs/en/api-and-mcp.md)** — Admin API, push/push-semantic, MCP endpoints, auth, and tools
 - **[Reference](docs/en/reference.md)** — Translator, Extract, DB & Recognize in detail
 - **[Snapshot Management](docs/en/snapshot-management.md)** — Snapshot migration, supplement, update
 

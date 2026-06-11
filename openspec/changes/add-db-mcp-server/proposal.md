@@ -1,3 +1,5 @@
+> **Archived historical change:** This OpenSpec change documents the original MCP implementation. Current MCP public docs supersede its full-content tools/resources: use `get_paper_content_outline`, `get_paper_content_window`, `get_paper_summary_keys`, and `get_paper_summary_value`; OAuth Streamable HTTP is `/oauth/mcp`; OAuth SSE `/oauth/mcp-sse` is currently absent/unsupported.
+
 # Change: Add MCP server for snapshot paper DB (Streamable HTTP)
 
 ## Why

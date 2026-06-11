@@ -164,8 +164,7 @@ class TestMcpSnapshotPublicBehavior(unittest.TestCase):
         cfg = self._base_config()
         clients = []
         threads = [
-            threading.Thread(target=lambda: clients.append(cfg.get_http_client()))
-            for _ in range(8)
+            threading.Thread(target=lambda: clients.append(cfg.get_http_client())) for _ in range(8)
         ]
 
         for thread in threads:
@@ -194,7 +193,9 @@ class TestMcpSnapshotPublicBehavior(unittest.TestCase):
 
         alt_static_dir = Path(self.tmpdir.name) / "alt-static"
         (alt_static_dir / "summary").mkdir(parents=True, exist_ok=True)
-        (alt_static_dir / "summary" / "p1.json").write_text('{"summary": "other"}', encoding="utf-8")
+        (alt_static_dir / "summary" / "p1.json").write_text(
+            '{"summary": "other"}', encoding="utf-8"
+        )
         alt_cfg = McpSnapshotConfig(
             snapshot_db=self.db_path,
             static_base_url="",
@@ -216,7 +217,7 @@ class TestMcpSnapshotPublicBehavior(unittest.TestCase):
         client1 = cfg.get_http_client()
         apps, lifespan = create_mcp_apps(cfg)
 
-        self.assertEqual(sorted(apps.keys()), ["sse", "streamable-http"])
+        self.assertEqual(sorted(apps.keys()), ["bearer-sse", "bearer-streamable-http"])
         self.assertTrue(callable(lifespan))
 
         async def run_lifespan() -> None:
@@ -287,7 +288,9 @@ class TestMcpSnapshotPublicBehavior(unittest.TestCase):
 
         self.assertEqual(resource_summary_default("p1"), '{"summary": "ready"}')
 
-    def test_resource_summary_default_raises_public_error_when_static_asset_is_unavailable(self) -> None:
+    def test_resource_summary_default_raises_public_error_when_static_asset_is_unavailable(
+        self,
+    ) -> None:
         configure(
             McpSnapshotConfig(
                 snapshot_db=self.db_path,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
 import tempfile
 from pathlib import Path
@@ -15,15 +16,11 @@ from deepresearch_flow.paper.snapshot.mcp_server import (
     configure,
     get_paper_bibtex,
     get_paper_metadata,
-    get_paper_source_lines,
-    get_paper_source_outline,
-    get_paper_summary_key,
+    get_paper_content_outline,
+    get_paper_content_window,
     get_paper_summary_keys,
-    get_paper_source,
-    get_paper_summary,
-    get_paper_translation_lines,
-    get_paper_translation_outline,
-    resource_translation,
+    get_paper_summary_value,
+    mcp,
     search_papers_semantic,
     search_papers,
     search_papers_by_keyword,
@@ -111,12 +108,7 @@ class TestMcpServerSchemaCompat(unittest.TestCase):
             encoding="utf-8",
         )
         (cls.static_dir / "summary" / f"{cls.long_summary_paper_id}.json").write_text(
-            (
-                '{"template_tag":"deep_read",'
-                '"headline":"'
-                + ("x" * 9001)
-                + '"}'
-            ),
+            ('{"template_tag":"deep_read","headline":"' + ("x" * 9001) + '"}'),
             encoding="utf-8",
         )
 
@@ -332,9 +324,132 @@ class TestMcpServerSchemaCompat(unittest.TestCase):
         self.assertEqual(payload["available_summary_templates"], ["deep_read", "simple"])
         self.assertEqual(payload["doi"], "10.1145/example.doi")
         self.assertTrue(payload["has_bibtex"])
+        self.assertTrue(payload["has_source"])
+        self.assertEqual(payload["available_translations"], ["zh"])
         self.assertIsNone(payload["arxiv_id"])
         self.assertIsNone(payload["openreview_id"])
         self.assertIsNone(payload["paper_pw_url"])
+
+    def test_public_mcp_surface_lists_new_tools_and_omits_removed_tools(self) -> None:
+        tools = asyncio.run(mcp.list_tools())
+        tool_names = {tool.name for tool in tools}
+
+        self.assertIn("get_paper_content_outline", tool_names)
+        self.assertIn("get_paper_content_window", tool_names)
+        self.assertIn("get_paper_summary_keys", tool_names)
+        self.assertIn("get_paper_summary_value", tool_names)
+        self.assertNotIn("get_paper_summary", tool_names)
+        self.assertNotIn("get_paper_summary_key", tool_names)
+        self.assertNotIn("get_paper_source", tool_names)
+        self.assertNotIn("get_paper_source_outline", tool_names)
+        self.assertNotIn("get_paper_source_lines", tool_names)
+        self.assertNotIn("get_paper_translation_outline", tool_names)
+        self.assertNotIn("get_paper_translation_lines", tool_names)
+
+    def test_public_mcp_resources_do_not_advertise_full_content_templates(self) -> None:
+        resources = asyncio.run(mcp.list_resources())
+        templates = asyncio.run(mcp.list_resource_templates())
+        advertised = {str(item.uri) for item in resources}
+        advertised.update(
+            str(getattr(item, "uri_template", getattr(item, "uriTemplate", "")))
+            for item in templates
+        )
+
+        self.assertIn("paper://{paper_id}/metadata", advertised)
+        self.assertNotIn("paper://{paper_id}/summary", advertised)
+        self.assertNotIn("paper://{paper_id}/summary/{template}", advertised)
+        self.assertNotIn("paper://{paper_id}/source", advertised)
+        self.assertNotIn("paper://{paper_id}/translation/{lang}", advertised)
+
+    def test_public_mcp_unknown_old_tool_and_resource_fail(self) -> None:
+        with self.assertRaises(Exception):
+            asyncio.run(mcp.call_tool("get_paper_source", {"paper_id": self.paper_id}))
+        with self.assertRaises(Exception):
+            asyncio.run(mcp.read_resource(f"paper://{self.paper_id}/source"))
+
+    def test_get_paper_summary_keys_respects_max_paths_above_default(self) -> None:
+        big_paper_id = "44444444444444444444444444444444"
+        summary_dir = self.static_dir / "summary"
+        summary_payload = {"template_tag": "deep_read"}
+        summary_payload.update({f"k{i}": f"v{i}" for i in range(250)})
+        (summary_dir / f"{big_paper_id}.json").write_text(
+            json.dumps(summary_payload),
+            encoding="utf-8",
+        )
+        conn = sqlite3.connect(str(self.db_path))
+        try:
+            conn.execute(
+                """
+                INSERT INTO paper(
+                  paper_id, paper_key, paper_key_type, title, year, month, publication_date,
+                  venue, doi, preferred_summary_template, summary_preview, paper_index, source_hash,
+                  output_language, provider, model, prompt_template, extracted_at,
+                  pdf_content_hash, source_md_content_hash
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    big_paper_id,
+                    "meta:key:big",
+                    "meta",
+                    "Big Summary Key Paper",
+                    "2024",
+                    "06",
+                    "2024-06-01",
+                    "ICLR",
+                    None,
+                    "deep_read",
+                    "preview",
+                    6,
+                    "sourcekey:big",
+                    "en",
+                    "provider-x",
+                    "model-y",
+                    "deep_read",
+                    "2025-01-01T00:00:00Z",
+                    None,
+                    None,
+                ),
+            )
+            conn.execute(
+                "INSERT INTO paper_summary(paper_id, template_tag) VALUES (?, ?)",
+                (big_paper_id, "deep_read"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        payload = get_paper_summary_keys(big_paper_id, max_paths=250)
+
+        self.assertEqual(payload["returned_paths"], 250)
+        self.assertGreaterEqual(payload["total_paths"], 250)
+        self.assertEqual(len(payload["paths"]), 250)
+
+    def test_get_paper_summary_value_object_defaults_to_child_metadata(self) -> None:
+        payload = get_paper_summary_value(self.paper_id, "experiments")
+        self.assertEqual(payload["value_type"], "object")
+        self.assertIsNone(payload["content_format"])
+        self.assertIsNone(payload["content"])
+        self.assertEqual(payload["child_keys"], ["main_result"])
+        self.assertEqual(payload["child_count"], 1)
+        self.assertEqual(payload["returned_child_keys"], 1)
+        self.assertFalse(payload["children_truncated"])
+
+    def test_summary_parameters_are_strictly_typed(self) -> None:
+        with self.assertRaises(McpToolError) as depth_ctx:
+            get_paper_summary_keys(self.paper_id, max_depth="2")  # type: ignore[arg-type]
+        self.assertEqual(depth_ctx.exception.code, "invalid_max_depth")
+
+        with self.assertRaises(McpToolError) as preview_ctx:
+            get_paper_summary_keys(self.paper_id, include_preview="false")  # type: ignore[arg-type]
+        self.assertEqual(preview_ctx.exception.code, "invalid_include_preview")
+
+        with self.assertRaises(McpToolError) as subtree_ctx:
+            get_paper_summary_value(self.paper_id, "summary", include_subtree="false")  # type: ignore[arg-type]
+        self.assertEqual(subtree_ctx.exception.code, "invalid_include_subtree")
+
+        with self.assertRaises(McpToolError) as root_ctx:
+            get_paper_summary_value(self.paper_id, "$")
+        self.assertEqual(root_ctx.exception.code, "invalid_summary_key")
 
     def test_get_paper_bibtex(self) -> None:
         payload = get_paper_bibtex(self.paper_id)
@@ -348,6 +463,8 @@ class TestMcpServerSchemaCompat(unittest.TestCase):
         payload = get_paper_metadata(self.no_bib_paper_id)
         self.assertIsNone(payload["doi"])
         self.assertFalse(payload["has_bibtex"])
+        self.assertFalse(payload["has_source"])
+        self.assertEqual(payload["available_translations"], [])
 
     def test_get_paper_bibtex_missing(self) -> None:
         with self.assertRaises(McpToolError) as ctx:
@@ -358,12 +475,6 @@ class TestMcpServerSchemaCompat(unittest.TestCase):
         with self.assertRaises(McpToolError) as ctx:
             get_paper_bibtex("missing-paper-id")
         self.assertEqual(ctx.exception.code, "paper_not_found")
-
-    def test_get_paper_summary_default_and_template(self) -> None:
-        default_summary = get_paper_summary(self.paper_id)
-        deep_read_summary = get_paper_summary(self.paper_id, template="deep_read")
-        self.assertIn("default summary", default_summary)
-        self.assertIn("deep summary", deep_read_summary)
 
     def test_get_paper_summary_keys_and_key(self) -> None:
         keys = get_paper_summary_keys(self.paper_id)
@@ -382,7 +493,7 @@ class TestMcpServerSchemaCompat(unittest.TestCase):
             ],
         )
 
-        nested = get_paper_summary_key(self.paper_id, "experiments.main_result")
+        nested = get_paper_summary_value(self.paper_id, "experiments.main_result")
         self.assertEqual(nested["paper_id"], self.paper_id)
         self.assertEqual(nested["key"], "experiments.main_result")
         self.assertEqual(nested["value_type"], "string")
@@ -390,13 +501,11 @@ class TestMcpServerSchemaCompat(unittest.TestCase):
         self.assertEqual(nested["content"], "default summary result")
         self.assertFalse(nested["truncated"])
 
-    def test_get_paper_summary_and_summary_key_default_to_8000_char_ceiling(self) -> None:
-        summary = get_paper_summary(self.long_summary_paper_id)
-        headline = get_paper_summary_key(self.long_summary_paper_id, "headline")
+    def test_get_paper_summary_value_defaults_to_4000_char_ceiling(self) -> None:
+        headline = get_paper_summary_value(self.long_summary_paper_id, "headline")
 
-        self.assertIn("[truncated:", summary)
         self.assertEqual(headline["content_format"], "text/plain")
-        self.assertEqual(len(headline["content"]), 8000)
+        self.assertEqual(len(headline["content"]), 4000)
         self.assertTrue(headline["truncated"])
 
     def test_omitted_max_chars_uses_shared_8000_default_even_if_config_raises_default(self) -> None:
@@ -411,15 +520,9 @@ class TestMcpServerSchemaCompat(unittest.TestCase):
             )
         )
         try:
-            summary = get_paper_summary(self.long_summary_paper_id)
-            source = get_paper_source(self.long_summary_paper_id)
-            translated = resource_translation(self.long_summary_paper_id, "zh")
-            headline = get_paper_summary_key(self.long_summary_paper_id, "headline")
+            headline = get_paper_summary_value(self.long_summary_paper_id, "headline")
 
-            self.assertIn("[truncated:", summary)
-            self.assertIn("[truncated:", source)
-            self.assertIn("[truncated:", translated)
-            self.assertEqual(len(headline["content"]), 8000)
+            self.assertEqual(len(headline["content"]), 4000)
         finally:
             configure(
                 McpSnapshotConfig(
@@ -443,10 +546,10 @@ class TestMcpServerSchemaCompat(unittest.TestCase):
             )
         )
         try:
-            summary = get_paper_summary(self.long_summary_paper_id, max_chars=9001)
-            headline = get_paper_summary_key(self.long_summary_paper_id, "headline", max_chars=9001)
+            headline = get_paper_summary_value(
+                self.long_summary_paper_id, "headline", max_chars=9001
+            )
 
-            self.assertGreater(len(summary), 8000)
             self.assertGreater(len(headline["content"]), 8000)
         finally:
             configure(
@@ -461,10 +564,8 @@ class TestMcpServerSchemaCompat(unittest.TestCase):
 
     def test_non_positive_max_chars_is_rejected_for_content_tools(self) -> None:
         for fn, kwargs in (
-            (get_paper_summary, {"paper_id": self.paper_id, "max_chars": 0}),
-            (get_paper_source, {"paper_id": self.paper_id, "max_chars": -1}),
             (
-                get_paper_summary_key,
+                get_paper_summary_value,
                 {"paper_id": self.paper_id, "key": "summary", "max_chars": 0},
             ),
         ):
@@ -475,7 +576,7 @@ class TestMcpServerSchemaCompat(unittest.TestCase):
 
     def test_get_paper_summary_template_not_available(self) -> None:
         with self.assertRaises(McpToolError) as ctx:
-            get_paper_summary(self.paper_id, template="unknown")
+            get_paper_summary_value(self.paper_id, "summary", template="unknown")
         self.assertEqual(ctx.exception.code, "template_not_available")
         self.assertEqual(
             ctx.exception.details["available_summary_templates"],
@@ -754,15 +855,11 @@ class TestMcpServerSchemaCompat(unittest.TestCase):
                 )
             )
 
-    def test_source_and_translation_loading(self) -> None:
-        source = get_paper_source(self.paper_id)
-        translated = resource_translation(self.paper_id, "zh")
-        self.assertIn("source body", source)
-        self.assertIn("翻译内容", translated)
-
-    def test_get_paper_source_outline_and_lines(self) -> None:
-        outline = get_paper_source_outline(self.outline_paper_id)
-        lines = get_paper_source_lines(self.outline_paper_id, 2, 99)
+    def test_get_paper_content_outline_and_window_for_source(self) -> None:
+        outline = get_paper_content_outline(self.outline_paper_id, "source")
+        lines = get_paper_content_window(
+            self.outline_paper_id, "source", mode="range", start_line=2, end_line=6
+        )
 
         self.assertEqual(outline["paper_id"], self.outline_paper_id)
         self.assertEqual(outline["total_lines"], 6)
@@ -793,24 +890,27 @@ class TestMcpServerSchemaCompat(unittest.TestCase):
             ],
         )
         self.assertEqual(lines["paper_id"], self.outline_paper_id)
-        self.assertEqual(lines["start_line"], 2)
-        self.assertEqual(lines["end_line"], 99)
-        self.assertEqual(lines["actual_start_line"], 2)
-        self.assertEqual(lines["actual_end_line"], 6)
+        self.assertEqual(lines["content_type"], "source")
+        self.assertEqual(lines["ranges"][0]["start_line"], 2)
+        self.assertEqual(lines["ranges"][0]["end_line"], 6)
         self.assertEqual(lines["total_lines"], 6)
         self.assertEqual(
-            lines["content"],
+            lines["ranges"][0]["content"],
             "intro paragraph\n## Introduction\nbody A\n##  A/B  Test: 概览!  \ntail",
         )
 
-    def test_get_paper_source_lines_rejects_invalid_ranges(self) -> None:
+    def test_get_paper_content_window_rejects_invalid_ranges(self) -> None:
         with self.assertRaises(McpToolError) as ctx:
-            get_paper_source_lines(self.outline_paper_id, 4, 3)
+            get_paper_content_window(
+                self.outline_paper_id, "source", mode="range", start_line=4, end_line=3
+            )
         self.assertEqual(ctx.exception.code, "invalid_line_range")
 
-    def test_get_paper_translation_outline_and_lines(self) -> None:
-        outline = get_paper_translation_outline(self.outline_paper_id, "zh")
-        lines = get_paper_translation_lines(self.outline_paper_id, "zh", 2, 5)
+    def test_get_paper_content_outline_and_window_for_translation(self) -> None:
+        outline = get_paper_content_outline(self.outline_paper_id, "translation", lang="ZH")
+        lines = get_paper_content_window(
+            self.outline_paper_id, "translation", lang="ZH", mode="range", start_line=2, end_line=5
+        )
 
         self.assertEqual(outline["paper_id"], self.outline_paper_id)
         self.assertEqual(outline["lang"], "zh")
@@ -843,12 +943,11 @@ class TestMcpServerSchemaCompat(unittest.TestCase):
         )
         self.assertEqual(lines["paper_id"], self.outline_paper_id)
         self.assertEqual(lines["lang"], "zh")
-        self.assertEqual(lines["start_line"], 2)
-        self.assertEqual(lines["end_line"], 5)
-        self.assertEqual(lines["actual_start_line"], 2)
-        self.assertEqual(lines["actual_end_line"], 5)
+        self.assertEqual(lines["content_type"], "translation")
+        self.assertEqual(lines["ranges"][0]["start_line"], 2)
+        self.assertEqual(lines["ranges"][0]["end_line"], 5)
         self.assertEqual(lines["total_lines"], 6)
-        self.assertEqual(lines["content"], "说明\n## 方法 总览\n正文一\n## 结果")
+        self.assertEqual(lines["ranges"][0]["content"], "说明\n## 方法 总览\n正文一\n## 结果")
 
     def test_search_tools_use_current_schema(self) -> None:
         fts_hits = search_papers("graph", limit=5)

@@ -92,14 +92,16 @@ server {
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
   }
 
+  # Static-bearer MCP Streamable HTTP
   location ^~ /mcp {
     proxy_pass http://127.0.0.1:8001;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
   }
 
-  # SSE 传输，给需要 Server-Sent Events 的 MCP 客户端使用
+  # Static-bearer SSE 传输，给需要 Server-Sent Events 的 MCP 客户端使用
   location ^~ /mcp-sse {
     proxy_pass http://127.0.0.1:8001;
     proxy_http_version 1.1;
@@ -107,12 +109,39 @@ server {
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
     proxy_buffering off;
     proxy_cache off;
     proxy_read_timeout 3600s;
     proxy_send_timeout 3600s;
     chunked_transfer_encoding off;
     add_header X-Accel-Buffering no;
+  }
+
+  # OAuth MCP Streamable HTTP 以及 OAuth 协议/发现路由。
+  # /oauth/mcp-sse 当前缺失/不支持；除非未来 gate 加入，否则不要代理它。
+  location = /oauth/mcp {
+    proxy_pass http://127.0.0.1:8001;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+
+  location ^~ /.well-known/ {
+    proxy_pass http://127.0.0.1:8001;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+
+  location ~ ^/(authorize|token|register|auth/callback|consent)$ {
+    proxy_pass http://127.0.0.1:8001;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
   }
 }
 
@@ -298,7 +327,7 @@ docker compose -f scripts/docker/docker-compose.example.yml --profile local-stat
 
 **运行时注意事项：**
 
-- Nginx 监听 `8899` 端口，将 `/api`、`/mcp`、`/mcp-sse` 以及 OAuth 路由反向代理到内部 API（`127.0.0.1:8000`）。
+- Nginx 监听 `8899` 端口，将 `/api`、static-bearer MCP（`/mcp`、`/mcp-sse`）、OAuth MCP（`/oauth/mcp`）以及 OAuth discovery/protocol 路由（`/.well-known/`、`/authorize`、`/token`、`/register`、`/auth/callback`、`/consent`）反向代理到内部 API（`127.0.0.1:8000`）。OAuth SSE `/oauth/mcp-sse` 当前缺失/不支持。
 - 快照数据库挂载到 `/db/papers.db`，静态资源挂载到 `/static`。
 - `start-api.sh` 会自动检测是否设置了 `PAPER_DB_EMBED_DB`、`PAPER_DB_CONFIG` 和 `SEARCH_ACCESS_TOKEN`，以此判断是否启用高级搜索模式。
 - 部署前务必设置 `MCP_ACCESS_TOKEN`。`MCP_PUBLIC_UNSAFE=1` 仅用于隔离的本地测试环境。

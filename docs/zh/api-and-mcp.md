@@ -159,39 +159,68 @@ uv run deepresearch-flow paper db api push-semantic \
 
 ## MCP（FastMCP Streamable HTTP + SSE）
 
-### 概述
+### 概览
 
-项目通过 FastMCP 暴露 MCP 工具和资源，供 AI agent 调用。
+项目通过 FastMCP 暴露 MCP 工具，供 AI agent 调用。推荐的 public surface 是有边界的工具工作流：先发现 metadata、outline 或 summary keys，再读取具体行窗口或具体 summary 值。
 
-**接口地址：**
+**端点：**
 
-- Streamable HTTP：`http://<host>:8001/mcp`
-- SSE：`http://<host>:8001/mcp-sse`
+- Static bearer Streamable HTTP：`http://<host>:8001/mcp`
+- Static bearer SSE：`http://<host>:8001/mcp-sse`
+- GitHub OAuth Streamable HTTP：`https://<public-host>/oauth/mcp`
+- OAuth SSE：当前缺失/不支持。除非未来 gate 明确加入，否则不要配置 `/oauth/mcp-sse`。
+- OAuth discovery/protocol 路由：`/.well-known/`、`/.well-known/oauth-protected-resource/oauth/mcp`、`/authorize`、`/token`、`/register`、`/auth/callback`、`/consent`
 - 可选协议头：`mcp-protocol-version`（`2025-03-26` 或 `2025-06-18`）
 
-**静态文件读取优先级：** `PAPER_DB_STATIC_EXPORT_DIR` → `PAPER_DB_STATIC_BASE` / `PAPER_DB_STATIC_BASE_URL`
+**静态读取优先级：** `PAPER_DB_STATIC_EXPORT_DIR` → `PAPER_DB_STATIC_BASE` / `PAPER_DB_STATIC_BASE_URL`
 
-### 认证方式
+Full-content MCP 读取和全文 paper URI resources 是旧的/已移除/归档的 public-surface 模式。不要再为 agent workflow 推荐 `get_paper_summary`、`get_paper_source`、旧的 source/translation line 工具或全文 `paper://...` resources；请使用下面的有边界工具。小型 `paper://{paper_id}/metadata` resource 可为兼容保留，但 agent 应优先使用 `get_paper_metadata`。
 
-#### 静态 Bearer
+### 鉴权模式
 
-使用 `--mcp-access-token` 或 `MCP_ACCESS_TOKEN`；请求头格式为 `Authorization: Bearer <token>`。对 `/mcp` 和 `/mcp-sse` 均生效。
+#### Static Bearer
+
+使用 `--mcp-access-token` 或 `MCP_ACCESS_TOKEN`；请求头为 `Authorization: Bearer <token>`。对 `/mcp` 和 `/mcp-sse` 均生效。
+
+CLI 示例：
+
+```bash
+MCP_ACCESS_TOKEN=your-token \
+uv run deepresearch-flow paper db api serve \
+  --snapshot-db papers.db \
+  --mcp-access-token "$MCP_ACCESS_TOKEN"
+```
+
+客户端 URL：Streamable HTTP 使用 `https://<public-host>/mcp`，SSE 使用 `https://<public-host>/mcp-sse`。
 
 #### GitHub OAuth
 
-设置 `MCP_AUTH_MODE=github-oauth`。OAuth 仅对 Streamable HTTP 的 `/mcp` 接口生效。
+设置 `MCP_AUTH_MODE=github-oauth`。OAuth 客户端使用 `/oauth/mcp` 的 Streamable HTTP；此端点会拒绝 static bearer token。`/mcp` 和 `/mcp-sse` 仍是 static bearer 端点。
 
-必需的环境变量：
+必需环境变量：
 
-- `MCP_PUBLIC_BASE_URL`
+- `MCP_AUTH_MODE=github-oauth`
+- `MCP_PUBLIC_BASE_URL`（只填 origin，例如 `https://papers.example.com`；不要包含 `/oauth/mcp`）
 - `GITHUB_OAUTH_CLIENT_ID`
 - `GITHUB_OAUTH_CLIENT_SECRET`
 - `MCP_GITHUB_ALLOWED_USER_IDS`（GitHub 用户数字 ID，必填）
-- `MCP_ACCESS_TOKEN`
+- `MCP_ACCESS_TOKEN`（仍用于 static bearer `/mcp` 和 `/mcp-sse`）
 
-OAuth 路由：`/.well-known/`、`/authorize`、`/token`、`/register`、`/auth/callback`、`/consent`
+OAuth 客户端配置摘要：
 
-> **注意：** MCP token、advanced-search token 和 admin token 是相互独立的凭据。
+1. 将 MCP client URL 配为 `https://<public-host>/oauth/mcp`。
+2. 让客户端从 `https://<public-host>/.well-known/oauth-protected-resource/oauth/mcp` 发现 protected-resource metadata。
+3. 通过服务器路由完成 GitHub OAuth：`/authorize`、`/token`、`/register`、`/auth/callback`、`/consent`。
+4. 不要使用 `/oauth/mcp-sse`；当前 OAuth SSE gate 结果是缺失/不支持。
+
+> **注意：** MCP token、advanced-search token、admin token 和 GitHub OAuth 凭据是相互独立的凭据。
+
+### 推荐 Agent Workflow
+
+1. 使用 `search_papers`、`search_papers_by_keyword` 或 `search_papers_semantic` 搜索。
+2. 调用 `get_paper_metadata` 发现可用性字段。
+3. 对 source 或 translation markdown，先调用 `get_paper_content_outline`，再调用 `get_paper_content_window`。
+4. 对 summary，先调用 `get_paper_summary_keys`，再对精确 key 调用 `get_paper_summary_value`。
 
 ### MCP 工具
 
@@ -224,9 +253,16 @@ OAuth 路由：`/.well-known/`、`/authorize`、`/token`、`/register`、`/auth/
 <details>
 <summary><code>get_paper_metadata(paper_id) → dict</code></summary>
 
-获取论文元数据和可用的 summary 模板。在请求 summary 之前先调用此工具，以了解有哪些模板可用。
+获取论文元数据和可用性标记。在读取 source、translation、summary 或 BibTeX 前先调用它。
 
-返回：`paper_id`、`title`、`year`、`venue`、`doi`、`arxiv_id`、`openreview_id`、`paper_pw_url`、`preferred_summary_template`、`available_summary_templates`、`has_bibtex`。
+返回：`paper_id`、`title`、`year`、`venue`、`doi`、`arxiv_id`、`openreview_id`、`paper_pw_url`、`preferred_summary_template`、`has_source`、`available_translations`、`available_summary_templates`、`has_bibtex`。
+
+可用性字段：
+
+- `has_source`：source markdown 可通过 content window 工具读取。
+- `available_translations`：`content_type="translation"` 时 content 工具接受的规范化语言标签。
+- `available_summary_templates`：summary 工具接受的模板标签。
+- `has_bibtex`：可通过 `get_paper_bibtex` 读取 BibTeX。
 </details>
 
 <details>
@@ -238,66 +274,52 @@ OAuth 路由：`/.well-known/`、`/authorize`、`/token`、`/register`、`/auth/
 </details>
 
 <details>
-<summary><code>get_paper_summary(paper_id, template=None, max_chars=None) → str</code></summary>
+<summary><code>get_paper_content_outline(paper_id, content_type, lang=None, max_sections=200) → dict</code></summary>
 
-以原始字符串形式获取 summary JSON。未指定 `template` 时使用首选模板。返回完整的 JSON 内容（非 URL）。
+获取 source 或 translated markdown 的有边界 heading outline。
+
+- `content_type`：`"source"` 或 `"translation"`
+- `lang`：translation 必填，source 省略；使用 `available_translations` 中的标签
+- `max_sections`：默认 `200`，服务器会设置硬上限
+
+返回：`paper_id`、`content_type`、`lang`、`total_lines`、带 heading 层级和行范围的 `sections`。
 </details>
 
 <details>
-<summary><code>get_paper_summary_keys(paper_id, template=None, max_depth=2, include_preview=False) → dict</code></summary>
+<summary><code>get_paper_content_window(..., mode="head", line_count=80, ...) → dict</code></summary>
+
+获取 source 或 translated markdown 的有边界行窗口。
+
+- 常用参数：`paper_id`、`content_type`、可选 `lang`
+- 模式：`head`、`tail`、`head_tail`、`around`、`range`
+- Range 参数：`start_line`、`end_line`
+- Around 参数：`center_line`、`before_lines`、`after_lines`
+- Head/tail 参数：`line_count`，或 `head_tail` 模式下的 `head_lines` 和 `tail_lines`
+
+返回：`paper_id`、`content_type`、`lang`、行边界、`total_lines`、`content` 以及截断/窗口 metadata。
+</details>
+
+<details>
+<summary><code>get_paper_summary_keys(paper_id, template=None, max_depth=2, include_preview=False, max_paths=200) → dict</code></summary>
 
 按文档顺序获取递归的 summary 键路径。
 
-- `max_depth`：最大嵌套深度（默认 2）
-- `include_preview`：设为 `True` 时包含值的预览
+- `template`：省略时使用首选模板
+- `max_depth`：最大嵌套深度（默认 `2`）
+- `include_preview`：设为 `True` 时包含有边界的预览值
+- `max_paths`：最多返回的路径数
 
-返回：`paper_id`、`template`、`keys`（键路径列表，含类型和可选的预览值）。
+返回：`paper_id`、`template`、`paths`、`total_paths`、`returned_paths`、`truncated`。
 </details>
 
 <details>
-<summary><code>get_paper_summary_key(paper_id, key, template=None, max_chars=None) → dict</code></summary>
+<summary><code>get_paper_summary_value(paper_id, key, template=None, max_chars=4000, include_subtree=False) → dict</code></summary>
 
-获取 summary 中单个指定路径的节点。
+读取一个指定 summary 值。对 object 或 array 节点，默认返回 child-key metadata，而不是大 subtree；只有需要时才设置 `include_subtree=True`。
 
-返回：`paper_id`、`template`、`key`、`value`、`type`。
-</details>
+返回：`paper_id`、`template`、`key`、`value_type`、`content_format`、`content`、适用时的 child-key metadata，以及 `truncated`。
 
-<details>
-<summary><code>get_paper_source(paper_id, max_chars=None) → str</code></summary>
-
-获取源 markdown 文本。内容可能较大，可使用 `max_chars` 限制大小。
-</details>
-
-<details>
-<summary><code>get_paper_source_outline(paper_id) → dict</code></summary>
-
-获取源 markdown 的大纲，以章节范围的形式返回。
-
-返回：`paper_id`、`sections`（列表，每项包含 `heading`、`level`、`start_line`、`end_line`）。
-</details>
-
-<details>
-<summary><code>get_paper_source_lines(paper_id, start_line, end_line) → dict</code></summary>
-
-获取源 markdown 的指定行范围（1 起始，闭区间）。
-
-返回：`paper_id`、`start_line`、`end_line`、`content`。
-</details>
-
-<details>
-<summary><code>get_paper_translation_outline(paper_id, lang) → dict</code></summary>
-
-获取翻译后 markdown 的大纲，以章节范围的形式返回。
-
-返回：`paper_id`、`lang`、`sections`（列表，每项包含 `heading`、`level`、`start_line`、`end_line`）。
-</details>
-
-<details>
-<summary><code>get_paper_translation_lines(paper_id, lang, start_line, end_line) → dict</code></summary>
-
-获取翻译后 markdown 的指定行范围（1 起始，闭区间）。
-
-返回：`paper_id`、`lang`、`start_line`、`end_line`、`content`。
+长 summary 字符串受 `max_chars` 前缀上限约束。读取中段/尾部需要未来的 `get_paper_summary_window` 工具。
 </details>
 
 <details>
@@ -309,9 +331,9 @@ OAuth 路由：`/.well-known/`、`/authorize`、`/token`、`/register`、`/auth/
 <details>
 <summary><code>list_top_facets(category, limit=20) → list[dict]</code></summary>
 
-列出 top facet 值。
+列出指定 facet 的 top 值。
 
-- `category`：可选值 `author`、`venue`、`keyword`、`institution`、`tag`
+- `category`：`author`、`venue`、`keyword`、`institution`、`tag` 之一
 
 返回：`[{ value, paper_count }]`。
 </details>
@@ -324,12 +346,34 @@ OAuth 路由：`/.well-known/`、`/authorize`、`/token`、`/register`、`/auth/
 返回：`paper_id`、`title`、`year`、`venue`。
 </details>
 
-### MCP 资源（URI 访问）
+### 示例
 
-| URI | 说明 | MIME 类型 |
-|-----|------|-----------|
-| `paper://{paper_id}/metadata` | 论文元数据，包括标题、作者、年份、会议/期刊、DOI 和可用的 summary 模板 | `application/json` |
-| `paper://{paper_id}/summary` | 使用首选模板的论文 summary | `application/json` |
-| `paper://{paper_id}/summary/{template}` | 使用指定模板的论文 summary | `application/json` |
-| `paper://{paper_id}/source` | 论文的源 markdown 内容 | `text/markdown` |
-| `paper://{paper_id}/translation/{lang}` | 指定语言的翻译后 markdown 内容 | `text/markdown` |
+读取 source 前 80 行：
+
+```json
+{"tool":"get_paper_content_window","arguments":{"paper_id":"paper-123","content_type":"source","mode":"head","line_count":80}}
+```
+
+先找 section，再读取某一行附近内容：
+
+```json
+{"tool":"get_paper_content_outline","arguments":{"paper_id":"paper-123","content_type":"source"}}
+{"tool":"get_paper_content_window","arguments":{"paper_id":"paper-123","content_type":"source","mode":"around","center_line":245,"before_lines":30,"after_lines":50}}
+```
+
+读取中文 translation 尾部：
+
+```json
+{"tool":"get_paper_content_window","arguments":{"paper_id":"paper-123","content_type":"translation","lang":"zh","mode":"tail","line_count":80}}
+```
+
+发现 summary keys，再读取一个值：
+
+```json
+{"tool":"get_paper_summary_keys","arguments":{"paper_id":"paper-123","template":"deep_read","max_depth":3,"include_preview":true}}
+{"tool":"get_paper_summary_value","arguments":{"paper_id":"paper-123","template":"deep_read","key":"experiments.main_result","max_chars":4000}}
+```
+
+### 已归档 MCP resources
+
+`paper://{paper_id}/summary`、`paper://{paper_id}/summary/{template}`、`paper://{paper_id}/source` 和 `paper://{paper_id}/translation/{lang}` 是历史 full-content resource 模式。它们不是当前 agent 推荐的 MCP public surface。请优先使用有边界工具：`get_paper_content_outline`、`get_paper_content_window`、`get_paper_summary_keys` 和 `get_paper_summary_value`。

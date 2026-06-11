@@ -63,7 +63,7 @@ DeepResearch Flow 提供一条完整流水线，覆盖 **修复**、**翻译**�
 - **Snapshot + API 服务** — 生产级 SQLite 快照 + 静态资源 + 只读 JSON API。
 - **OCR 后处理** — 自动修复引用、合并断段、修复 LaTeX 和 Mermaid 图。
 - **语义搜索** — LanceDB 向量检索，支持混合召回和云端重排序。
-- **MCP 集成** — FastMCP 服务，支持 AI Agent 访问，Streamable HTTP + SSE，GitHub OAuth 鉴权。
+- **MCP 集成** — FastMCP 服务，支持 AI Agent 通过有边界读取工具访问，static-bearer Streamable HTTP/SSE，以及 `/oauth/mcp` 上的 GitHub OAuth。
 
 ---
 
@@ -258,7 +258,7 @@ uv run deepresearch-flow paper db serve \
 
 #### 步骤 5：MCP 集成（可选）
 
-项目通过 FastMCP 暴露 MCP 工具和资源，供 AI Agent 访问。详见 [MCP 文档](docs/zh/api-and-mcp.md#mcp)。
+项目通过 FastMCP 暴露有边界的 MCP 工具，供 AI Agent 访问。端点、鉴权和工具参考详见 [MCP 文档](docs/zh/api-and-mcp.md#mcp)。
 
 ---
 
@@ -266,7 +266,7 @@ uv run deepresearch-flow paper db serve \
 
 - **[高级工作流](docs/zh/workflow.md)** — 增量构建、合并 JSON/BibTeX、补充模板
 - **[部署指南](docs/zh/deployment.md)** — CDN 部署、Nginx/Caddy 配置、Docker、Compose
-- **[API & MCP](docs/zh/api-and-mcp.md)** — Admin API、推送、MCP 工具与资源
+- **[API & MCP](docs/zh/api-and-mcp.md)** — Admin API、推送、MCP 端点、鉴权与工具
 - **[功能参考](docs/zh/reference.md)** — Translator、Extract、DB、Recognize 详解
 - **[Snapshot 管理](docs/zh/snapshot-management.md)** — Snapshot 迁移、补充、更新
 
