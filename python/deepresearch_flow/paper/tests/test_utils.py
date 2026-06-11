@@ -91,8 +91,8 @@ def test_estimate_tokens_has_minimum_of_one() -> None:
 
 def test_extract_json_from_text_handles_fenced_and_embedded_json() -> None:
     assert extract_json_from_text('{"ok": true}') == '{"ok": true}'
-    assert extract_json_from_text("```json\n{\"ok\": true}\n```") == '{"ok": true}'
-    assert extract_json_from_text("prefix {\"ok\": true} suffix") == '{"ok": true}'
+    assert extract_json_from_text('```json\n{"ok": true}\n```') == '{"ok": true}'
+    assert extract_json_from_text('prefix {"ok": true} suffix') == '{"ok": true}'
 
     with pytest.raises(ValueError, match="No JSON object found"):
         extract_json_from_text("plain text only")
@@ -100,7 +100,7 @@ def test_extract_json_from_text_handles_fenced_and_embedded_json() -> None:
 
 def test_parse_json_handles_direct_embedded_and_repaired_payloads(monkeypatch) -> None:
     assert parse_json('{"ok": 1}') == {"ok": 1}
-    assert parse_json("Answer: {\"ok\": 2}") == {"ok": 2}
+    assert parse_json('Answer: {"ok": 2}') == {"ok": 2}
 
     monkeypatch.setattr(
         "deepresearch_flow.paper.utils.json_repair.loads",

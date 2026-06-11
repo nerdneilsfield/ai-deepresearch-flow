@@ -22,6 +22,7 @@ from deepresearch_flow.paper.utils import stable_hash
 @dataclass(frozen=True)
 class SnapshotSupplementOptions:
     """Options for supplementing an existing snapshot."""
+
     snapshot_db: Path
     static_export_dir: Path
     input_paths: list[Path]
@@ -37,6 +38,7 @@ class SnapshotSupplementOptions:
 @dataclass
 class SupplementStats:
     """Statistics for supplement operation."""
+
     papers_checked: int = 0
     papers_supplemented: int = 0
     templates_added: int = 0
@@ -51,19 +53,19 @@ def supplement_snapshot(opts: SnapshotSupplementOptions) -> None:
     """Supplement existing snapshot with missing templates/translations."""
     console = Console()
     stats = SupplementStats()
-    
+
     # Validate inputs
     if not opts.snapshot_db.exists():
         raise FileNotFoundError(f"Snapshot DB not found: {opts.snapshot_db}")
     if not opts.static_export_dir.exists():
         raise FileNotFoundError(f"Static export dir not found: {opts.static_export_dir}")
-    
+
     # Determine output paths
     if opts.in_place:
         output_db = opts.snapshot_db
         output_static = opts.static_export_dir
         # Backup original
-        backup_db = opts.snapshot_db.with_suffix('.db.backup')
+        backup_db = opts.snapshot_db.with_suffix(".db.backup")
         shutil.copy2(opts.snapshot_db, backup_db)
         console.print(f"[yellow]Backup created: {backup_db}[/yellow]")
     elif opts.output_db:
@@ -75,12 +77,12 @@ def supplement_snapshot(opts: SnapshotSupplementOptions) -> None:
         _copy_snapshot(opts.snapshot_db, opts.static_export_dir, output_db, output_static)
     else:
         raise ValueError("Must specify either --in-place or --output-db")
-    
+
     # Load and merge input papers
     if not opts.input_paths:
         console.print("[yellow]No inputs provided, nothing to supplement[/yellow]")
         return
-    
+
     console.print("[cyan]Loading input papers...[/cyan]")
     papers = load_and_merge_papers(
         opts.input_paths,
@@ -89,13 +91,13 @@ def supplement_snapshot(opts: SnapshotSupplementOptions) -> None:
         use_cache=False,
         pdf_roots=opts.pdf_roots or [],
     )
-    
+
     if not papers:
         console.print("[yellow]No papers found in inputs[/yellow]")
         return
-    
+
     console.print(f"[cyan]Checking {len(papers)} papers for missing content...[/cyan]")
-    
+
     # Process each paper
     conn = sqlite3.connect(str(output_db))
     conn.row_factory = sqlite3.Row
@@ -115,7 +117,10 @@ def supplement_snapshot(opts: SnapshotSupplementOptions) -> None:
 
                 # Supplement missing translations
                 translation_count, copied_count, images_count = _supplement_translations(
-                    conn, output_static, paper_id, paper,
+                    conn,
+                    output_static,
+                    paper_id,
+                    paper,
                     opts.md_translated_roots or [],
                     written_images,
                 )
@@ -125,16 +130,17 @@ def supplement_snapshot(opts: SnapshotSupplementOptions) -> None:
                 stats.images_extracted += images_count
                 if template_count > 0 or translation_count > 0:
                     stats.papers_supplemented += 1
-        
+
         conn.commit()
         _print_supplement_summary(stats, output_db, output_static, opts.in_place)
-        
+
     finally:
         conn.close()
 
 
 def _resolve_existing_paper_ids(conn: sqlite3.Connection, paper: dict[str, Any]) -> list[str]:
     """Resolve one or more paper IDs for supplement inputs that may not include paper_id."""
+
     def _rows_to_ids(rows: list[sqlite3.Row]) -> list[str]:
         seen: set[str] = set()
         out: list[str] = []
@@ -216,7 +222,7 @@ def _copy_snapshot(src_db: Path, src_static: Path, dst_db: Path, dst_static: Pat
     # Copy DB
     dst_db.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src_db, dst_db)
-    
+
     # Copy static if different
     if dst_static != src_static:
         dst_static.mkdir(parents=True, exist_ok=True)
@@ -230,38 +236,35 @@ def _copy_snapshot(src_db: Path, src_static: Path, dst_db: Path, dst_static: Pat
 
 
 def _supplement_templates(
-    conn: sqlite3.Connection,
-    static_dir: Path,
-    paper_id: str,
-    paper: dict[str, Any]
+    conn: sqlite3.Connection, static_dir: Path, paper_id: str, paper: dict[str, Any]
 ) -> int:
     """Add missing templates for a paper. Returns count added."""
     count = 0
-    
+
     # Get template tag from paper
     template_tag = paper.get("prompt_template") or paper.get("template_tag") or "default"
-    
+
     # Check if template already exists
     existing = conn.execute(
         "SELECT 1 FROM paper_summary WHERE paper_id = ? AND template_tag = ?",
         (paper_id, template_tag),
     ).fetchone()
-    
+
     if not existing:
         # Add template reference
         conn.execute(
             "INSERT INTO paper_summary (paper_id, template_tag) VALUES (?, ?)",
             (paper_id, template_tag),
         )
-        
+
         # Write summary JSON
         summary_dir = static_dir / "summary" / paper_id
         summary_dir.mkdir(parents=True, exist_ok=True)
         summary_file = summary_dir / f"{template_tag}.json"
         summary_file.write_text(json.dumps(paper, ensure_ascii=False, indent=2))
-        
+
         count += 1
-    
+
     return count
 
 
@@ -282,27 +285,27 @@ def _supplement_translations(
     source_hash = paper.get("source_hash") or paper.get("source_md_content_hash")
     if not source_hash:
         return 0, 0, 0
-    
+
     # Scan translated directories for this paper
     for root in md_translated_roots:
         if not root.exists():
             continue
-        
+
         for lang_dir in root.iterdir():
             if not lang_dir.is_dir():
                 continue
-            
+
             lang = lang_dir.name
-            
+
             # Check if translation already exists in DB
             existing = conn.execute(
                 "SELECT 1 FROM paper_translation WHERE paper_id = ? AND lang = ?",
                 (paper_id, lang),
             ).fetchone()
-            
+
             if existing:
                 continue
-            
+
             # Look for translation file
             # Try different naming patterns
             possible_names = [
@@ -310,11 +313,11 @@ def _supplement_translations(
                 f"{source_hash}.md",
                 f"{paper_id}.{lang}.md",
             ]
-            
+
             for trans_file in lang_dir.iterdir():
                 if trans_file.suffix != ".md":
                     continue
-                
+
                 # Check if this file belongs to our paper
                 if any(name in trans_file.name for name in possible_names):
                     # Process translated markdown: extract images and rewrite paths
@@ -330,7 +333,9 @@ def _supplement_translations(
                         images_output_dir=images_dir,
                         written=written_images,
                     )
-                    images_count += len([img for img in trans_images if img.get("status") == "available"])
+                    images_count += len(
+                        [img for img in trans_images if img.get("status") == "available"]
+                    )
 
                     # Compute hash of processed content
                     md_hash = _hash_bytes(processed_trans.encode("utf-8"))
@@ -357,10 +362,7 @@ def _supplement_translations(
 
 
 def _print_supplement_summary(
-    stats: SupplementStats,
-    output_db: Path,
-    output_static: Path,
-    in_place: bool
+    stats: SupplementStats, output_db: Path, output_static: Path, in_place: bool
 ) -> None:
     """Print supplement operation summary."""
     from rich.panel import Panel
@@ -386,7 +388,11 @@ def _print_supplement_summary(
     processing_table.add_column("Type", style="cyan")
     processing_table.add_column("Count", style="green", justify="right")
     processing_table.add_column("Details", style="yellow")
-    processing_table.add_row("Translations processed", str(stats.translations_processed), "Images extracted & paths rewritten")
+    processing_table.add_row(
+        "Translations processed",
+        str(stats.translations_processed),
+        "Images extracted & paths rewritten",
+    )
     processing_table.add_row("Images extracted", str(stats.images_extracted), "From translations")
     console.print(processing_table)
     console.print()
@@ -411,10 +417,12 @@ def _print_supplement_summary(
     console.print()
 
     # Success panel
-    console.print(Panel(
-        f"[bold green]{action} Successfully![/bold green]\n\n"
-        f"Database: [yellow]{output_db}[/yellow]\n"
-        f"Static: [yellow]{output_static}[/yellow]",
-        border_style="green",
-        padding=(1, 2)
-    ))
+    console.print(
+        Panel(
+            f"[bold green]{action} Successfully![/bold green]\n\n"
+            f"Database: [yellow]{output_db}[/yellow]\n"
+            f"Static: [yellow]{output_static}[/yellow]",
+            border_style="green",
+            padding=(1, 2),
+        )
+    )

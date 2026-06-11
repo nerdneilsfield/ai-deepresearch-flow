@@ -80,14 +80,17 @@ def assemble_response(
         else:
             scores["final"] = chunk.fused_score
 
-        paper_meta = papers.get(chunk.paper_id, {
-            "title": "",
-            "authors": [],
-            "year": "",
-            "venue": "",
-            "doi": "",
-            "source_hash": "",
-        })
+        paper_meta = papers.get(
+            chunk.paper_id,
+            {
+                "title": "",
+                "authors": [],
+                "year": "",
+                "venue": "",
+                "doi": "",
+                "source_hash": "",
+            },
+        )
         results.append(
             {
                 "chunk_id": chunk.chunk_id,
@@ -130,5 +133,7 @@ def assemble_response(
             "reason": degradation_reason,
             "message": degradation_message,
             "details": degradation_details or {},
-        } if degraded else None,
+        }
+        if degraded
+        else None,
     }

@@ -97,7 +97,9 @@ def _select_markdown_range(
         raise click.ClickException(
             f"--start-index {start_index} exceeds discovered markdown count {len(markdown_files)}"
         )
-    effective_end = len(markdown_files) if end_index is None else min(end_index, len(markdown_files))
+    effective_end = (
+        len(markdown_files) if end_index is None else min(end_index, len(markdown_files))
+    )
     selected = markdown_files[start_index - 1 : effective_end]
     return selected, start_index, effective_end
 
@@ -124,14 +126,38 @@ def translator() -> None:
     help="Text file containing markdown file paths (one per line)",
 )
 @click.option("--count", "count_limit", default=None, type=int, help="Translate up to N files")
-@click.option("--start-index", "start_index", default=1, show_default=True, type=int, help="1-based inclusive start index in discovered markdown order")
-@click.option("--end-index", "end_index", default=None, type=int, help="1-based inclusive end index in discovered markdown order (default: last discovered file)")
-@click.option("-g", "--glob", "glob_pattern", default=None, help="Glob filter when input is a directory")
+@click.option(
+    "--start-index",
+    "start_index",
+    default=1,
+    show_default=True,
+    type=int,
+    help="1-based inclusive start index in discovered markdown order",
+)
+@click.option(
+    "--end-index",
+    "end_index",
+    default=None,
+    type=int,
+    help="1-based inclusive end index in discovered markdown order (default: last discovered file)",
+)
+@click.option(
+    "-g", "--glob", "glob_pattern", default=None, help="Glob filter when input is a directory"
+)
 @click.option("-m", "--model", "model_ref", required=False, help="provider/model")
 @click.option("--source-lang", "source_lang", default=None, help="Source language hint")
-@click.option("--target-lang", "target_lang", default="zh", show_default=True, help="Target language")
-@click.option("--output-dir", "output_dir", default=None, help="Directory for translated markdown outputs")
-@click.option("--fix-level", "fix_level", default="moderate", type=click.Choice(["off", "moderate", "aggressive"]))
+@click.option(
+    "--target-lang", "target_lang", default="zh", show_default=True, help="Target language"
+)
+@click.option(
+    "--output-dir", "output_dir", default=None, help="Directory for translated markdown outputs"
+)
+@click.option(
+    "--fix-level",
+    "fix_level",
+    default="moderate",
+    type=click.Choice(["off", "moderate", "aggressive"]),
+)
 @click.option("--max-chunk-chars", "max_chunk_chars", default=4000, show_default=True, type=int)
 @click.option(
     "--max-concurrency",
@@ -220,7 +246,9 @@ def translator() -> None:
     default=None,
     help="Retry provider/model or JSON model pool",
 )
-@click.option("--fallback-model", "fallback_model_ref", default=None, help="Fallback provider/model")
+@click.option(
+    "--fallback-model", "fallback_model_ref", default=None, help="Fallback provider/model"
+)
 @click.option(
     "--fallback-model-2",
     "fallback_model_ref_2",
@@ -241,11 +269,17 @@ def translator() -> None:
     type=int,
     help="Retry rounds for second fallback model",
 )
-@click.option("--sleep-every", "sleep_every", default=None, type=int, help="Sleep after every N requests")
-@click.option("--sleep-time", "sleep_time", default=None, type=float, help="Sleep duration in seconds")
+@click.option(
+    "--sleep-every", "sleep_every", default=None, type=int, help="Sleep after every N requests"
+)
+@click.option(
+    "--sleep-time", "sleep_time", default=None, type=float, help="Sleep duration in seconds"
+)
 @click.option("--debug-dir", "debug_dir", default=None, help="Directory for debug outputs")
 @click.option("--dump-protected", "dump_protected", is_flag=True, help="Write protected markdown")
-@click.option("--dump-placeholders", "dump_placeholders", is_flag=True, help="Write placeholder mapping JSON")
+@click.option(
+    "--dump-placeholders", "dump_placeholders", is_flag=True, help="Write placeholder mapping JSON"
+)
 @click.option("--dump-nodes", "dump_nodes", is_flag=True, help="Write per-node translation JSON")
 @click.option(
     "--dump-requests-log",
@@ -254,7 +288,9 @@ def translator() -> None:
     help="Write request/response attempts to JSON log",
 )
 @click.option("--no-format", "no_format", is_flag=True, help="Disable rumdl formatting")
-@click.option("--dry-run", "dry_run", is_flag=True, help="Discover inputs without calling providers")
+@click.option(
+    "--dry-run", "dry_run", is_flag=True, help="Discover inputs without calling providers"
+)
 @click.option("--force", "force", is_flag=True, help="Overwrite existing outputs")
 @click.option("-v", "--verbose", is_flag=True, help="Enable verbose logging")
 def translate(
@@ -639,7 +675,9 @@ def translate(
     max_tokens = provider.max_tokens if provider.type == "claude" else None
     retry_max_tokens = retry_provider.max_tokens if retry_provider.type == "claude" else None
     fallback_max_tokens = (
-        fallback_provider.max_tokens if fallback_provider and fallback_provider.type == "claude" else None
+        fallback_provider.max_tokens
+        if fallback_provider and fallback_provider.type == "claude"
+        else None
     )
     fallback_max_tokens_2 = (
         fallback_provider_2.max_tokens
@@ -652,7 +690,9 @@ def translate(
         from deepresearch_flow.translator.progress import ProgressReporter
         from deepresearch_flow.translator.scheduler import DocStage, QueueConfig, Scheduler
 
-        nonlocal_document_window = document_window if document_window is not None else len(to_process)
+        nonlocal_document_window = (
+            document_window if document_window is not None else len(to_process)
+        )
         main_capacity = main_concurrency or max_concurrency or initial_workers
         retry_capacity = retry_concurrency_val
         fallback_capacity = fallback_concurrency_val or max_concurrency or fallback_workers
@@ -669,11 +709,7 @@ def translate(
 
         global_sem = asyncio.Semaphore(global_capacity)
         main_sem = asyncio.Semaphore(main_capacity)
-        retry_sem = (
-            asyncio.Semaphore(retry_capacity)
-            if retry_capacity is not None
-            else main_sem
-        )
+        retry_sem = asyncio.Semaphore(retry_capacity) if retry_capacity is not None else main_sem
         fb_sem = asyncio.Semaphore(fallback_capacity)
         fb2_sem = asyncio.Semaphore(fallback_2_capacity)
 

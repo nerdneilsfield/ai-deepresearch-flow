@@ -46,7 +46,13 @@ def _basic_provider() -> ProviderConfig:
     return ProviderConfig(
         name="openai",
         type="openai_compatible",
-        base=[BaseConfig(url="https://api.example.com/v1", weight=1, key=[KeyConfig(value="test-key", weight=1)])],
+        base=[
+            BaseConfig(
+                url="https://api.example.com/v1",
+                weight=1,
+                key=[KeyConfig(value="test-key", weight=1)],
+            )
+        ],
         models=[
             ModelCapability(
                 model_name="gpt-4.1",
@@ -84,8 +90,16 @@ def _basic_config(*, with_embedding: bool = False) -> PaperConfig:
                 EmbeddingProviderConfig(
                     name="ollama",
                     type="openai_compatible",
-                    base=[BaseConfig(url="http://localhost:11434/v1", weight=1, key=[KeyConfig(value="ollama", weight=1)])],
-                    models=[EmbeddingModelConfig(model_name="bge-m3", dimensions=1024, max_context=8192)],
+                    base=[
+                        BaseConfig(
+                            url="http://localhost:11434/v1",
+                            weight=1,
+                            key=[KeyConfig(value="ollama", weight=1)],
+                        )
+                    ],
+                    models=[
+                        EmbeddingModelConfig(model_name="bge-m3", dimensions=1024, max_context=8192)
+                    ],
                 )
             ],
         )
@@ -121,7 +135,9 @@ def test_provider_window_error_as_click_allows_click_exception_to_pass_through()
             raise click.ClickException("already wrapped")
 
 
-def test_translator_cli_wraps_provider_window_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_translator_cli_wraps_provider_window_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     import deepresearch_flow.translator.cli as mod
 
     source_path = tmp_path / "doc.md"
@@ -130,9 +146,13 @@ def test_translator_cli_wraps_provider_window_error(tmp_path: Path, monkeypatch:
     monkeypatch.setattr(
         mod,
         "parse_model_selector",
-        lambda *args, **kwargs: ParsedModelSelector(kind="single", fixed_model="openai/gpt-4.1", pool=[]),
+        lambda *args, **kwargs: ParsedModelSelector(
+            kind="single", fixed_model="openai/gpt-4.1", pool=[]
+        ),
     )
-    monkeypatch.setattr(mod, "select_runtime_route", lambda *args, **kwargs: (_ for _ in ()).throw(_window_error()))
+    monkeypatch.setattr(
+        mod, "select_runtime_route", lambda *args, **kwargs: (_ for _ in ()).throw(_window_error())
+    )
 
     result = CliRunner().invoke(
         cli,
@@ -142,7 +162,9 @@ def test_translator_cli_wraps_provider_window_error(tmp_path: Path, monkeypatch:
     _assert_wrapped_cli_error(result)
 
 
-def test_recognize_cli_wraps_provider_window_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_recognize_cli_wraps_provider_window_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     import deepresearch_flow.recognize.cli as mod
 
     source_path = tmp_path / "doc.md"
@@ -152,38 +174,65 @@ def test_recognize_cli_wraps_provider_window_error(tmp_path: Path, monkeypatch: 
     monkeypatch.setattr(
         mod,
         "parse_model_selector",
-        lambda *args, **kwargs: ParsedModelSelector(kind="single", fixed_model="openai/gpt-4.1", pool=[]),
+        lambda *args, **kwargs: ParsedModelSelector(
+            kind="single", fixed_model="openai/gpt-4.1", pool=[]
+        ),
     )
-    monkeypatch.setattr(mod, "select_runtime_route", lambda *args, **kwargs: (_ for _ in ()).throw(_window_error()))
+    monkeypatch.setattr(
+        mod, "select_runtime_route", lambda *args, **kwargs: (_ for _ in ()).throw(_window_error())
+    )
 
     result = CliRunner().invoke(
         cli,
-        ["recognize", "fix-math", "--input", str(source_path), "--in-place", "--model", "openai/gpt-4.1"],
+        [
+            "recognize",
+            "fix-math",
+            "--input",
+            str(source_path),
+            "--in-place",
+            "--model",
+            "openai/gpt-4.1",
+        ],
     )
 
     _assert_wrapped_cli_error(result)
 
 
-def test_utils_cli_wraps_provider_window_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_utils_cli_wraps_provider_window_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     import deepresearch_flow.utils.cli as mod
 
     monkeypatch.setattr(mod, "load_config", lambda path: _basic_config())
     monkeypatch.setattr(
         mod,
         "parse_model_selector",
-        lambda *args, **kwargs: ParsedModelSelector(kind="single", fixed_model="openai/gpt-4.1", pool=[]),
+        lambda *args, **kwargs: ParsedModelSelector(
+            kind="single", fixed_model="openai/gpt-4.1", pool=[]
+        ),
     )
-    monkeypatch.setattr(mod, "select_runtime_route", lambda *args, **kwargs: (_ for _ in ()).throw(_window_error()))
+    monkeypatch.setattr(
+        mod, "select_runtime_route", lambda *args, **kwargs: (_ for _ in ()).throw(_window_error())
+    )
 
     result = CliRunner().invoke(
         cli,
-        ["utils", "test-mode", "--config", str(tmp_path / "config.toml"), "--model", "openai/gpt-4.1"],
+        [
+            "utils",
+            "test-mode",
+            "--config",
+            str(tmp_path / "config.toml"),
+            "--model",
+            "openai/gpt-4.1",
+        ],
     )
 
     _assert_wrapped_cli_error(result)
 
 
-def test_paper_embed_cli_wraps_provider_window_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_paper_embed_cli_wraps_provider_window_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     import deepresearch_flow.paper.cli as mod
     import deepresearch_flow.paper.embed_pipeline as embed_pipeline
     import deepresearch_flow.paper.vector_store as vector_store
@@ -218,7 +267,9 @@ def test_paper_db_generate_tags_cli_wraps_provider_window_error(
     monkeypatch.setattr(
         mod,
         "parse_model_selector",
-        lambda *args, **kwargs: ParsedModelSelector(kind="single", fixed_model="openai/gpt-4.1", pool=[]),
+        lambda *args, **kwargs: ParsedModelSelector(
+            kind="single", fixed_model="openai/gpt-4.1", pool=[]
+        ),
     )
     monkeypatch.setattr(mod, "RoutePool", _FakeRoutePool)
 

@@ -39,6 +39,7 @@ from deepresearch_flow.paper.render import resolve_render_template, render_paper
 try:
     from pybtex.database import BibliographyData, parse_file
     from pybtex.database.output.bibtex import Writer
+
     PYBTEX_AVAILABLE = True
 except ImportError:
     PYBTEX_AVAILABLE = False
@@ -108,9 +109,7 @@ def _expand_semantic_chunk_window(
     selected_window = _slice_by_index_range(ordered_chunks, start_chunk_idx, end_chunk_idx)
     selected_groups = {_semantic_group_key(chunk) for chunk in selected_window}
     expanded_chunks = [
-        chunk
-        for chunk in ordered_chunks
-        if _semantic_group_key(chunk) in selected_groups
+        chunk for chunk in ordered_chunks if _semantic_group_key(chunk) in selected_groups
     ]
     return ordered_chunks, expanded_chunks, selected_groups
 
@@ -149,25 +148,37 @@ def export_compare_csv(results: list[Any], output_path: Path) -> None:
 
     with open(output_path, "w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
-        writer.writerow([
-            "Side", "Source Hash", "Title", "Match Status", "Match Type",
-            "Match Score", "Source Path", "Other Source Hash", "Other Title",
-            "Other Source Path", "Lang"
-        ])
+        writer.writerow(
+            [
+                "Side",
+                "Source Hash",
+                "Title",
+                "Match Status",
+                "Match Type",
+                "Match Score",
+                "Source Path",
+                "Other Source Hash",
+                "Other Title",
+                "Other Source Path",
+                "Lang",
+            ]
+        )
         for result in results:
-            writer.writerow([
-                result.side,
-                result.source_hash,
-                result.title,
-                result.match_status,
-                result.match_type or "",
-                f"{result.match_score:.4f}",
-                result.source_path or "",
-                result.other_source_hash or "",
-                result.other_title or "",
-                result.other_source_path or "",
-                result.lang or "",
-            ])
+            writer.writerow(
+                [
+                    result.side,
+                    result.source_hash,
+                    result.title,
+                    result.match_status,
+                    result.match_type or "",
+                    f"{result.match_score:.4f}",
+                    result.source_path or "",
+                    result.other_source_hash or "",
+                    result.other_title or "",
+                    result.other_source_path or "",
+                    result.lang or "",
+                ]
+            )
 
 
 def export_only_in_b_paths(results: list[Any], output_path: Path) -> int:
@@ -439,8 +450,12 @@ def register_db_commands(db_group: click.Group) -> None:
         """Build production snapshot artifacts (SQLite + static export)."""
 
     @snapshot_group.command("build")
-    @click.option("-i", "--input", "input_paths", multiple=True, required=True, help="Input JSON file path")
-    @click.option("-c", "--config", "config_path", default="config.toml", help="Path to config.toml")
+    @click.option(
+        "-i", "--input", "input_paths", multiple=True, required=True, help="Input JSON file path"
+    )
+    @click.option(
+        "-c", "--config", "config_path", default="config.toml", help="Path to config.toml"
+    )
     @click.option("-b", "--bibtex", "bibtex_path", default=None, help="Optional BibTeX file path")
     @click.option(
         "--md-root",
@@ -463,7 +478,13 @@ def register_db_commands(db_group: click.Group) -> None:
         default=(),
         help="Optional PDF root directory (repeatable) for PDF discovery",
     )
-    @click.option("--output-db", "output_db", default="paper_snapshot.db", show_default=True, help="Output DB path")
+    @click.option(
+        "--output-db",
+        "output_db",
+        default="paper_snapshot.db",
+        show_default=True,
+        help="Output DB path",
+    )
     @click.option(
         "--static-export-dir",
         "static_export_dir",
@@ -477,7 +498,12 @@ def register_db_commands(db_group: click.Group) -> None:
         default=None,
         help="Optional previous snapshot DB path for identity continuity",
     )
-    @click.option("--output-embed-db", "output_embed_db", default=None, help="Build LanceDB vector index alongside snapshot")
+    @click.option(
+        "--output-embed-db",
+        "output_embed_db",
+        default=None,
+        help="Build LanceDB vector index alongside snapshot",
+    )
     @click.option("-v", "--verbose", is_flag=True, help="Show detailed snapshot build logs")
     def snapshot_build(
         input_paths: tuple[str, ...],
@@ -542,7 +568,9 @@ def register_db_commands(db_group: click.Group) -> None:
         required=True,
         help="PDF root directories for name alignment (repeatable)",
     )
-    @click.option("--md-output-dir", "md_output_dir", required=True, help="Output directory for Markdown")
+    @click.option(
+        "--md-output-dir", "md_output_dir", required=True, help="Output directory for Markdown"
+    )
     @click.option(
         "--md-translated-output-dir",
         "md_translated_output_dir",
@@ -651,10 +679,16 @@ def register_db_commands(db_group: click.Group) -> None:
         required=True,
         help="Type of missing artifact to export",
     )
-    @click.option("--template", "template", default=None, help="Template name (required for --type=template)")
-    @click.option("--lang", "lang", default=None, help="Language code (required for --type=translation)")
+    @click.option(
+        "--template", "template", default=None, help="Template name (required for --type=template)"
+    )
+    @click.option(
+        "--lang", "lang", default=None, help="Language code (required for --type=translation)"
+    )
     @click.option("--output", "output_json", default=None, help="Output JSON file path")
-    @click.option("--txt-output", "output_txt", default=None, help="Output TXT file path (paper IDs only)")
+    @click.option(
+        "--txt-output", "output_txt", default=None, help="Output TXT file path (paper IDs only)"
+    )
     @click.option(
         "--md-root",
         "md_roots",
@@ -714,14 +748,48 @@ def register_db_commands(db_group: click.Group) -> None:
         required=True,
         help="Path to static export directory",
     )
-    @click.option("-i", "--input", "input_paths", multiple=True, required=True, help="Input JSON file path (repeatable)")
+    @click.option(
+        "-i",
+        "--input",
+        "input_paths",
+        multiple=True,
+        required=True,
+        help="Input JSON file path (repeatable)",
+    )
     @click.option("-b", "--bibtex", "bibtex_path", default=None, help="Optional BibTeX file path")
-    @click.option("--md-root", "md_roots", multiple=True, default=[], help="Markdown root directories (repeatable)")
-    @click.option("--md-translated-root", "md_translated_roots", multiple=True, default=[], help="Translated markdown directories (repeatable)")
-    @click.option("--pdf-root", "pdf_roots", multiple=True, default=[], help="PDF root directories (repeatable)")
-    @click.option("--in-place", is_flag=True, help="Modify existing snapshot in place (creates backup)")
-    @click.option("--output-db", "output_db", default=None, help="Output database path (if not --in-place)")
-    @click.option("--output-static-dir", "output_static_dir", default=None, help="Output static directory (if not --in-place)")
+    @click.option(
+        "--md-root",
+        "md_roots",
+        multiple=True,
+        default=[],
+        help="Markdown root directories (repeatable)",
+    )
+    @click.option(
+        "--md-translated-root",
+        "md_translated_roots",
+        multiple=True,
+        default=[],
+        help="Translated markdown directories (repeatable)",
+    )
+    @click.option(
+        "--pdf-root",
+        "pdf_roots",
+        multiple=True,
+        default=[],
+        help="PDF root directories (repeatable)",
+    )
+    @click.option(
+        "--in-place", is_flag=True, help="Modify existing snapshot in place (creates backup)"
+    )
+    @click.option(
+        "--output-db", "output_db", default=None, help="Output database path (if not --in-place)"
+    )
+    @click.option(
+        "--output-static-dir",
+        "output_static_dir",
+        default=None,
+        help="Output static directory (if not --in-place)",
+    )
     def snapshot_update(
         snapshot_db: str,
         static_export_dir: str,
@@ -746,7 +814,9 @@ def register_db_commands(db_group: click.Group) -> None:
             input_paths=[Path(p) for p in input_paths],
             bibtex_path=Path(bibtex_path) if bibtex_path else None,
             md_roots=[Path(r) for r in md_roots] if md_roots else None,
-            md_translated_roots=[Path(r) for r in md_translated_roots] if md_translated_roots else None,
+            md_translated_roots=[Path(r) for r in md_translated_roots]
+            if md_translated_roots
+            else None,
             pdf_roots=[Path(r) for r in pdf_roots] if pdf_roots else None,
             in_place=in_place,
             output_db=Path(output_db) if output_db else None,
@@ -767,14 +837,48 @@ def register_db_commands(db_group: click.Group) -> None:
         required=True,
         help="Path to static export directory",
     )
-    @click.option("-i", "--input", "input_paths", multiple=True, required=True, help="Input JSON file path (repeatable)")
+    @click.option(
+        "-i",
+        "--input",
+        "input_paths",
+        multiple=True,
+        required=True,
+        help="Input JSON file path (repeatable)",
+    )
     @click.option("-b", "--bibtex", "bibtex_path", default=None, help="Optional BibTeX file path")
-    @click.option("--md-root", "md_roots", multiple=True, default=[], help="Markdown root directories (repeatable)")
-    @click.option("--md-translated-root", "md_translated_roots", multiple=True, default=[], help="Translated markdown directories (repeatable)")
-    @click.option("--pdf-root", "pdf_roots", multiple=True, default=[], help="PDF root directories (repeatable)")
-    @click.option("--in-place", is_flag=True, help="Modify existing snapshot in place (creates backup)")
-    @click.option("--output-db", "output_db", default=None, help="Output database path (if not --in-place)")
-    @click.option("--output-static-dir", "output_static_dir", default=None, help="Output static directory (if not --in-place)")
+    @click.option(
+        "--md-root",
+        "md_roots",
+        multiple=True,
+        default=[],
+        help="Markdown root directories (repeatable)",
+    )
+    @click.option(
+        "--md-translated-root",
+        "md_translated_roots",
+        multiple=True,
+        default=[],
+        help="Translated markdown directories (repeatable)",
+    )
+    @click.option(
+        "--pdf-root",
+        "pdf_roots",
+        multiple=True,
+        default=[],
+        help="PDF root directories (repeatable)",
+    )
+    @click.option(
+        "--in-place", is_flag=True, help="Modify existing snapshot in place (creates backup)"
+    )
+    @click.option(
+        "--output-db", "output_db", default=None, help="Output database path (if not --in-place)"
+    )
+    @click.option(
+        "--output-static-dir",
+        "output_static_dir",
+        default=None,
+        help="Output static directory (if not --in-place)",
+    )
     def snapshot_supplement(
         snapshot_db: str,
         static_export_dir: str,
@@ -788,7 +892,10 @@ def register_db_commands(db_group: click.Group) -> None:
         output_static_dir: str | None,
     ) -> None:
         """Supplement existing snapshot with missing templates/translations for existing papers."""
-        from deepresearch_flow.paper.snapshot.supplement import SnapshotSupplementOptions, supplement_snapshot
+        from deepresearch_flow.paper.snapshot.supplement import (
+            SnapshotSupplementOptions,
+            supplement_snapshot,
+        )
 
         if not in_place and not output_db:
             raise click.ClickException("Must specify either --in-place or --output-db")
@@ -799,7 +906,9 @@ def register_db_commands(db_group: click.Group) -> None:
             input_paths=[Path(p) for p in input_paths],
             bibtex_path=Path(bibtex_path) if bibtex_path else None,
             md_roots=[Path(r) for r in md_roots] if md_roots else None,
-            md_translated_roots=[Path(r) for r in md_translated_roots] if md_translated_roots else None,
+            md_translated_roots=[Path(r) for r in md_translated_roots]
+            if md_translated_roots
+            else None,
             pdf_roots=[Path(r) for r in pdf_roots] if pdf_roots else None,
             in_place=in_place,
             output_db=Path(output_db) if output_db else None,
@@ -808,12 +917,27 @@ def register_db_commands(db_group: click.Group) -> None:
         supplement_snapshot(opts)
 
     @snapshot_group.command("migrate")
-    @click.option("--snapshot-db", "snapshot_db", required=True, help="Path to existing snapshot database")
+    @click.option(
+        "--snapshot-db", "snapshot_db", required=True, help="Path to existing snapshot database"
+    )
     @click.option("--bibtex", "bibtex_path", default=None, help="Optional BibTeX file path")
-    @click.option("--static-export-dir", "static_export_dir", default=None, help="Optional static export directory to update")
-    @click.option("--in-place", is_flag=True, help="Modify database in place (creates timestamped backup)")
-    @click.option("--output-db", "output_db", default=None, help="Output database path (if not --in-place)")
-    @click.option("--backup/--no-backup", default=True, help="Create backup when using --in-place (default: yes)")
+    @click.option(
+        "--static-export-dir",
+        "static_export_dir",
+        default=None,
+        help="Optional static export directory to update",
+    )
+    @click.option(
+        "--in-place", is_flag=True, help="Modify database in place (creates timestamped backup)"
+    )
+    @click.option(
+        "--output-db", "output_db", default=None, help="Output database path (if not --in-place)"
+    )
+    @click.option(
+        "--backup/--no-backup",
+        default=True,
+        help="Create backup when using --in-place (default: yes)",
+    )
     def snapshot_migrate(
         snapshot_db: str,
         bibtex_path: str | None,
@@ -867,7 +991,9 @@ def register_db_commands(db_group: click.Group) -> None:
         else:
             target_path = Path(output_db)
             if target_path.exists():
-                if not click.confirm(f"Output database {target_path} exists. Overwrite?", default=False):
+                if not click.confirm(
+                    f"Output database {target_path} exists. Overwrite?", default=False
+                ):
                     console.print("[red]Aborted.[/red]")
                     return
             # Copy to output location
@@ -904,7 +1030,9 @@ def register_db_commands(db_group: click.Group) -> None:
                 if not bibtex_file.exists():
                     raise click.ClickException(f"BibTeX file not found: {bibtex_file}")
 
-                console.print(f"[bold]2. BibTeX Enrichment[/bold] from [yellow]{bibtex_file.name}[/yellow]")
+                console.print(
+                    f"[bold]2. BibTeX Enrichment[/bold] from [yellow]{bibtex_file.name}[/yellow]"
+                )
                 matched, doi_count, total = enrich_db_with_bibtex(conn, bibtex_file)
 
                 bibtex_table = Table(show_header=True, header_style="bold magenta", box=None)
@@ -912,12 +1040,22 @@ def register_db_commands(db_group: click.Group) -> None:
                 bibtex_table.add_column("Count", justify="right", style="green")
                 bibtex_table.add_column("Percentage", justify="right")
                 bibtex_table.add_row("Total papers", str(total), "")
-                bibtex_table.add_row("BibTeX matched", str(matched), f"{matched/total*100:.1f}%" if total else "0%")
-                bibtex_table.add_row("DOI extracted", str(doi_count), f"{doi_count/total*100:.1f}%" if total else "0%")
+                bibtex_table.add_row(
+                    "BibTeX matched",
+                    str(matched),
+                    f"{matched / total * 100:.1f}%" if total else "0%",
+                )
+                bibtex_table.add_row(
+                    "DOI extracted",
+                    str(doi_count),
+                    f"{doi_count / total * 100:.1f}%" if total else "0%",
+                )
                 console.print(bibtex_table)
                 console.print()
             else:
-                console.print("[yellow]2. BibTeX Enrichment[/yellow]: Skipped (no BibTeX file provided)")
+                console.print(
+                    "[yellow]2. BibTeX Enrichment[/yellow]: Skipped (no BibTeX file provided)"
+                )
                 console.print()
 
             # Commit changes
@@ -930,17 +1068,23 @@ def register_db_commands(db_group: click.Group) -> None:
                     console.print(f"[bold]3. Static Export Update[/bold]")
                     updated_count = update_static_export_index(static_path, conn)
                     if updated_count > 0:
-                        console.print(f"  [green]✓[/green] Updated {updated_count} papers in paper_index.json")
+                        console.print(
+                            f"  [green]✓[/green] Updated {updated_count} papers in paper_index.json"
+                        )
                     else:
-                        console.print(f"  [yellow]○[/yellow] paper_index.json not found or no updates needed")
+                        console.print(
+                            f"  [yellow]○[/yellow] paper_index.json not found or no updates needed"
+                        )
                     console.print()
 
-            console.print(Panel(
-                f"[bold green]Migration Complete![/bold green]\n\n"
-                f"Database: [yellow]{target_path}[/yellow]",
-                border_style="green",
-                padding=(1, 2)
-            ))
+            console.print(
+                Panel(
+                    f"[bold green]Migration Complete![/bold green]\n\n"
+                    f"Database: [yellow]{target_path}[/yellow]",
+                    border_style="green",
+                    padding=(1, 2),
+                )
+            )
 
         except Exception as e:
             conn.rollback()
@@ -967,14 +1111,32 @@ def register_db_commands(db_group: click.Group) -> None:
         default=(),
         help="Allowed CORS origin (repeatable; default is '*')",
     )
-    @click.option("--max-query-length", "max_query_length", type=int, default=500, show_default=True)
+    @click.option(
+        "--max-query-length", "max_query_length", type=int, default=500, show_default=True
+    )
     @click.option("--max-page-size", "max_page_size", type=int, default=100, show_default=True)
-    @click.option("--max-pagination-offset", "max_pagination_offset", type=int, default=10000, show_default=True)
+    @click.option(
+        "--max-pagination-offset",
+        "max_pagination_offset",
+        type=int,
+        default=10000,
+        show_default=True,
+    )
     @click.option("--host", default="127.0.0.1", show_default=True, help="Bind host")
     @click.option("--port", default=8001, type=int, show_default=True, help="Bind port")
-    @click.option("--embed-db", "embed_db", default=None, help="LanceDB directory for semantic search")
-    @click.option("--search-access-token", "search_access_token_cli", default=None, envvar="SEARCH_ACCESS_TOKEN", help="Token to gate advanced search")
-    @click.option("-c", "--config", "config_path", default="config.toml", help="Path to config.toml")
+    @click.option(
+        "--embed-db", "embed_db", default=None, help="LanceDB directory for semantic search"
+    )
+    @click.option(
+        "--search-access-token",
+        "search_access_token_cli",
+        default=None,
+        envvar="SEARCH_ACCESS_TOKEN",
+        help="Token to gate advanced search",
+    )
+    @click.option(
+        "-c", "--config", "config_path", default="config.toml", help="Path to config.toml"
+    )
     @click.option(
         "--admin-token",
         "admin_token",
@@ -1133,8 +1295,12 @@ def register_db_commands(db_group: click.Group) -> None:
                 raise click.ClickException(
                     "Advanced search requires LanceDB path via --embed-db or config.search.vector_dir"
                 )
-            if embed_db and paper_config.search.vector_dir and \
-                    str(Path(embed_db).resolve()) != str(Path(paper_config.search.vector_dir).resolve()):
+            if (
+                embed_db
+                and paper_config.search.vector_dir
+                and str(Path(embed_db).resolve())
+                != str(Path(paper_config.search.vector_dir).resolve())
+            ):
                 click.echo(
                     f"[WARN] --embed-db ({embed_db}) differs from config.search.vector_dir ({paper_config.search.vector_dir}); using CLI",
                     err=True,
@@ -1165,9 +1331,7 @@ def register_db_commands(db_group: click.Group) -> None:
                     provider=embedding_provider.name,
                 )
             except Exception as exc:
-                raise click.ClickException(
-                    f"Advanced search INDEX_MISMATCH: {exc}"
-                ) from exc
+                raise click.ClickException(f"Advanced search INDEX_MISMATCH: {exc}") from exc
 
             embedding_pool = RoutePool.from_embedding_provider(paper_config.embedding)
             rerank_pool = None
@@ -1209,7 +1373,9 @@ def register_db_commands(db_group: click.Group) -> None:
         uvicorn.run(app, host=host, port=port, log_level="info")
 
     @api_group.command("push")
-    @click.option("--snapshot-db", "snapshot_db", required=True, help="Path to local paper_snapshot.db")
+    @click.option(
+        "--snapshot-db", "snapshot_db", required=True, help="Path to local paper_snapshot.db"
+    )
     @click.option(
         "--static-export-dir",
         "static_export_dir",
@@ -1223,7 +1389,9 @@ def register_db_commands(db_group: click.Group) -> None:
         show_default=True,
         help="Path to remote config TOML file",
     )
-    @click.option("--dry-run", is_flag=True, default=False, help="Extract and show stats without pushing")
+    @click.option(
+        "--dry-run", is_flag=True, default=False, help="Extract and show stats without pushing"
+    )
     @click.option(
         "--retry-failed",
         "retry_failed_path",
@@ -1231,8 +1399,18 @@ def register_db_commands(db_group: click.Group) -> None:
         type=click.Path(exists=True),
         help="Path to push-static-errors.json to retry only failed static files",
     )
-    @click.option("--only-storage", is_flag=True, default=False, help="Push only static storage; skip admin API")
-    @click.option("--only-api", is_flag=True, default=False, help="Push only admin API; skip static storage and semantic chunks")
+    @click.option(
+        "--only-storage",
+        is_flag=True,
+        default=False,
+        help="Push only static storage; skip admin API",
+    )
+    @click.option(
+        "--only-api",
+        is_flag=True,
+        default=False,
+        help="Push only admin API; skip static storage and semantic chunks",
+    )
     @click.option(
         "--embed-db",
         "embed_db",
@@ -1248,7 +1426,14 @@ def register_db_commands(db_group: click.Group) -> None:
         show_default=True,
         help="Concurrent workers for static storage push",
     )
-    @click.option("--start-idx", "start_idx", type=int, default=0, show_default=True, help="0-based start index for papers")
+    @click.option(
+        "--start-idx",
+        "start_idx",
+        type=int,
+        default=0,
+        show_default=True,
+        help="0-based start index for papers",
+    )
     @click.option(
         "--end-idx",
         "end_idx",
@@ -1334,7 +1519,9 @@ def register_db_commands(db_group: click.Group) -> None:
                 return
 
         if retry_mode == "static" and not config.storage:
-            raise click.ClickException("--retry-failed static retry requires [remote.storage] in config")
+            raise click.ClickException(
+                "--retry-failed static retry requires [remote.storage] in config"
+            )
         if retry_mode == "static" and not static_dir:
             raise click.ClickException("Static retry report requires --static-export-dir")
         if retry_mode == "semantic" and not embed_db:
@@ -1346,7 +1533,9 @@ def register_db_commands(db_group: click.Group) -> None:
         console.print(f"[cyan]Batch size:[/cyan] {config.batch_size}")
 
         should_push_api = not only_storage and retry_mode == "none"
-        should_push_storage = not only_api and static_dir and config.storage and retry_mode in {"none", "static"}
+        should_push_storage = (
+            not only_api and static_dir and config.storage and retry_mode in {"none", "static"}
+        )
         should_push_semantic = embed_db is not None and not only_api and retry_mode != "static"
 
         selected_doc_ids: set[str] | None = None
@@ -1370,7 +1559,9 @@ def register_db_commands(db_group: click.Group) -> None:
                 return
 
             templates_count = sum(1 for p in papers if p.get("templates"))
-            console.print(f"[cyan]Papers with summary payloads:[/cyan] {templates_count}/{len(papers)}")
+            console.print(
+                f"[cyan]Papers with summary payloads:[/cyan] {templates_count}/{len(papers)}"
+            )
 
             if dry_run:
                 console.print("[yellow]Dry run — not pushing[/yellow]")
@@ -1380,7 +1571,9 @@ def register_db_commands(db_group: click.Group) -> None:
                 table.add_column("templates", justify="right")
                 for p in papers[:20]:
                     t_count = len(p.get("templates", {}))
-                    table.add_row(p["paper_id"][:16] + "…", p.get("paper_title", "")[:60], str(t_count))
+                    table.add_row(
+                        p["paper_id"][:16] + "…", p.get("paper_title", "")[:60], str(t_count)
+                    )
                 if len(papers) > 20:
                     table.add_row("…", f"and {len(papers) - 20} more", "")
                 console.print(table)
@@ -1411,7 +1604,9 @@ def register_db_commands(db_group: click.Group) -> None:
             result_table.add_row("Total papers", str(stats.total))
             result_table.add_row("Added", f"[green]{stats.added}[/green]")
             result_table.add_row("Skipped (duplicates)", f"[yellow]{stats.skipped}[/yellow]")
-            result_table.add_row("Errors", f"[red]{len(stats.errors)}[/red]" if stats.errors else "0")
+            result_table.add_row(
+                "Errors", f"[red]{len(stats.errors)}[/red]" if stats.errors else "0"
+            )
             result_table.add_row("Batches sent", str(stats.batches_sent))
             console.print(result_table)
 
@@ -1421,9 +1616,7 @@ def register_db_commands(db_group: click.Group) -> None:
                     console.print(f"  index={err.get('index')}: {err.get('error')}")
                 if len(stats.errors) > 10:
                     console.print(f"  ... and {len(stats.errors) - 10} more")
-                raise click.ClickException(
-                    f"{len(stats.errors)} paper(s) failed to insert"
-                )
+                raise click.ClickException(f"{len(stats.errors)} paper(s) failed to insert")
 
         # --- Static file push via remote storage ---
         if should_push_storage:
@@ -1445,7 +1638,11 @@ def register_db_commands(db_group: click.Group) -> None:
             console.print(f"[cyan]Storage:[/cyan] {config.storage.type} → {config.storage.url}")
             console.print(f"[cyan]Storage concurrency:[/cyan] {storage_concurrency}")
             static_files = discover_static_files(static_dir, only_files=only_files)
-            progress = tqdm(total=len(static_files), desc="Static push", unit="file") if static_files else None
+            progress = (
+                tqdm(total=len(static_files), desc="Static push", unit="file")
+                if static_files
+                else None
+            )
             progress_counts = {"uploaded": 0, "skipped": 0, "failed": 0}
 
             def on_static_file_result(rel_path: str, kind: str, error: str = "") -> None:
@@ -1494,7 +1691,9 @@ def register_db_commands(db_group: click.Group) -> None:
                 "[bold]Total[/bold]",
                 f"[bold green]{static_stats.uploaded}[/bold green]",
                 f"[bold dim]{static_stats.skipped}[/bold dim]",
-                f"[bold red]{static_stats.failed}[/bold red]" if static_stats.failed else "[bold]0[/bold]",
+                f"[bold red]{static_stats.failed}[/bold red]"
+                if static_stats.failed
+                else "[bold]0[/bold]",
             )
             console.print(static_table)
 
@@ -1519,7 +1718,11 @@ def register_db_commands(db_group: click.Group) -> None:
                 push_semantic_chunks,
                 write_error_report as write_semantic_error_report,
             )
-            from deepresearch_flow.paper.vector_store import load_index_meta, open_store, read_all_chunks
+            from deepresearch_flow.paper.vector_store import (
+                load_index_meta,
+                open_store,
+                read_all_chunks,
+            )
 
             embed_path = Path(embed_db)
             if not embed_path.exists():
@@ -1535,7 +1738,9 @@ def register_db_commands(db_group: click.Group) -> None:
                         if str(request.get("group", {}).get("doc_id") or "") in selected_doc_ids
                     ]
                 all_chunks: list[dict[str, Any]] = []
-                semantic_chunk_total = sum(len(list(request.get("chunks") or [])) for request in semantic_requests)
+                semantic_chunk_total = sum(
+                    len(list(request.get("chunks") or [])) for request in semantic_requests
+                )
             else:
                 embed_store = open_store(embed_path)
                 all_chunks = read_all_chunks(embed_store)
@@ -1565,9 +1770,18 @@ def register_db_commands(db_group: click.Group) -> None:
                 )
                 console.print(f"[cyan]Semantic requests:[/cyan] {len(semantic_requests)}")
                 progress = tqdm(total=semantic_chunk_total, desc="Semantic push", unit="chunk")
-                progress_counts = {"requests": 0, "retries": 0, "ins": 0, "upd": 0, "skip": 0, "del": 0}
+                progress_counts = {
+                    "requests": 0,
+                    "retries": 0,
+                    "ins": 0,
+                    "upd": 0,
+                    "skip": 0,
+                    "del": 0,
+                }
 
-                def on_semantic_batch(batch_idx: int, chunk_count: int, data: dict[str, Any]) -> None:
+                def on_semantic_batch(
+                    batch_idx: int, chunk_count: int, data: dict[str, Any]
+                ) -> None:
                     progress_counts["requests"] = batch_idx + 1
                     progress_counts["ins"] += int(data.get("inserted", 0))
                     progress_counts["upd"] += int(data.get("updated", 0))
@@ -1576,7 +1790,9 @@ def register_db_commands(db_group: click.Group) -> None:
                     progress.update(chunk_count)
                     progress.set_postfix(progress_counts, refresh=False)
 
-                def on_semantic_retry(batch_idx: int, attempt: int, failure: dict[str, Any]) -> None:
+                def on_semantic_retry(
+                    batch_idx: int, attempt: int, failure: dict[str, Any]
+                ) -> None:
                     progress_counts["retries"] += 1
                     progress.set_postfix(progress_counts, refresh=False)
                     console.print(
@@ -1589,6 +1805,7 @@ def register_db_commands(db_group: click.Group) -> None:
                         f"payload_bytes={failure.get('payload_bytes', 0)} "
                         f"error={failure.get('error')}"
                     )
+
                 try:
                     semantic_stats = push_semantic_chunks(
                         all_chunks,
@@ -1681,7 +1898,11 @@ def register_db_commands(db_group: click.Group) -> None:
             push_semantic_chunks,
             write_error_report as write_semantic_error_report,
         )
-        from deepresearch_flow.paper.vector_store import load_index_meta, open_store, read_all_chunks
+        from deepresearch_flow.paper.vector_store import (
+            load_index_meta,
+            open_store,
+            read_all_chunks,
+        )
 
         console = Console()
 
@@ -1720,7 +1941,9 @@ def register_db_commands(db_group: click.Group) -> None:
 
         if retry_semantic_requests is not None:
             semantic_requests = retry_semantic_requests
-            semantic_chunk_total = sum(len(list(request.get("chunks") or [])) for request in semantic_requests)
+            semantic_chunk_total = sum(
+                len(list(request.get("chunks") or [])) for request in semantic_requests
+            )
             selected_groups = {
                 (
                     str(request.get("group", {}).get("doc_id") or ""),
@@ -1847,7 +2070,9 @@ def register_db_commands(db_group: click.Group) -> None:
                     "key": key,
                     "type": entry.type,
                     "fields": dict(entry.fields),
-                    "persons": {role: [str(p) for p in persons] for role, persons in entry.persons.items()},
+                    "persons": {
+                        role: [str(p) for p in persons] for role, persons in entry.persons.items()
+                    },
                 }
             )
 
@@ -1937,7 +2162,9 @@ def register_db_commands(db_group: click.Group) -> None:
 
     @db_group.command("statistics")
     @click.option("-i", "--input", "input_path", required=True, help="Input JSON file path")
-    @click.option("--top-n", "top_n", default=20, type=int, show_default=True, help="Top N rows to show")
+    @click.option(
+        "--top-n", "top_n", default=20, type=int, show_default=True, help="Top N rows to show"
+    )
     def statistics(input_path: str, top_n: int) -> None:
         papers = load_json(Path(input_path))
         console = Console()
@@ -1951,6 +2178,7 @@ def register_db_commands(db_group: click.Group) -> None:
         journal_counts: dict[str, int] = {}
         conference_counts: dict[str, int] = {}
         other_venue_counts: dict[str, int] = {}
+
         def normalize_keywords(value: Any) -> list[str]:
             if value is None:
                 return []
@@ -1966,6 +2194,7 @@ def register_db_commands(db_group: click.Group) -> None:
                 if token:
                     normalized.append(token)
             return normalized
+
         for paper in papers:
             bibtex_fields = {}
             bibtex_type = None
@@ -1997,34 +2226,49 @@ def register_db_commands(db_group: click.Group) -> None:
             venue = None
             if bibtex_type in {"article"}:
                 venue = bibtex_fields.get("journal")
-                journal_counts[clean_journal_name(venue)] = journal_counts.get(
-                    clean_journal_name(venue),
-                    0,
-                ) + 1
+                journal_counts[clean_journal_name(venue)] = (
+                    journal_counts.get(
+                        clean_journal_name(venue),
+                        0,
+                    )
+                    + 1
+                )
             elif bibtex_type in {"inproceedings", "conference", "proceedings"}:
                 venue = bibtex_fields.get("booktitle")
-                conference_counts[clean_conference_name(venue)] = conference_counts.get(
-                    clean_conference_name(venue),
-                    0,
-                ) + 1
+                conference_counts[clean_conference_name(venue)] = (
+                    conference_counts.get(
+                        clean_conference_name(venue),
+                        0,
+                    )
+                    + 1
+                )
             else:
                 extracted_venue = paper.get("publication_venue")
                 venue_kind = classify_venue(extracted_venue)
                 if venue_kind == "journal":
-                    journal_counts[clean_journal_name(extracted_venue)] = journal_counts.get(
-                        clean_journal_name(extracted_venue),
-                        0,
-                    ) + 1
+                    journal_counts[clean_journal_name(extracted_venue)] = (
+                        journal_counts.get(
+                            clean_journal_name(extracted_venue),
+                            0,
+                        )
+                        + 1
+                    )
                 elif venue_kind == "conference":
-                    conference_counts[clean_conference_name(extracted_venue)] = conference_counts.get(
-                        clean_conference_name(extracted_venue),
-                        0,
-                    ) + 1
+                    conference_counts[clean_conference_name(extracted_venue)] = (
+                        conference_counts.get(
+                            clean_conference_name(extracted_venue),
+                            0,
+                        )
+                        + 1
+                    )
                 elif extracted_venue:
-                    other_venue_counts[clean_conference_name(extracted_venue)] = other_venue_counts.get(
-                        clean_conference_name(extracted_venue),
-                        0,
-                    ) + 1
+                    other_venue_counts[clean_conference_name(extracted_venue)] = (
+                        other_venue_counts.get(
+                            clean_conference_name(extracted_venue),
+                            0,
+                        )
+                        + 1
+                    )
 
         total = len(papers)
         console.print(f"Total papers: {total}")
@@ -2036,6 +2280,7 @@ def register_db_commands(db_group: click.Group) -> None:
         year_table.add_column("Distribution", style="magenta")
 
         max_year = max(year_counts.values()) if year_counts else 0
+
         def year_sort_key(item: tuple[str, int]) -> tuple[int, int]:
             label = item[0]
             if label == "Unknown":
@@ -2061,6 +2306,7 @@ def register_db_commands(db_group: click.Group) -> None:
         month_table.add_column("Distribution", style="magenta")
 
         max_month = max(month_counts.values()) if month_counts else 0
+
         def month_sort_key(item: tuple[str, int]) -> int:
             if item[0] == "Unknown":
                 return 99
@@ -2083,7 +2329,9 @@ def register_db_commands(db_group: click.Group) -> None:
             journal_table.add_column("Journal", style="cyan")
             journal_table.add_column("Count", style="green", justify="right")
             journal_table.add_column("Percentage", style="yellow", justify="right")
-            for journal, count in sorted(journal_counts.items(), key=lambda item: item[1], reverse=True)[:top_n]:
+            for journal, count in sorted(
+                journal_counts.items(), key=lambda item: item[1], reverse=True
+            )[:top_n]:
                 percentage = (count / total * 100) if total else 0
                 journal_table.add_row(journal, str(count), f"{percentage:.1f}%")
             console.print(journal_table)
@@ -2093,7 +2341,9 @@ def register_db_commands(db_group: click.Group) -> None:
             conference_table.add_column("Conference", style="cyan")
             conference_table.add_column("Count", style="green", justify="right")
             conference_table.add_column("Percentage", style="yellow", justify="right")
-            for conference, count in sorted(conference_counts.items(), key=lambda item: item[1], reverse=True)[:top_n]:
+            for conference, count in sorted(
+                conference_counts.items(), key=lambda item: item[1], reverse=True
+            )[:top_n]:
                 percentage = (count / total * 100) if total else 0
                 conference_table.add_row(conference, str(count), f"{percentage:.1f}%")
             console.print(conference_table)
@@ -2103,7 +2353,9 @@ def register_db_commands(db_group: click.Group) -> None:
             other_table.add_column("Venue", style="cyan")
             other_table.add_column("Count", style="green", justify="right")
             other_table.add_column("Percentage", style="yellow", justify="right")
-            for venue, count in sorted(other_venue_counts.items(), key=lambda item: item[1], reverse=True)[:top_n]:
+            for venue, count in sorted(
+                other_venue_counts.items(), key=lambda item: item[1], reverse=True
+            )[:top_n]:
                 percentage = (count / total * 100) if total else 0
                 other_table.add_row(venue, str(count), f"{percentage:.1f}%")
             console.print(other_table)
@@ -2113,7 +2365,9 @@ def register_db_commands(db_group: click.Group) -> None:
             author_table.add_column("Author", style="cyan")
             author_table.add_column("Papers", style="green", justify="right")
             author_table.add_column("Percentage", style="yellow", justify="right")
-            for author, count in sorted(author_counts.items(), key=lambda item: item[1], reverse=True)[:top_n]:
+            for author, count in sorted(
+                author_counts.items(), key=lambda item: item[1], reverse=True
+            )[:top_n]:
                 percentage = (count / total * 100) if total else 0
                 author_table.add_row(author, str(count), f"{percentage:.1f}%")
             console.print(author_table)
@@ -2123,7 +2377,9 @@ def register_db_commands(db_group: click.Group) -> None:
             tag_table.add_column("Tag", style="cyan")
             tag_table.add_column("Count", style="green", justify="right")
             tag_table.add_column("Percentage", style="yellow", justify="right")
-            for tag, count in sorted(tag_counts.items(), key=lambda item: item[1], reverse=True)[:top_n]:
+            for tag, count in sorted(tag_counts.items(), key=lambda item: item[1], reverse=True)[
+                :top_n
+            ]:
                 percentage = (count / total * 100) if total else 0
                 tag_table.add_row(tag, str(count), f"{percentage:.1f}%")
             console.print(tag_table)
@@ -2133,13 +2389,17 @@ def register_db_commands(db_group: click.Group) -> None:
             keyword_table.add_column("Keyword", style="cyan")
             keyword_table.add_column("Count", style="green", justify="right")
             keyword_table.add_column("Percentage", style="yellow", justify="right")
-            for keyword, count in sorted(keyword_counts.items(), key=lambda item: item[1], reverse=True)[:top_n]:
+            for keyword, count in sorted(
+                keyword_counts.items(), key=lambda item: item[1], reverse=True
+            )[:top_n]:
                 percentage = (count / total * 100) if total else 0
                 keyword_table.add_row(keyword, str(count), f"{percentage:.1f}%")
             console.print(keyword_table)
 
     @db_group.command("serve")
-    @click.option("-i", "--input", "input_paths", multiple=True, required=True, help="Input JSON file path")
+    @click.option(
+        "-i", "--input", "input_paths", multiple=True, required=True, help="Input JSON file path"
+    )
     @click.option("-b", "--bibtex", "bibtex_path", default=None, help="Optional BibTeX file path")
     @click.option(
         "--md-root",
@@ -2162,7 +2422,9 @@ def register_db_commands(db_group: click.Group) -> None:
         default=(),
         help="Optional PDF root directory (repeatable) for in-page PDF viewing",
     )
-    @click.option("--cache-dir", "cache_dir", default=None, help="Cache directory for merged inputs")
+    @click.option(
+        "--cache-dir", "cache_dir", default=None, help="Cache directory for merged inputs"
+    )
     @click.option("--no-cache", "no_cache", is_flag=True, help="Disable cache for db serve")
     @click.option(
         "--static-base-url",
@@ -2192,9 +2454,19 @@ def register_db_commands(db_group: click.Group) -> None:
     )
     @click.option("--host", default="127.0.0.1", show_default=True, help="Bind host")
     @click.option("--port", default=8000, type=int, show_default=True, help="Bind port")
-    @click.option("--embed-db", "embed_db", default=None, help="LanceDB directory for semantic search")
-    @click.option("--search-access-token", "search_access_token", default=None, envvar="SEARCH_ACCESS_TOKEN", help="Token to gate semantic search")
-    @click.option("-c", "--config", "config_path", default="config.toml", help="Path to config.toml")
+    @click.option(
+        "--embed-db", "embed_db", default=None, help="LanceDB directory for semantic search"
+    )
+    @click.option(
+        "--search-access-token",
+        "search_access_token",
+        default=None,
+        envvar="SEARCH_ACCESS_TOKEN",
+        help="Token to gate semantic search",
+    )
+    @click.option(
+        "-c", "--config", "config_path", default="config.toml", help="Path to config.toml"
+    )
     @click.option(
         "--language",
         "fallback_language",
@@ -2252,10 +2524,14 @@ def register_db_commands(db_group: click.Group) -> None:
     @db_group.command("generate-tags")
     @click.option("-i", "--input", "input_path", required=True, help="Input JSON file path")
     @click.option("-o", "--output", "output_path", required=True, help="Output JSON file path")
-    @click.option("-c", "--config", "config_path", default="config.toml", help="Path to config.toml")
+    @click.option(
+        "-c", "--config", "config_path", default="config.toml", help="Path to config.toml"
+    )
     @click.option("-m", "--model", "model_ref", required=True, help="provider/model")
     @click.option("-w", "--workers", "workers", default=4, type=int, help="Concurrent workers")
-    def generate_tags(input_path: str, output_path: str, config_path: str, model_ref: str, workers: int) -> None:
+    def generate_tags(
+        input_path: str, output_path: str, config_path: str, model_ref: str, workers: int
+    ) -> None:
         async def _run() -> None:
             config = load_config(config_path)
             selector = parse_model_selector(model_ref, config)
@@ -2271,6 +2547,7 @@ def register_db_commands(db_group: click.Group) -> None:
             semaphore = asyncio.Semaphore(workers)
 
             async with httpx.AsyncClient() as client:
+
                 async def process_one(paper: dict[str, Any]) -> None:
                     async with semaphore:
                         tags = await generate_tags_for_paper(
@@ -2391,7 +2668,9 @@ def register_db_commands(db_group: click.Group) -> None:
         person_count = sum(len(people) for people in persons.values())
         return len(fields) + len(persons) + person_count
 
-    def _summarize_bibtex_merge(output_path: Path, *, input_count: int, entry_count: int, duplicate_count: int) -> None:
+    def _summarize_bibtex_merge(
+        output_path: Path, *, input_count: int, entry_count: int, duplicate_count: int
+    ) -> None:
         summary = Table(title="BibTeX Merge Summary")
         summary.add_column("Metric", style="bold")
         summary.add_column("Value")
@@ -2402,10 +2681,16 @@ def register_db_commands(db_group: click.Group) -> None:
         Console().print(summary)
 
     @merge_group.command("library")
-    @click.option("-i", "--inputs", "input_paths", multiple=True, required=True, help="Input JSON files")
-    @click.option("--template-tag", "template_tag", default=None, help="Template tag for merged output")
+    @click.option(
+        "-i", "--inputs", "input_paths", multiple=True, required=True, help="Input JSON files"
+    )
+    @click.option(
+        "--template-tag", "template_tag", default=None, help="Template tag for merged output"
+    )
     @click.option("-o", "--output", "output_path", required=True, help="Output JSON file path")
-    def merge_library(input_paths: Iterable[str], template_tag: str | None, output_path: str) -> None:
+    def merge_library(
+        input_paths: Iterable[str], template_tag: str | None, output_path: str
+    ) -> None:
         paths = [Path(path) for path in input_paths]
         merged: list[dict[str, Any]] = []
         tag_candidates: list[str] = []
@@ -2419,7 +2704,9 @@ def register_db_commands(db_group: click.Group) -> None:
                 if isinstance(papers, list):
                     merged.extend(papers)
                 else:
-                    raise click.ClickException("Input JSON must be a list or {template_tag, papers}")
+                    raise click.ClickException(
+                        "Input JSON must be a list or {template_tag, papers}"
+                    )
             elif isinstance(payload, list):
                 merged.extend(payload)
             else:
@@ -2446,7 +2733,9 @@ def register_db_commands(db_group: click.Group) -> None:
         _summarize_merge(output, bundle, input_count=len(paths))
 
     @merge_group.command("templates")
-    @click.option("-i", "--inputs", "input_paths", multiple=True, required=True, help="Input JSON files")
+    @click.option(
+        "-i", "--inputs", "input_paths", multiple=True, required=True, help="Input JSON files"
+    )
     @click.option("-o", "--output", "output_path", required=True, help="Output JSON file path")
     def merge_templates(input_paths: Iterable[str], output_path: str) -> None:
         from deepresearch_flow.paper import db_ops
@@ -2505,9 +2794,7 @@ def register_db_commands(db_group: click.Group) -> None:
                 if source_hash and source_hash in hash_to_group:
                     match_idx = hash_to_group[source_hash]
                 else:
-                    match_paper, _, _ = db_ops._resolve_paper_by_title_and_meta(
-                        paper, paper_index
-                    )
+                    match_paper, _, _ = db_ops._resolve_paper_by_title_and_meta(paper, paper_index)
                     if match_paper is not None:
                         match_idx = paper_id_to_group.get(id(match_paper))
                 if match_idx is None:
@@ -2523,9 +2810,9 @@ def register_db_commands(db_group: click.Group) -> None:
                         other_value = str(paper.get(field) or "")
                         if base_value == other_value:
                             continue
-                        diff_counts[(template_tag, field)] = diff_counts.get(
-                            (template_tag, field), 0
-                        ) + 1
+                        diff_counts[(template_tag, field)] = (
+                            diff_counts.get((template_tag, field), 0) + 1
+                        )
                         if len(diff_samples) < 50:
                             diff_samples.append(
                                 (
@@ -2596,7 +2883,9 @@ def register_db_commands(db_group: click.Group) -> None:
             Console().print(sample_table)
 
     @merge_group.command("bibtex")
-    @click.option("-i", "--input", "input_paths", multiple=True, required=True, help="Input BibTeX file paths")
+    @click.option(
+        "-i", "--input", "input_paths", multiple=True, required=True, help="Input BibTeX file paths"
+    )
     @click.option("-o", "--output", "output_path", required=True, help="Output BibTeX file path")
     def merge_bibtex(input_paths: Iterable[str], output_path: str) -> None:
         if not PYBTEX_AVAILABLE:
@@ -2649,11 +2938,19 @@ def register_db_commands(db_group: click.Group) -> None:
             if len(duplicate_keys) > preview_limit:
                 preview = f"{preview}, ... (+{len(duplicate_keys) - preview_limit} more)"
             note = "Kept entry with most fields; ties keep first input order."
-            Console().print(Panel(f"{note}\n{preview}", title=f"Duplicate keys ({len(duplicate_keys)})", style="yellow"))
+            Console().print(
+                Panel(
+                    f"{note}\n{preview}",
+                    title=f"Duplicate keys ({len(duplicate_keys)})",
+                    style="yellow",
+                )
+            )
 
     @db_group.command("render-md")
     @click.option("-i", "--input", "input_path", required=True, help="Input JSON file path")
-    @click.option("-d", "--output-dir", "output_dir", default="rendered_md", help="Output directory")
+    @click.option(
+        "-d", "--output-dir", "output_dir", default="rendered_md", help="Output directory"
+    )
     @click.option(
         "-t",
         "--markdown-template",
@@ -2706,18 +3003,28 @@ def register_db_commands(db_group: click.Group) -> None:
     @click.option("--json", "target_json", default=None, help="Target JSON database path")
     @click.option("--input-json", "input_json", default=None, help="Reference JSON file path")
     @click.option(
-        "--pdf-root", "pdf_roots", multiple=True, help="PDF root directories for reference (repeatable)"
+        "--pdf-root",
+        "pdf_roots",
+        multiple=True,
+        help="PDF root directories for reference (repeatable)",
     )
     @click.option(
-        "--md-root", "md_roots", multiple=True, help="Markdown root directories for reference (repeatable)"
+        "--md-root",
+        "md_roots",
+        multiple=True,
+        help="Markdown root directories for reference (repeatable)",
     )
     @click.option(
-        "--md-translated-root", "md_translated_roots", multiple=True,
-        help="Translated Markdown root directories to extract from (repeatable)"
+        "--md-translated-root",
+        "md_translated_roots",
+        multiple=True,
+        help="Translated Markdown root directories to extract from (repeatable)",
     )
     @click.option(
-        "--md-source-root", "md_source_roots", multiple=True,
-        help="Source Markdown root directories to extract from (repeatable)"
+        "--md-source-root",
+        "md_source_roots",
+        multiple=True,
+        help="Source Markdown root directories to extract from (repeatable)",
     )
     @click.option("--output-json", "output_json", default=None, help="Output JSON file path")
     @click.option(
@@ -2739,7 +3046,9 @@ def register_db_commands(db_group: click.Group) -> None:
         default=None,
         help="Reference BibTeX file path",
     )
-    @click.option("--lang", "lang", default=None, help="Language code for translated Markdown (e.g., zh)")
+    @click.option(
+        "--lang", "lang", default=None, help="Language code for translated Markdown (e.g., zh)"
+    )
     @click.option("--output-csv", "output_csv", default=None, help="Path to export results as CSV")
     def extract(
         target_json: str | None,
@@ -2862,6 +3171,7 @@ def register_db_commands(db_group: click.Group) -> None:
 
             matched_reference_ids: set[int] = set()
             if reference_index:
+
                 def detail_score(paper: dict[str, Any]) -> tuple[int, int]:
                     non_empty = 0
                     total_len = 0
@@ -3034,7 +3344,7 @@ def register_db_commands(db_group: click.Group) -> None:
                 raise click.ClickException(
                     "--output-md-translated-root is required when using --md-translated-root"
                 )
-            results, match_pairs, dataset_a, _ = compare_datasets_with_pairs(
+            results, match_pairs, dataset_a, _ = db_ops.compare_datasets_with_pairs(
                 md_translated_roots_a=translated_root_paths,
                 pdf_roots_b=pdf_root_paths,
                 md_roots_b=md_root_paths,
@@ -3060,16 +3370,16 @@ def register_db_commands(db_group: click.Group) -> None:
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source, destination)
                 copied_count += 1
-            click.echo(
-                f"Copied {copied_count} translated Markdown files to {output_root}"
-            )
+            click.echo(f"Copied {copied_count} translated Markdown files to {output_root}")
             all_results.extend(results)
 
         if md_source_roots:
             output_root = Path(output_md_root) if output_md_root else None
             if output_root is None:
-                raise click.ClickException("--output-md-root is required when using --md-source-root")
-            results, match_pairs, dataset_a, _ = compare_datasets_with_pairs(
+                raise click.ClickException(
+                    "--output-md-root is required when using --md-source-root"
+                )
+            results, match_pairs, dataset_a, _ = db_ops.compare_datasets_with_pairs(
                 md_roots_a=source_root_paths,
                 pdf_roots_b=pdf_root_paths,
                 md_roots_b=md_root_paths,
@@ -3202,9 +3512,7 @@ def register_db_commands(db_group: click.Group) -> None:
                 "missing_fields": missing_fields,
             }
             if field_stage_map and all(field in field_stage_map for field in missing_fields):
-                item["retry_stages"] = sorted(
-                    {field_stage_map[field] for field in missing_fields}
-                )
+                item["retry_stages"] = sorted({field_stage_map[field] for field in missing_fields})
             report_items.append(item)
 
         report_payload = {
@@ -3266,7 +3574,9 @@ def register_db_commands(db_group: click.Group) -> None:
             console.print(Panel("[green]No missing fields detected.[/green]", expand=False))
 
     @db_group.command("transfer-pdfs")
-    @click.option("--input-list", "input_list", required=True, help="Text file containing PDF paths")
+    @click.option(
+        "--input-list", "input_list", required=True, help="Text file containing PDF paths"
+    )
     @click.option("--output-dir", "output_dir", required=True, help="Output directory")
     @click.option("--move", "move_files", is_flag=True, help="Move PDFs instead of copying")
     @click.option("--copy", "copy_files", is_flag=True, help="Copy PDFs instead of moving")
@@ -3312,36 +3622,60 @@ def register_db_commands(db_group: click.Group) -> None:
 
     @db_group.command("compare")
     @click.option(
-        "-ia", "--input-a", "input_paths_a", multiple=True, help="Input JSON files for side A (repeatable)"
+        "-ia",
+        "--input-a",
+        "input_paths_a",
+        multiple=True,
+        help="Input JSON files for side A (repeatable)",
     )
     @click.option(
-        "-ib", "--input-b", "input_paths_b", multiple=True, help="Input JSON files for side B (repeatable)"
+        "-ib",
+        "--input-b",
+        "input_paths_b",
+        multiple=True,
+        help="Input JSON files for side B (repeatable)",
     )
     @click.option(
-        "--pdf-root-a", "pdf_roots_a", multiple=True, help="PDF root directories for side A (repeatable)"
+        "--pdf-root-a",
+        "pdf_roots_a",
+        multiple=True,
+        help="PDF root directories for side A (repeatable)",
     )
     @click.option(
-        "--pdf-root-b", "pdf_roots_b", multiple=True, help="PDF root directories for side B (repeatable)"
+        "--pdf-root-b",
+        "pdf_roots_b",
+        multiple=True,
+        help="PDF root directories for side B (repeatable)",
     )
     @click.option(
-        "--md-root-a", "md_roots_a", multiple=True, help="Markdown root directories for side A (repeatable)"
+        "--md-root-a",
+        "md_roots_a",
+        multiple=True,
+        help="Markdown root directories for side A (repeatable)",
     )
     @click.option(
-        "--md-root-b", "md_roots_b", multiple=True, help="Markdown root directories for side B (repeatable)"
+        "--md-root-b",
+        "md_roots_b",
+        multiple=True,
+        help="Markdown root directories for side B (repeatable)",
     )
     @click.option(
-        "--md-translated-root-a", "md_translated_roots_a", multiple=True,
-        help="Translated Markdown root directories for side A (repeatable)"
+        "--md-translated-root-a",
+        "md_translated_roots_a",
+        multiple=True,
+        help="Translated Markdown root directories for side A (repeatable)",
     )
     @click.option(
-        "--md-translated-root-b", "md_translated_roots_b", multiple=True,
-        help="Translated Markdown root directories for side B (repeatable)"
+        "--md-translated-root-b",
+        "md_translated_roots_b",
+        multiple=True,
+        help="Translated Markdown root directories for side B (repeatable)",
     )
     @click.option("-b", "--bibtex", "bibtex_path", default=None, help="Optional BibTeX file path")
-    @click.option("--lang", "lang", default=None, help="Language code for translated comparisons (e.g., zh)")
     @click.option(
-        "--output-csv", "output_csv", default=None, help="Path to export results as CSV"
+        "--lang", "lang", default=None, help="Language code for translated comparisons (e.g., zh)"
     )
+    @click.option("--output-csv", "output_csv", default=None, help="Path to export results as CSV")
     @click.option(
         "--output-only-in-b",
         "output_only_in_b",
@@ -3349,8 +3683,12 @@ def register_db_commands(db_group: click.Group) -> None:
         help="Path to export only-in-B source paths as a newline list",
     )
     @click.option(
-        "--sample-limit", "sample_limit", default=5, type=int, show_default=True,
-        help="Number of sample items to show in terminal output"
+        "--sample-limit",
+        "sample_limit",
+        default=5,
+        type=int,
+        show_default=True,
+        help="Number of sample items to show in terminal output",
     )
     def compare(
         input_paths_a: tuple[str, ...],
@@ -3373,7 +3711,7 @@ def register_db_commands(db_group: click.Group) -> None:
         # Validate that at least one input is provided for each side
         has_input_a = bool(input_paths_a or pdf_roots_a or md_roots_a or md_translated_roots_a)
         has_input_b = bool(input_paths_b or pdf_roots_b or md_roots_b or md_translated_roots_b)
-        
+
         if not has_input_a:
             raise click.ClickException(
                 "Side A must have at least one input: --input-a, --pdf-root-a, --md-root-a, or --md-translated-root-a"
@@ -3383,8 +3721,10 @@ def register_db_commands(db_group: click.Group) -> None:
                 "Side B must have at least one input: --input-b, --pdf-root-b, --md-root-b, or --md-translated-root-b"
             )
         if (md_translated_roots_a or md_translated_roots_b) and not lang:
-            raise click.ClickException("--lang is required when comparing translated Markdown datasets")
-        
+            raise click.ClickException(
+                "--lang is required when comparing translated Markdown datasets"
+            )
+
         # Run comparison
         try:
             results = compare_datasets(
@@ -3402,16 +3742,16 @@ def register_db_commands(db_group: click.Group) -> None:
             )
         except ValueError as exc:
             raise click.ClickException(str(exc)) from exc
-        
+
         # Calculate statistics
         total_a = sum(1 for r in results if r.side == "A")
         total_b = sum(1 for r in results if r.side == "B")
         matched = sum(1 for r in results if r.side == "MATCH")
         only_in_a = sum(1 for r in results if r.side == "A" and r.match_status == "only_in_A")
         only_in_b = sum(1 for r in results if r.side == "B" and r.match_status == "only_in_B")
-        
+
         console = Console()
-        
+
         # Print summary table
         summary_table = Table(title="Comparison Summary")
         summary_table.add_column("Metric", style="cyan")
@@ -3422,13 +3762,13 @@ def register_db_commands(db_group: click.Group) -> None:
         summary_table.add_row("Only in A", str(only_in_a))
         summary_table.add_row("Only in B", str(only_in_b))
         console.print(summary_table)
-        
+
         # Print match type breakdown
         match_types: dict[str, int] = {}
         for r in results:
             if r.side == "MATCH" and r.match_type:
                 match_types[r.match_type] = match_types.get(r.match_type, 0) + 1
-        
+
         if match_types:
             type_table = Table(title="Match Types")
             type_table.add_column("Type", style="cyan")
@@ -3436,10 +3776,10 @@ def register_db_commands(db_group: click.Group) -> None:
             for match_type, count in sorted(match_types.items(), key=lambda x: x[1], reverse=True):
                 type_table.add_row(match_type, str(count))
             console.print(type_table)
-        
+
         # Print sample results
         console.print("\n[bold]Sample Results:[/bold]")
-        
+
         # Sample matched items
         matched_samples = [r for r in results if r.side == "MATCH"][:sample_limit]
         if matched_samples:
@@ -3450,25 +3790,25 @@ def register_db_commands(db_group: click.Group) -> None:
                 console.print(
                     f"  • {left} ↔ {right} (type: {r.match_type}, score: {r.match_score:.2f})"
                 )
-        
+
         # Sample only in A
-        only_a_samples = [
-            r for r in results if r.side == "A" and r.match_status == "only_in_A"
-        ][:sample_limit]
+        only_a_samples = [r for r in results if r.side == "A" and r.match_status == "only_in_A"][
+            :sample_limit
+        ]
         if only_a_samples:
             console.print("\n[yellow]Only in A:[/yellow]")
             for r in only_a_samples:
                 console.print(f"  • {r.title[:60]}...")
-        
+
         # Sample only in B
-        only_b_samples = [
-            r for r in results if r.side == "B" and r.match_status == "only_in_B"
-        ][:sample_limit]
+        only_b_samples = [r for r in results if r.side == "B" and r.match_status == "only_in_B"][
+            :sample_limit
+        ]
         if only_b_samples:
             console.print("\n[yellow]Only in B:[/yellow]")
             for r in only_b_samples:
                 console.print(f"  • {r.title[:60]}...")
-        
+
         # Export to CSV if requested
         if output_csv:
             output_path = Path(output_csv)

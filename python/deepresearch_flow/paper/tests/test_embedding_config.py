@@ -45,10 +45,18 @@ def _write_config(tmp_path: Path, *, embedding_section: str, rerank_section: str
 
 
 def _load_config(tmp_path: Path, *, embedding_section: str, rerank_section: str = ""):
-    return load_config(str(_write_config(tmp_path, embedding_section=embedding_section, rerank_section=rerank_section)))
+    return load_config(
+        str(
+            _write_config(
+                tmp_path, embedding_section=embedding_section, rerank_section=rerank_section
+            )
+        )
+    )
 
 
-def test_loads_embedding_providers_with_bases_and_keys(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_loads_embedding_providers_with_bases_and_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("SF_KEY", "test-sf-key")
     config = _load_config(
         tmp_path,
@@ -100,7 +108,9 @@ def test_loads_embedding_providers_with_bases_and_keys(tmp_path: Path, monkeypat
     assert siliconflow.base[0].key[0].value == "env:SF_KEY"
 
 
-def test_loads_rerank_providers_with_bases_and_keys(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_loads_rerank_providers_with_bases_and_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("SF_KEY", "test-sf-key")
     config = _load_config(
         tmp_path,
@@ -159,9 +169,7 @@ def test_loads_rerank_providers_with_bases_and_keys(tmp_path: Path, monkeypatch:
 def test_embedding_rejects_legacy_provider_fields(
     tmp_path: Path, legacy_field: str, provider_kind: str
 ) -> None:
-    field_value = (
-        '"http://localhost:11434/v1"' if legacy_field == "base_url" else '"ollama"'
-    )
+    field_value = '"http://localhost:11434/v1"' if legacy_field == "base_url" else '"ollama"'
     with pytest.raises(ValueError, match=f"legacy provider field '{legacy_field}'"):
         _load_config(
             tmp_path,
@@ -184,9 +192,7 @@ def test_embedding_rejects_legacy_provider_fields(
 def test_rerank_rejects_legacy_provider_fields(
     tmp_path: Path, legacy_field: str, provider_kind: str
 ) -> None:
-    field_value = (
-        '"https://api.siliconflow.cn/v1"' if legacy_field == "base_url" else '"rerank"'
-    )
+    field_value = '"https://api.siliconflow.cn/v1"' if legacy_field == "base_url" else '"rerank"'
     with pytest.raises(ValueError, match=f"legacy provider field '{legacy_field}'"):
         _load_config(
             tmp_path,
@@ -211,7 +217,9 @@ def test_rerank_rejects_legacy_provider_fields(
         )
 
 
-def test_resolves_embedding_provider_and_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resolves_embedding_provider_and_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("SF_KEY", "test-sf-key")
     config = _load_config(
         tmp_path,
@@ -267,7 +275,9 @@ def test_embedding_model_accepts_explicit_canonical_name(tmp_path: Path) -> None
     assert config.embedding.providers[0].models[0].canonical_name == "Qwen3-Embedding-4B"
 
 
-def test_embedding_allows_requested_dimensions_below_model_max(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_embedding_allows_requested_dimensions_below_model_max(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("SF_KEY", "test-sf-key")
     config = _load_config(
         tmp_path,
@@ -295,7 +305,9 @@ def test_embedding_allows_requested_dimensions_below_model_max(tmp_path: Path, m
     assert model.model_name == "bge-m3"
 
 
-def test_embedding_requested_dimensions_above_model_max_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_embedding_requested_dimensions_above_model_max_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("SF_KEY", "test-sf-key")
     config_path = _write_config(
         tmp_path,
@@ -319,7 +331,9 @@ def test_embedding_requested_dimensions_above_model_max_raises(tmp_path: Path, m
         """,
     )
     config_path.write_text(
-        config_path.read_text(encoding="utf-8").replace("dimensions = 1024", "dimensions = 4096", 1),
+        config_path.read_text(encoding="utf-8").replace(
+            "dimensions = 1024", "dimensions = 4096", 1
+        ),
         encoding="utf-8",
     )
     config = load_config(str(config_path))
@@ -391,7 +405,9 @@ def test_rerank_disabled_without_providers(tmp_path: Path) -> None:
     assert loaded.rerank.providers == []
 
 
-def test_search_access_token_env_resolution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_search_access_token_env_resolution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("SEARCH_ACCESS_TOKEN", "secret-search-token")
     monkeypatch.setenv("SF_KEY", "test-sf-key")
     config = _write_config(

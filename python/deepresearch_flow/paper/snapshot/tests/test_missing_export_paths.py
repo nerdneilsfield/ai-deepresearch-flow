@@ -10,7 +10,9 @@ from deepresearch_flow.paper.snapshot.schema import init_snapshot_db
 
 
 class TestMissingExportPaths(unittest.TestCase):
-    def _insert_paper(self, conn: sqlite3.Connection, *, paper_id: str, title: str, md_hash: str) -> None:
+    def _insert_paper(
+        self, conn: sqlite3.Connection, *, paper_id: str, title: str, md_hash: str
+    ) -> None:
         conn.execute(
             """
             INSERT INTO paper(

@@ -121,7 +121,9 @@ def _safe_read_text(path: Path) -> str:
 _MD_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 _DATA_URL_PATTERN = re.compile(r"^data:([^;,]+)(;base64)?,(.*)$", re.DOTALL)
 _IMG_TAG_PATTERN = re.compile(r"<img\\b[^>]*>", re.IGNORECASE)
-_SRC_ATTR_PATTERN = re.compile(r"\\bsrc\\s*=\\s*(\"[^\"]*\"|'[^']*'|[^\\s>]+)", re.IGNORECASE | re.DOTALL)
+_SRC_ATTR_PATTERN = re.compile(
+    r"\\bsrc\\s*=\\s*(\"[^\"]*\"|'[^']*'|[^\\s>]+)", re.IGNORECASE | re.DOTALL
+)
 _EXTENSION_OVERRIDES = {".jpe": ".jpg"}
 _WHITESPACE_RE = re.compile(r"\s+")
 _EIO_RETRY_DELAYS = (0.2, 0.5)
@@ -213,7 +215,9 @@ def _parse_data_url(target: str) -> tuple[str, bytes] | None:
 
 def _is_absolute_url(target: str) -> bool:
     lowered = target.lower()
-    return lowered.startswith(("http://", "https://", "data:", "mailto:", "file:", "#")) or target.startswith("/")
+    return lowered.startswith(
+        ("http://", "https://", "data:", "mailto:", "file:", "#")
+    ) or target.startswith("/")
 
 
 def _rewrite_markdown_images(
@@ -240,10 +244,19 @@ def _rewrite_markdown_images(
                     _write_bytes_with_eio_retry(dest, data, log_label="snapshot image")
                 except OSError as exc:
                     logger.warning("Failed to export snapshot image %s: %s", dest, exc)
-                    images.append({"path": rel, "sha256": digest, "ext": ext.lstrip("."), "status": "write_failed"})
+                    images.append(
+                        {
+                            "path": rel,
+                            "sha256": digest,
+                            "ext": ext.lstrip("."),
+                            "status": "write_failed",
+                        }
+                    )
                     return None
             written.add(filename)
-        images.append({"path": rel, "sha256": digest, "ext": ext.lstrip("."), "status": "available"})
+        images.append(
+            {"path": rel, "sha256": digest, "ext": ext.lstrip("."), "status": "available"}
+        )
         return rel
 
     def store_local(target: str) -> str | None:
@@ -265,16 +278,36 @@ def _rewrite_markdown_images(
                 dest = images_output_dir / filename
                 if not dest.exists():
                     try:
-                        _write_bytes_with_eio_retry(dest, local_path.read_bytes(), log_label="snapshot image copy")
+                        _write_bytes_with_eio_retry(
+                            dest, local_path.read_bytes(), log_label="snapshot image copy"
+                        )
                     except OSError as exc:
-                        logger.warning("Failed to copy snapshot image %s to %s: %s", local_path, dest, exc)
-                        images.append({"path": rel, "sha256": digest, "ext": ext.lstrip("."), "status": "write_failed"})
+                        logger.warning(
+                            "Failed to copy snapshot image %s to %s: %s", local_path, dest, exc
+                        )
+                        images.append(
+                            {
+                                "path": rel,
+                                "sha256": digest,
+                                "ext": ext.lstrip("."),
+                                "status": "write_failed",
+                            }
+                        )
                         return None
                 written.add(filename)
-            images.append({"path": rel, "sha256": digest, "ext": ext.lstrip("."), "status": "available"})
+            images.append(
+                {"path": rel, "sha256": digest, "ext": ext.lstrip("."), "status": "available"}
+            )
             return rel
 
-        images.append({"path": cleaned, "sha256": None, "ext": Path(cleaned).suffix.lstrip("."), "status": "missing"})
+        images.append(
+            {
+                "path": cleaned,
+                "sha256": None,
+                "ext": Path(cleaned).suffix.lstrip("."),
+                "status": "missing",
+            }
+        )
         return None
 
     def replace(match) -> str:
@@ -307,7 +340,7 @@ def _rewrite_markdown_images(
             return tag
         raw_value = src_match.group(1)
         quote = ""
-        if raw_value and raw_value[0] in {"\"", "'"}:
+        if raw_value and raw_value[0] in {'"', "'"}:
             quote = raw_value[0]
             value = raw_value[1:-1]
         else:
@@ -547,7 +580,11 @@ def _extract_summary_markdown(paper: dict[str, Any]) -> str:
     if isinstance(templates, dict):
         for template_tag in ("simple", "simple_phi"):
             tmpl = templates.get(template_tag)
-            if isinstance(tmpl, dict) and isinstance(tmpl.get("summary"), str) and tmpl.get("summary").strip():
+            if (
+                isinstance(tmpl, dict)
+                and isinstance(tmpl.get("summary"), str)
+                and tmpl.get("summary").strip()
+            ):
                 return str(tmpl.get("summary"))
     if isinstance(paper.get("abstract"), str) and paper.get("abstract").strip():
         return str(paper.get("abstract"))
@@ -584,7 +621,12 @@ def _extract_template_summaries(paper: dict[str, Any]) -> dict[str, str]:
     top_level = paper.get("summary")
     if isinstance(top_level, str) and top_level.strip():
         tag = _canonical_template_tag(
-            str(paper.get("default_template") or paper.get("prompt_template") or paper.get("template_tag") or "default")
+            str(
+                paper.get("default_template")
+                or paper.get("prompt_template")
+                or paper.get("template_tag")
+                or "default"
+            )
         )
         summaries.setdefault(tag, top_level.strip())
 
@@ -622,7 +664,9 @@ def _render_template_fallback_markdown(
 def _choose_preferred_summary_template(paper: dict[str, Any], summaries: dict[str, str]) -> str:
     if not summaries:
         return "default"
-    preferred = _canonical_template_tag(str(paper.get("prompt_template") or paper.get("template_tag") or ""))
+    preferred = _canonical_template_tag(
+        str(paper.get("prompt_template") or paper.get("template_tag") or "")
+    )
     if preferred and preferred in summaries:
         return preferred
     for key in ("simple", "simple_phi"):
@@ -674,11 +718,17 @@ def _print_build_summary(
     content_table.add_column("Type", style="cyan")
     content_table.add_column("Count", style="green", justify="right")
     content_table.add_column("Details", style="yellow")
-    content_table.add_row("Source markdown", str(stats.source_markdown_found), "Resolved source documents")
-    content_table.add_row("Translated markdown", str(stats.translated_markdown_found), "Resolved translated variants")
+    content_table.add_row(
+        "Source markdown", str(stats.source_markdown_found), "Resolved source documents"
+    )
+    content_table.add_row(
+        "Translated markdown", str(stats.translated_markdown_found), "Resolved translated variants"
+    )
     content_table.add_row("PDFs matched", str(stats.pdfs_found), "Resolved PDF assets")
     if stats.pdfs_missing > 0:
-        content_table.add_row("PDFs missing", str(stats.pdfs_missing), "No PDF asset resolved", style="yellow")
+        content_table.add_row(
+            "PDFs missing", str(stats.pdfs_missing), "No PDF asset resolved", style="yellow"
+        )
     console.print(content_table)
     console.print()
 
@@ -689,7 +739,9 @@ def _print_build_summary(
     export_table.add_row("Manifest exports", str(stats.manifest_exports))
     export_table.add_row("Images extracted", str(stats.images_extracted))
     if stats.doi_bibtex_mismatches > 0:
-        export_table.add_row("DOI/BibTeX mismatches", str(stats.doi_bibtex_mismatches), style="yellow")
+        export_table.add_row(
+            "DOI/BibTeX mismatches", str(stats.doi_bibtex_mismatches), style="yellow"
+        )
     console.print(export_table)
     console.print()
 
@@ -723,17 +775,35 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
         md_translated_roots=opts.md_translated_roots,
         pdf_roots=opts.pdf_roots,
     )
-    logger.info("Building snapshot for %d paper(s) from %d input file(s)", len(index.papers), len(opts.input_paths))
+    logger.info(
+        "Building snapshot for %d paper(s) from %d input file(s)",
+        len(index.papers),
+        len(opts.input_paths),
+    )
     if opts.verbose:
-        logger.debug("  md roots: %s", ", ".join(str(root) for root in opts.md_roots) if opts.md_roots else "none configured")
+        logger.debug(
+            "  md roots: %s",
+            ", ".join(str(root) for root in opts.md_roots) if opts.md_roots else "none configured",
+        )
         logger.debug(
             "  translated roots: %s",
-            ", ".join(str(root) for root in opts.md_translated_roots) if opts.md_translated_roots else "none configured",
+            ", ".join(str(root) for root in opts.md_translated_roots)
+            if opts.md_translated_roots
+            else "none configured",
         )
-        logger.debug("  pdf roots: %s", ", ".join(str(root) for root in opts.pdf_roots) if opts.pdf_roots else "none configured")
+        logger.debug(
+            "  pdf roots: %s",
+            ", ".join(str(root) for root in opts.pdf_roots)
+            if opts.pdf_roots
+            else "none configured",
+        )
 
-    previous_aliases = _load_previous_aliases(opts.previous_snapshot_db) if opts.previous_snapshot_db else {}
-    previous_metadata = _load_previous_metadata(opts.previous_snapshot_db) if opts.previous_snapshot_db else {}
+    previous_aliases = (
+        _load_previous_aliases(opts.previous_snapshot_db) if opts.previous_snapshot_db else {}
+    )
+    previous_metadata = (
+        _load_previous_metadata(opts.previous_snapshot_db) if opts.previous_snapshot_db else {}
+    )
     snapshot_build_id = uuid.uuid4().hex
     stats = BuildStats(
         input_files=len(opts.input_paths),
@@ -796,7 +866,13 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
             unique_paper_ids: set[str] = set()
             missing_pdf_hashes: set[str] = set()
             for idx, paper in enumerate(
-                tqdm(index.papers, total=len(index.papers), desc="snapshot build", unit="paper", file=sys.stdout)
+                tqdm(
+                    index.papers,
+                    total=len(index.papers),
+                    desc="snapshot build",
+                    unit="paper",
+                    file=sys.stdout,
+                )
             ):
                 candidates = build_paper_key_candidates(paper)
                 paper_id, preferred, conflicts = _pick_paper_id(
@@ -815,15 +891,25 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
                 bib = paper.get("bibtex") if isinstance(paper.get("bibtex"), dict) else None
                 bib_fields = (bib.get("fields") if isinstance(bib, dict) else None) or {}
                 current_doi = extract_canonical_doi(paper, bib_fields)
-                current_bibtex_raw, current_bibtex_key, current_entry_type, current_bib_doi = extract_current_bibtex_payload(
-                    paper
+                current_bibtex_raw, current_bibtex_key, current_entry_type, current_bib_doi = (
+                    extract_current_bibtex_payload(paper)
                 )
                 previous_meta = previous_metadata.get(paper_id)
                 doi = current_doi or (previous_meta.doi if previous_meta else None)
-                bibtex_raw = current_bibtex_raw or (previous_meta.bibtex_raw if previous_meta else None)
-                bibtex_key = current_bibtex_key or (previous_meta.bibtex_key if previous_meta else None)
-                entry_type = current_entry_type or (previous_meta.entry_type if previous_meta else None)
-                if preferred.key_type == "bib" and preferred.paper_key.startswith("bib:") and not bibtex_key:
+                bibtex_raw = current_bibtex_raw or (
+                    previous_meta.bibtex_raw if previous_meta else None
+                )
+                bibtex_key = current_bibtex_key or (
+                    previous_meta.bibtex_key if previous_meta else None
+                )
+                entry_type = current_entry_type or (
+                    previous_meta.entry_type if previous_meta else None
+                )
+                if (
+                    preferred.key_type == "bib"
+                    and preferred.paper_key.startswith("bib:")
+                    and not bibtex_key
+                ):
                     bibtex_key = preferred.paper_key.split(":", 1)[1]
 
                 bib_doi_for_compare = current_bib_doi
@@ -851,8 +937,12 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
 
                 if not pub_date:
                     pub_date = year if year.isdigit() else ""
-                venue = _normalize_display_venue(str(paper.get("_venue") or "").strip()) or "unknown"
-                source_hash = str(paper.get("source_hash") or stable_hash(str(paper.get("source_path") or idx)))
+                venue = (
+                    _normalize_display_venue(str(paper.get("_venue") or "").strip()) or "unknown"
+                )
+                source_hash = str(
+                    paper.get("source_hash") or stable_hash(str(paper.get("source_path") or idx))
+                )
                 unique_paper_ids.add(paper_id)
                 logger.info("[%d/%d] %s", idx + 1, len(index.papers), title or paper_id)
                 if opts.verbose:
@@ -889,7 +979,9 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
                 else:
                     _log_skip(
                         "source markdown",
-                        "no --md-root configured" if not opts.md_roots else "no markdown matched source_hash",
+                        "no --md-root configured"
+                        if not opts.md_roots
+                        else "no markdown matched source_hash",
                         verbose_reason=(
                             "md roots: none configured"
                             if not opts.md_roots
@@ -918,7 +1010,10 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
                 if translations:
                     logger.info("  translated markdown: exported %d language(s)", len(translations))
                     if opts.verbose:
-                        logger.debug("    langs=%s", ", ".join(sorted(str(lang).lower() for lang in translations)))
+                        logger.debug(
+                            "    langs=%s",
+                            ", ".join(sorted(str(lang).lower() for lang in translations)),
+                        )
                 else:
                     _log_skip(
                         "translated markdown",
@@ -947,7 +1042,9 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
                 else:
                     _log_skip(
                         "pdf",
-                        "no --pdf-root configured" if not opts.pdf_roots else "no PDF matched source_hash",
+                        "no --pdf-root configured"
+                        if not opts.pdf_roots
+                        else "no PDF matched source_hash",
                         verbose_reason=(
                             "pdf roots: none configured"
                             if not opts.pdf_roots
@@ -958,8 +1055,12 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
                     missing_pdf_hashes.add(source_hash)
 
                 template_summaries = _extract_template_summaries(paper)
-                preferred_summary_template = _choose_preferred_summary_template(paper, template_summaries)
-                preferred_summary_markdown = template_summaries.get(preferred_summary_template) or ""
+                preferred_summary_template = _choose_preferred_summary_template(
+                    paper, template_summaries
+                )
+                preferred_summary_markdown = (
+                    template_summaries.get(preferred_summary_template) or ""
+                )
                 preview_source = template_summaries.get("simple") or preferred_summary_markdown
                 summary_preview = _summary_preview(preview_source)
 
@@ -968,14 +1069,18 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
                     "paper_title": title,
                     "paper_authors": authors,
                     "publication_date": paper.get("publication_date") or "",
-                    "publication_venue": _normalize_display_venue(str(paper.get("publication_venue") or venue)),
+                    "publication_venue": _normalize_display_venue(
+                        str(paper.get("publication_venue") or venue)
+                    ),
                     "abstract": paper.get("abstract") or "",
                     "keywords": paper.get("keywords") or paper.get("_keywords") or [],
                     "paper_institutions": paper.get("paper_institutions") or [],
                     "output_language": paper.get("output_language") or "",
                     "provider": paper.get("provider") or "",
                     "model": paper.get("model") or "",
-                    "prompt_template": paper.get("prompt_template") or paper.get("template_tag") or "",
+                    "prompt_template": paper.get("prompt_template")
+                    or paper.get("template_tag")
+                    or "",
                     "extracted_at": paper.get("extracted_at") or "",
                 }
 
@@ -986,7 +1091,9 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
                         **base_summary_payload,
                         "template_tag": preferred_summary_template,
                         "summary": preferred_summary_markdown,
-                        "available_templates": sorted(template_summaries.keys(), key=lambda item: item.lower()),
+                        "available_templates": sorted(
+                            template_summaries.keys(), key=lambda item: item.lower()
+                        ),
                     },
                 )
                 stats.summary_exports += 1
@@ -1005,7 +1112,9 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
                     stats.summary_exports += 1
 
                 folder_name, folder_name_short = _folder_names(first_author, year, title, paper_id)
-                pdf_filename = _sanitize_component(f"{first_author}_{year}_{title}") or f"{paper_id}"
+                pdf_filename = (
+                    _sanitize_component(f"{first_author}_{year}_{title}") or f"{paper_id}"
+                )
                 pdf_filename = _truncate(pdf_filename, 120) + ".pdf"
 
                 manifest_payload = {
@@ -1042,7 +1151,9 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
                                 "static_path": f"summary/{paper_id}/{template_tag}.json",
                                 "zip_path": f"summaries/{template_tag}.json",
                             }
-                            for template_tag in sorted(template_summaries.keys(), key=lambda item: item.lower())
+                            for template_tag in sorted(
+                                template_summaries.keys(), key=lambda item: item.lower()
+                            )
                         ],
                     },
                     "images": [
@@ -1065,7 +1176,10 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
                             continue
                         if key not in deduped:
                             deduped[key] = item
-                        elif deduped[key].get("status") != "available" and item.get("status") == "available":
+                        elif (
+                            deduped[key].get("status") != "available"
+                            and item.get("status") == "available"
+                        ):
                             deduped[key] = item
                     manifest_payload["images"] = list(deduped.values())
                 _write_json(static_root / "manifest" / f"{paper_id}.json", manifest_payload)
@@ -1112,7 +1226,9 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
                         (paper_id, bibtex_raw, bibtex_key, entry_type),
                     )
 
-                for template_tag in sorted(template_summaries.keys(), key=lambda item: item.lower()):
+                for template_tag in sorted(
+                    template_summaries.keys(), key=lambda item: item.lower()
+                ):
                     conn.execute(
                         "INSERT OR IGNORE INTO paper_summary(paper_id, template_tag) VALUES (?, ?)",
                         (paper_id, template_tag),
@@ -1167,7 +1283,9 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
                 institutions = paper.get("paper_institutions") or []
                 if isinstance(institutions, list):
                     for inst in institutions:
-                        upsert_facet("institution", "paper_institution", "institution_id", str(inst))
+                        upsert_facet(
+                            "institution", "paper_institution", "institution_id", str(inst)
+                        )
                 tags = paper.get("ai_generated_tags") or paper.get("_tags") or []
                 if isinstance(tags, list):
                     for tag in tags:
@@ -1202,7 +1320,9 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
                 add_graph_nodes("output_language", paper.get("output_language"))
                 add_graph_nodes("provider", paper.get("provider"))
                 add_graph_nodes("model", paper.get("model"))
-                add_graph_nodes("prompt_template", paper.get("prompt_template") or paper.get("template_tag"))
+                add_graph_nodes(
+                    "prompt_template", paper.get("prompt_template") or paper.get("template_tag")
+                )
                 add_graph_nodes("translation_lang", list(translated_hashes.keys()))
 
                 for node_id in graph_nodes:
@@ -1231,13 +1351,17 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
                 source_text = ""
                 translated_text = ""
                 if source_md_hash and md_path:
-                    source_text = markdown_to_plain_text(_safe_read_text(static_root / "md" / f"{source_md_hash}.md"))
+                    source_text = markdown_to_plain_text(
+                        _safe_read_text(static_root / "md" / f"{source_md_hash}.md")
+                    )
                 if translated_hashes:
                     translated_parts: list[str] = []
                     for lang, md_hash in translated_hashes.items():
                         translated_parts.append(
                             markdown_to_plain_text(
-                                _safe_read_text(static_root / "md_translate" / lang / f"{md_hash}.md")
+                                _safe_read_text(
+                                    static_root / "md_translate" / lang / f"{md_hash}.md"
+                                )
                             )
                         )
                     translated_text = " ".join(part for part in translated_parts if part)
@@ -1249,7 +1373,9 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
                         " ".join(str(a) for a in authors),
                         venue,
                         " ".join(str(k) for k in (keywords if isinstance(keywords, list) else [])),
-                        " ".join(str(i) for i in (institutions if isinstance(institutions, list) else [])),
+                        " ".join(
+                            str(i) for i in (institutions if isinstance(institutions, list) else [])
+                        ),
                         year,
                         doi or "",
                     ]

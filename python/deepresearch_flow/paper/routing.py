@@ -130,7 +130,9 @@ def resolve_model_capability(
     )
 
 
-def _parse_pool_item(item: object, providers: list[ProviderConfig], item_name: str) -> MainModelConfig:
+def _parse_pool_item(
+    item: object, providers: list[ProviderConfig], item_name: str
+) -> MainModelConfig:
     if not isinstance(item, dict):
         raise ValueError(f"{item_name} entries must be objects")
     model_ref = item.get("model")
@@ -152,7 +154,9 @@ def _parse_pool_item(item: object, providers: list[ProviderConfig], item_name: s
     return MainModelConfig(model=model_ref, weight=weight_value)
 
 
-def load_main_model_override(model_ref: str, providers: list[ProviderConfig]) -> list[MainModelConfig]:
+def load_main_model_override(
+    model_ref: str, providers: list[ProviderConfig]
+) -> list[MainModelConfig]:
     payload_text = model_ref
     if model_ref.startswith("@"):
         payload_path = Path(model_ref[1:])
@@ -166,16 +170,15 @@ def load_main_model_override(model_ref: str, providers: list[ProviderConfig]) ->
         raise ValueError("Inline model pool must be valid JSON array") from exc
     if not isinstance(parsed, list):
         raise ValueError("Inline model pool must be a JSON array")
-    return [
-        _parse_pool_item(item, providers, "main_model")
-        for item in parsed
-    ]
+    return [_parse_pool_item(item, providers, "main_model") for item in parsed]
 
 
 def parse_model_selector(model_ref: str, config: PaperConfig) -> ParsedModelSelector:
     providers = config.providers
     if model_ref.startswith("@"):
-        return ParsedModelSelector(kind="pool", fixed_model=None, pool=load_main_model_override(model_ref, providers))
+        return ParsedModelSelector(
+            kind="pool", fixed_model=None, pool=load_main_model_override(model_ref, providers)
+        )
 
     try:
         pool = load_main_model_override(model_ref, providers)
@@ -268,7 +271,9 @@ def _parse_windows_for_candidates(
     timezones: dict[str, tzinfo] = {}
     for candidate in candidates:
         route_id = candidate.route.route_id
-        parsed_windows, parsed_tz = _resolve_window_config(candidate.route.base, fallback_tz=local_tz)
+        parsed_windows, parsed_tz = _resolve_window_config(
+            candidate.route.base, fallback_tz=local_tz
+        )
         windows[route_id] = parsed_windows
         timezones[route_id] = parsed_tz
     return windows, timezones
@@ -290,7 +295,9 @@ def _earliest_next_active_start(
     timezones: dict[str, tzinfo],
 ) -> datetime | None:
     starts = [
-        next_active_start(now_dt, windows[candidate.route.route_id], timezones[candidate.route.route_id])
+        next_active_start(
+            now_dt, windows[candidate.route.route_id], timezones[candidate.route.route_id]
+        )
         for candidate in candidates
     ]
     valid = [start for start in starts if start is not None]
@@ -316,8 +323,12 @@ def _build_route_candidates(
                 active_windows=base.active_windows,
                 active_timezone=base.active_timezone,
             )
-            routed_provider = cast(ProviderT, replace(cast(Any, provider), base=[routed_base], models=[model]))
-            route_id = f"{routeable_provider.name}|{routeable_model.model_name}|{base.url}|{key.value}"
+            routed_provider = cast(
+                ProviderT, replace(cast(Any, provider), base=[routed_base], models=[model])
+            )
+            route_id = (
+                f"{routeable_provider.name}|{routeable_model.model_name}|{base.url}|{key.value}"
+            )
             route = RuntimeRoute(
                 provider=routed_provider,
                 base=routed_base,
@@ -353,12 +364,22 @@ class RoutePool(Generic[ProviderT, ModelT]):
         self._verbose = verbose
         self._now = now_provider or time.time
         self._lock = asyncio.Lock()
-        self._cooldowns: dict[str, float] = {candidate.route.route_id: 0.0 for candidate in candidates}
-        self._quota_until: dict[str, float] = {candidate.route.route_id: 0.0 for candidate in candidates}
-        self._error_counts: dict[str, int] = {candidate.route.route_id: 0 for candidate in candidates}
+        self._cooldowns: dict[str, float] = {
+            candidate.route.route_id: 0.0 for candidate in candidates
+        }
+        self._quota_until: dict[str, float] = {
+            candidate.route.route_id: 0.0 for candidate in candidates
+        }
+        self._error_counts: dict[str, int] = {
+            candidate.route.route_id: 0 for candidate in candidates
+        }
         self._last_pause_until: float = 0.0
-        self._last_key_quota_until: dict[str, float] = {candidate.route.route_id: 0.0 for candidate in candidates}
-        self._key_meta: dict[str, KeyConfig] = {candidate.route.route_id: candidate.route.key for candidate in candidates}
+        self._last_key_quota_until: dict[str, float] = {
+            candidate.route.route_id: 0.0 for candidate in candidates
+        }
+        self._key_meta: dict[str, KeyConfig] = {
+            candidate.route.route_id: candidate.route.key for candidate in candidates
+        }
         self._windows, self._tz = _parse_windows_for_candidates(candidates)
 
     @property
@@ -503,7 +524,9 @@ class RoutePool(Generic[ProviderT, ModelT]):
 
                 if not any_window_ok:
                     urls = _unique_route_urls(self._candidates)
-                    earliest = _earliest_next_active_start(now_dt, self._candidates, self._windows, self._tz)
+                    earliest = _earliest_next_active_start(
+                        now_dt, self._candidates, self._windows, self._tz
+                    )
                     logger.warning(
                         "All provider URLs are outside their active window: [%s]; next available at %s",
                         ", ".join(urls),

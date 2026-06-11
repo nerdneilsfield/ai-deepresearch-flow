@@ -9,7 +9,9 @@ import pytest
 from deepresearch_flow.paper.reranker import OpenAICompatibleReranker, RerankResult
 
 
-def _mock_rerank_transport(*, expected_body: dict[str, object] | None = None) -> httpx.MockTransport:
+def _mock_rerank_transport(
+    *, expected_body: dict[str, object] | None = None
+) -> httpx.MockTransport:
     async def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
         assert request.method == "POST"

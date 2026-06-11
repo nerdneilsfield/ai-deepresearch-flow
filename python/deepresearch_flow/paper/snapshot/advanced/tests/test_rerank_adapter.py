@@ -5,7 +5,10 @@ import asyncio
 import pytest
 
 from deepresearch_flow.paper.snapshot.advanced.chunk_select import SelectedChunk
-from deepresearch_flow.paper.snapshot.advanced.rerank_adapter import RerankOutcome, rerank_with_timeout
+from deepresearch_flow.paper.snapshot.advanced.rerank_adapter import (
+    RerankOutcome,
+    rerank_with_timeout,
+)
 
 
 def _selected(chunk_id: str, fused: float) -> SelectedChunk:

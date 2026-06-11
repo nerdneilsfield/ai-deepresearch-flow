@@ -11,7 +11,9 @@ from deepresearch_flow.paper.snapshot.unpacker import SnapshotUnpackInfoOptions,
 
 
 class TestUnpackInfoStrictTemplate(unittest.TestCase):
-    def _insert_paper(self, conn: sqlite3.Connection, *, paper_id: str, title: str, idx: int) -> None:
+    def _insert_paper(
+        self, conn: sqlite3.Connection, *, paper_id: str, title: str, idx: int
+    ) -> None:
         conn.execute(
             """
             INSERT INTO paper(

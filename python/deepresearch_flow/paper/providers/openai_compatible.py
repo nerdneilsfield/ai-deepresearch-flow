@@ -116,9 +116,13 @@ async def chat(
     data = response.json()
     choices = data.get("choices") or []
     if not choices:
-        raise ProviderError("OpenAI-compatible response missing choices", status_code=response.status_code)
+        raise ProviderError(
+            "OpenAI-compatible response missing choices", status_code=response.status_code
+        )
     message = choices[0].get("message", {})
     content = message.get("content")
     if not content:
-        raise ProviderError("OpenAI-compatible response missing content", status_code=response.status_code)
+        raise ProviderError(
+            "OpenAI-compatible response missing content", status_code=response.status_code
+        )
     return content

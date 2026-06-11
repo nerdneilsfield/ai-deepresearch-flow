@@ -26,14 +26,12 @@ class PushStaticStats:
 
 def _discover_files(root: Path) -> list[str]:
     """Recursively discover all files under root, returning sorted relative paths."""
-    return sorted(
-        str(p.relative_to(root))
-        for p in root.rglob("*")
-        if p.is_file()
-    )
+    return sorted(str(p.relative_to(root)) for p in root.rglob("*") if p.is_file())
 
 
-def discover_static_files(static_export_dir: Path, *, only_files: list[str] | None = None) -> list[str]:
+def discover_static_files(
+    static_export_dir: Path, *, only_files: list[str] | None = None
+) -> list[str]:
     """Return the relative files that would be processed for a static push."""
     return only_files if only_files is not None else _discover_files(static_export_dir)
 
@@ -44,7 +42,9 @@ def _top_dir(rel_path: str) -> str:
     return f"{parts[0]}/" if len(parts) > 1 else "(root)"
 
 
-def _ensure_parents(storage: RemoteStorage, rel_path: str, ensured_dirs: set[str] | None = None) -> None:
+def _ensure_parents(
+    storage: RemoteStorage, rel_path: str, ensured_dirs: set[str] | None = None
+) -> None:
     """Call storage.mkdir() for each parent directory component."""
     parts = rel_path.split("/")[:-1]
     current = ""
@@ -153,6 +153,7 @@ def push_static_files(
 # ---------------------------------------------------------------------------
 # Error report I/O
 # ---------------------------------------------------------------------------
+
 
 def write_error_report(failed_files: list[dict[str, str]], path: Path) -> None:
     """Write failed file list to JSON."""

@@ -36,18 +36,22 @@ def test_returns_chunk_hits(monkeypatch) -> None:
     monkeypatch.setattr(mod, "call_embedding_with_route_pool", fake_embed)
     monkeypatch.setattr(mod, "query_vector", _fake_query_vector)
 
-    db = _FakeLance(rows=[{
-        "id": "p1_simple_content_0",
-        "doc_id": "p1",
-        "text": "...",
-        "field_name": "simple/content",
-        "template_tag": "simple",
-        "chunk_type": "content",
-        "chunk_index": 0,
-        "lang": "en",
-        "_distance": 0.2,
-        "vector": [0.1, 0.2, 0.3],
-    }])
+    db = _FakeLance(
+        rows=[
+            {
+                "id": "p1_simple_content_0",
+                "doc_id": "p1",
+                "text": "...",
+                "field_name": "simple/content",
+                "template_tag": "simple",
+                "chunk_type": "content",
+                "chunk_index": 0,
+                "lang": "en",
+                "_distance": 0.2,
+                "vector": [0.1, 0.2, 0.3],
+            }
+        ]
+    )
 
     hits = asyncio.run(
         dense_retrieve(

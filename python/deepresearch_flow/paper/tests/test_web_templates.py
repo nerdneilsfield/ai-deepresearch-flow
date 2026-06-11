@@ -25,7 +25,7 @@ def test_render_template_includes_context_and_shared_layout_bits() -> None:
 def test_render_template_keeps_default_page_metadata_and_shared_assets() -> None:
     html = templates.render_template("detail.html", body_html="")
 
-    assert "<html lang=\"en\">" in html
+    assert '<html lang="en">' in html
     assert "<title></title>" in html
     assert '<meta name="robots" content="noindex, nofollow, noarchive, nosnippet"' in html
     assert "/static/css/main.css" in html

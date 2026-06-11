@@ -13,7 +13,11 @@ from starlette.responses import FileResponse, JSONResponse, Response
 
 from deepresearch_flow.paper.db_ops import PaperIndex
 from deepresearch_flow.paper.utils import stable_hash
-from deepresearch_flow.paper.snapshot.identity import build_paper_key_candidates, choose_preferred_key, paper_id_for_key
+from deepresearch_flow.paper.snapshot.identity import (
+    build_paper_key_candidates,
+    choose_preferred_key,
+    paper_id_for_key,
+)
 from deepresearch_flow.paper.web.filters import (
     compute_counts,
     matches_presence,
@@ -25,7 +29,11 @@ from deepresearch_flow.paper.web.filters import (
 )
 from deepresearch_flow.paper.web.markdown import normalize_markdown_images
 from deepresearch_flow.paper.web.static_assets import resolve_asset_urls
-from deepresearch_flow.paper.web.text import extract_summary_snippet, normalize_title, normalize_venue
+from deepresearch_flow.paper.web.text import (
+    extract_summary_snippet,
+    normalize_title,
+    normalize_venue,
+)
 from deepresearch_flow.paper.web.query import Query, QueryTerm, parse_query
 from deepresearch_flow.paper.search import validate_venue_filter
 
@@ -110,26 +118,46 @@ def _apply_query(index: PaperIndex, query: Query) -> set[int]:
     def ids_for_term(term: QueryTerm, base: set[int]) -> set[int]:
         value_lc = term.value.lower()
         if term.field is None:
-            return {idx for idx in base if value_lc in str(index.papers[idx].get("_search_lc") or "")}
+            return {
+                idx for idx in base if value_lc in str(index.papers[idx].get("_search_lc") or "")
+            }
         if term.field == "title":
-            return {idx for idx in base if value_lc in str(index.papers[idx].get("_title_lc") or "")}
+            return {
+                idx for idx in base if value_lc in str(index.papers[idx].get("_title_lc") or "")
+            }
         if term.field == "venue":
-            return {idx for idx in base if value_lc in str(index.papers[idx].get("_venue") or "").lower()}
+            return {
+                idx
+                for idx in base
+                if value_lc in str(index.papers[idx].get("_venue") or "").lower()
+            }
         if term.field == "tag":
             exact = index.by_tag.get(value_lc)
             if exact is not None:
                 return exact & base
-            return {idx for idx in base if any(value_lc in t.lower() for t in (index.papers[idx].get("_tags") or []))}
+            return {
+                idx
+                for idx in base
+                if any(value_lc in t.lower() for t in (index.papers[idx].get("_tags") or []))
+            }
         if term.field == "author":
             exact = index.by_author.get(value_lc)
             if exact is not None:
                 return exact & base
-            return {idx for idx in base if any(value_lc in a.lower() for a in (index.papers[idx].get("_authors") or []))}
+            return {
+                idx
+                for idx in base
+                if any(value_lc in a.lower() for a in (index.papers[idx].get("_authors") or []))
+            }
         if term.field == "month":
             exact = index.by_month.get(value_lc)
             if exact is not None:
                 return exact & base
-            return {idx for idx in base if value_lc == str(index.papers[idx].get("_month") or "").lower()}
+            return {
+                idx
+                for idx in base
+                if value_lc == str(index.papers[idx].get("_month") or "").lower()
+            }
         if term.field == "year":
             if ".." in term.value:
                 start_str, end_str = term.value.split("..", 1)
@@ -143,7 +171,9 @@ def _apply_query(index: PaperIndex, query: Query) -> set[int]:
             exact = index.by_year.get(value_lc)
             if exact is not None:
                 return exact & base
-            return {idx for idx in base if value_lc in str(index.papers[idx].get("_year") or "").lower()}
+            return {
+                idx for idx in base if value_lc in str(index.papers[idx].get("_year") or "").lower()
+            }
         return set()
 
     result: set[int] = set()
@@ -167,7 +197,9 @@ def _safe_read_text(path: Path) -> str:
         return path.read_text(encoding="latin-1")
 
 
-def _parse_positive_int_param(value: str | None, *, default: int, maximum: int) -> tuple[int | None, JSONResponse | None]:
+def _parse_positive_int_param(
+    value: str | None, *, default: int, maximum: int
+) -> tuple[int | None, JSONResponse | None]:
     raw = str(value if value is not None else default).strip()
     try:
         parsed = int(raw)
@@ -205,7 +237,9 @@ async def api_papers(request: Request) -> JSONResponse:
     query = parse_query(q)
     candidate = _apply_query(index, query)
     filter_terms = parse_filter_query(filter_query)
-    pdf_filter = merge_filter_set(presence_filter(filters["pdf"]), presence_filter(list(filter_terms["pdf"])))
+    pdf_filter = merge_filter_set(
+        presence_filter(filters["pdf"]), presence_filter(list(filter_terms["pdf"]))
+    )
     source_filter = merge_filter_set(
         presence_filter(filters["source"]), presence_filter(list(filter_terms["source"]))
     )
@@ -225,7 +259,9 @@ async def api_papers(request: Request) -> JSONResponse:
         filtered: set[int] = set()
         for idx in candidate:
             paper = index.papers[idx]
-            source_hash = str(paper.get("source_hash") or stable_hash(str(paper.get("source_path") or idx)))
+            source_hash = str(
+                paper.get("source_hash") or stable_hash(str(paper.get("source_path") or idx))
+            )
             has_source = source_hash in index.md_path_by_hash
             has_pdf = source_hash in index.pdf_path_by_hash
             has_summary = bool(paper.get("_has_summary"))
@@ -260,7 +296,9 @@ async def api_papers(request: Request) -> JSONResponse:
     items: list[dict[str, Any]] = []
     for idx in page_ids:
         paper = index.papers[idx]
-        source_hash = str(paper.get("source_hash") or stable_hash(str(paper.get("source_path") or idx)))
+        source_hash = str(
+            paper.get("source_hash") or stable_hash(str(paper.get("source_path") or idx))
+        )
         translations = index.translated_md_by_hash.get(source_hash, {})
         translation_languages = sorted(translations.keys(), key=str.lower)
         asset_urls = resolve_asset_urls(index, source_hash, asset_config, prefer_local=prefer_local)
@@ -381,24 +419,46 @@ async def api_papers_semantic(request: Request) -> JSONResponse:
     async with httpx.AsyncClient() as client:
         try:
             embedding_route_pool = getattr(request.app.state, "embedding_route_pool", None)
-            if embedding_route_pool is None and paper_config is not None and paper_config.embedding is not None:
+            if (
+                embedding_route_pool is None
+                and paper_config is not None
+                and paper_config.embedding is not None
+            ):
                 embedding_route_pool = RoutePool.from_embedding_provider(paper_config.embedding)
                 request.app.state.embedding_route_pool = embedding_route_pool
-            query_vector_val = await _embed_query(query_text, paper_config, client, embedding_route_pool)
+            query_vector_val = await _embed_query(
+                query_text, paper_config, client, embedding_route_pool
+            )
         except Exception:
-            return JSONResponse({"error": "Semantic search query embedding failed"}, status_code=502)
+            return JSONResponse(
+                {"error": "Semantic search query embedding failed"}, status_code=502
+            )
         aggregated = await hybrid_search(
             query_vector=query_vector_val,
             query_text=query_text,
             vector_store_db=embed_db,
             keyword_search_fn=keyword_search_fn,
             reranker=reranker,
-            vector_top_k=(paper_config.search.vector_top_k if paper_config and paper_config.search else top_n * 5),
-            keyword_top_k=(paper_config.search.keyword_top_k if paper_config and paper_config.search else top_n * 3),
+            vector_top_k=(
+                paper_config.search.vector_top_k
+                if paper_config and paper_config.search
+                else top_n * 5
+            ),
+            keyword_top_k=(
+                paper_config.search.keyword_top_k
+                if paper_config and paper_config.search
+                else top_n * 3
+            ),
             rerank_top_n=top_n,
-            hybrid=bool(paper_config.search.hybrid) if paper_config and paper_config.search else True,
+            hybrid=bool(paper_config.search.hybrid)
+            if paper_config and paper_config.search
+            else True,
             where=where,
-            document_text_resolver=lambda doc_id: _paper_text_for_rerank(paper_by_doc_id[doc_id]) if doc_id in paper_by_doc_id else doc_id,
+            document_text_resolver=lambda doc_id: (
+                _paper_text_for_rerank(paper_by_doc_id[doc_id])
+                if doc_id in paper_by_doc_id
+                else doc_id
+            ),
             client=client,
         )
 
@@ -419,10 +479,14 @@ async def api_papers_semantic(request: Request) -> JSONResponse:
         }
         paper = paper_by_doc_id.get(hit.doc_id)
         if paper is not None and index is not None and asset_config is not None:
-            source_hash = str(paper.get("source_hash") or stable_hash(str(paper.get("source_path") or hit.doc_id)))
+            source_hash = str(
+                paper.get("source_hash") or stable_hash(str(paper.get("source_path") or hit.doc_id))
+            )
             translations = index.translated_md_by_hash.get(source_hash, {})
             translation_languages = sorted(translations.keys(), key=str.lower)
-            asset_urls = resolve_asset_urls(index, source_hash, asset_config, prefer_local=prefer_local)
+            asset_urls = resolve_asset_urls(
+                index, source_hash, asset_config, prefer_local=prefer_local
+            )
             payload.update(
                 {
                     "source_hash": source_hash,

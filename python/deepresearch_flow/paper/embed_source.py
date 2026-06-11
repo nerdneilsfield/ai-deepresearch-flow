@@ -159,7 +159,14 @@ def _file_matches(path: Path, tokens: Iterable[str]) -> bool:
     stem = path.stem
     rel = str(path.as_posix())
     for token in tokens:
-        if token == name or token == stem or token == rel or token in name or token in stem or token in rel:
+        if (
+            token == name
+            or token == stem
+            or token == rel
+            or token in name
+            or token in stem
+            or token in rel
+        ):
             return True
     return False
 
@@ -213,7 +220,9 @@ def _match_translations(record: dict[str, Any], md_translated_roots: list[Path])
     for root in md_translated_roots:
         if not root.exists() or not root.is_dir():
             continue
-        for lang_dir in sorted((path for path in root.iterdir() if path.is_dir()), key=lambda path: path.name):
+        for lang_dir in sorted(
+            (path for path in root.iterdir() if path.is_dir()), key=lambda path: path.name
+        ):
             md_file = _resolve_markdown_file(lang_dir, record)
             if md_file is None:
                 continue
@@ -260,7 +269,9 @@ def load_from_json(
                     docs_by_id[doc_id] = doc
                     title_ranks[doc_id] = title_rank
                 else:
-                    _update_metadata_if_preferred(doc, metadata, title_rank=title_rank, title_ranks=title_ranks)
+                    _update_metadata_if_preferred(
+                        doc, metadata, title_rank=title_rank, title_ranks=title_ranks
+                    )
                 if source_roots and doc.source_md is None:
                     doc.source_md = _match_source_md(record, source_roots)
                 if translated_roots:

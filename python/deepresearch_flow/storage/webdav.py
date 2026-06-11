@@ -50,9 +50,7 @@ class WebDavStorage:
 
     def _check_auth(self, resp: httpx.Response) -> None:
         if resp.status_code == 401:
-            raise StorageAuthError(
-                f"WebDAV authentication failed (username: {self._username})"
-            )
+            raise StorageAuthError(f"WebDAV authentication failed (username: {self._username})")
 
     def _is_already_exists_response(self, resp: httpx.Response) -> bool:
         if resp.status_code == 405:

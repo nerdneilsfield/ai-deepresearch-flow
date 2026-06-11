@@ -7,6 +7,7 @@ import pytest
 
 from deepresearch_flow.recognize import mermaid
 
+
 @dataclass(frozen=True)
 class MermaidCleanupSeed:
     kind: str
@@ -28,14 +29,14 @@ MERMAID_CLEANUP_SEEDS = [
         kind="pass",
         original=(
             "flowchart LR\n"
-            "B[模型训练] --> B1[\"训练集：KITTI 00序列库帧<br/>"
-            "损失：懒三元组损失<br/>数据增强：z轴随机旋转[-π, π)\"]\n"
+            'B[模型训练] --> B1["训练集：KITTI 00序列库帧<br/>'
+            '损失：懒三元组损失<br/>数据增强：z轴随机旋转[-π, π)"]\n'
             "B --> B2[对比方法]\n"
         ),
         expected=(
             "flowchart LR\n"
-            "B[模型训练] --> B1[\"训练集：KITTI 00序列库帧<br/>"
-            "损失：懒三元组损失<br/>数据增强：z轴随机旋转[-π, π)\"]\n"
+            'B[模型训练] --> B1["训练集：KITTI 00序列库帧<br/>'
+            '损失：懒三元组损失<br/>数据增强：z轴随机旋转[-π, π)"]\n'
             "B --> B2[对比方法]\n"
         ),
         seed_id="quoted-html-label-with-brackets",
@@ -139,7 +140,7 @@ def _build_mermaid_repair_body(seed: int) -> tuple[str, str, tuple[str, ...], st
     original_lines = [
         f'{nodes[0]}["{tokens[0]}"]{nodes[1]} --> {nodes[2]}["{tokens[1]}"]',
         f'{nodes[2]}["{tokens[2]} "hi""] --> {nodes[3]}["{tokens[3]}"]',
-        f'{nodes[3]}[{tokens[3]}[-π, π)] --> {nodes[4]}[ok]',
+        f"{nodes[3]}[{tokens[3]}[-π, π)] --> {nodes[4]}[ok]",
         f'{nodes[4]}["{tokens[4]}<br>{tokens[5]}"] --> {nodes[5]}["mixed"]',
         f'{nodes[5]}["valid_{seed}"] --> {nodes[0]}["{tokens[0]}"]',
     ]
@@ -190,7 +191,9 @@ def _build_extract_fuzz_case(seed: int) -> tuple[str, tuple[str, ...], int]:
     return "".join(parts), tuple(expected_bodies), context_chars
 
 
-def _assert_cleanup_preserves_core_tokens(cleaned: str, expected_tokens: tuple[str, ...], header: str) -> None:
+def _assert_cleanup_preserves_core_tokens(
+    cleaned: str, expected_tokens: tuple[str, ...], header: str
+) -> None:
     assert cleaned.splitlines()[0] == header
     for token in expected_tokens:
         assert token in cleaned
@@ -198,10 +201,7 @@ def _assert_cleanup_preserves_core_tokens(cleaned: str, expected_tokens: tuple[s
 
 @pytest.mark.parametrize(
     "seed",
-    [
-        pytest.param(seed, id=f"{seed.kind}:{seed.seed_id}")
-        for seed in MERMAID_CLEANUP_SEEDS
-    ],
+    [pytest.param(seed, id=f"{seed.kind}:{seed.seed_id}") for seed in MERMAID_CLEANUP_SEEDS],
 )
 def test_cleanup_mermaid_seed_table(seed: MermaidCleanupSeed) -> None:
     cleaned = mermaid.cleanup_mermaid(seed.original)
@@ -218,8 +218,8 @@ def test_fix_mermaid_text_accepts_valid_repair_without_recleanup(monkeypatch) ->
     )
     repaired = (
         "flowchart LR\n"
-        "B[模型训练] --> B1[\"训练集：KITTI 00序列库帧<br/>"
-        "损失：懒三元组损失<br/>数据增强：z轴随机旋转[-π, π)\"]\n"
+        'B[模型训练] --> B1["训练集：KITTI 00序列库帧<br/>'
+        '损失：懒三元组损失<br/>数据增强：z轴随机旋转[-π, π)"]\n'
         "B --> B2[对比方法]\n"
     )
 
@@ -314,9 +314,7 @@ def test_cleanup_mermaid_fuzz_preserves_valid_and_repairs_local_defects(seed: in
 
 
 @pytest.mark.parametrize("seed", range(100))
-def test_fix_mermaid_text_fuzz_handles_pass_repair_and_reject_paths(
-    monkeypatch, seed: int
-) -> None:
+def test_fix_mermaid_text_fuzz_handles_pass_repair_and_reject_paths(monkeypatch, seed: int) -> None:
     kind = ("pass", "repair", "reject")[seed % 3]
     if kind == "pass":
         original_text, expected_tokens, header = _build_mermaid_pass_body(seed)
@@ -499,9 +497,7 @@ def test_repair_all_diagrams_global_handles_cancelled_validation_results(
     "seed",
     [pytest.param(seed, id=f"reject:{seed.seed_id}") for seed in MERMAID_REJECT_SEEDS],
 )
-def test_fix_mermaid_text_rejects_invalid_repairs(
-    monkeypatch, seed: MermaidRejectSeed
-) -> None:
+def test_fix_mermaid_text_rejects_invalid_repairs(monkeypatch, seed: MermaidRejectSeed) -> None:
     async def fake_repair_batch(*_args, **_kwargs):
         return {"abc:0": seed.repaired}, None
 

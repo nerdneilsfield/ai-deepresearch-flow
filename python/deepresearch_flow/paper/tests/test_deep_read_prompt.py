@@ -126,9 +126,7 @@ def test_deep_read_single_shot_prompt_requires_paper_archetype_before_module_a()
         output_language="zh",
     )
 
-    field_line = next(
-        line for line in user_prompt.splitlines() if "JSON fields" in line
-    )
+    field_line = next(line for line in user_prompt.splitlines() if "JSON fields" in line)
 
     assert "paper_archetype" in field_line
     assert field_line.index("paper_archetype") < field_line.index("module_a")
@@ -251,7 +249,10 @@ def test_deep_read_prompt_is_written_in_english_while_output_language_remains_ex
     assert "Output language: zh." in prompt_before_schema
     assert "Use that language for the final content" in prompt_before_schema
     assert "The prompt itself is written in English." in prompt_before_schema
-    assert "Do not switch the answer to English unless output_language requests English." in prompt_before_schema
+    assert (
+        "Do not switch the answer to English unless output_language requests English."
+        in prompt_before_schema
+    )
     assert prompt_before_schema.count("Output language") >= 2
     assert "当前阶段" not in prompt_before_schema
     assert "请仅输出 JSON" not in prompt_before_schema

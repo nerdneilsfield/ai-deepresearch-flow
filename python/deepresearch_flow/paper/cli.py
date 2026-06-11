@@ -57,7 +57,9 @@ def _resolve_provider_model_override(
     model_ref: str,
     *,
     section_name: str,
-) -> tuple[EmbeddingProviderConfig | RerankProviderConfig, EmbeddingModelConfig | RerankModelConfig]:
+) -> tuple[
+    EmbeddingProviderConfig | RerankProviderConfig, EmbeddingModelConfig | RerankModelConfig
+]:
     if "/" not in model_ref:
         raise click.ClickException(f"--{section_name} must be in provider/model format")
     provider_name, model_name = model_ref.split("/", 1)
@@ -132,7 +134,9 @@ async def _run_search(
         except ValueError as exc:
             raise click.ClickException(str(exc)) from exc
         keyword_rows = [
-            row for row in keyword_rows if venue_lower in str(row.get("venue") or "").strip().lower()
+            row
+            for row in keyword_rows
+            if venue_lower in str(row.get("venue") or "").strip().lower()
         ]
 
     keyword_search_fn = None
@@ -167,7 +171,9 @@ async def _run_search(
         else:
             rerank_provider, rerank_model = config.rerank.resolve_active()
             rerank_config = config.rerank
-        reranker = RoutedReranker(route_pool=RoutePool.from_rerank_provider(rerank_config, verbose=verbose))
+        reranker = RoutedReranker(
+            route_pool=RoutePool.from_rerank_provider(rerank_config, verbose=verbose)
+        )
         rerank_model_label = f"{rerank_provider.name}/{rerank_model.model_name}"
 
     if verbose:
@@ -259,7 +265,9 @@ async def _run_search(
     default=None,
     help="Text file containing markdown file paths (one per line)",
 )
-@click.option("-g", "--glob", "glob_pattern", default=None, help="Glob filter when input is a directory")
+@click.option(
+    "-g", "--glob", "glob_pattern", default=None, help="Glob filter when input is a directory"
+)
 @click.option(
     "-s",
     "--schema-json",
@@ -268,7 +276,9 @@ async def _run_search(
     default=None,
     help="Path to JSON schema",
 )
-@click.option("--prompt-system", "prompt_system", default=None, help="Custom system prompt template path")
+@click.option(
+    "--prompt-system", "prompt_system", default=None, help="Custom system prompt template path"
+)
 @click.option("--prompt-user", "prompt_user", default=None, help="Custom user prompt template path")
 @click.option(
     "--template-dir",
@@ -336,11 +346,21 @@ async def _run_search(
     help="End index (exclusive); -1 means to the last item",
 )
 @click.option("--dry-run", is_flag=True, help="Discover inputs without calling providers")
-@click.option("--max-concurrency", "max_concurrency", type=int, default=None, help="Override max concurrency")
-@click.option("--timeout", "timeout_seconds", type=float, default=None, help="Request timeout in seconds")
-@click.option("--sleep-every", "sleep_every", type=int, default=None, help="Sleep after every N requests")
-@click.option("--sleep-time", "sleep_time", type=float, default=None, help="Sleep duration in seconds")
-@click.option("--render-md", "render_md", is_flag=True, help="Render markdown outputs after extraction")
+@click.option(
+    "--max-concurrency", "max_concurrency", type=int, default=None, help="Override max concurrency"
+)
+@click.option(
+    "--timeout", "timeout_seconds", type=float, default=None, help="Request timeout in seconds"
+)
+@click.option(
+    "--sleep-every", "sleep_every", type=int, default=None, help="Sleep after every N requests"
+)
+@click.option(
+    "--sleep-time", "sleep_time", type=float, default=None, help="Sleep duration in seconds"
+)
+@click.option(
+    "--render-md", "render_md", is_flag=True, help="Render markdown outputs after extraction"
+)
 @click.option(
     "--render-output-dir",
     "render_output_dir",
@@ -413,7 +433,7 @@ def extract(
             raise click.ClickException(f"Input list file not found: {input_list}")
         list_content = list_path.read_text(encoding="utf-8")
         list_items = [line.strip() for line in list_content.splitlines() if line.strip()]
-        
+
         # Find base directory from inputs if available
         base_dir = None
         for inp in inputs:
@@ -421,17 +441,17 @@ def extract(
             if path.is_dir():
                 base_dir = path
                 break
-        
+
         # Resolve relative paths against base_dir
         for item in list_items:
             item_path = Path(item)
             if not item_path.is_absolute() and base_dir:
                 item_path = base_dir / item_path
             all_inputs.append(str(item_path))
-    
+
     if not all_inputs:
         raise click.ClickException("At least one --input or --input-list is required")
-    
+
     config = load_config(config_path)
     if model_ref is None:
         model_selector = ParsedModelSelector(
@@ -447,7 +467,11 @@ def extract(
 
     provider = None
     model_name = None
-    if model_selector is not None and model_selector.kind == "single" and model_selector.fixed_model:
+    if (
+        model_selector is not None
+        and model_selector.kind == "single"
+        and model_selector.fixed_model
+    ):
         provider_name, selected_model_name = model_selector.fixed_model.split("/", 1)
         provider, _model_capability = resolve_model_capability(
             provider_name,
@@ -480,7 +504,9 @@ def extract(
     if end_idx < -1:
         raise click.ClickException("--end-idx must be -1 or >= 0")
     if retry_failed and retry_failed_stages:
-        raise click.ClickException("--retry-failed and --retry-failed-stages are mutually exclusive")
+        raise click.ClickException(
+            "--retry-failed and --retry-failed-stages are mutually exclusive"
+        )
     if retry_list_json and (retry_failed or retry_failed_stages):
         raise click.ClickException(
             "--retry-list-json cannot be combined with --retry-failed or --retry-failed-stages"
@@ -498,14 +524,18 @@ def extract(
             raise click.ClickException(f"{provider.type} providers require api_keys")
 
     if template_dir and (prompt_system or prompt_user or schema_path):
-        raise click.ClickException("template-dir cannot be combined with custom prompt or schema flags")
+        raise click.ClickException(
+            "template-dir cannot be combined with custom prompt or schema flags"
+        )
 
     if (prompt_system and not prompt_user) or (prompt_user and not prompt_system):
         raise click.ClickException("Both --prompt-system and --prompt-user are required")
 
     custom_prompt = bool(prompt_system or prompt_user or template_dir)
     if custom_prompt and prompt_template != "simple":
-        raise click.ClickException("Custom prompts cannot be combined with built-in prompt templates")
+        raise click.ClickException(
+            "Custom prompts cannot be combined with built-in prompt templates"
+        )
     if stage_dag and custom_prompt:
         raise click.ClickException("--stage-dag requires a built-in multi-stage prompt template")
 
@@ -529,9 +559,13 @@ def extract(
         raise click.ClickException("Render template options require --render-md")
     if not render_md and render_output_dir is not None:
         raise click.ClickException("--render-output-dir requires --render-md")
-    if render_md and sum(
-        bool(item) for item in (render_template_path, render_template_name, render_template_dir)
-    ) > 1:
+    if (
+        render_md
+        and sum(
+            bool(item) for item in (render_template_path, render_template_name, render_template_dir)
+        )
+        > 1
+    ):
         raise click.ClickException(
             "Use only one of --render-markdown-template/--render-template, --render-template-name, or --render-template-dir"
         )
@@ -579,62 +613,78 @@ def extract(
     errors = Path(errors_path or config.extract.errors)
     retry_list_path = Path(retry_list_json) if retry_list_json else None
     split_out = Path(split_dir) if split_dir else None
-    timeout_seconds_effective = timeout_seconds if timeout_seconds is not None else config.extract.timeout
+    timeout_seconds_effective = (
+        timeout_seconds if timeout_seconds is not None else config.extract.timeout
+    )
 
     configure_logging(verbose)
 
     with provider_window_error_as_click():
         asyncio.run(
             extract_documents(
-            inputs=tuple(all_inputs) if all_inputs else inputs,
-            glob_pattern=glob_pattern,
-            provider=provider,
-            model=model_name,
-            schema=schema,
-            validator=validator,
-            config=config,
-            output_path=output,
-            errors_path=errors,
-            split=split,
-            split_dir=split_out,
-            force=force,
-            force_stages=list(force_stages),
-            retry_failed=retry_failed,
-            retry_failed_stages=retry_failed_stages,
-            retry_list_path=retry_list_path,
-            stage_dag=stage_dag or config.extract.stage_dag,
-            start_idx=start_idx,
-            end_idx=end_idx,
-            dry_run=dry_run,
-            max_concurrency_override=max_concurrency,
-            timeout_seconds=timeout_seconds_effective,
-            prompt_template=prompt_template,
-            output_language=output_language,
-            custom_prompt=custom_prompt,
-            prompt_system_path=prompt_system_path,
-            prompt_user_path=prompt_user_path,
-            render_md=render_md,
-            render_output_dir=render_output_dir_effective,
-            render_template_path=render_template_path_effective,
-            render_template_name=render_template_name_effective,
-            render_template_dir=render_template_dir_effective,
-            sleep_every=sleep_every,
-            sleep_time=sleep_time,
-            verbose=verbose,
-            model_selector=model_selector,
+                inputs=tuple(all_inputs) if all_inputs else inputs,
+                glob_pattern=glob_pattern,
+                provider=provider,
+                model=model_name,
+                schema=schema,
+                validator=validator,
+                config=config,
+                output_path=output,
+                errors_path=errors,
+                split=split,
+                split_dir=split_out,
+                force=force,
+                force_stages=list(force_stages),
+                retry_failed=retry_failed,
+                retry_failed_stages=retry_failed_stages,
+                retry_list_path=retry_list_path,
+                stage_dag=stage_dag or config.extract.stage_dag,
+                start_idx=start_idx,
+                end_idx=end_idx,
+                dry_run=dry_run,
+                max_concurrency_override=max_concurrency,
+                timeout_seconds=timeout_seconds_effective,
+                prompt_template=prompt_template,
+                output_language=output_language,
+                custom_prompt=custom_prompt,
+                prompt_system_path=prompt_system_path,
+                prompt_user_path=prompt_user_path,
+                render_md=render_md,
+                render_output_dir=render_output_dir_effective,
+                render_template_path=render_template_path_effective,
+                render_template_name=render_template_name_effective,
+                render_template_dir=render_template_dir_effective,
+                sleep_every=sleep_every,
+                sleep_time=sleep_time,
+                verbose=verbose,
+                model_selector=model_selector,
             )
         )
 
 
 @paper.command()
 @click.option("-c", "--config", "config_path", default="config.toml", help="Path to config.toml")
-@click.option("-i", "--input", "input_paths", multiple=True, help="Input paper_infos JSON (repeatable)")
+@click.option(
+    "-i", "--input", "input_paths", multiple=True, help="Input paper_infos JSON (repeatable)"
+)
 @click.option("--snapshot-db", "snapshot_db", default=None, help="Snapshot SQLite database path")
-@click.option("--static-export-dir", "static_export_dir", default=None, help="Snapshot static export directory")
+@click.option(
+    "--static-export-dir",
+    "static_export_dir",
+    default=None,
+    help="Snapshot static export directory",
+)
 @click.option("--md-root", "md_roots", multiple=True, help="Source markdown root directory")
-@click.option("--md-translated-root", "md_translated_roots", multiple=True, help="Translated markdown root directory")
+@click.option(
+    "--md-translated-root",
+    "md_translated_roots",
+    multiple=True,
+    help="Translated markdown root directory",
+)
 @click.option("--output-embed-db", "output_embed_db", default=None, help="LanceDB output directory")
-@click.option("--embedding", "embedding_override", default=None, help="Override embedding provider/model")
+@click.option(
+    "--embedding", "embedding_override", default=None, help="Override embedding provider/model"
+)
 @click.option(
     "--max-concurrency",
     "max_concurrency",
@@ -649,7 +699,9 @@ def extract(
     default=None,
     help="Max paper documents prepared for global embedding concurrency",
 )
-@click.option("--template-tag", "template_tag", default=None, help="Override template tag for all JSON inputs")
+@click.option(
+    "--template-tag", "template_tag", default=None, help="Override template tag for all JSON inputs"
+)
 @click.option("--force", is_flag=True, help="Delete existing index and rebuild from scratch")
 @click.option("-v", "--verbose", is_flag=True, help="Verbose logging")
 def embed(
@@ -699,7 +751,9 @@ def embed(
             ),
         )
 
-    vector_dir = Path(output_embed_db or (config.search.vector_dir if config.search else "paper_vectors"))
+    vector_dir = Path(
+        output_embed_db or (config.search.vector_dir if config.search else "paper_vectors")
+    )
     if force and vector_dir.exists():
         import shutil
 
@@ -707,6 +761,7 @@ def embed(
         shutil.rmtree(vector_dir)
 
     from deepresearch_flow.paper.vector_store import preflight_vector_store
+
     try:
         preflight_vector_store(vector_dir, dimensions=config.embedding.dimensions)
     except RuntimeError as exc:
@@ -717,17 +772,17 @@ def embed(
     with provider_window_error_as_click():
         asyncio.run(
             run_embed_pipeline(
-            config=config,
-            input_paths=[Path(p) for p in input_paths] if has_json else None,
-            snapshot_db=Path(snapshot_db) if snapshot_db else None,
-            static_export_dir=Path(static_export_dir) if static_export_dir else None,
-            md_roots=[Path(p) for p in md_roots],
-            md_translated_roots=[Path(p) for p in md_translated_roots],
-            vector_dir=vector_dir,
-            template_tag_override=template_tag,
-            max_concurrency_override=max_concurrency,
-            document_window_override=document_window,
-            verbose=verbose,
+                config=config,
+                input_paths=[Path(p) for p in input_paths] if has_json else None,
+                snapshot_db=Path(snapshot_db) if snapshot_db else None,
+                static_export_dir=Path(static_export_dir) if static_export_dir else None,
+                md_roots=[Path(p) for p in md_roots],
+                md_translated_roots=[Path(p) for p in md_translated_roots],
+                vector_dir=vector_dir,
+                template_tag_override=template_tag,
+                max_concurrency_override=max_concurrency,
+                document_window_override=document_window,
+                verbose=verbose,
             )
         )
     click.echo("Embedding complete.")
@@ -736,7 +791,9 @@ def embed(
 @paper.command()
 @click.option("-c", "--config", "config_path", default="config.toml", help="Path to config.toml")
 @click.option("--embed-db", "embed_db", default=None, help="LanceDB directory to query")
-@click.option("--embedding", "embedding_override", default=None, help="Override embedding provider/model")
+@click.option(
+    "--embedding", "embedding_override", default=None, help="Override embedding provider/model"
+)
 @click.option("--rerank", "rerank_override", default=None, help="Override rerank provider/model")
 @click.option("-q", "--query", "query_text", required=True, help="Search query")
 @click.option("--top-n", "top_n", type=int, default=10, help="Number of results")
@@ -765,22 +822,24 @@ def search(
 
     vector_dir = Path(embed_db or (config.search.vector_dir if config.search else "paper_vectors"))
     if not vector_dir.exists():
-        raise click.ClickException(f"Vector index not found at {vector_dir}. Run 'paper embed' first.")
+        raise click.ClickException(
+            f"Vector index not found at {vector_dir}. Run 'paper embed' first."
+        )
 
     with provider_window_error_as_click():
         asyncio.run(
             _run_search(
-            config=config,
-            vector_dir=vector_dir,
-            query_text=query_text,
-            top_n=top_n,
-            year=year,
-            venue=venue,
-            no_rerank=no_rerank,
-            no_hybrid=no_hybrid,
-            verbose=verbose,
-            embedding_override=embedding_override,
-            rerank_override=rerank_override,
+                config=config,
+                vector_dir=vector_dir,
+                query_text=query_text,
+                top_n=top_n,
+                year=year,
+                venue=venue,
+                no_rerank=no_rerank,
+                no_hybrid=no_hybrid,
+                verbose=verbose,
+                embedding_override=embedding_override,
+                rerank_override=rerank_override,
             )
         )
 

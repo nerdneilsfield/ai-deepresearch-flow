@@ -15,9 +15,7 @@ class MarkdownProtector:
         "figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|legend|li|link|main|menu|nav|"
         "noframes|ol|optgroup|option|p|param|section|summary|table|tbody|td|tfoot|th|thead|title|tr|ul|video|audio|canvas"
     )
-    VOID_HTML_TAGS = (
-        "area|base|br|col|embed|hr|img|input|keygen|link|meta|param|source|track|wbr"
-    )
+    VOID_HTML_TAGS = "area|base|br|col|embed|hr|img|input|keygen|link|meta|param|source|track|wbr"
 
     def protect(self, text: str, cfg: TranslateConfig, store: PlaceHolderStore) -> str:
         store.record_source_placeholder_like_tokens(text)
@@ -42,10 +40,7 @@ class MarkdownProtector:
 
     @staticmethod
     def _line_is_fence_close(line: str, fence_char: str, fence_len: int) -> bool:
-        return (
-            re.match(rf"^\s*{re.escape(fence_char)}{{{fence_len},}}\s*$", line)
-            is not None
-        )
+        return re.match(rf"^\s*{re.escape(fence_char)}{{{fence_len},}}\s*$", line) is not None
 
     @staticmethod
     def _scan_paren_math_end(text: str, start: int) -> int | None:
@@ -105,10 +100,7 @@ class MarkdownProtector:
 
     @staticmethod
     def _looks_like_table_delim(line: str) -> bool:
-        return (
-            re.match(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$", line)
-            is not None
-        )
+        return re.match(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$", line) is not None
 
     @staticmethod
     def _line_starts_block_html_open(line: str) -> str | None:
@@ -161,9 +153,7 @@ class MarkdownProtector:
         return n - 1
 
     @staticmethod
-    def _partition_by_blocks(
-        text: str, cfg: TranslateConfig, store: PlaceHolderStore
-    ) -> str:
+    def _partition_by_blocks(text: str, cfg: TranslateConfig, store: PlaceHolderStore) -> str:
         lines = text.splitlines(keepends=True)
         out: List[str] = []
         i = 0

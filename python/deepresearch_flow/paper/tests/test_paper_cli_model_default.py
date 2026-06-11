@@ -86,9 +86,7 @@ def test_paper_extract_uses_config_main_model_when_model_omitted(
     assert [item.model for item in selector.pool] == ["openai/gpt-4.1", "openai/gpt-4.1-mini"]
 
 
-def test_paper_extract_model_flag_overrides_config_main_model(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_paper_extract_model_flag_overrides_config_main_model(tmp_path: Path, monkeypatch) -> None:
     runner = CliRunner()
     config_path = _write_config(tmp_path)
     input_path = tmp_path / "doc.md"

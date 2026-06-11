@@ -8,7 +8,9 @@ from deepresearch_flow.paper.snapshot.advanced.fusion import FusedPaper
 from deepresearch_flow.paper.snapshot.advanced.retrieve_dense import ChunkHit
 
 
-def _chunk(paper_id: str, chunk_id: str, chunk_type: str, chunk_index: int, score: float) -> ChunkHit:
+def _chunk(
+    paper_id: str, chunk_id: str, chunk_type: str, chunk_index: int, score: float
+) -> ChunkHit:
     return ChunkHit(
         chunk_id=chunk_id,
         paper_id=paper_id,
@@ -67,24 +69,68 @@ def test_dense_chunk_picked_when_available() -> None:
 
 def test_sparse_only_fetches_abstract_from_lance() -> None:
     fused = [FusedPaper("p1", 0.01, paper_dense_score=None, paper_sparse_score=4.0)]
-    lance = _FakeLance({
-        "p1": [
-            {"id": "p1_simple_content_3", "doc_id": "p1", "text": "body", "field_name": "simple/content", "template_tag": "simple", "chunk_type": "content", "chunk_index": 3, "lang": "en", "vector": [0.0]},
-            {"id": "p1_simple_abstract_0", "doc_id": "p1", "text": "abs", "field_name": "simple/abstract", "template_tag": "simple", "chunk_type": "abstract", "chunk_index": 0, "lang": "en", "vector": [0.0]},
-        ]
-    })
+    lance = _FakeLance(
+        {
+            "p1": [
+                {
+                    "id": "p1_simple_content_3",
+                    "doc_id": "p1",
+                    "text": "body",
+                    "field_name": "simple/content",
+                    "template_tag": "simple",
+                    "chunk_type": "content",
+                    "chunk_index": 3,
+                    "lang": "en",
+                    "vector": [0.0],
+                },
+                {
+                    "id": "p1_simple_abstract_0",
+                    "doc_id": "p1",
+                    "text": "abs",
+                    "field_name": "simple/abstract",
+                    "template_tag": "simple",
+                    "chunk_type": "abstract",
+                    "chunk_index": 0,
+                    "lang": "en",
+                    "vector": [0.0],
+                },
+            ]
+        }
+    )
     output = select_chunks(fused_papers=fused, dense_chunks=[], lance_db=lance, max_papers=10)
     assert output[0].chunk_type == "abstract"
 
 
 def test_falls_back_to_index_zero() -> None:
     fused = [FusedPaper("p2", 0.01, None, 1.0)]
-    lance = _FakeLance({
-        "p2": [
-            {"id": "p2_simple_content_5", "doc_id": "p2", "text": "x", "field_name": "simple/content", "template_tag": "simple", "chunk_type": "content", "chunk_index": 5, "lang": "en", "vector": [0.0]},
-            {"id": "p2_simple_content_0", "doc_id": "p2", "text": "zero", "field_name": "simple/content", "template_tag": "simple", "chunk_type": "content", "chunk_index": 0, "lang": "en", "vector": [0.0]},
-        ]
-    })
+    lance = _FakeLance(
+        {
+            "p2": [
+                {
+                    "id": "p2_simple_content_5",
+                    "doc_id": "p2",
+                    "text": "x",
+                    "field_name": "simple/content",
+                    "template_tag": "simple",
+                    "chunk_type": "content",
+                    "chunk_index": 5,
+                    "lang": "en",
+                    "vector": [0.0],
+                },
+                {
+                    "id": "p2_simple_content_0",
+                    "doc_id": "p2",
+                    "text": "zero",
+                    "field_name": "simple/content",
+                    "template_tag": "simple",
+                    "chunk_type": "content",
+                    "chunk_index": 0,
+                    "lang": "en",
+                    "vector": [0.0],
+                },
+            ]
+        }
+    )
     output = select_chunks(fused_papers=fused, dense_chunks=[], lance_db=lance, max_papers=10)
     assert output[0].chunk_index == 0
 
@@ -109,5 +155,7 @@ def test_max_papers_truncates() -> None:
         for i in range(10)
     ]
     dense = [_chunk(f"p{i}", f"p{i}_c0", "content", 0, 0.5) for i in range(10)]
-    output = select_chunks(fused_papers=fused, dense_chunks=dense, lance_db=_FakeLance({}), max_papers=3)
+    output = select_chunks(
+        fused_papers=fused, dense_chunks=dense, lance_db=_FakeLance({}), max_papers=3
+    )
     assert len(output) == 3

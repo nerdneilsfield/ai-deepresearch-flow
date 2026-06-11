@@ -12,7 +12,12 @@ import signal
 
 from tqdm import tqdm
 
-from deepresearch_flow.paper.chunker import Chunk, SearchableField, chunk_fields, extract_searchable_fields
+from deepresearch_flow.paper.chunker import (
+    Chunk,
+    SearchableField,
+    chunk_fields,
+    extract_searchable_fields,
+)
 from deepresearch_flow.paper.config import PaperConfig
 from deepresearch_flow.paper.embed_source import EmbedDocument, load_from_json, load_from_snapshot
 from deepresearch_flow.paper.embedding import call_embedding_with_route_pool
@@ -200,7 +205,9 @@ def _save_checkpoint(
         "next_offset": next_offset,
         "staged_rows": [_serialize_chunk_row(row) for row in staged_rows],
     }
-    _checkpoint_path(vector_dir).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    _checkpoint_path(vector_dir).write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
 
 def _clear_checkpoint(vector_dir: Path) -> None:
@@ -273,6 +280,7 @@ async def run_embed_pipeline(
     ensure_admin_scalar_indices(db, vector_dir=vector_dir)
     source_group_keys: set[tuple[str, str]] = set()
     import httpx
+
     written_chunk_count = 0
     embed_progress = tqdm(total=0, desc="embed chunks", unit="chunk")
     checkpoint = _load_checkpoint(vector_dir)
@@ -358,7 +366,9 @@ async def run_embed_pipeline(
                             )
                             if not batch_specs and should_replace_existing and staged_rows:
                                 delete_groups(db, [(doc.doc_id, template_key)])
-                                write_chunks(db, staged_rows, dimensions=embedding_config.dimensions)
+                                write_chunks(
+                                    db, staged_rows, dimensions=embedding_config.dimensions
+                                )
                                 written_chunk_count += len(staged_rows)
                                 _clear_checkpoint(vector_dir)
                                 checkpoint = None
@@ -418,11 +428,15 @@ async def run_embed_pipeline(
                             rows_to_write = group.staged_rows + ordered_rows
                             if group.should_replace_existing:
                                 delete_groups(db, [(group.doc_id, group.template_key)])
-                                write_chunks(db, rows_to_write, dimensions=embedding_config.dimensions)
+                                write_chunks(
+                                    db, rows_to_write, dimensions=embedding_config.dimensions
+                                )
                                 _clear_checkpoint(vector_dir)
                                 checkpoint = None
                             else:
-                                write_chunks(db, rows_to_write, dimensions=embedding_config.dimensions)
+                                write_chunks(
+                                    db, rows_to_write, dimensions=embedding_config.dimensions
+                                )
                             written_chunk_count += len(rows_to_write)
                             group.finalized = True
                         embed_progress.update(len(job.batch_rows))

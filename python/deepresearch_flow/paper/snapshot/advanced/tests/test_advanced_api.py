@@ -115,18 +115,20 @@ def _build_app(tmp_path: Path, monkeypatch) -> tuple[Starlette, Path]:
         return Result()
 
     def fake_query_vector(db, vec, *, top_k, where=None):
-        return [{
-            "id": "p1_c0",
-            "doc_id": "p1",
-            "_distance": 0.1,
-            "text": "body",
-            "field_name": "simple/content",
-            "template_tag": "simple",
-            "chunk_type": "content",
-            "chunk_index": 0,
-            "lang": "en",
-            "vector": [0.5, 0.5],
-        }]
+        return [
+            {
+                "id": "p1_c0",
+                "doc_id": "p1",
+                "_distance": 0.1,
+                "text": "body",
+                "field_name": "simple/content",
+                "template_tag": "simple",
+                "chunk_type": "content",
+                "chunk_index": 0,
+                "lang": "en",
+                "vector": [0.5, 0.5],
+            }
+        ]
 
     monkeypatch.setattr(retrieve_dense, "call_embedding_with_route_pool", fake_embed)
     monkeypatch.setattr(retrieve_dense, "query_vector", fake_query_vector)

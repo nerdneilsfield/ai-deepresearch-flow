@@ -146,14 +146,7 @@ def test_embedded_fence_like_line_keeps_entire_code_fence_together() -> None:
     protector = MarkdownProtector()
     store = PlaceHolderStore()
     cfg = TranslateConfig()
-    text = (
-        "```python\n"
-        "print('start')\n"
-        "```json\n"
-        "<td>example</td>\n"
-        "print('end')\n"
-        "```\n"
-    )
+    text = "```python\nprint('start')\n```json\n<td>example</td>\nprint('end')\n```\n"
 
     protected = protector.protect(text, cfg, store)
 
@@ -166,9 +159,7 @@ def test_unknown_placeholder_like_tokens_are_detected() -> None:
     store.add("CODE", "`x`")
     text = "before __PH_UNKNOWN_999999__ after"
 
-    assert store.find_unresolved_placeholder_tokens(text) == [
-        "__PH_UNKNOWN_999999__"
-    ]
+    assert store.find_unresolved_placeholder_tokens(text) == ["__PH_UNKNOWN_999999__"]
     assert store.has_unresolved_placeholder_tokens(text)
 
 
@@ -252,7 +243,7 @@ def test_protect_unprotect_restores_html_inline_with_nested_math_image_and_footr
     cfg = TranslateConfig()
     text = (
         '<submit data-note="x">Good translation $^{1}$. '
-        'See![Image](data:image/png;base64,AAAA)[^4][^5]</submit>\n\n'
+        "See![Image](data:image/png;base64,AAAA)[^4][^5]</submit>\n\n"
         "[^4]: Footnote four.\n\n"
         "[^5]: Footnote five.\n"
     )

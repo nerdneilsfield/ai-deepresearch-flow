@@ -7,12 +7,20 @@ from deepresearch_flow.paper.web import app as appmod
 
 
 def test_create_app_exposes_expected_routes_and_state(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("deepresearch_flow.paper.web.app.load_and_merge_papers", lambda *args, **kwargs: [])
-    monkeypatch.setattr("deepresearch_flow.paper.web.app.build_index", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(
+        "deepresearch_flow.paper.web.app.load_and_merge_papers", lambda *args, **kwargs: []
+    )
+    monkeypatch.setattr(
+        "deepresearch_flow.paper.web.app.build_index", lambda *args, **kwargs: SimpleNamespace()
+    )
     monkeypatch.setattr("deepresearch_flow.paper.web.app.create_md_renderer", lambda: "renderer")
     monkeypatch.setattr(
         "deepresearch_flow.paper.web.app.build_static_assets",
-        lambda index_obj, **kwargs: SimpleNamespace(enabled=True, base_url="https://cdn.example.com/assets", images_base_url="https://cdn.example.com/assets/images"),
+        lambda index_obj, **kwargs: SimpleNamespace(
+            enabled=True,
+            base_url="https://cdn.example.com/assets",
+            images_base_url="https://cdn.example.com/assets/images",
+        ),
     )
 
     pdfjs_dir = tmp_path / "pdfjs"
@@ -25,7 +33,9 @@ def test_create_app_exposes_expected_routes_and_state(monkeypatch, tmp_path: Pat
 
     monkeypatch.setattr("deepresearch_flow.paper.web.app.PDFJS_STATIC_DIR", pdfjs_dir)
     monkeypatch.setattr("deepresearch_flow.paper.web.app.STATIC_DIR", static_dir)
-    monkeypatch.setattr("deepresearch_flow.paper.vector_store.open_store", lambda path: f"store:{path.name}")
+    monkeypatch.setattr(
+        "deepresearch_flow.paper.vector_store.open_store", lambda path: f"store:{path.name}"
+    )
 
     embed_db = tmp_path / "embed.db"
     embed_db.write_text("placeholder", encoding="utf-8")
@@ -60,14 +70,22 @@ def test_create_app_exposes_expected_routes_and_state(monkeypatch, tmp_path: Pat
 
 
 def test_create_app_falls_back_to_dev_mode_for_local_pdfjs(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("deepresearch_flow.paper.web.app.load_and_merge_papers", lambda *args, **kwargs: [])
-    monkeypatch.setattr("deepresearch_flow.paper.web.app.build_index", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(
+        "deepresearch_flow.paper.web.app.load_and_merge_papers", lambda *args, **kwargs: []
+    )
+    monkeypatch.setattr(
+        "deepresearch_flow.paper.web.app.build_index", lambda *args, **kwargs: SimpleNamespace()
+    )
     monkeypatch.setattr("deepresearch_flow.paper.web.app.create_md_renderer", lambda: "renderer")
     monkeypatch.setattr(
         "deepresearch_flow.paper.web.app.build_static_assets",
-        lambda index_obj, **kwargs: SimpleNamespace(enabled=True, base_url="", images_base_url="/images"),
+        lambda index_obj, **kwargs: SimpleNamespace(
+            enabled=True, base_url="", images_base_url="/images"
+        ),
     )
-    monkeypatch.setattr("deepresearch_flow.paper.web.app.PDFJS_STATIC_DIR", tmp_path / "missing-pdfjs")
+    monkeypatch.setattr(
+        "deepresearch_flow.paper.web.app.PDFJS_STATIC_DIR", tmp_path / "missing-pdfjs"
+    )
     monkeypatch.setattr("deepresearch_flow.paper.web.app.STATIC_DIR", tmp_path / "missing-static")
 
     export_dir = tmp_path / "exported"
@@ -86,15 +104,25 @@ def test_create_app_falls_back_to_dev_mode_for_local_pdfjs(monkeypatch, tmp_path
     assert app.state.pdfjs_cdn_base_url is None
 
 
-def test_create_app_keeps_assets_disabled_when_no_export_or_base(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("deepresearch_flow.paper.web.app.load_and_merge_papers", lambda *args, **kwargs: [])
-    monkeypatch.setattr("deepresearch_flow.paper.web.app.build_index", lambda *args, **kwargs: SimpleNamespace())
+def test_create_app_keeps_assets_disabled_when_no_export_or_base(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "deepresearch_flow.paper.web.app.load_and_merge_papers", lambda *args, **kwargs: []
+    )
+    monkeypatch.setattr(
+        "deepresearch_flow.paper.web.app.build_index", lambda *args, **kwargs: SimpleNamespace()
+    )
     monkeypatch.setattr("deepresearch_flow.paper.web.app.create_md_renderer", lambda: "renderer")
-    monkeypatch.setattr("deepresearch_flow.paper.web.app.PDFJS_STATIC_DIR", tmp_path / "missing-pdfjs")
+    monkeypatch.setattr(
+        "deepresearch_flow.paper.web.app.PDFJS_STATIC_DIR", tmp_path / "missing-pdfjs"
+    )
     monkeypatch.setattr("deepresearch_flow.paper.web.app.STATIC_DIR", tmp_path / "missing-static")
     monkeypatch.setattr(
         "deepresearch_flow.paper.web.app.build_static_assets",
-        lambda index_obj, **kwargs: SimpleNamespace(enabled=False, base_url=None, images_base_url=None),
+        lambda index_obj, **kwargs: SimpleNamespace(
+            enabled=False, base_url=None, images_base_url=None
+        ),
     )
 
     app = appmod.create_app(db_paths=[tmp_path / "papers.db"])

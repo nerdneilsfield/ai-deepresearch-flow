@@ -255,7 +255,9 @@ def test_translate_uses_fallback_model_after_group_provider_error(
     assert (output_dir / "doc.zh.md").read_text(encoding="utf-8").strip() == "已翻译文本"
 
 
-def test_translate_uses_translator_config_defaults_for_scheduler(tmp_path: Path, monkeypatch) -> None:
+def test_translate_uses_translator_config_defaults_for_scheduler(
+    tmp_path: Path, monkeypatch
+) -> None:
     input_dir = tmp_path / "input"
     output_dir = tmp_path / "out"
     input_dir.mkdir()
@@ -468,9 +470,7 @@ def test_translate_rejects_retry_concurrency_without_retry_model(tmp_path: Path)
     assert "retry_concurrency requires retry_model" in result.output
 
 
-def test_translate_retry_cli_options_override_config_defaults(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_translate_retry_cli_options_override_config_defaults(tmp_path: Path, monkeypatch) -> None:
     input_dir = tmp_path / "input"
     output_dir = tmp_path / "out"
     input_dir.mkdir()
@@ -635,9 +635,7 @@ def test_translate_explicit_max_concurrency_overrides_stage_sum(
     assert seen == {"global_concurrency": 5}
 
 
-def test_translate_logs_resolved_scheduler_concurrency(
-    tmp_path: Path, monkeypatch, caplog
-) -> None:
+def test_translate_logs_resolved_scheduler_concurrency(tmp_path: Path, monkeypatch, caplog) -> None:
     input_dir = tmp_path / "input"
     output_dir = tmp_path / "out"
     input_dir.mkdir()
@@ -689,7 +687,9 @@ def test_translate_logs_resolved_scheduler_concurrency(
     assert "initial=workers:4/concurrency:4" in log_text
     assert "retry=workers:2/concurrency:2/dedicated" in log_text
     assert "fallback=workers:3/concurrency:3" in log_text
-    assert "Translator scheduler models: main=gpt-4.1, retry=gpt-4.1-fallback (dedicated)" in log_text
+    assert (
+        "Translator scheduler models: main=gpt-4.1, retry=gpt-4.1-fallback (dedicated)" in log_text
+    )
 
 
 def test_group_concurrency_maps_to_initial_workers(tmp_path: Path, monkeypatch) -> None:
@@ -847,7 +847,9 @@ def test_translate_filters_documents_by_start_and_end_index(tmp_path: Path, monk
     assert (output_dir / "003.zh.md").read_text(encoding="utf-8") == "003"
 
 
-def test_translate_start_index_without_end_uses_remaining_documents(tmp_path: Path, monkeypatch) -> None:
+def test_translate_start_index_without_end_uses_remaining_documents(
+    tmp_path: Path, monkeypatch
+) -> None:
     input_dir = tmp_path / "input"
     output_dir = tmp_path / "out"
     input_dir.mkdir()
@@ -985,7 +987,9 @@ def test_dump_requests_log_stays_on_scheduler_path(tmp_path: Path, monkeypatch) 
         )
 
     monkeypatch.setattr("deepresearch_flow.translator.scheduler.Scheduler.run", fake_run)
-    monkeypatch.setattr("deepresearch_flow.translator.cli.MarkdownTranslator.translate", fake_translate)
+    monkeypatch.setattr(
+        "deepresearch_flow.translator.cli.MarkdownTranslator.translate", fake_translate
+    )
 
     result = CliRunner().invoke(
         cli,
@@ -1012,9 +1016,7 @@ def test_dump_requests_log_stays_on_scheduler_path(tmp_path: Path, monkeypatch) 
     "dump_flag",
     ["--dump-protected", "--dump-placeholders", "--dump-nodes"],
 )
-def test_dump_flags_stay_on_scheduler_path(
-    tmp_path: Path, monkeypatch, dump_flag: str
-) -> None:
+def test_dump_flags_stay_on_scheduler_path(tmp_path: Path, monkeypatch, dump_flag: str) -> None:
     input_dir = tmp_path / "input"
     output_dir = tmp_path / "out"
     input_dir.mkdir()
@@ -1049,7 +1051,9 @@ def test_dump_flags_stay_on_scheduler_path(
         )
 
     monkeypatch.setattr("deepresearch_flow.translator.scheduler.Scheduler.run", fake_run)
-    monkeypatch.setattr("deepresearch_flow.translator.cli.MarkdownTranslator.translate", fake_translate)
+    monkeypatch.setattr(
+        "deepresearch_flow.translator.cli.MarkdownTranslator.translate", fake_translate
+    )
 
     result = CliRunner().invoke(
         cli,
@@ -1227,7 +1231,9 @@ def _assert_dump_artifacts_black_box(debug_dir: Path, output_dir: Path) -> None:
     placeholders_payload = _load_debug_artifact(debug_dir, ".placeholders.json")
     placeholder_tokens = list(_collect_placeholder_tokens(placeholders_payload))
     if placeholder_tokens:
-        assert all(token.startswith("__PH_") and token.endswith("__") for token in placeholder_tokens)
+        assert all(
+            token.startswith("__PH_") and token.endswith("__") for token in placeholder_tokens
+        )
 
     nodes_payload = _load_debug_artifact(debug_dir, ".nodes.json")
     assert isinstance(nodes_payload, dict)
@@ -1278,15 +1284,15 @@ def _build_response_perturbation_content(kind: str, variant: int) -> str:
     if kind == "trailing_noise":
         return "".join(blocks) + noise_suffix
     if kind == "partial":
-        return "".join([blocks[0], f"<NODE_START_0001>\n已翻译文本 partial {variant} 1\n", blocks[2]])
+        return "".join(
+            [blocks[0], f"<NODE_START_0001>\n已翻译文本 partial {variant} 1\n", blocks[2]]
+        )
     if kind == "mixed_error":
         return f"ERROR: upstream timeout {variant}\n\n" + "".join(blocks)
     raise ValueError(kind)
 
 
-def _fake_openai_send_with_perturbation(
-    response_text: str, *, include_error_field: bool = False
-):
+def _fake_openai_send_with_perturbation(response_text: str, *, include_error_field: bool = False):
     async def _send(self, request, *args, **kwargs):
         _ = (self, args, kwargs)
         payload = None
@@ -1298,9 +1304,7 @@ def _fake_openai_send_with_perturbation(
         if payload.get("stream"):
             lines = [
                 'data: {"choices":[{"delta":{"content":"'
-                + response_text.replace("\\", "\\\\")
-                .replace('"', '\\"')
-                .replace("\n", "\\n")
+                + response_text.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
                 + '"}}]}'
             ]
             if include_error_field:
@@ -1334,11 +1338,11 @@ def _indexed_templates(templates: tuple[str, ...], *, token_base: int) -> tuple[
 
 
 _NESTED_PRIMARY = tuple(
-    f'<article>[outer-{i} ![inner-{i}](https://example.com/nested/{i}.png)](https://example.com/nested/{i}) <section>tail-{i}</section>'
+    f"<article>[outer-{i} ![inner-{i}](https://example.com/nested/{i}.png)](https://example.com/nested/{i}) <section>tail-{i}</section>"
     for i in range(1, 6)
 )
 _CROSS_PRIMARY = tuple(
-    f'<!-- cross-{i} --> [link-{i}](https://example.com/cross/{i}) ![img-{i}](https://example.com/cross/{i}.png) <div>bridge-{i}</div>'
+    f"<!-- cross-{i} --> [link-{i}](https://example.com/cross/{i}) ![img-{i}](https://example.com/cross/{i}.png) <div>bridge-{i}</div>"
     for i in range(1, 6)
 )
 _HALF_CLOSED_PRIMARY = tuple(
@@ -1346,79 +1350,79 @@ _HALF_CLOSED_PRIMARY = tuple(
     for i in range(1, 6)
 )
 _PSEUDO_PRIMARY = tuple(
-    f'Pseudo text __PH_{100 + i}__ beside [link-{i}](https://example.com/pseudo/{i}) and ![img-{i}](https://example.com/pseudo/{i}.png).'
+    f"Pseudo text __PH_{100 + i}__ beside [link-{i}](https://example.com/pseudo/{i}) and ![img-{i}](https://example.com/pseudo/{i}.png)."
     for i in range(1, 6)
 )
 _TOKEN_MIX_PRIMARY = tuple(
-    f'__PH_{200 + i}__ meets __ph_{200 + i}__ and __PH-{200 + i}__ around [link-{i}](https://example.com/tokens/{i}) and <span>markup-{i}</span>.'
+    f"__PH_{200 + i}__ meets __ph_{200 + i}__ and __PH-{200 + i}__ around [link-{i}](https://example.com/tokens/{i}) and <span>markup-{i}</span>."
     for i in range(1, 6)
 )
 _ADJACENT_PRIMARY = tuple(
-    f'[link-{i}](https://example.com/adjacent/{i})![img-{i}](https://example.com/adjacent/{i}.png)__PH_{300 + i}__<em>edge-{i}</em>'
+    f"[link-{i}](https://example.com/adjacent/{i})![img-{i}](https://example.com/adjacent/{i}.png)__PH_{300 + i}__<em>edge-{i}</em>"
     for i in range(1, 6)
 )
 _WHITESPACE_PRIMARY = tuple(
-    f'\n\n\t  [link-{i}](https://example.com/space/{i}) \n\t ![img-{i}](https://example.com/space/{i}.png) \n\n __PH_{400 + i}__  '
+    f"\n\n\t  [link-{i}](https://example.com/space/{i}) \n\t ![img-{i}](https://example.com/space/{i}.png) \n\n __PH_{400 + i}__  "
     for i in range(1, 6)
 )
 
 _BROKEN_LINK_PRIMARY = _indexed_templates(
     (
-        'Broken [link-{i}](ht!tp://exa mple.com/link/{i}) with ![img-{i}](https://example.com/link/{i}.png) and __PH_{token}__.',
-        'Broken [link-{i}](https://example.com/link/{i} with a missing close and <div>tail-{i}</div>.',
-        'Broken [link-{i}](https://example.com/link/{i})) with an extra close and [ref-{i}](https://example.com/ref/{i}).',
-        'Broken [link-{i}(https://example.com/link/{i}) with a mismatched bracket and ![img-{i}](https://example.com/link/{i}.png).',
-        'Broken [link-{i}](https://example.com/link/{i} path) with spaces in the target and <span>html-{i}</span>.',
+        "Broken [link-{i}](ht!tp://exa mple.com/link/{i}) with ![img-{i}](https://example.com/link/{i}.png) and __PH_{token}__.",
+        "Broken [link-{i}](https://example.com/link/{i} with a missing close and <div>tail-{i}</div>.",
+        "Broken [link-{i}](https://example.com/link/{i})) with an extra close and [ref-{i}](https://example.com/ref/{i}).",
+        "Broken [link-{i}(https://example.com/link/{i}) with a mismatched bracket and ![img-{i}](https://example.com/link/{i}.png).",
+        "Broken [link-{i}](https://example.com/link/{i} path) with spaces in the target and <span>html-{i}</span>.",
     ),
     token_base=500,
 )
 _BROKEN_IMAGE_PRIMARY = _indexed_templates(
     (
-        'Broken ![img-{i}](ht!tp://exa mple.com/image/{i}.png) with [link-{i}](https://example.com/image/{i}) and __PH_{token}__.',
-        'Broken ![img-{i}](https://example.com/image/{i}.png with a missing close and <div>tail-{i}</div>.',
-        'Broken ![img-{i}](https://example.com/image/{i}.png)) with an extra close and [link-{i}](https://example.com/ref/{i}).',
-        'Broken ![img-{i}(https://example.com/image/{i}.png) with a mismatched alt bracket.',
-        'Broken ![img-{i}](https://example.com/image/{i} path.png) with spaces and __PH_{token}__.',
+        "Broken ![img-{i}](ht!tp://exa mple.com/image/{i}.png) with [link-{i}](https://example.com/image/{i}) and __PH_{token}__.",
+        "Broken ![img-{i}](https://example.com/image/{i}.png with a missing close and <div>tail-{i}</div>.",
+        "Broken ![img-{i}](https://example.com/image/{i}.png)) with an extra close and [link-{i}](https://example.com/ref/{i}).",
+        "Broken ![img-{i}(https://example.com/image/{i}.png) with a mismatched alt bracket.",
+        "Broken ![img-{i}](https://example.com/image/{i} path.png) with spaces and __PH_{token}__.",
     ),
     token_base=600,
 )
 _BROKEN_HTML_PRIMARY = _indexed_templates(
     (
         '<div class="html-{i}">open tag with [link-{i}](https://example.com/html/{i}) and ![img-{i}](https://example.com/html/{i}.png).',
-        '<!-- comment-{i} starts but never closes [link-{i}](https://example.com/html/{i}) and __PH_{token}__.',
+        "<!-- comment-{i} starts but never closes [link-{i}](https://example.com/html/{i}) and __PH_{token}__.",
         '<span data-x="{i}">mismatched </div> with broken nesting and <em>tail-{i}</em>.',
-        '<section><article>nested but missing end {i} and ![img-{i}](https://example.com/html/{i}.png).',
+        "<section><article>nested but missing end {i} and ![img-{i}](https://example.com/html/{i}.png).",
         '<section class="broken-{i}" data-i="{i}"',
     ),
     token_base=700,
 )
 _BROKEN_MATH_PRIMARY = _indexed_templates(
     (
-        '$$x_{i} + y_{i} = z_{i} and [link-{i}](https://example.com/math/{i}) with __PH_{token}__.',
-        '$a_{i} + b_{i} = c_{i} and ![img-{i}](https://example.com/math/{i}.png) before the close.',
-        'Equation ends badly x_{i} + y_{i} = z_{i}$$ and <span>tail-{i}</span>.',
-        '$$\n x_{i} + y_{i}\n and the display math never closes properly.',
-        '$x_{i} + y_{i}$$ mixed fence and [link-{i}](https://example.com/math/{i}).',
+        "$$x_{i} + y_{i} = z_{i} and [link-{i}](https://example.com/math/{i}) with __PH_{token}__.",
+        "$a_{i} + b_{i} = c_{i} and ![img-{i}](https://example.com/math/{i}.png) before the close.",
+        "Equation ends badly x_{i} + y_{i} = z_{i}$$ and <span>tail-{i}</span>.",
+        "$$\n x_{i} + y_{i}\n and the display math never closes properly.",
+        "$x_{i} + y_{i}$$ mixed fence and [link-{i}](https://example.com/math/{i}).",
     ),
     token_base=800,
 )
 _BROKEN_FOOTNOTE_PRIMARY = _indexed_templates(
     (
-        'Marker[^f{i}] with [link-{i}](https://example.com/footnote/{i}) and ![img-{i}](https://example.com/footnote/{i}.png).',
-        'Repeated marker[^f{i}] and again[^f{i}] with __PH_{token}__.\n\n[^f{i}]: note {i}.',
-        'Orphan definition[^orphan{i}] in the body with <div>tail-{i}</div>.\n\n[^orphan{i}]: definition without ref.',
-        'Dangling marker[^] with malformed footnote and $$x_{i}$$.',
-        'Footnote body[^f{i}] plus adjacent token__PH_{token}__\n\n[^f{i}]: note.',
+        "Marker[^f{i}] with [link-{i}](https://example.com/footnote/{i}) and ![img-{i}](https://example.com/footnote/{i}.png).",
+        "Repeated marker[^f{i}] and again[^f{i}] with __PH_{token}__.\n\n[^f{i}]: note {i}.",
+        "Orphan definition[^orphan{i}] in the body with <div>tail-{i}</div>.\n\n[^orphan{i}]: definition without ref.",
+        "Dangling marker[^] with malformed footnote and $$x_{i}$$.",
+        "Footnote body[^f{i}] plus adjacent token__PH_{token}__\n\n[^f{i}]: note.",
     ),
     token_base=900,
 )
 _BROKEN_FENCE_PRIMARY = _indexed_templates(
     (
-        '```yaml\nkey: value\nbroken fence {i}\n[link-{i}](https://example.com/fence/{i})',
-        '```html\n<div>[link-{i}](https://example.com/fence/{i}) and ![img-{i}](https://example.com/fence/{i}.png)\n',
-        '```text\n__PH_{token}__ and broken fence {i}\n``',
-        '```\ncontent starts with a stray fence and never resolves {i}',
-        '```md\ncontent {i}\n```\n```',
+        "```yaml\nkey: value\nbroken fence {i}\n[link-{i}](https://example.com/fence/{i})",
+        "```html\n<div>[link-{i}](https://example.com/fence/{i}) and ![img-{i}](https://example.com/fence/{i}.png)\n",
+        "```text\n__PH_{token}__ and broken fence {i}\n``",
+        "```\ncontent starts with a stray fence and never resolves {i}",
+        "```md\ncontent {i}\n```\n```",
     ),
     token_base=1000,
 )
@@ -1777,13 +1781,11 @@ def _build_aggressive_response_perturbation_content(kind: str, variant: int) -> 
     if kind == "wrong_id":
         return (
             f"<NODE_START_{9000 + variant:04d}>\n已翻译文本 wrong-id {variant}\n"
-            f"</NODE_END_{8000 + variant:04d}>\n"
-            + valid_blocks[1]
+            f"</NODE_END_{8000 + variant:04d}>\n" + valid_blocks[1]
         )
     if kind == "noise":
         long_noise = "".join(
-            f"噪声-{variant}-{chunk}-" + ("x" * 90) + "\n"
-            for chunk in range(1, 8 + variant)
+            f"噪声-{variant}-{chunk}-" + ("x" * 90) + "\n" for chunk in range(1, 8 + variant)
         )
         return (
             f"前置无关文本 {variant}\n\n"
@@ -1803,7 +1805,7 @@ def _build_aggressive_response_perturbation_content(kind: str, variant: int) -> 
         return (
             f"ERROR: upstream timeout {variant}\n\n"
             + valid_blocks[0]
-            + f"\n\n{{\"error\":{{\"message\":\"still failing {variant}\"}}}}\n\n"
+            + f'\n\n{{"error":{{"message":"still failing {variant}"}}}}\n\n'
             + valid_blocks[1]
             + f"\n\nERROR: recoverable {variant}\n\n"
             + valid_blocks[2]

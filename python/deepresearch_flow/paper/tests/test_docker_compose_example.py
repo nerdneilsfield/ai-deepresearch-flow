@@ -15,7 +15,9 @@ def test_docker_compose_example_requires_private_mcp_access_token_for_all_profil
     assert "deploy-external-static:" in content
     assert "deploy-external-static-advanced:" in content
     assert content.count('MCP_ACCESS_TOKEN: "${MCP_ACCESS_TOKEN:?set MCP_ACCESS_TOKEN}"') == 4
-    assert content.count('SEARCH_ACCESS_TOKEN: "${SEARCH_ACCESS_TOKEN:?set SEARCH_ACCESS_TOKEN}"') == 2
+    assert (
+        content.count('SEARCH_ACCESS_TOKEN: "${SEARCH_ACCESS_TOKEN:?set SEARCH_ACCESS_TOKEN}"') == 2
+    )
     assert "your-mcp-token" not in content
     assert "SEARCH_ACCESS_TOKEN: your-token" not in content
     assert content.count('"127.0.0.1:8080:8899"') == 4

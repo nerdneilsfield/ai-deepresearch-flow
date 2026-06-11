@@ -10,7 +10,16 @@ import pytest
 from starlette.testclient import TestClient
 
 from deepresearch_flow.paper.snapshot.admin import create_admin_app
-from deepresearch_flow.paper.vector_store import ChunkRow, compute_group_hash, encode_vector_b64, load_index_meta, open_store, read_chunks_for_group, save_index_meta, write_chunks
+from deepresearch_flow.paper.vector_store import (
+    ChunkRow,
+    compute_group_hash,
+    encode_vector_b64,
+    load_index_meta,
+    open_store,
+    read_chunks_for_group,
+    save_index_meta,
+    write_chunks,
+)
 
 
 def _make_admin_app(tmp_path: Path):
@@ -55,7 +64,13 @@ def _chunk(doc_id: str, tag: str, idx: int, *, content_hash: str = "h") -> dict:
 
 
 def _meta(*, model: str = "m", canonical_model: str | None = None) -> dict:
-    payload = {"model": model, "dimensions": 4, "normalized": True, "provider": "p", "index_version": 1}
+    payload = {
+        "model": model,
+        "dimensions": 4,
+        "normalized": True,
+        "provider": "p",
+        "index_version": 1,
+    }
     if canonical_model is not None:
         payload["canonical_model"] = canonical_model
     return payload
@@ -76,7 +91,8 @@ def _body(
         "group": {
             "doc_id": doc_id,
             "template_tag": tag,
-            "group_hash": group_hash or compute_group_hash([str(chunk["content_hash"]) for chunk in chunks]),
+            "group_hash": group_hash
+            or compute_group_hash([str(chunk["content_hash"]) for chunk in chunks]),
             "part_index": part_index,
             "part_count": part_count,
             "is_final_part": part_index == part_count - 1,
@@ -87,57 +103,105 @@ def _body(
 
 def test_inserts_new_chunks(tmp_path: Path) -> None:
     client, headers, _ = _make_app(tmp_path)
-    resp = client.post('/semantic/chunks/batch', json=_body('d1', 'simple', [_chunk('d1', 'simple', 0), _chunk('d1', 'simple', 1)]), headers=headers)
+    resp = client.post(
+        "/semantic/chunks/batch",
+        json=_body("d1", "simple", [_chunk("d1", "simple", 0), _chunk("d1", "simple", 1)]),
+        headers=headers,
+    )
     assert resp.status_code == 200
-    assert resp.json()['inserted'] == 2
+    assert resp.json()["inserted"] == 2
 
 
 def test_skips_unchanged(tmp_path: Path) -> None:
     client, headers, _ = _make_app(tmp_path)
-    body = _body('d1', 'simple', [_chunk('d1', 'simple', 0)])
-    client.post('/semantic/chunks/batch', json=body, headers=headers)
-    resp = client.post('/semantic/chunks/batch', json=body, headers=headers)
-    assert resp.json()['skipped'] == 1
-    assert resp.json()['inserted'] == 0
+    body = _body("d1", "simple", [_chunk("d1", "simple", 0)])
+    client.post("/semantic/chunks/batch", json=body, headers=headers)
+    resp = client.post("/semantic/chunks/batch", json=body, headers=headers)
+    assert resp.json()["skipped"] == 1
+    assert resp.json()["inserted"] == 0
 
 
 def test_updates_changed(tmp_path: Path) -> None:
     client, headers, _ = _make_app(tmp_path)
-    client.post('/semantic/chunks/batch', json=_body('d1', 'simple', [_chunk('d1', 'simple', 0, content_hash='old')]), headers=headers)
-    resp = client.post('/semantic/chunks/batch', json=_body('d1', 'simple', [_chunk('d1', 'simple', 0, content_hash='new')]), headers=headers)
-    assert resp.json()['updated'] == 1
+    client.post(
+        "/semantic/chunks/batch",
+        json=_body("d1", "simple", [_chunk("d1", "simple", 0, content_hash="old")]),
+        headers=headers,
+    )
+    resp = client.post(
+        "/semantic/chunks/batch",
+        json=_body("d1", "simple", [_chunk("d1", "simple", 0, content_hash="new")]),
+        headers=headers,
+    )
+    assert resp.json()["updated"] == 1
 
 
 def test_deletes_orphans_on_complete_group(tmp_path: Path) -> None:
     client, headers, _ = _make_app(tmp_path)
-    client.post('/semantic/chunks/batch', json=_body('d1', 'simple', [_chunk('d1', 'simple', i) for i in range(3)]), headers=headers)
-    resp = client.post('/semantic/chunks/batch', json=_body('d1', 'simple', [_chunk('d1', 'simple', 0, content_hash='new')]), headers=headers)
-    assert resp.json()['deleted'] == 2
+    client.post(
+        "/semantic/chunks/batch",
+        json=_body("d1", "simple", [_chunk("d1", "simple", i) for i in range(3)]),
+        headers=headers,
+    )
+    resp = client.post(
+        "/semantic/chunks/batch",
+        json=_body("d1", "simple", [_chunk("d1", "simple", 0, content_hash="new")]),
+        headers=headers,
+    )
+    assert resp.json()["deleted"] == 2
 
 
 def test_requires_auth(tmp_path: Path) -> None:
     client, _, _ = _make_app(tmp_path)
-    resp = client.post('/semantic/chunks/batch', json=_body('d1', '', []))
+    resp = client.post("/semantic/chunks/batch", json=_body("d1", "", []))
     assert resp.status_code == 401
 
 
 def test_multi_part_staging(tmp_path: Path) -> None:
     client, headers, _ = _make_app(tmp_path)
-    group_hash = compute_group_hash(['h_0', 'h_1'])
-    resp0 = client.post('/semantic/chunks/batch', json=_body('d1', 'deep', [_chunk('d1', 'deep', 0)], group_hash=group_hash, part_index=0, part_count=2), headers=headers)
+    group_hash = compute_group_hash(["h_0", "h_1"])
+    resp0 = client.post(
+        "/semantic/chunks/batch",
+        json=_body(
+            "d1",
+            "deep",
+            [_chunk("d1", "deep", 0)],
+            group_hash=group_hash,
+            part_index=0,
+            part_count=2,
+        ),
+        headers=headers,
+    )
     assert resp0.status_code == 200
-    assert resp0.json()['inserted'] == 0
+    assert resp0.json()["inserted"] == 0
 
-    resp1 = client.post('/semantic/chunks/batch', json=_body('d1', 'deep', [_chunk('d1', 'deep', 1)], group_hash=group_hash, part_index=1, part_count=2), headers=headers)
+    resp1 = client.post(
+        "/semantic/chunks/batch",
+        json=_body(
+            "d1",
+            "deep",
+            [_chunk("d1", "deep", 1)],
+            group_hash=group_hash,
+            part_index=1,
+            part_count=2,
+        ),
+        headers=headers,
+    )
     assert resp1.status_code == 200
-    assert resp1.json()['inserted'] == 2
+    assert resp1.json()["inserted"] == 2
 
 
-def test_logs_semantic_batch_phase_timings(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+def test_logs_semantic_batch_phase_timings(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     client, headers, _ = _make_app(tmp_path)
     caplog.set_level("INFO", logger="deepresearch_flow.paper.snapshot.admin")
 
-    resp = client.post('/semantic/chunks/batch', json=_body('d1', 'simple', [_chunk('d1', 'simple', 0)]), headers=headers)
+    resp = client.post(
+        "/semantic/chunks/batch",
+        json=_body("d1", "simple", [_chunk("d1", "simple", 0)]),
+        headers=headers,
+    )
 
     assert resp.status_code == 200
     assert "semantic batch request doc=d1 tag=simple part=1/1 chunk_count=1" in caplog.text
@@ -150,13 +214,15 @@ def test_logs_semantic_batch_phase_timings(tmp_path: Path, caplog: pytest.LogCap
     assert "semantic batch done doc=d1 tag=simple" in caplog.text
 
 
-def test_skips_delete_phase_for_empty_existing_group(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+def test_skips_delete_phase_for_empty_existing_group(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     client, headers, _ = _make_app(tmp_path)
     caplog.set_level("INFO", logger="deepresearch_flow.paper.snapshot.admin")
 
     resp = client.post(
-        '/semantic/chunks/batch',
-        json=_body('d1', 'simple', [_chunk('d1', 'simple', 0)]),
+        "/semantic/chunks/batch",
+        json=_body("d1", "simple", [_chunk("d1", "simple", 0)]),
         headers=headers,
     )
 
@@ -165,61 +231,82 @@ def test_skips_delete_phase_for_empty_existing_group(tmp_path: Path, caplog: pyt
     assert "skipped_delete=1" in caplog.text
 
 
-def test_logs_staging_progress_before_final_apply(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+def test_logs_staging_progress_before_final_apply(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     client, headers, _ = _make_app(tmp_path)
     caplog.set_level("INFO", logger="deepresearch_flow.paper.snapshot.admin")
-    group_hash = compute_group_hash(['h_0', 'h_1'])
+    group_hash = compute_group_hash(["h_0", "h_1"])
 
     resp0 = client.post(
-        '/semantic/chunks/batch',
-        json=_body('d1', 'deep', [_chunk('d1', 'deep', 0)], group_hash=group_hash, part_index=0, part_count=2),
+        "/semantic/chunks/batch",
+        json=_body(
+            "d1",
+            "deep",
+            [_chunk("d1", "deep", 0)],
+            group_hash=group_hash,
+            part_index=0,
+            part_count=2,
+        ),
         headers=headers,
     )
     resp1 = client.post(
-        '/semantic/chunks/batch',
-        json=_body('d1', 'deep', [_chunk('d1', 'deep', 1)], group_hash=group_hash, part_index=1, part_count=2),
+        "/semantic/chunks/batch",
+        json=_body(
+            "d1",
+            "deep",
+            [_chunk("d1", "deep", 1)],
+            group_hash=group_hash,
+            part_index=1,
+            part_count=2,
+        ),
         headers=headers,
     )
 
     assert resp0.status_code == 200
     assert resp1.status_code == 200
-    assert "semantic batch staged doc=d1 tag=deep part=1/2 staged_parts=1/2 waiting_for_more_parts=1" in caplog.text
+    assert (
+        "semantic batch staged doc=d1 tag=deep part=1/2 staged_parts=1/2 waiting_for_more_parts=1"
+        in caplog.text
+    )
     assert "semantic batch ready doc=d1 tag=deep part=2/2 staged_parts=2/2" in caplog.text
 
 
 def test_rejects_oversized_payload(tmp_path: Path) -> None:
     client, headers, _ = _make_app(tmp_path)
-    huge_chunks = [_chunk('d1', 'simple', i) for i in range(5)]
+    huge_chunks = [_chunk("d1", "simple", i) for i in range(5)]
     for chunk in huge_chunks:
-        chunk['text'] = 'x' * 8_000_000
-    resp = client.post('/semantic/chunks/batch', json=_body('d1', 'simple', huge_chunks), headers=headers)
+        chunk["text"] = "x" * 8_000_000
+    resp = client.post(
+        "/semantic/chunks/batch", json=_body("d1", "simple", huge_chunks), headers=headers
+    )
     assert resp.status_code == 413
 
 
 def test_rejects_dimension_mismatch(tmp_path: Path) -> None:
     client, headers, _ = _make_app(tmp_path)
-    body = _body('d1', 'simple', [_chunk('d1', 'simple', 0)])
-    body['index_meta']['dimensions'] = 999
-    resp = client.post('/semantic/chunks/batch', json=body, headers=headers)
+    body = _body("d1", "simple", [_chunk("d1", "simple", 0)])
+    body["index_meta"]["dimensions"] = 999
+    resp = client.post("/semantic/chunks/batch", json=body, headers=headers)
     assert resp.status_code == 400
-    assert 'dimension' in resp.json().get('error', '').lower()
+    assert "dimension" in resp.json().get("error", "").lower()
 
 
 def test_rejects_group_hash_mismatch(tmp_path: Path) -> None:
     client, headers, _ = _make_app(tmp_path)
-    body = _body('d1', 'simple', [_chunk('d1', 'simple', 0)], group_hash='wrong')
-    resp = client.post('/semantic/chunks/batch', json=body, headers=headers)
+    body = _body("d1", "simple", [_chunk("d1", "simple", 0)], group_hash="wrong")
+    resp = client.post("/semantic/chunks/batch", json=body, headers=headers)
     assert resp.status_code == 400
-    assert 'group_hash' in resp.json()['detail']
+    assert "group_hash" in resp.json()["detail"]
 
 
 def test_rejects_invalid_vector_payload_per_chunk(tmp_path: Path) -> None:
     client, headers, _ = _make_app(tmp_path)
-    bad = _chunk('d1', 'simple', 0)
-    bad['vector_b64'] = 'not-base64'
-    resp = client.post('/semantic/chunks/batch', json=_body('d1', 'simple', [bad]), headers=headers)
+    bad = _chunk("d1", "simple", 0)
+    bad["vector_b64"] = "not-base64"
+    resp = client.post("/semantic/chunks/batch", json=_body("d1", "simple", [bad]), headers=headers)
     assert resp.status_code == 400
-    assert 'invalid vector payload' in resp.json()['detail']
+    assert "invalid vector payload" in resp.json()["detail"]
 
 
 def test_accepts_alias_model_when_canonical_model_matches_existing_index(tmp_path: Path) -> None:
@@ -239,18 +326,18 @@ def test_accepts_alias_model_when_canonical_model_matches_existing_index(tmp_pat
     )
 
     resp = client.post(
-        '/semantic/chunks/batch',
+        "/semantic/chunks/batch",
         json=_body(
-            'd1',
-            'simple',
-            [_chunk('d1', 'simple', 0)],
+            "d1",
+            "simple",
+            [_chunk("d1", "simple", 0)],
             index_meta=_meta(model="qwen3-embedding:4b", canonical_model="Qwen3-Embedding-4B"),
         ),
         headers=headers,
     )
 
     assert resp.status_code == 200
-    assert resp.json()['inserted'] == 1
+    assert resp.json()["inserted"] == 1
 
 
 def test_model_mismatch_returns_400_instead_of_500(tmp_path: Path) -> None:
@@ -270,11 +357,11 @@ def test_model_mismatch_returns_400_instead_of_500(tmp_path: Path) -> None:
     )
 
     resp = client.post(
-        '/semantic/chunks/batch',
+        "/semantic/chunks/batch",
         json=_body(
-            'd1',
-            'simple',
-            [_chunk('d1', 'simple', 0)],
+            "d1",
+            "simple",
+            [_chunk("d1", "simple", 0)],
             index_meta=_meta(model="other-model", canonical_model="other-model"),
         ),
         headers=headers,
@@ -289,24 +376,53 @@ def test_multi_part_write_failure_keeps_staged_parts(tmp_path: Path) -> None:
     from unittest.mock import patch
 
     client, headers, _ = _make_app(tmp_path)
-    group_hash = compute_group_hash(['h_0', 'h_1'])
-    resp0 = client.post('/semantic/chunks/batch', json=_body('d1', 'deep', [_chunk('d1', 'deep', 0)], group_hash=group_hash, part_index=0, part_count=2), headers=headers)
+    group_hash = compute_group_hash(["h_0", "h_1"])
+    resp0 = client.post(
+        "/semantic/chunks/batch",
+        json=_body(
+            "d1",
+            "deep",
+            [_chunk("d1", "deep", 0)],
+            group_hash=group_hash,
+            part_index=0,
+            part_count=2,
+        ),
+        headers=headers,
+    )
     assert resp0.status_code == 200
 
-    with patch('deepresearch_flow.paper.vector_store.write_chunks', side_effect=RuntimeError('boom')):
-        resp1 = client.post('/semantic/chunks/batch', json=_body('d1', 'deep', [_chunk('d1', 'deep', 1)], group_hash=group_hash, part_index=1, part_count=2), headers=headers)
+    with patch(
+        "deepresearch_flow.paper.vector_store.write_chunks", side_effect=RuntimeError("boom")
+    ):
+        resp1 = client.post(
+            "/semantic/chunks/batch",
+            json=_body(
+                "d1",
+                "deep",
+                [_chunk("d1", "deep", 1)],
+                group_hash=group_hash,
+                part_index=1,
+                part_count=2,
+            ),
+            headers=headers,
+        )
     assert resp1.status_code == 500
 
-    conn = sqlite3.connect(tmp_path / 'test.db')
+    conn = sqlite3.connect(tmp_path / "test.db")
     try:
-        count = conn.execute('SELECT COUNT(*) FROM semantic_staging WHERE doc_id = ? AND template_tag = ? AND group_hash = ?', ('d1', 'deep', group_hash)).fetchone()[0]
+        count = conn.execute(
+            "SELECT COUNT(*) FROM semantic_staging WHERE doc_id = ? AND template_tag = ? AND group_hash = ?",
+            ("d1", "deep", group_hash),
+        ).fetchone()[0]
     finally:
         conn.close()
     assert count == 2
 
 
 @pytest.mark.anyio
-async def test_concurrent_same_group_writes_do_not_duplicate_rows(tmp_path: Path, monkeypatch) -> None:
+async def test_concurrent_same_group_writes_do_not_duplicate_rows(
+    tmp_path: Path, monkeypatch
+) -> None:
     app, embed_dir = _make_admin_app(tmp_path)
     headers = {"Authorization": "Bearer test-token", "Content-Type": "application/json"}
 
@@ -421,15 +537,15 @@ def test_membership_transitions_update_doc_and_template_counts(tmp_path: Path) -
     client, headers, embed_dir = _make_app(tmp_path)
 
     resp_simple = client.post(
-        '/semantic/chunks/batch',
-        json=_body('d1', 'simple', [_chunk('d1', 'simple', 0)]),
+        "/semantic/chunks/batch",
+        json=_body("d1", "simple", [_chunk("d1", "simple", 0)]),
         headers=headers,
     )
     assert resp_simple.status_code == 200
 
     resp_deep = client.post(
-        '/semantic/chunks/batch',
-        json=_body('d1', 'deep', [_chunk('d1', 'deep', 0)]),
+        "/semantic/chunks/batch",
+        json=_body("d1", "deep", [_chunk("d1", "deep", 0)]),
         headers=headers,
     )
     assert resp_deep.status_code == 200
@@ -439,8 +555,8 @@ def test_membership_transitions_update_doc_and_template_counts(tmp_path: Path) -
     assert meta["template_count"] == 2
 
     resp_remove_simple = client.post(
-        '/semantic/chunks/batch',
-        json=_body('d1', 'simple', []),
+        "/semantic/chunks/batch",
+        json=_body("d1", "simple", []),
         headers=headers,
     )
     assert resp_remove_simple.status_code == 200
@@ -450,8 +566,8 @@ def test_membership_transitions_update_doc_and_template_counts(tmp_path: Path) -
     assert meta["template_count"] == 1
 
     resp_remove_deep = client.post(
-        '/semantic/chunks/batch',
-        json=_body('d1', 'deep', []),
+        "/semantic/chunks/batch",
+        json=_body("d1", "deep", []),
         headers=headers,
     )
     assert resp_remove_deep.status_code == 200

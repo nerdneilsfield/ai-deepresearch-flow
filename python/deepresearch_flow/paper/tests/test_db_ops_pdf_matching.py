@@ -21,7 +21,8 @@ def test_resolve_pdf_matches_author_title_filename_without_year(tmp_path: Path) 
     paper = {
         "paper_title": "Event-Driven Asynchronous Graph Neural Network FPGA Accelerator for Real-time Edge Vision",
         "source_path": str(
-            tmp_path / "Liu_-_Event-driven_asynchronous_graph_neural_network_FPGA_accelerator_for_real-time_edge_vision.md"
+            tmp_path
+            / "Liu_-_Event-driven_asynchronous_graph_neural_network_FPGA_accelerator_for_real-time_edge_vision.md"
         ),
     }
 
@@ -76,7 +77,9 @@ def test_resolve_pdf_only_logs_when_all_fallbacks_fail(tmp_path: Path, capsys) -
     assert captured.err == ""
 
 
-def test_resolve_pdf_falls_back_to_source_path_title_when_paper_title_is_non_latin(tmp_path: Path) -> None:
+def test_resolve_pdf_falls_back_to_source_path_title_when_paper_title_is_non_latin(
+    tmp_path: Path,
+) -> None:
     pdf_dir = tmp_path / "pdfs"
     pdf_dir.mkdir()
     pdf_path = pdf_dir / (

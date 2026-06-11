@@ -103,7 +103,9 @@ class EmbeddingModelConfig:
         **_: Any,
     ) -> None:
         object.__setattr__(self, "model_name", model_name)
-        object.__setattr__(self, "canonical_name", (canonical_name or model_name).strip() or model_name)
+        object.__setattr__(
+            self, "canonical_name", (canonical_name or model_name).strip() or model_name
+        )
         object.__setattr__(self, "dimensions", dimensions)
         object.__setattr__(self, "max_context", max_context)
 
@@ -516,13 +518,18 @@ def _parse_base_configs(value: Any, provider_path: str) -> list[BaseConfig]:
             try:
                 ZoneInfo(raw_timezone)
             except ZoneInfoNotFoundError as exc:
-                raise ValueError(f"{field_name}.active_timezone: unknown timezone '{raw_timezone}'") from exc
+                raise ValueError(
+                    f"{field_name}.active_timezone: unknown timezone '{raw_timezone}'"
+                ) from exc
             active_timezone = raw_timezone
         parsed.append(
             BaseConfig(
                 url=url,
                 weight=_validate_weight(item.get("weight"), f"{field_name}.weight"),
-                key=[_parse_key_config(entry, f"{field_name}.key[{key_idx}]") for key_idx, entry in enumerate(keys_raw)],
+                key=[
+                    _parse_key_config(entry, f"{field_name}.key[{key_idx}]")
+                    for key_idx, entry in enumerate(keys_raw)
+                ],
                 active_windows=active_windows,
                 active_timezone=active_timezone,
             )
@@ -610,7 +617,9 @@ def _parse_embedding_model_configs(
     return parsed
 
 
-def _parse_embedding_provider_configs(value: Any, default_dimensions: int) -> list[EmbeddingProviderConfig]:
+def _parse_embedding_provider_configs(
+    value: Any, default_dimensions: int
+) -> list[EmbeddingProviderConfig]:
     if not isinstance(value, list) or not value:
         raise ValueError("Config [embedding] must include non-empty providers")
 
@@ -654,7 +663,9 @@ def _parse_embedding_config(value: Any) -> EmbeddingConfig | None:
         batch_size=_as_int(value.get("batch_size"), 32),
         max_concurrency=_as_int(value.get("max_concurrency"), 1),
         document_window=(
-            _as_int(value.get("document_window"), 0) if value.get("document_window") is not None else None
+            _as_int(value.get("document_window"), 0)
+            if value.get("document_window") is not None
+            else None
         ),
         chunk_max_tokens=_as_int(value.get("chunk_max_tokens"), 512),
         chunk_overlap_tokens=_as_int(value.get("chunk_overlap_tokens"), 64),
@@ -765,23 +776,15 @@ def _parse_search_config(value: Any) -> SearchConfig | None:
         advanced_rrf_k=_as_int(value.get("advanced_rrf_k"), 60),
         advanced_dense_top_k=_as_int(value.get("advanced_dense_top_k"), 50),
         advanced_sparse_top_k=_as_int(value.get("advanced_sparse_top_k"), 30),
-        advanced_post_fusion_top_k=_as_int(
-            value.get("advanced_post_fusion_top_k"), 50
-        ),
+        advanced_post_fusion_top_k=_as_int(value.get("advanced_post_fusion_top_k"), 50),
         advanced_dedup_cosine_threshold=_as_float(
             value.get("advanced_dedup_cosine_threshold"), 0.95
         ),
         advanced_rerank_top_n=_as_int(value.get("advanced_rerank_top_n"), 20),
-        advanced_mmr_lambda_default=_as_float(
-            value.get("advanced_mmr_lambda_default"), 0.6
-        ),
-        advanced_rerank_timeout_ms=_as_int(
-            value.get("advanced_rerank_timeout_ms"), 1500
-        ),
+        advanced_mmr_lambda_default=_as_float(value.get("advanced_mmr_lambda_default"), 0.6),
+        advanced_rerank_timeout_ms=_as_int(value.get("advanced_rerank_timeout_ms"), 1500),
         advanced_top_n_max=_as_int(value.get("advanced_top_n_max"), 50),
-        advanced_max_query_length=_as_int(
-            value.get("advanced_max_query_length"), 500
-        ),
+        advanced_max_query_length=_as_int(value.get("advanced_max_query_length"), 500),
     )
 
 
@@ -826,9 +829,13 @@ def load_config(path: str) -> PaperConfig:
 
     extract_data = data.get("extract", {})
     extract = ExtractConfig(
-        output=_as_str(extract_data.get("output"), DEFAULT_EXTRACT.output) or DEFAULT_EXTRACT.output,
-        errors=_as_str(extract_data.get("errors"), DEFAULT_EXTRACT.errors) or DEFAULT_EXTRACT.errors,
-        max_concurrency=_as_int(extract_data.get("max_concurrency"), DEFAULT_EXTRACT.max_concurrency),
+        output=_as_str(extract_data.get("output"), DEFAULT_EXTRACT.output)
+        or DEFAULT_EXTRACT.output,
+        errors=_as_str(extract_data.get("errors"), DEFAULT_EXTRACT.errors)
+        or DEFAULT_EXTRACT.errors,
+        max_concurrency=_as_int(
+            extract_data.get("max_concurrency"), DEFAULT_EXTRACT.max_concurrency
+        ),
         max_retries=_as_int(extract_data.get("max_retries"), DEFAULT_EXTRACT.max_retries),
         timeout=_as_float(extract_data.get("timeout"), DEFAULT_EXTRACT.timeout),
         backoff_base_seconds=_as_float(
@@ -853,7 +860,9 @@ def load_config(path: str) -> PaperConfig:
     )
 
     render_data = data.get("render", {})
-    render = RenderConfig(template_path=_as_str(render_data.get("template_path"), DEFAULT_RENDER.template_path))
+    render = RenderConfig(
+        template_path=_as_str(render_data.get("template_path"), DEFAULT_RENDER.template_path)
+    )
 
     providers_data = data.get("providers", [])
     if not isinstance(providers_data, list) or not providers_data:

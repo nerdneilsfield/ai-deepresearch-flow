@@ -18,9 +18,7 @@ def build_request_spec(
 ) -> RequestSpec:
     resolved_top_n = int(top_n)
     if resolved_top_n < 1 or resolved_top_n > search_cfg.advanced_top_n_max:
-        raise InvalidQueryError(
-            f"top_n must be in [1, {search_cfg.advanced_top_n_max}]"
-        )
+        raise InvalidQueryError(f"top_n must be in [1, {search_cfg.advanced_top_n_max}]")
 
     resolved_mmr_lambda = float(mmr_lambda)
     if not (0.0 <= resolved_mmr_lambda <= 1.0):

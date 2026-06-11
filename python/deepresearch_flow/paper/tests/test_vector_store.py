@@ -88,7 +88,9 @@ def test_validate_index_meta_mismatch_fails(tmp_path: Path) -> None:
         )
 
 
-def test_validate_index_meta_allows_same_canonical_model_with_different_provider_names(tmp_path: Path) -> None:
+def test_validate_index_meta_allows_same_canonical_model_with_different_provider_names(
+    tmp_path: Path,
+) -> None:
     save_index_meta(
         tmp_path,
         {

@@ -32,7 +32,11 @@ class SelectedChunk:
 
 def _preference_key(row: dict[str, Any]) -> tuple[int, int]:
     chunk_type = str(row.get("chunk_type", ""))
-    pref = _PREFERRED_TYPES.index(chunk_type) if chunk_type in _PREFERRED_TYPES else len(_PREFERRED_TYPES)
+    pref = (
+        _PREFERRED_TYPES.index(chunk_type)
+        if chunk_type in _PREFERRED_TYPES
+        else len(_PREFERRED_TYPES)
+    )
     return pref, int(row.get("chunk_index", 0) or 0)
 
 

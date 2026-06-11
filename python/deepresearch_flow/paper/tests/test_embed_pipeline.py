@@ -101,8 +101,16 @@ def _test_config(
                 EmbeddingProviderConfig(
                     name="ollama",
                     type="openai_compatible",
-                    base=[BaseConfig(url="http://localhost:11434/v1", weight=1, key=[KeyConfig(value=api_key, weight=1)])],
-                    models=[EmbeddingModelConfig(model_name="bge-m3", dimensions=1024, max_context=8192)],
+                    base=[
+                        BaseConfig(
+                            url="http://localhost:11434/v1",
+                            weight=1,
+                            key=[KeyConfig(value=api_key, weight=1)],
+                        )
+                    ],
+                    models=[
+                        EmbeddingModelConfig(model_name="bge-m3", dimensions=1024, max_context=8192)
+                    ],
                 )
             ],
         ),
@@ -115,7 +123,9 @@ def test_pipeline_creates_index_meta(tmp_path: Path, monkeypatch) -> None:
     json_path = _write_json(tmp_path)
     vector_dir = tmp_path / "vectors"
 
-    async def fake_embed(base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None):  # noqa: ANN001
+    async def fake_embed(
+        base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None
+    ):  # noqa: ANN001
         return EmbeddingResult(
             vectors=[[0.1] * 1024 for _ in texts],
             model=model,
@@ -140,7 +150,9 @@ def test_pipeline_incremental_skips_unchanged(tmp_path: Path, monkeypatch) -> No
     vector_dir = tmp_path / "vectors"
     call_count = 0
 
-    async def counting_embed(base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None):  # noqa: ANN001
+    async def counting_embed(
+        base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None
+    ):  # noqa: ANN001
         nonlocal call_count
         call_count += len(texts)
         return EmbeddingResult(
@@ -171,11 +183,15 @@ def test_pipeline_incremental_skips_unchanged(tmp_path: Path, monkeypatch) -> No
     assert call_count == first_count
 
 
-def test_pipeline_upgrades_existing_table_indices_even_when_no_reembed_needed(tmp_path: Path, monkeypatch) -> None:
+def test_pipeline_upgrades_existing_table_indices_even_when_no_reembed_needed(
+    tmp_path: Path, monkeypatch
+) -> None:
     json_path = _write_json(tmp_path)
     vector_dir = tmp_path / "vectors"
 
-    async def ok_embed(base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None):  # noqa: ARG001, ANN001
+    async def ok_embed(
+        base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None
+    ):  # noqa: ARG001, ANN001
         return EmbeddingResult(
             vectors=[[0.1] * 1024 for _ in texts],
             model=model,
@@ -196,7 +212,9 @@ def test_pipeline_upgrades_existing_table_indices_even_when_no_reembed_needed(tm
     raw_db.create_table("paper_chunks", data=existing_rows, mode="overwrite")
     assert list(raw_db.open_table("paper_chunks").list_indices()) == []
 
-    async def should_not_embed(base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None):  # noqa: ARG001, ANN001
+    async def should_not_embed(
+        base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None
+    ):  # noqa: ARG001, ANN001
         raise AssertionError("unchanged embed run should not request embeddings")
 
     monkeypatch.setattr("deepresearch_flow.paper.embedding.call_embedding", should_not_embed)
@@ -222,7 +240,9 @@ def test_pipeline_resumes_after_partial_failure(tmp_path: Path, monkeypatch) -> 
     seen_texts: list[str] = []
     should_fail = {"value": True}
 
-    async def flaky_embed(base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None):  # noqa: ANN001
+    async def flaky_embed(
+        base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None
+    ):  # noqa: ANN001
         seen_texts.extend(list(texts))
         if should_fail["value"] and any("second test paper" in text.lower() for text in texts):
             raise RuntimeError("embedding backend unavailable")
@@ -264,7 +284,9 @@ def test_pipeline_resumes_after_partial_failure(tmp_path: Path, monkeypatch) -> 
     assert all("first test paper" not in text.lower() for text in resumed_texts)
 
 
-def test_pipeline_embeds_batches_concurrently_with_configured_limit(tmp_path: Path, monkeypatch) -> None:
+def test_pipeline_embeds_batches_concurrently_with_configured_limit(
+    tmp_path: Path, monkeypatch
+) -> None:
     json_path = tmp_path / "papers.json"
     json_path.write_text(
         json.dumps(
@@ -288,7 +310,9 @@ def test_pipeline_embeds_batches_concurrently_with_configured_limit(tmp_path: Pa
     started_requests = 0
     release = asyncio.Event()
 
-    async def delayed_embed(base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None):  # noqa: ARG001, ANN001
+    async def delayed_embed(
+        base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None
+    ):  # noqa: ARG001, ANN001
         nonlocal active_requests, peak_requests, started_requests
         if texts == ["Concurrent Paper"]:
             return EmbeddingResult(
@@ -327,7 +351,9 @@ def test_pipeline_embeds_batches_concurrently_with_configured_limit(tmp_path: Pa
     assert scan_rows(open_store(vector_dir))
 
 
-def test_pipeline_embeds_batches_concurrently_across_document_window(tmp_path: Path, monkeypatch) -> None:
+def test_pipeline_embeds_batches_concurrently_across_document_window(
+    tmp_path: Path, monkeypatch
+) -> None:
     json_path = _write_two_doc_json(tmp_path)
     vector_dir = tmp_path / "vectors"
     active_requests = 0
@@ -335,7 +361,9 @@ def test_pipeline_embeds_batches_concurrently_across_document_window(tmp_path: P
     started_requests = 0
     release = asyncio.Event()
 
-    async def delayed_embed(base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None):  # noqa: ARG001, ANN001
+    async def delayed_embed(
+        base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None
+    ):  # noqa: ARG001, ANN001
         nonlocal active_requests, peak_requests, started_requests
         if all(text.startswith("Test Paper ") for text in texts):
             return EmbeddingResult(
@@ -377,13 +405,17 @@ def test_pipeline_embeds_batches_concurrently_across_document_window(tmp_path: P
     }
 
 
-def test_pipeline_document_window_limits_cross_document_concurrency(tmp_path: Path, monkeypatch) -> None:
+def test_pipeline_document_window_limits_cross_document_concurrency(
+    tmp_path: Path, monkeypatch
+) -> None:
     json_path = _write_two_doc_json(tmp_path)
     vector_dir = tmp_path / "vectors"
     active_requests = 0
     peak_requests = 0
 
-    async def delayed_embed(base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None):  # noqa: ARG001, ANN001
+    async def delayed_embed(
+        base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None
+    ):  # noqa: ARG001, ANN001
         nonlocal active_requests, peak_requests
         if all(text.startswith("Test Paper ") for text in texts):
             return EmbeddingResult(
@@ -418,7 +450,9 @@ def test_pipeline_keeps_existing_rows_when_reembed_fails(tmp_path: Path, monkeyp
     json_path = _write_json(tmp_path)
     vector_dir = tmp_path / "vectors"
 
-    async def ok_embed(base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None):  # noqa: ARG001, ANN001
+    async def ok_embed(
+        base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None
+    ):  # noqa: ARG001, ANN001
         return EmbeddingResult(
             vectors=[[0.1] * 1024 for _ in texts],
             model=model,
@@ -447,7 +481,9 @@ def test_pipeline_keeps_existing_rows_when_reembed_fails(tmp_path: Path, monkeyp
     ]
     json_path.write_text(json.dumps(updated), encoding="utf-8")
 
-    async def failing_embed(base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None):  # noqa: ARG001, ANN001
+    async def failing_embed(
+        base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None
+    ):  # noqa: ARG001, ANN001
         raise RuntimeError("embedding backend unavailable")
 
     monkeypatch.setattr("deepresearch_flow.paper.embedding.call_embedding", failing_embed)
@@ -469,7 +505,9 @@ def test_pipeline_reports_batch_size_mismatch(tmp_path: Path, monkeypatch) -> No
     json_path = _write_json(tmp_path)
     vector_dir = tmp_path / "vectors"
 
-    async def bad_embed(base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None):  # noqa: ARG001, ANN001
+    async def bad_embed(
+        base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None
+    ):  # noqa: ARG001, ANN001
         return EmbeddingResult(
             vectors=[[0.1] * 1024],
             model=model,
@@ -488,7 +526,9 @@ def test_pipeline_reports_batch_size_mismatch(tmp_path: Path, monkeypatch) -> No
         )
 
 
-def test_pipeline_assigns_monotonic_chunk_index_per_template_and_type(tmp_path: Path, monkeypatch) -> None:
+def test_pipeline_assigns_monotonic_chunk_index_per_template_and_type(
+    tmp_path: Path, monkeypatch
+) -> None:
     json_path = tmp_path / "papers.json"
     json_path.write_text(
         json.dumps(
@@ -508,7 +548,9 @@ def test_pipeline_assigns_monotonic_chunk_index_per_template_and_type(tmp_path: 
     )
     vector_dir = tmp_path / "vectors"
 
-    async def ok_embed(base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None):  # noqa: ARG001, ANN001
+    async def ok_embed(
+        base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None
+    ):  # noqa: ARG001, ANN001
         return EmbeddingResult(
             vectors=[[0.1] * 1024 for _ in texts],
             model=model,
@@ -525,7 +567,9 @@ def test_pipeline_assigns_monotonic_chunk_index_per_template_and_type(tmp_path: 
     )
 
     rows = scan_rows(open_store(vector_dir))
-    content_rows = [row for row in rows if row["template_tag"] == "simple" and row["chunk_type"] == "content"]
+    content_rows = [
+        row for row in rows if row["template_tag"] == "simple" and row["chunk_type"] == "content"
+    ]
     assert [row["chunk_index"] for row in content_rows] == list(range(len(content_rows)))
     assert len({row["id"] for row in content_rows}) == len(content_rows)
 
@@ -534,7 +578,9 @@ def test_pipeline_updates_index_meta_stats(tmp_path: Path, monkeypatch) -> None:
     json_path = _write_json(tmp_path)
     vector_dir = tmp_path / "vectors"
 
-    async def ok_embed(base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None):  # noqa: ARG001, ANN001
+    async def ok_embed(
+        base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None
+    ):  # noqa: ARG001, ANN001
         return EmbeddingResult(
             vectors=[[0.1] * 1024 for _ in texts],
             model=model,
@@ -563,7 +609,9 @@ def test_pipeline_embeds_using_active_weighted_route(tmp_path: Path, monkeypatch
 
     seen: dict[str, object] = {}
 
-    async def fake_embed(base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None):  # noqa: ANN001
+    async def fake_embed(
+        base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None
+    ):  # noqa: ANN001
         seen.update(
             {
                 "base_url": base_url,
@@ -629,7 +677,9 @@ def test_pipeline_shows_tqdm_progress_for_embedding_batches(tmp_path: Path, monk
         tqdm_calls.append(kwargs)
         return FakeProgress(str(kwargs.get("desc", "")))
 
-    async def ok_embed(base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None):  # noqa: ARG001, ANN001
+    async def ok_embed(
+        base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None
+    ):  # noqa: ARG001, ANN001
         return EmbeddingResult(
             vectors=[[0.1] * 1024 for _ in texts],
             model=model,
@@ -648,11 +698,17 @@ def test_pipeline_shows_tqdm_progress_for_embedding_batches(tmp_path: Path, monk
     )
 
     assert tqdm_calls
-    assert any(call.get("desc") == "prepare chunks" and int(call.get("total", 0)) > 0 for call in tqdm_calls)
+    assert any(
+        call.get("desc") == "prepare chunks" and int(call.get("total", 0)) > 0
+        for call in tqdm_calls
+    )
     assert any(call.get("desc") == "embed chunks" for call in tqdm_calls)
     assert ("prepare chunks", "enter", None) in progress_events
     assert ("prepare chunks", "update", 1) in progress_events
     assert ("prepare chunks", "exit", None) in progress_events
-    assert any(event[0] == "embed chunks" and event[1] == "refresh" and int(event[2] or 0) > 0 for event in progress_events)
+    assert any(
+        event[0] == "embed chunks" and event[1] == "refresh" and int(event[2] or 0) > 0
+        for event in progress_events
+    )
     assert ("embed chunks", "update", 2) in progress_events
     assert ("embed chunks", "close", None) in progress_events

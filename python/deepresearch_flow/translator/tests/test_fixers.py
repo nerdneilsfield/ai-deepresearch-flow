@@ -20,6 +20,7 @@ from deepresearch_flow.translator.fixers import (
 # fix_nested_mailto
 # ---------------------------------------------------------------------------
 
+
 class TestFixNestedMailto:
     def test_triple_nested(self):
         text = "<mailto:<mailto:<mailto:tobi@ini.uzh.ch>>>"
@@ -47,14 +48,10 @@ class TestFixNestedMailto:
 # pre-protect safety
 # ---------------------------------------------------------------------------
 
+
 class TestPreProtectSafety:
     def test_reference_markers_inside_math_and_code_unchanged(self):
-        text = (
-            "Math \\(see [1]\\) and code ` [2] `\n"
-            "```\n"
-            "[3]\n"
-            "```"
-        )
+        text = "Math \\(see [1]\\) and code ` [2] `\n```\n[3]\n```"
         assert ReferenceProcessor().fix_references(text) == text
 
     def test_fix_markdown_expands_split_reference_ranges(self):
@@ -126,9 +123,7 @@ class TestPreProtectSafety:
         assert "```\n# 2. Inside code\n```" in result
 
     def test_fix_markdown_does_not_wrap_algorithm_parameters_paragraph_as_pseudocode(self):
-        text = (
-            "Algorithm parameters are tuned on Traverse 1, Part 1 and the same values are used elsewhere.\n"
-        )
+        text = "Algorithm parameters are tuned on Traverse 1, Part 1 and the same values are used elsewhere.\n"
         result = fix_markdown(text, "moderate")
         assert "```pseudo" not in result
         assert "Algorithm parameters are tuned" in result
@@ -151,6 +146,7 @@ class TestHeadingLevelPreservation:
 # ---------------------------------------------------------------------------
 # fix_non_math_in_delimiters
 # ---------------------------------------------------------------------------
+
 
 class TestFixNonMathInDelimiters:
     def test_refs_in_dollars(self):
@@ -208,6 +204,7 @@ class TestFixNonMathInDelimiters:
 # fix_math_delimiter_spaces
 # ---------------------------------------------------------------------------
 
+
 class TestFixMathDelimiterSpaces:
     def test_spaces_trimmed(self):
         assert fix_math_delimiter_spaces("$ ^{1} $") == "$^{1}$"
@@ -246,6 +243,7 @@ class TestFixMathDelimiterSpaces:
 # ---------------------------------------------------------------------------
 # fix_html_table_math_spaces
 # ---------------------------------------------------------------------------
+
 
 class TestFixHtmlTableMathSpaces:
     def test_td_math_spaces(self):

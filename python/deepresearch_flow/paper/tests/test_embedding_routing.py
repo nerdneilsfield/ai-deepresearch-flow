@@ -145,7 +145,9 @@ def test_rerank_route_pool_matches_main_pool_for_quota_backoff() -> None:
     selector = parse_model_selector(f"{provider.name}/{model.model_name}", main_config)
     rerank_bundle = _ResolvedBundle(provider=provider, model=model)
 
-    main_pool = RoutePool.from_selector(main_config, selector, cooldown_seconds=0.05, rng=Random(11))
+    main_pool = RoutePool.from_selector(
+        main_config, selector, cooldown_seconds=0.05, rng=Random(11)
+    )
     rerank_pool = RoutePool.from_rerank_provider(
         rerank_bundle,
         cooldown_seconds=0.05,

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, TypedDict
 
-from deepresearch_flow.ocr.base import OcrBackend, OcrPage
+from deepresearch_flow.ocr.base import OcrBackend, OcrPage, OcrResult
 
 logger = logging.getLogger(__name__)
 
@@ -45,9 +45,7 @@ def discover_files(path: Path) -> list[Path]:
 
     # Directory: collect all supported files.
     files = sorted(
-        f
-        for f in path.iterdir()
-        if f.is_file() and f.suffix.lower() in _SUPPORTED_EXTENSIONS
+        f for f in path.iterdir() if f.is_file() and f.suffix.lower() in _SUPPORTED_EXTENSIONS
     )
     return files
 
@@ -113,10 +111,13 @@ def _has_existing_output(base: Path, stem: str) -> bool:
 
 
 def _ocr_with_retry(
-    backend: OcrBackend, file_path: Path, max_retries: int,
-) -> "OcrResult":
+    backend: OcrBackend,
+    file_path: Path,
+    max_retries: int,
+) -> OcrResult:
     """Call backend.ocr with exponential backoff retries."""
-    from deepresearch_flow.ocr.base import OcrResult  # noqa: F811
+    if max_retries < 1:
+        raise ValueError("max_retries must be at least 1")
 
     last_exc: Exception | None = None
     for attempt in range(1, max_retries + 1):
@@ -125,13 +126,18 @@ def _ocr_with_retry(
         except Exception as exc:
             last_exc = exc
             if attempt < max_retries:
-                wait = min(2 ** attempt, 30)
+                wait = min(2**attempt, 30)
                 logger.warning(
                     "OCR attempt %d/%d failed for %s, retrying in %ds: %s",
-                    attempt, max_retries, file_path.name, wait, exc,
+                    attempt,
+                    max_retries,
+                    file_path.name,
+                    wait,
+                    exc,
                 )
                 time.sleep(wait)
-    raise last_exc  # type: ignore[misc]
+    assert last_exc is not None
+    raise last_exc
 
 
 def run_ocr(
@@ -160,11 +166,17 @@ def run_ocr(
             try:
                 result = _ocr_with_retry(backend, file_path, max_retries)
             except Exception as exc:
-                logger.error("Failed to OCR %s after %d attempt(s): %s", file_path.name, max_retries, exc)
+                logger.error(
+                    "Failed to OCR %s after %d attempt(s): %s", file_path.name, max_retries, exc
+                )
                 stats["failed"] += 1
-                results.append(OcrFileResult(
-                    name=file_path.name, status="failed", error=str(exc),
-                ))
+                results.append(
+                    OcrFileResult(
+                        name=file_path.name,
+                        status="failed",
+                        error=str(exc),
+                    )
+                )
                 continue
 
             if not result.pages:
@@ -176,6 +188,7 @@ def run_ocr(
             doc_dir = output_dir / file_path.stem
             if overwrite and doc_dir.exists():
                 import shutil
+
                 shutil.rmtree(doc_dir)
 
             doc_dir = _resolve_output_dir(output_dir, file_path.stem)
@@ -183,10 +196,14 @@ def run_ocr(
             _write_output(doc_dir, markdown, images, missing)
 
             stats["processed"] += 1
-            results.append(OcrFileResult(
-                name=file_path.name, status="processed",
-                pages=len(result.pages), images=len(images),
-            ))
+            results.append(
+                OcrFileResult(
+                    name=file_path.name,
+                    status="processed",
+                    pages=len(result.pages),
+                    images=len(images),
+                )
+            )
             logger.info("Written: %s/full.md (%d pages)", doc_dir.name, len(result.pages))
         finally:
             if progress is not None:
@@ -268,9 +285,13 @@ def migrate_to_hash_names(
 
         if dry_run:
             stats["migrated"] += 1
-            results.append(MigrateResult(
-                name=doc_dir.name, status="migrated", images_renamed=len(rename_map),
-            ))
+            results.append(
+                MigrateResult(
+                    name=doc_dir.name,
+                    status="migrated",
+                    images_renamed=len(rename_map),
+                )
+            )
             continue
 
         try:
@@ -293,16 +314,24 @@ def migrate_to_hash_names(
                 tmp_path.rename(new_path)
 
             stats["migrated"] += 1
-            results.append(MigrateResult(
-                name=doc_dir.name, status="migrated", images_renamed=len(rename_map),
-            ))
+            results.append(
+                MigrateResult(
+                    name=doc_dir.name,
+                    status="migrated",
+                    images_renamed=len(rename_map),
+                )
+            )
             logger.info("Migrated: %s (%d images renamed)", doc_dir.name, len(rename_map))
 
         except Exception as exc:
             logger.exception("Failed to migrate %s", doc_dir.name)
             stats["failed"] += 1
-            results.append(MigrateResult(
-                name=doc_dir.name, status="failed", error=str(exc),
-            ))
+            results.append(
+                MigrateResult(
+                    name=doc_dir.name,
+                    status="failed",
+                    error=str(exc),
+                )
+            )
 
     return stats, results

@@ -51,7 +51,9 @@ def conn() -> sqlite3.Connection:
 
 
 def test_returns_paper_hits_sorted(conn) -> None:
-    hits = sparse_retrieve(conn=conn, fts_expr="transformer", filters=parse_filters({}), top_k=10, lang="en")
+    hits = sparse_retrieve(
+        conn=conn, fts_expr="transformer", filters=parse_filters({}), top_k=10, lang="en"
+    )
     assert all(isinstance(hit, PaperHit) for hit in hits)
     assert "p1" in [hit.paper_id for hit in hits]
 
@@ -81,11 +83,16 @@ def test_applies_author_filter(conn) -> None:
 
 
 def test_empty_fts_expr_returns_empty(conn) -> None:
-    assert sparse_retrieve(conn=conn, fts_expr="", filters=parse_filters({}), top_k=10, lang="en") == []
+    assert (
+        sparse_retrieve(conn=conn, fts_expr="", filters=parse_filters({}), top_k=10, lang="en")
+        == []
+    )
 
 
 def test_zh_lang_merges_trigram_hits(conn) -> None:
-    hits = sparse_retrieve(conn=conn, fts_expr='"视觉"', filters=parse_filters({}), top_k=10, lang="zh")
+    hits = sparse_retrieve(
+        conn=conn, fts_expr='"视觉"', filters=parse_filters({}), top_k=10, lang="zh"
+    )
     assert "p3" in [hit.paper_id for hit in hits]
 
 
@@ -120,13 +127,17 @@ def test_zh_lang_prefers_better_trigram_rank() -> None:
     class FakeConn:
         def execute(self, sql, params):  # noqa: ANN001
             if "paper_fts_trigram" in sql:
-                return FakeResult([
-                    {"paper_id": "p1", "rank": -2.0},
-                ])
-            return FakeResult([
-                {"paper_id": "p1", "rank": -1.0},
-                {"paper_id": "p2", "rank": -0.5},
-            ])
+                return FakeResult(
+                    [
+                        {"paper_id": "p1", "rank": -2.0},
+                    ]
+                )
+            return FakeResult(
+                [
+                    {"paper_id": "p1", "rank": -1.0},
+                    {"paper_id": "p2", "rank": -0.5},
+                ]
+            )
 
     hits = sparse_retrieve(
         conn=FakeConn(),  # type: ignore[arg-type]

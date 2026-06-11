@@ -20,7 +20,11 @@ from deepresearch_flow.paper.web.filters import (
     tokenize_filter_query,
 )
 from deepresearch_flow.paper.web.query import Query, QueryTerm, parse_query
-from deepresearch_flow.paper.web.text import extract_summary_snippet, normalize_title, normalize_venue
+from deepresearch_flow.paper.web.text import (
+    extract_summary_snippet,
+    normalize_title,
+    normalize_venue,
+)
 
 
 @dataclass
@@ -65,13 +69,15 @@ def test_filter_tokenization_and_presence_helpers() -> None:
 
 
 def test_parse_filter_query_and_request_filters() -> None:
-    parsed = parse_filter_query('tmpl:simple,deep_read pdf:yes no:translated has:summary source:without')
+    parsed = parse_filter_query(
+        "tmpl:simple,deep_read pdf:yes no:translated has:summary source:without"
+    )
     assert parsed["template"] == {"simple", "deep_read"}
     assert parsed["pdf"] == {"with"}
     assert parsed["translated"] == {"without"}
     assert parsed["summary"] == {"with"}
     assert parsed["source"] == {"without"}
-    malformed = parse_filter_query('pdf: template: has:unknown no: weird summary:maybe')
+    malformed = parse_filter_query("pdf: template: has:unknown no: weird summary:maybe")
     assert malformed == {
         "pdf": set(),
         "source": set(),
@@ -184,7 +190,9 @@ def test_query_parser_handles_or_fields_and_negation() -> None:
 
 
 def test_web_text_helpers_normalize_and_extract_snippets() -> None:
-    title = normalize_title("A <inline-formula><tex-math>x^2</tex-math></inline-formula> &amp; <b>Title</b>")
+    title = normalize_title(
+        "A <inline-formula><tex-math>x^2</tex-math></inline-formula> &amp; <b>Title</b>"
+    )
     assert title == "A x^2 & Title"
     assert normalize_title("") == ""
     assert normalize_title("<inline-formula>ignored</inline-formula>") == ""

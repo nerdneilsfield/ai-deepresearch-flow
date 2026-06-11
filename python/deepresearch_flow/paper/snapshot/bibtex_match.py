@@ -1,5 +1,6 @@
 # python/deepresearch_flow/paper/snapshot/bibtex_match.py
 """BibTeX matching against snapshot paper database."""
+
 from __future__ import annotations
 
 import difflib
@@ -106,28 +107,34 @@ def _parse_bibtex_entries(raw: str) -> list[dict[str, Any]]:
             bib_data = Parser().parse_stream(io.StringIO(segment))
             for key, entry in bib_data.entries.items():
                 fields = dict(entry.fields)
-                title = str(fields.get("title", "")).replace("{", "").replace("}", "").strip() or None
+                title = (
+                    str(fields.get("title", "")).replace("{", "").replace("}", "").strip() or None
+                )
                 year = str(fields.get("year", "")).strip() or None
                 doi_raw = fields.get("doi")
-                entries.append({
-                    "key": key,
-                    "type": entry.type,
-                    "title": title,
-                    "year": year,
-                    "doi_raw": str(doi_raw).strip() if doi_raw else None,
-                    "fields": fields,
-                })
+                entries.append(
+                    {
+                        "key": key,
+                        "type": entry.type,
+                        "title": title,
+                        "year": year,
+                        "doi_raw": str(doi_raw).strip() if doi_raw else None,
+                        "fields": fields,
+                    }
+                )
         except Exception:
             # Single entry failed to parse — extract key at minimum
             key_match = re.search(r"@\w+\s*\{([^,\s]+)", segment)
-            entries.append({
-                "key": key_match.group(1) if key_match else "unknown",
-                "type": "unknown",
-                "title": None,
-                "year": None,
-                "doi_raw": None,
-                "fields": {},
-            })
+            entries.append(
+                {
+                    "key": key_match.group(1) if key_match else "unknown",
+                    "type": "unknown",
+                    "title": None,
+                    "year": None,
+                    "doi_raw": None,
+                    "fields": {},
+                }
+            )
 
     return entries
 
@@ -189,19 +196,22 @@ def match_bibtex_entries(bibtex_raw: str, db_path: Path) -> MatchResult:
             # Level 1: DOI exact match
             if entry["doi_raw"] and has_doi:
                 from deepresearch_flow.paper.snapshot.identity import canonicalize_doi
+
                 canonical = canonicalize_doi(entry["doi_raw"])
                 if canonical and canonical in doi_lookup:
                     paper = doi_lookup[canonical]
                     authors = _fetch_authors(conn, paper["paper_id"])
-                    matched.append(MatchedEntry(
-                        bibtex_key=bib_key,
-                        paper_id=paper["paper_id"],
-                        match_method="doi",
-                        title=paper["title"],
-                        year=paper["year"],
-                        venue=paper["venue"],
-                        authors=authors,
-                    ))
+                    matched.append(
+                        MatchedEntry(
+                            bibtex_key=bib_key,
+                            paper_id=paper["paper_id"],
+                            match_method="doi",
+                            title=paper["title"],
+                            year=paper["year"],
+                            venue=paper["venue"],
+                            authors=authors,
+                        )
+                    )
                     continue
 
             # Level 2: Title fuzzy match
@@ -238,23 +248,27 @@ def match_bibtex_entries(bibtex_raw: str, db_path: Path) -> MatchResult:
 
                             if year_ok:
                                 authors = _fetch_authors(conn, paper["paper_id"])
-                                matched.append(MatchedEntry(
-                                    bibtex_key=bib_key,
-                                    paper_id=paper["paper_id"],
-                                    match_method="title",
-                                    title=paper["title"],
-                                    year=paper["year"],
-                                    venue=paper["venue"],
-                                    authors=authors,
-                                ))
+                                matched.append(
+                                    MatchedEntry(
+                                        bibtex_key=bib_key,
+                                        paper_id=paper["paper_id"],
+                                        match_method="title",
+                                        title=paper["title"],
+                                        year=paper["year"],
+                                        venue=paper["venue"],
+                                        authors=authors,
+                                    )
+                                )
                                 continue
 
             # No match
-            unmatched.append(UnmatchedEntry(
-                bibtex_key=bib_key,
-                title=bib_title,
-                search_query=search_query,
-            ))
+            unmatched.append(
+                UnmatchedEntry(
+                    bibtex_key=bib_key,
+                    title=bib_title,
+                    search_query=search_query,
+                )
+            )
 
         return MatchResult(matched=matched, unmatched=unmatched)
     finally:

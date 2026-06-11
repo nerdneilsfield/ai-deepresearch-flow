@@ -18,7 +18,9 @@ from deepresearch_flow.paper.db_ops import PaperIndex
 _IMAGE_PATTERN = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 _DATA_URL_PATTERN = re.compile(r"^data:([^;,]+)(;base64)?,(.*)$", re.DOTALL)
 _IMG_TAG_PATTERN = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
-_SRC_ATTR_PATTERN = re.compile(r"\bsrc\s*=\s*(\"[^\"]*\"|'[^']*'|[^\s>]+)", re.IGNORECASE | re.DOTALL)
+_SRC_ATTR_PATTERN = re.compile(
+    r"\bsrc\s*=\s*(\"[^\"]*\"|'[^']*'|[^\s>]+)", re.IGNORECASE | re.DOTALL
+)
 
 _EXTENSION_OVERRIDES = {
     ".jpe": ".jpg",
@@ -164,7 +166,7 @@ def _rewrite_markdown_images(text: str, store: _ImageStore) -> str:
             return tag
         raw_value = src_match.group(1)
         quote = ""
-        if raw_value and raw_value[0] in {"\"", "'"}:
+        if raw_value and raw_value[0] in {'"', "'"}:
             quote = raw_value[0]
             value = raw_value[1:-1]
         else:
@@ -291,10 +293,14 @@ def resolve_asset_urls(
     """Resolve asset URLs for a paper based on static asset config or local endpoints."""
     if prefer_local:
         translations = index.translated_md_by_hash.get(source_hash, {})
-        images_base_url = asset_config.images_base_url if asset_config and asset_config.enabled else None
+        images_base_url = (
+            asset_config.images_base_url if asset_config and asset_config.enabled else None
+        )
         return {
             "pdf_url": f"/api/pdf/{source_hash}" if source_hash in index.pdf_path_by_hash else None,
-            "md_url": f"/api/dev/markdown/{source_hash}" if source_hash in index.md_path_by_hash else None,
+            "md_url": f"/api/dev/markdown/{source_hash}"
+            if source_hash in index.md_path_by_hash
+            else None,
             "md_translated_url": {
                 lang: f"/api/dev/markdown/{source_hash}?lang={lang}" for lang in translations
             },
@@ -311,7 +317,9 @@ def resolve_asset_urls(
     translations = index.translated_md_by_hash.get(source_hash, {})
     return {
         "pdf_url": f"/api/pdf/{source_hash}" if source_hash in index.pdf_path_by_hash else None,
-        "md_url": f"/api/dev/markdown/{source_hash}" if source_hash in index.md_path_by_hash else None,
+        "md_url": f"/api/dev/markdown/{source_hash}"
+        if source_hash in index.md_path_by_hash
+        else None,
         "md_translated_url": {
             lang: f"/api/dev/markdown/{source_hash}?lang={lang}" for lang in translations
         },

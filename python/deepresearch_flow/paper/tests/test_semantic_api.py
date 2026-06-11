@@ -24,7 +24,13 @@ from deepresearch_flow.paper.config import (
     RerankProviderConfig,
     SearchConfig,
 )
-from deepresearch_flow.paper.vector_store import ChunkRow, INDEX_VERSION, open_store, save_index_meta, write_chunks
+from deepresearch_flow.paper.vector_store import (
+    ChunkRow,
+    INDEX_VERSION,
+    open_store,
+    save_index_meta,
+    write_chunks,
+)
 
 
 def _create_test_embed_db(tmp_path: Path, *, dimensions: int = 1024) -> Path:
@@ -76,7 +82,9 @@ def _make_app(tmp_path: Path, *, access_token: str | None = None) -> TestClient:
     return TestClient(app)
 
 
-def _paper_config(*, embedding_api_key: str = "ollama", rerank_api_key: str = "rerank") -> PaperConfig:
+def _paper_config(
+    *, embedding_api_key: str = "ollama", rerank_api_key: str = "rerank"
+) -> PaperConfig:
     return PaperConfig(
         extract=DEFAULT_EXTRACT,
         render=DEFAULT_RENDER,
@@ -94,8 +102,16 @@ def _paper_config(*, embedding_api_key: str = "ollama", rerank_api_key: str = "r
                 EmbeddingProviderConfig(
                     name="ollama",
                     type="openai_compatible",
-                    base=[BaseConfig(url="http://localhost:11434/v1", weight=1, key=[KeyConfig(value=embedding_api_key, weight=1)])],
-                    models=[EmbeddingModelConfig(model_name="bge-m3", dimensions=1024, max_context=8192)],
+                    base=[
+                        BaseConfig(
+                            url="http://localhost:11434/v1",
+                            weight=1,
+                            key=[KeyConfig(value=embedding_api_key, weight=1)],
+                        )
+                    ],
+                    models=[
+                        EmbeddingModelConfig(model_name="bge-m3", dimensions=1024, max_context=8192)
+                    ],
                 )
             ],
         ),
@@ -108,7 +124,13 @@ def _paper_config(*, embedding_api_key: str = "ollama", rerank_api_key: str = "r
                 RerankProviderConfig(
                     name="siliconflow",
                     type="openai_compatible",
-                    base=[BaseConfig(url="https://api.siliconflow.cn/v1", weight=1, key=[KeyConfig(value=rerank_api_key, weight=1)])],
+                    base=[
+                        BaseConfig(
+                            url="https://api.siliconflow.cn/v1",
+                            weight=1,
+                            key=[KeyConfig(value=rerank_api_key, weight=1)],
+                        )
+                    ],
                     models=[
                         RerankModelConfig(
                             model_name="bge-reranker-v2-m3",
@@ -120,7 +142,9 @@ def _paper_config(*, embedding_api_key: str = "ollama", rerank_api_key: str = "r
                 )
             ],
         ),
-        search=SearchConfig(vector_dir="paper_vectors", vector_top_k=50, keyword_top_k=30, hybrid=True),
+        search=SearchConfig(
+            vector_dir="paper_vectors", vector_top_k=50, keyword_top_k=30, hybrid=True
+        ),
     )
 
 
@@ -148,7 +172,9 @@ def test_semantic_uses_constant_time_token_compare(tmp_path: Path, monkeypatch) 
         seen.append((left, right))
         return real_compare(left, right)
 
-    monkeypatch.setattr("deepresearch_flow.paper.web.handlers.api.hmac.compare_digest", fake_compare)
+    monkeypatch.setattr(
+        "deepresearch_flow.paper.web.handlers.api.hmac.compare_digest", fake_compare
+    )
 
     async def fake_embed_query(text, config, client_obj, route_pool=None):  # noqa: ANN001
         return [0.1] * 1024
@@ -226,7 +252,9 @@ def test_semantic_embedding_failure_returns_502(tmp_path: Path, monkeypatch) -> 
     async def failing_embed_query(text, config, client_obj, route_pool=None):  # noqa: ARG001, ANN001
         raise httpx.ReadTimeout("timeout")
 
-    monkeypatch.setattr("deepresearch_flow.paper.web.handlers.api._embed_query", failing_embed_query)
+    monkeypatch.setattr(
+        "deepresearch_flow.paper.web.handlers.api._embed_query", failing_embed_query
+    )
 
     response = client.get("/api/papers/semantic?q=attention&top_n=5")
     assert response.status_code == 502
@@ -238,7 +266,9 @@ def test_embed_query_uses_embedding_resolve_active(monkeypatch) -> None:
 
     seen: dict[str, object] = {}
 
-    async def fake_call_embedding(base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None):  # noqa: ANN001
+    async def fake_call_embedding(
+        base_url, api_key, model, texts, *, dimensions=None, client=None, provider_type=None
+    ):  # noqa: ANN001
         seen.update(
             {
                 "base_url": base_url,
@@ -255,7 +285,9 @@ def test_embed_query_uses_embedding_resolve_active(monkeypatch) -> None:
 
     async def _run() -> list[float]:
         async with httpx.AsyncClient() as client:
-            return await _embed_query("attention", _paper_config(embedding_api_key="resolved-embed-key"), client)
+            return await _embed_query(
+                "attention", _paper_config(embedding_api_key="resolved-embed-key"), client
+            )
 
     vector = asyncio.run(_run())
 
@@ -277,7 +309,9 @@ def test_semantic_builds_reranker_from_rerank_config(tmp_path: Path, monkeypatch
     def boom_select_runtime_route(*args, **kwargs):  # noqa: ANN001, ARG001
         raise AssertionError("select_runtime_route should not be used for semantic rerank")
 
-    monkeypatch.setattr("deepresearch_flow.paper.routing.select_runtime_route", boom_select_runtime_route)
+    monkeypatch.setattr(
+        "deepresearch_flow.paper.routing.select_runtime_route", boom_select_runtime_route
+    )
 
     async def fake_embed_query(*args, **kwargs):  # noqa: ANN002, ANN003
         return [0.1] * 1024

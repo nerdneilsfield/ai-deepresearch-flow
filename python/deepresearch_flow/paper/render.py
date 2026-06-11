@@ -26,9 +26,7 @@ def resolve_render_template(
     template_dir: str | None,
 ) -> Template:
     if sum(bool(item) for item in (template_path, template_name, template_dir)) > 1:
-        raise ValueError(
-            "Use only one of template path, template name, or template directory"
-        )
+        raise ValueError("Use only one of template path, template name, or template directory")
     if template_dir:
         template_path = str(Path(template_dir) / "render.j2")
     if template_path:

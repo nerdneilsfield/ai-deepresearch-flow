@@ -14,6 +14,7 @@ from deepresearch_flow.paper.utils import stable_hash
 
 try:
     from pypdf import PdfReader
+
     PYPDF_AVAILABLE = True
 except Exception:
     PYPDF_AVAILABLE = False
@@ -21,9 +22,11 @@ except Exception:
 try:
     from pybtex.database import parse_file
     from pybtex import errors as pybtex_errors
+
     PYBTEX_AVAILABLE = True
 except Exception:
     PYBTEX_AVAILABLE = False
+
 
 @dataclass(frozen=True)
 class PaperIndex:
@@ -763,7 +766,9 @@ def _build_file_index(
                 if author_hint:
                     author_key = _normalize_author_key(author_hint)
                     if author_key:
-                        index.setdefault(f"authoryear:{year_hint}:{author_key}", []).append(resolved)
+                        index.setdefault(f"authoryear:{year_hint}:{author_key}", []).append(
+                            resolved
+                        )
     return index
 
 
@@ -914,7 +919,9 @@ def _resolve_pdf(paper: dict[str, Any], pdf_index: dict[str, list[Path]]) -> Pat
         print(f"[DEBUG] Failed to match PDF for: {name}", file=sys.stderr)
         print(f"[DEBUG] Tried candidates: {[g.lower() for g in guesses]}", file=sys.stderr)
         name_prefix = name[:20].lower() if len(name) > 20 else name.lower()
-        close_matches = [k for k in pdf_index.keys() if name_prefix in k or k[:20] in name.lower()][:5]
+        close_matches = [k for k in pdf_index.keys() if name_prefix in k or k[:20] in name.lower()][
+            :5
+        ]
         if close_matches:
             print(f"[DEBUG] Close matches in index: {close_matches}", file=sys.stderr)
     return None
@@ -1090,11 +1097,13 @@ def build_index(
 def _sorted_counts(counts: dict[str, int], *, numeric_desc: bool = False) -> list[dict[str, Any]]:
     items = list(counts.items())
     if numeric_desc:
+
         def key(item: tuple[str, int]) -> tuple[int, int]:
             label, count = item
             if label.isdigit():
                 return (0, -int(label))
             return (1, 0)
+
         items.sort(key=key)
     else:
         items.sort(key=lambda item: item[1], reverse=True)
@@ -1136,7 +1145,7 @@ def _load_paper_inputs(paths: list[Path]) -> list[dict[str, Any]]:
         list_template_names_in_registry_order,
         load_schema_for_template,
     )
-    
+
     inputs: list[dict[str, Any]] = []
     for path in paths:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -1151,13 +1160,15 @@ def _load_paper_inputs(paths: list[Path]) -> list[dict[str, Any]]:
             raise ValueError(f"Input JSON missing papers list: {path}")
         template_tag = payload.get("template_tag")
         if not template_tag:
-            template_tag = _infer_template_tag(papers, path, list_template_names_in_registry_order, load_schema_for_template)
+            template_tag = _infer_template_tag(
+                papers, path, list_template_names_in_registry_order, load_schema_for_template
+            )
         inputs.append({"template_tag": str(template_tag), "papers": papers})
     return inputs
 
 
 def _infer_template_tag(
-    papers: list[dict[str, Any]], 
+    papers: list[dict[str, Any]],
     path: Path,
     list_template_names_in_registry_order,
     load_schema_for_template,
@@ -1203,6 +1214,7 @@ def _build_cache_meta(
     pdf_roots_meta: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build cache metadata for invalidation."""
+
     def file_meta(path: Path) -> dict[str, Any]:
         try:
             stats = path.stat()
@@ -1238,7 +1250,9 @@ def _load_cached_papers(cache_dir: Path, meta: dict[str, Any]) -> list[dict[str,
         return None
 
 
-def _write_cached_papers(cache_dir: Path, meta: dict[str, Any], papers: list[dict[str, Any]]) -> None:
+def _write_cached_papers(
+    cache_dir: Path, meta: dict[str, Any], papers: list[dict[str, Any]]
+) -> None:
     """Write cached papers and metadata."""
     meta_path = cache_dir / "db_serve_cache.meta.json"
     data_path = cache_dir / "db_serve_cache.papers.json"
@@ -1329,7 +1343,9 @@ def _titles_match(group: dict[str, Any], paper: dict[str, Any], *, threshold: fl
     paper_title = _extract_paper_title(paper)
     group_titles = group.get("_merge_paper_titles") or set()
     if paper_title and group_titles:
-        return any(_title_similarity(paper_title, existing) >= threshold for existing in group_titles)
+        return any(
+            _title_similarity(paper_title, existing) >= threshold for existing in group_titles
+        )
     return False
 
 
@@ -1618,6 +1634,7 @@ from typing import Literal
 @dataclass
 class CompareResult:
     """Result of comparing two datasets."""
+
     side: Literal["A", "B", "MATCH"]
     source_hash: str
     title: str
@@ -1634,6 +1651,7 @@ class CompareResult:
 @dataclass
 class CompareDataset:
     """Prepared dataset for compare."""
+
     papers: list[dict[str, Any]]
     md_index: dict[str, list[Path]]
     pdf_index: dict[str, list[Path]]
@@ -1956,12 +1974,16 @@ def _match_datasets_with_pairs(
                 matched_path, mt, score = _resolve_by_title_and_meta(paper, file_index_b)
                 if matched_path is not None:
                     matched_b_idx = dataset_b.path_to_index.get(matched_path.resolve())
-                    matched_b_paper = dataset_b.papers[matched_b_idx] if matched_b_idx is not None else None
+                    matched_b_paper = (
+                        dataset_b.papers[matched_b_idx] if matched_b_idx is not None else None
+                    )
                     match_status = "matched"
                     match_type = mt
                     match_score = score
             if matched_b_idx is None:
-                match_paper, mt, score = _resolve_paper_by_title_and_meta(paper, dataset_b.paper_index)
+                match_paper, mt, score = _resolve_paper_by_title_and_meta(
+                    paper, dataset_b.paper_index
+                )
                 if match_paper is not None:
                     matched_b_idx = dataset_b.paper_id_to_index.get(id(match_paper))
                     matched_b_paper = match_paper
@@ -1974,7 +1996,9 @@ def _match_datasets_with_pairs(
                     translated_path = dataset_b.translated_index.get(base_key, {}).get(lang.lower())
                     if translated_path is not None:
                         matched_b_idx = dataset_b.path_to_index.get(translated_path.resolve())
-                        matched_b_paper = dataset_b.papers[matched_b_idx] if matched_b_idx is not None else None
+                        matched_b_paper = (
+                            dataset_b.papers[matched_b_idx] if matched_b_idx is not None else None
+                        )
                         match_status = "matched"
                         match_type = f"translated_{lang.lower()}"
                         match_score = 1.0
@@ -2118,12 +2142,8 @@ def build_compare_dataset(
 
     md_paths = _scan_md_roots(md_roots or [], show_progress=show_progress)
     pdf_paths, _ = _scan_pdf_roots(pdf_roots or [], show_progress=show_progress)
-    md_index = _build_file_index(
-        md_roots or [], suffixes={".md"}, show_progress=show_progress
-    )
-    pdf_index = _build_file_index(
-        pdf_roots or [], suffixes={".pdf"}, show_progress=show_progress
-    )
+    md_index = _build_file_index(md_roots or [], suffixes={".md"}, show_progress=show_progress)
+    pdf_index = _build_file_index(pdf_roots or [], suffixes={".pdf"}, show_progress=show_progress)
     translated_index = _build_translated_index(
         md_translated_roots or [], show_progress=show_progress
     )
@@ -2207,15 +2227,15 @@ def compare_datasets_with_pairs(
     bibtex_path: Path | None = None,
     lang: str | None = None,
     show_progress: bool = False,
-) -> tuple[list[CompareResult], list[tuple[int, int, str | None, float]], CompareDataset, CompareDataset]:
+) -> tuple[
+    list[CompareResult], list[tuple[int, int, str | None, float]], CompareDataset, CompareDataset
+]:
     # Validate language requirement for translated inputs
     has_translated_a = md_translated_roots_a is not None and len(md_translated_roots_a) > 0
     has_translated_b = md_translated_roots_b is not None and len(md_translated_roots_b) > 0
 
     if (has_translated_a or has_translated_b) and lang is None:
-        raise ValueError(
-            "--lang parameter is required when comparing translated Markdown datasets"
-        )
+        raise ValueError("--lang parameter is required when comparing translated Markdown datasets")
 
     dataset_a = build_compare_dataset(
         json_paths=json_paths_a,

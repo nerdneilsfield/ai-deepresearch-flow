@@ -163,7 +163,9 @@ async def paper_detail(request: Request) -> HTMLResponse:
         default_left = preferred_pdf_view
         default_right = preferred_pdf_view
     else:
-        default_left = preferred_pdf_view if pdf_path else ("source" if source_available else "summary")
+        default_left = (
+            preferred_pdf_view if pdf_path else ("source" if source_available else "summary")
+        )
         default_right = "summary"
 
     left_param = request.query_params.get("left")
@@ -332,6 +334,7 @@ if (templateSelect) {{
 
     # Split view
     if view == "split":
+
         def pane_src(pane_view: str) -> str:
             if pane_view == "pdfjs" and pdf_path and pdf_url:
                 return build_pdfjs_viewer_url(

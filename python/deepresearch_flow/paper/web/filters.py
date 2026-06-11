@@ -139,7 +139,9 @@ def compute_counts(index: PaperIndex, ids: set[int]) -> dict[str, Any]:
         if paper.get("_is_pdf_only"):
             continue
         total_count += 1
-        source_hash = str(paper.get("source_hash") or stable_hash(str(paper.get("source_path") or idx)))
+        source_hash = str(
+            paper.get("source_hash") or stable_hash(str(paper.get("source_path") or idx))
+        )
         has_source = source_hash in index.md_path_by_hash
         has_pdf = source_hash in index.pdf_path_by_hash
         has_summary = bool(paper.get("_has_summary"))

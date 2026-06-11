@@ -7,7 +7,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 from deepresearch_flow.paper.snapshot import builder, image_utils
-from deepresearch_flow.paper.web.static_assets import _ImageStore, _rewrite_markdown_images as rewrite_web_markdown_images
+from deepresearch_flow.paper.web.static_assets import (
+    _ImageStore,
+    _rewrite_markdown_images as rewrite_web_markdown_images,
+)
 
 
 def _failing_image_write_factory() -> object:
@@ -45,7 +48,9 @@ def _expected_image_entry() -> dict[str, str]:
     }
 
 
-def test_builder_rewrite_markdown_images_keeps_content_when_image_export_write_fails(tmp_path: Path) -> None:
+def test_builder_rewrite_markdown_images_keeps_content_when_image_export_write_fails(
+    tmp_path: Path,
+) -> None:
     payload = base64.b64encode(b"img-bytes").decode("ascii")
     markdown = f"![plot](data:image/png;base64,{payload})"
 
@@ -109,7 +114,9 @@ def test_builder_rewrite_markdown_images_retries_transient_image_export_eio(tmp_
 
     assert rewritten == f"![plot]({expected['path']})"
     assert images == [{**expected, "status": "available"}]
-    assert (tmp_path / "static" / "images" / Path(expected["path"]).name).read_bytes() == b"img-bytes"
+    assert (
+        tmp_path / "static" / "images" / Path(expected["path"]).name
+    ).read_bytes() == b"img-bytes"
 
 
 def test_snapshot_image_utils_retries_transient_image_export_eio(tmp_path: Path) -> None:
@@ -130,7 +137,9 @@ def test_snapshot_image_utils_retries_transient_image_export_eio(tmp_path: Path)
 
     assert rewritten == f"![plot]({expected['path']})"
     assert images == [{**expected, "status": "available"}]
-    assert (tmp_path / "static" / "images" / Path(expected["path"]).name).read_bytes() == b"img-bytes"
+    assert (
+        tmp_path / "static" / "images" / Path(expected["path"]).name
+    ).read_bytes() == b"img-bytes"
 
 
 def test_web_static_assets_retries_transient_image_export_eio(tmp_path: Path) -> None:
@@ -146,4 +155,6 @@ def test_web_static_assets_retries_transient_image_export_eio(tmp_path: Path) ->
         rewritten = rewrite_web_markdown_images(markdown, store)
 
     assert rewritten == f"![plot]({expected['path']})"
-    assert (tmp_path / "static" / "images" / Path(expected["path"]).name).read_bytes() == b"img-bytes"
+    assert (
+        tmp_path / "static" / "images" / Path(expected["path"]).name
+    ).read_bytes() == b"img-bytes"

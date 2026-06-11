@@ -293,11 +293,7 @@ class _DummyTranslator:
         return trans
 
     def _collect_failed_nodes(self, nodes: dict[int, Node]) -> dict[int, Node]:
-        return {
-            nid: node
-            for nid, node in nodes.items()
-            if not node.translated_text
-        }
+        return {nid: node for nid, node in nodes.items() if not node.translated_text}
 
     async def _translate_group(
         self,
@@ -549,7 +545,9 @@ def _destructive_delay(case_index: int, doc_index: int, slot: int) -> float:
     return round(0.001 + step * 0.004, 3)
 
 
-def _build_destructive_doc_plan(case_index: int, doc_index: int, mode: str, prefix: str) -> _FuzzDocPlan:
+def _build_destructive_doc_plan(
+    case_index: int, doc_index: int, mode: str, prefix: str
+) -> _FuzzDocPlan:
     stem = f"{prefix}-{case_index:02d}-doc-{doc_index}"
     source_text = f"{stem} input"
     expected_output = f"{stem} {mode} output"
@@ -681,7 +679,9 @@ def _make_fuzz_queue_configs() -> list[QueueConfig]:
     ]
 
 
-async def _run_scheduler_fuzz_case(tmp_path: Path, case: _SchedulerFuzzCase) -> tuple[list[Path], int]:
+async def _run_scheduler_fuzz_case(
+    tmp_path: Path, case: _SchedulerFuzzCase
+) -> tuple[list[Path], int]:
     sources: dict[Path, Path] = {}
     expected_outputs: dict[Path, str] = {}
     expected_empty_outputs: set[Path] = set()
@@ -816,9 +816,14 @@ def test_scheduler_document_window_fuzz(tmp_path: Path, case: _SchedulerFuzzCase
 @pytest.mark.parametrize("case", _DESTRUCTIVE_FUZZ_CASES, ids=lambda case: case.name)
 def test_scheduler_destructive_window_timing_fuzz(tmp_path: Path, case: _SchedulerFuzzCase) -> None:
     async def run() -> None:
-        first_outputs, second_outputs, first_failed, second_failed, first_max_active_docs, second_max_active_docs = (
-            await _run_scheduler_fuzz_case_twice(tmp_path, case)
-        )
+        (
+            first_outputs,
+            second_outputs,
+            first_failed,
+            second_failed,
+            first_max_active_docs,
+            second_max_active_docs,
+        ) = await _run_scheduler_fuzz_case_twice(tmp_path, case)
         assert first_outputs == second_outputs
         assert first_failed == []
         assert second_failed == []

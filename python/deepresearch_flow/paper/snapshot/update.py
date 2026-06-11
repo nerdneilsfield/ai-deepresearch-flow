@@ -25,7 +25,11 @@ from deepresearch_flow.paper.snapshot.identity import (
     paper_id_for_key,
 )
 from deepresearch_flow.paper.snapshot.image_utils import rewrite_markdown_images, _hash_bytes
-from deepresearch_flow.paper.snapshot.schema import init_snapshot_db, recompute_facet_counts, recompute_paper_index
+from deepresearch_flow.paper.snapshot.schema import (
+    init_snapshot_db,
+    recompute_facet_counts,
+    recompute_paper_index,
+)
 from deepresearch_flow.paper.snapshot.text import insert_cjk_spaces, markdown_to_plain_text
 from deepresearch_flow.paper.utils import stable_hash
 
@@ -127,7 +131,9 @@ def _extract_venue(paper: dict[str, Any]) -> str:
             bib_type = str(bib.get("type") or "").lower()
             if bib_type == "article" and fields.get("journal"):
                 return str(fields.get("journal") or "").strip()
-            if bib_type in {"inproceedings", "conference", "proceedings"} and fields.get("booktitle"):
+            if bib_type in {"inproceedings", "conference", "proceedings"} and fields.get(
+                "booktitle"
+            ):
                 return str(fields.get("booktitle") or "").strip()
             if fields.get("journal"):
                 return str(fields.get("journal") or "").strip()
@@ -219,7 +225,9 @@ def _extract_template_markdown(payload: dict[str, Any]) -> str:
 
 
 def _choose_preferred_template(paper: dict[str, Any], payloads: dict[str, dict[str, Any]]) -> str:
-    preferred = _canonical_template_tag(str(paper.get("prompt_template") or paper.get("template_tag") or ""))
+    preferred = _canonical_template_tag(
+        str(paper.get("prompt_template") or paper.get("template_tag") or "")
+    )
     if preferred and preferred in payloads:
         return preferred
     for key in ("simple", "simple_phi"):
@@ -258,7 +266,13 @@ def _resolve_paper_identity(
             (cand.paper_key,),
         ).fetchone()
         if row:
-            return str(row["paper_id"]), cand.paper_key, cand.key_type, cand.meta_fingerprint, candidates
+            return (
+                str(row["paper_id"]),
+                cand.paper_key,
+                cand.key_type,
+                cand.meta_fingerprint,
+                candidates,
+            )
 
     preferred = choose_preferred_key(candidates)
     paper_id = explicit_id or paper_id_for_key(preferred.paper_key)
@@ -356,7 +370,9 @@ def _add_new_paper(
     publication_date = str(paper.get("publication_date") or "").strip()
     venue = _extract_venue(paper)
     bib = paper.get("bibtex") if isinstance(paper.get("bibtex"), dict) else None
-    bib_fields = bib.get("fields") if isinstance(bib, dict) and isinstance(bib.get("fields"), dict) else {}
+    bib_fields = (
+        bib.get("fields") if isinstance(bib, dict) and isinstance(bib.get("fields"), dict) else {}
+    )
     doi = extract_canonical_doi(paper, bib_fields or {})
     bibtex_raw, bibtex_key, entry_type, bib_doi = extract_current_bibtex_payload(paper)
     if paper_key_type == "bib" and paper_key.startswith("bib:") and not bibtex_key:
@@ -384,7 +400,9 @@ def _add_new_paper(
             written=written_images,
         )
         stats.markdown_processed += 1
-        stats.images_extracted += len([img for img in md_images if img.get("status") == "available"])
+        stats.images_extracted += len(
+            [img for img in md_images if img.get("status") == "available"]
+        )
         # Hash the processed content (not original file)
         source_md_hash = _hash_bytes(processed_md.encode("utf-8"))
         dst_md = static_dir / "md" / f"{source_md_hash}.md"
@@ -410,7 +428,9 @@ def _add_new_paper(
 
     template_payloads = _extract_template_payloads(paper)
     preferred_summary_template = _choose_preferred_template(paper, template_payloads)
-    preferred_markdown = _extract_template_markdown(template_payloads.get(preferred_summary_template, {}))
+    preferred_markdown = _extract_template_markdown(
+        template_payloads.get(preferred_summary_template, {})
+    )
 
     conn.execute(
         """
@@ -506,7 +526,9 @@ def _add_new_paper(
             written=written_images,
         )
         stats.translations_processed += 1
-        stats.images_extracted += len([img for img in trans_images if img.get("status") == "available"])
+        stats.images_extracted += len(
+            [img for img in trans_images if img.get("status") == "available"]
+        )
         # Hash the processed content (not original file)
         trans_hash = _hash_bytes(processed_trans.encode("utf-8"))
         conn.execute(
@@ -620,7 +642,9 @@ def _add_new_paper(
         )
 
     summary_text = markdown_to_plain_text(
-        " ".join(_extract_template_markdown(template_payloads[tag]) for tag in ordered_template_tags)
+        " ".join(
+            _extract_template_markdown(template_payloads[tag]) for tag in ordered_template_tags
+        )
     )
     source_text = ""
     if source_md_hash:
@@ -738,7 +762,9 @@ def update_snapshot(opts: SnapshotUpdateOptions) -> None:
             stats.papers_checked += 1
 
             source_hash = _paper_source_hash(paper)
-            paper_id, paper_key, paper_key_type, _, candidates = _resolve_paper_identity(conn, paper)
+            paper_id, paper_key, paper_key_type, _, candidates = _resolve_paper_identity(
+                conn, paper
+            )
 
             existing = conn.execute(
                 "SELECT 1 FROM paper WHERE paper_id = ?", (paper_id,)
@@ -749,7 +775,9 @@ def update_snapshot(opts: SnapshotUpdateOptions) -> None:
 
             md_path = paper_index.md_path_by_hash.get(source_hash) if source_hash else None
             pdf_path = paper_index.pdf_path_by_hash.get(source_hash) if source_hash else None
-            translated_paths = paper_index.translated_md_by_hash.get(source_hash, {}) if source_hash else {}
+            translated_paths = (
+                paper_index.translated_md_by_hash.get(source_hash, {}) if source_hash else {}
+            )
 
             # Debug: Print PDF matching info
             if not pdf_path:
@@ -761,6 +789,7 @@ def update_snapshot(opts: SnapshotUpdateOptions) -> None:
                 console.print(f"  source_hash: {source_hash}")
                 # Try to manually resolve
                 from deepresearch_flow.paper.db_ops import _normalize_title_key
+
                 title_key = _normalize_title_key(paper_title)
                 console.print(f"  normalized title: {title_key}")
                 console.print()
@@ -821,9 +850,17 @@ def _print_update_summary(
     processing_table.add_column("Type", style="cyan")
     processing_table.add_column("Count", style="green", justify="right")
     processing_table.add_column("Details", style="yellow")
-    processing_table.add_row("Markdown processed", str(stats.markdown_processed), "Images extracted & paths rewritten")
-    processing_table.add_row("Translations processed", str(stats.translations_processed), "Images extracted & paths rewritten")
-    processing_table.add_row("Images extracted", str(stats.images_extracted), "From markdown & translations")
+    processing_table.add_row(
+        "Markdown processed", str(stats.markdown_processed), "Images extracted & paths rewritten"
+    )
+    processing_table.add_row(
+        "Translations processed",
+        str(stats.translations_processed),
+        "Images extracted & paths rewritten",
+    )
+    processing_table.add_row(
+        "Images extracted", str(stats.images_extracted), "From markdown & translations"
+    )
     console.print(processing_table)
     console.print()
 
@@ -848,7 +885,9 @@ def _print_update_summary(
     metadata_table.add_row("Summaries generated", str(stats.summaries_generated))
     metadata_table.add_row("Translations added", str(stats.translations_added))
     if stats.doi_bibtex_mismatches > 0:
-        metadata_table.add_row("DOI/BibTeX mismatches", str(stats.doi_bibtex_mismatches), style="yellow")
+        metadata_table.add_row(
+            "DOI/BibTeX mismatches", str(stats.doi_bibtex_mismatches), style="yellow"
+        )
     console.print(metadata_table)
     console.print()
 
@@ -867,10 +906,12 @@ def _print_update_summary(
         console.print()
 
     # Success panel
-    console.print(Panel(
-        f"[bold green]{action} Successfully![/bold green]\n\n"
-        f"Database: [yellow]{output_db}[/yellow]\n"
-        f"Static: [yellow]{output_static}[/yellow]",
-        border_style="green",
-        padding=(1, 2)
-    ))
+    console.print(
+        Panel(
+            f"[bold green]{action} Successfully![/bold green]\n\n"
+            f"Database: [yellow]{output_db}[/yellow]\n"
+            f"Static: [yellow]{output_static}[/yellow]",
+            border_style="green",
+            padding=(1, 2),
+        )
+    )

@@ -67,7 +67,9 @@ class TestLoadOcrConfig:
         cfg = load_ocr_config(env_toml)
         assert cfg.backend.token == "resolved-secret"
 
-    def test_env_prefix_missing_raises(self, env_toml: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_env_prefix_missing_raises(
+        self, env_toml: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.delenv("TEST_OCR_TOKEN", raising=False)
         with pytest.raises(ValueError, match="TEST_OCR_TOKEN"):
             load_ocr_config(env_toml)

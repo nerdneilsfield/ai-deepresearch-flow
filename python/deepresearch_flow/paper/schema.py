@@ -21,9 +21,11 @@ def load_schema(schema_path: str | None) -> dict[str, Any]:
             raise SchemaError(f"Schema file not found: {path}")
         return json.loads(path.read_text(encoding="utf-8"))
 
-    with resources.files("deepresearch_flow.paper.schemas").joinpath(
-        "default_paper_schema.json"
-    ).open("r", encoding="utf-8") as handle:
+    with (
+        resources.files("deepresearch_flow.paper.schemas")
+        .joinpath("default_paper_schema.json")
+        .open("r", encoding="utf-8") as handle
+    ):
         return json.load(handle)
 
 

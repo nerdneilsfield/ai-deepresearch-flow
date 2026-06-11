@@ -38,22 +38,18 @@ class ReferenceProcessor:
         text = _sub(
             self._patterns["reference_range"],
             lambda match: " ".join(
-                f"[^{i}]"
-                for i in range(int(match.group(1)), int(match.group(2)) + 1)
+                f"[^{i}]" for i in range(int(match.group(1)), int(match.group(2)) + 1)
             ),
         )
         text = _sub(
             self._patterns["reference_split_range"],
             lambda match: " ".join(
-                f"[^{i}]"
-                for i in range(int(match.group(1)), int(match.group(2)) + 1)
+                f"[^{i}]" for i in range(int(match.group(1)), int(match.group(2)) + 1)
             ),
         )
         text = _sub(
             self._patterns["reference_multi"],
-            lambda match: " ".join(
-                f"[^{n.strip()}]" for n in match.group(1).split(",")
-            ),
+            lambda match: " ".join(f"[^{n.strip()}]" for n in match.group(1).split(",")),
         )
         text = _sub(
             self._patterns["reference_single"],
@@ -216,7 +212,12 @@ class PseudocodeProcessor:
         return False
 
     def _clean_inline(self, text: str) -> str:
-        text = re.sub(r"<\s*sub\s*>\s*(.*?)\s*<\s*/\s*sub\s*>", lambda m: "_" + re.sub(r"\*", "", m.group(1)), text, flags=re.I)
+        text = re.sub(
+            r"<\s*sub\s*>\s*(.*?)\s*<\s*/\s*sub\s*>",
+            lambda m: "_" + re.sub(r"\*", "", m.group(1)),
+            text,
+            flags=re.I,
+        )
         text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
         text = re.sub(r"\*([^\*]+)\*", r"\1", text)
         text = re.sub(r"\*+$", "", text)
@@ -351,7 +352,9 @@ def preserve_heading_levels(original: str, formatted: str) -> str:
             continue
         match = _HEADING_RE.match(line)
         if match and heading_idx < len(original_hashes):
-            out.append(f"{match.group(1)}{original_hashes[heading_idx]}{match.group(3)}{match.group(4)}")
+            out.append(
+                f"{match.group(1)}{original_hashes[heading_idx]}{match.group(3)}{match.group(4)}"
+            )
             heading_idx += 1
             continue
         if match:
@@ -381,10 +384,7 @@ def _looks_like_table_header(line: str) -> bool:
 
 
 def _looks_like_table_delim(line: str) -> bool:
-    return (
-        re.match(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$", line)
-        is not None
-    )
+    return re.match(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$", line) is not None
 
 
 def _is_image_line(line: str) -> bool:
@@ -459,7 +459,11 @@ def _parse_blocks(text: str) -> list[Block]:
                 break
             if _line_starts_with_fence(peek):
                 break
-            if j + 1 < n and _looks_like_table_header(peek) and _looks_like_table_delim(lines[j + 1]):
+            if (
+                j + 1 < n
+                and _looks_like_table_header(peek)
+                and _looks_like_table_delim(lines[j + 1])
+            ):
                 break
             if peek.strip() == "$$":
                 break
@@ -521,7 +525,9 @@ def _merge_blocks(blocks: list[Block]) -> list[Block]:
             blocks = blocks[:idx] + [Block(kind="text", content=merged_text)] + blocks[idx + 3 :]
             continue
 
-        blocks = blocks[:idx] + [Block(kind="text", content=merged_text), middle] + blocks[idx + 3 :]
+        blocks = (
+            blocks[:idx] + [Block(kind="text", content=merged_text), middle] + blocks[idx + 3 :]
+        )
         idx += 1
 
     return blocks
@@ -704,11 +710,15 @@ def fix_html_table_math_spaces(text: str) -> str:
             content,
             protected,
             lambda chunk: re.sub(
-                r"(\$)\s{2,}", r"\1 ", re.sub(
-                    r"\s{2,}(\$)", r" \1", _RE_INLINE_MATH.sub(
-                        lambda im: f"${im.group(1).strip()}$"
-                        if im.group(1).strip()
-                        else im.group(0),
+                r"(\$)\s{2,}",
+                r"\1 ",
+                re.sub(
+                    r"\s{2,}(\$)",
+                    r" \1",
+                    _RE_INLINE_MATH.sub(
+                        lambda im: (
+                            f"${im.group(1).strip()}$" if im.group(1).strip() else im.group(0)
+                        ),
                         chunk,
                     ),
                 ),

@@ -216,7 +216,9 @@ class TestBuilderMetadataInheritance(unittest.TestCase):
 
             output = stdout_buffer.getvalue()
             self.assertIn("source markdown: skipped (no --md-root configured)", output)
-            self.assertIn("translated markdown: skipped (no --md-translated-root configured)", output)
+            self.assertIn(
+                "translated markdown: skipped (no --md-translated-root configured)", output
+            )
             self.assertIn("pdf: skipped (no --pdf-root configured)", output)
 
     def test_builder_verbose_logs_more_context_for_skipped_paths(self) -> None:

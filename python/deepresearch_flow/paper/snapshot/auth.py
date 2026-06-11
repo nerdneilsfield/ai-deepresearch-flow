@@ -72,11 +72,16 @@ def bearer_auth_app(app, access_token: str | None):
             await app(scope, receive, send)
             return
 
-        headers = {key.decode("latin-1").lower(): value.decode("latin-1") for key, value in scope["headers"]}
+        headers = {
+            key.decode("latin-1").lower(): value.decode("latin-1")
+            for key, value in scope["headers"]
+        }
         try:
             verify_bearer(headers.get("authorization"), access_token)
         except BearerAuthError:
-            response = JSONResponse({"error": "unauthorized"}, status_code=401, headers={"WWW-Authenticate": "Bearer"})
+            response = JSONResponse(
+                {"error": "unauthorized"}, status_code=401, headers={"WWW-Authenticate": "Bearer"}
+            )
             await response(scope, receive, send)
             return
 
@@ -107,7 +112,9 @@ class McpGitHubOAuthConfig:
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             raise ValueError("MCP_PUBLIC_BASE_URL must be an absolute http(s) URL")
         if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
-            raise ValueError("MCP_PUBLIC_BASE_URL must be an origin without path, query, or fragment")
+            raise ValueError(
+                "MCP_PUBLIC_BASE_URL must be an origin without path, query, or fragment"
+            )
         host = (parsed.hostname or "").lower()
         local_hosts = {"localhost", "127.0.0.1", "::1"}
         if parsed.scheme != "https" and host not in local_hosts:
@@ -116,7 +123,9 @@ class McpGitHubOAuthConfig:
             raise ValueError("GITHUB_OAUTH_CLIENT_ID is required for GitHub OAuth")
         if not self.client_secret:
             raise ValueError("GITHUB_OAUTH_CLIENT_SECRET is required for GitHub OAuth")
-        allowed_ids = tuple(str(value).strip() for value in self.allowed_github_user_ids if str(value).strip())
+        allowed_ids = tuple(
+            str(value).strip() for value in self.allowed_github_user_ids if str(value).strip()
+        )
         if not allowed_ids:
             raise ValueError("MCP_GITHUB_ALLOWED_USER_IDS is required for GitHub OAuth")
         if any(not value.isdigit() for value in allowed_ids):
@@ -189,11 +198,19 @@ def oauth_metadata_compat_app(app):
                 body_parts.append(message.get("body", b""))
                 if message.get("more_body", False):
                     return
-                start_message = response_start or {"type": "http.response.start", "status": 500, "headers": []}
+                start_message = response_start or {
+                    "type": "http.response.start",
+                    "status": 500,
+                    "headers": [],
+                }
                 body = b"".join(body_parts)
                 headers_in = start_message.get("headers", [])
                 content_type = next(
-                    (value.decode("latin-1") for key, value in headers_in if key.lower() == b"content-type"),
+                    (
+                        value.decode("latin-1")
+                        for key, value in headers_in
+                        if key.lower() == b"content-type"
+                    ),
                     "",
                 )
                 if start_message.get("status") == 200 and "json" in content_type.lower():
@@ -232,6 +249,7 @@ def oauth_metadata_compat_app(app):
     wrapped.lifespan = getattr(app, "lifespan", None)
     return wrapped
 
+
 def build_mcp_github_oauth_provider(
     config: McpGitHubOAuthConfig,
     *,
@@ -260,5 +278,7 @@ def build_mcp_github_oauth_provider(
             )
         )
     if verifiers:
-        return MultiAuth(server=github_provider, verifiers=verifiers, base_url=config.public_base_url)
+        return MultiAuth(
+            server=github_provider, verifiers=verifiers, base_url=config.public_base_url
+        )
     return github_provider

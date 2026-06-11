@@ -4,7 +4,11 @@ from dataclasses import dataclass
 from pathlib import Path
 import base64
 
-from deepresearch_flow.paper.web.static_assets import StaticAssetConfig, build_static_assets, resolve_asset_urls
+from deepresearch_flow.paper.web.static_assets import (
+    StaticAssetConfig,
+    build_static_assets,
+    resolve_asset_urls,
+)
 
 
 @dataclass
@@ -41,7 +45,9 @@ def test_build_static_assets_exports_files_and_rewrites_embedded_images(tmp_path
     assert config.images_base_url == "https://cdn.example.com/assets/images"
     assert config.md_urls["hash-1"].startswith("https://cdn.example.com/assets/md/")
     assert config.pdf_urls["hash-1"].startswith("https://cdn.example.com/assets/pdf/")
-    assert config.translated_md_urls["hash-1"]["zh"].startswith("https://cdn.example.com/assets/md_translate/zh/")
+    assert config.translated_md_urls["hash-1"]["zh"].startswith(
+        "https://cdn.example.com/assets/md_translate/zh/"
+    )
 
     exported_md = list((export_dir / "md").glob("*.md"))
     exported_pdf = list((export_dir / "pdf").glob("*.pdf"))

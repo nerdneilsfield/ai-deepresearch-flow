@@ -89,7 +89,9 @@ def test_load_config_rejects_invalid_active_window_with_path(tmp_path: Path) -> 
 def test_load_config_rejects_invalid_active_timezone(tmp_path: Path) -> None:
     config_path = _write_config(tmp_path, embedding_base_extra='active_timezone = "Not/A_Zone",')
 
-    with pytest.raises(ValueError, match=r"embedding\.providers\[embedder\]\.base\[0\]\.active_timezone"):
+    with pytest.raises(
+        ValueError, match=r"embedding\.providers\[embedder\]\.base\[0\]\.active_timezone"
+    ):
         load_config(str(config_path))
 
 

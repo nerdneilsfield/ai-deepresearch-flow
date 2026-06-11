@@ -49,8 +49,13 @@ def test_load_from_json_merges_records_and_prefers_paper_title(tmp_path: Path) -
         "source_path": "nested/paper.md",
         "source_hash": "source-hash",
     }
-    json_a.write_text(json.dumps([{**paper, "prompt_template": "simple"}], ensure_ascii=False), encoding="utf-8")
-    json_b.write_text(json.dumps([{**paper, "prompt_template": "deep_read"}], ensure_ascii=False), encoding="utf-8")
+    json_a.write_text(
+        json.dumps([{**paper, "prompt_template": "simple"}], ensure_ascii=False), encoding="utf-8"
+    )
+    json_b.write_text(
+        json.dumps([{**paper, "prompt_template": "deep_read"}], ensure_ascii=False),
+        encoding="utf-8",
+    )
 
     docs = load_from_json(
         [json_a, json_b],
@@ -87,7 +92,9 @@ def test_load_from_json_supports_dict_list_and_nested_papers(tmp_path: Path) -> 
     }
     list_path.write_text(json.dumps([paper, "x"], ensure_ascii=False), encoding="utf-8")
     dict_path.write_text(json.dumps(paper, ensure_ascii=False), encoding="utf-8")
-    nested_path.write_text(json.dumps({"papers": [paper, "x"]}, ensure_ascii=False), encoding="utf-8")
+    nested_path.write_text(
+        json.dumps({"papers": [paper, "x"]}, ensure_ascii=False), encoding="utf-8"
+    )
     bad_path.write_text(json.dumps("oops"), encoding="utf-8")
 
     assert len(load_from_json([list_path])) == 1
@@ -188,7 +195,9 @@ def test_load_from_json_shows_tqdm_progress(tmp_path: Path, monkeypatch) -> None
     docs = load_from_json([json_path])
 
     assert len(docs) == 2
-    assert any(call.get("desc") == "load json" and int(call.get("total", 0)) == 2 for call in tqdm_calls)
+    assert any(
+        call.get("desc") == "load json" and int(call.get("total", 0)) == 2 for call in tqdm_calls
+    )
     assert progress_updates == [1, 1]
     assert exits == [True]
 
@@ -234,9 +243,14 @@ def test_load_from_snapshot_reads_source_and_translation(tmp_path: Path) -> None
                 "source-hash",
             ),
         )
-        conn.execute("INSERT INTO author(author_id, value, paper_count) VALUES (?, ?, ?)", (1, "Alice Example", 1))
+        conn.execute(
+            "INSERT INTO author(author_id, value, paper_count) VALUES (?, ?, ?)",
+            (1, "Alice Example", 1),
+        )
         conn.execute("INSERT INTO paper_author(paper_id, author_id) VALUES (?, ?)", ("paper-1", 1))
-        conn.execute("INSERT INTO tag(tag_id, value, paper_count) VALUES (?, ?, ?)", (1, "tag-a", 1))
+        conn.execute(
+            "INSERT INTO tag(tag_id, value, paper_count) VALUES (?, ?, ?)", (1, "tag-a", 1)
+        )
         conn.execute("INSERT INTO paper_tag(paper_id, tag_id) VALUES (?, ?)", ("paper-1", 1))
         conn.execute(
             "INSERT INTO paper_summary(paper_id, template_tag) VALUES (?, ?)",
@@ -333,14 +347,14 @@ def test_load_from_snapshot_keeps_documents_when_artifacts_are_missing(tmp_path:
                 "doi",
                 None,
                 "Missing Files",
-                    "2024",
-                    "04",
-                    "2024-04-01",
-                    "ACL",
-                    "simple",
-                    "",
-                    1,
-                    None,
+                "2024",
+                "04",
+                "2024-04-01",
+                "ACL",
+                "simple",
+                "",
+                1,
+                None,
                 "en",
                 "provider",
                 "model",
@@ -350,10 +364,19 @@ def test_load_from_snapshot_keeps_documents_when_artifacts_are_missing(tmp_path:
                 None,
             ),
         )
-        conn.execute("INSERT INTO author(author_id, value, paper_count) VALUES (?, ?, ?)", (1, "Alice Example", 1))
-        conn.execute("INSERT INTO paper_author(paper_id, author_id) VALUES (?, ?)", ("paper-with-files", 1))
-        conn.execute("INSERT INTO tag(tag_id, value, paper_count) VALUES (?, ?, ?)", (1, "tag-a", 1))
-        conn.execute("INSERT INTO paper_tag(paper_id, tag_id) VALUES (?, ?)", ("paper-with-files", 1))
+        conn.execute(
+            "INSERT INTO author(author_id, value, paper_count) VALUES (?, ?, ?)",
+            (1, "Alice Example", 1),
+        )
+        conn.execute(
+            "INSERT INTO paper_author(paper_id, author_id) VALUES (?, ?)", ("paper-with-files", 1)
+        )
+        conn.execute(
+            "INSERT INTO tag(tag_id, value, paper_count) VALUES (?, ?, ?)", (1, "tag-a", 1)
+        )
+        conn.execute(
+            "INSERT INTO paper_tag(paper_id, tag_id) VALUES (?, ?)", ("paper-with-files", 1)
+        )
         conn.execute(
             "INSERT INTO paper_summary(paper_id, template_tag) VALUES (?, ?)",
             ("paper-with-files", "simple"),

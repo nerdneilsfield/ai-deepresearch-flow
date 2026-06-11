@@ -34,7 +34,9 @@ async def rerank_with_timeout(
     client: Any,
 ) -> RerankOutcome:
     if reranker is None or not chunks:
-        return RerankOutcome(success=True, reason=None, message=None, details=None, chunks=chunks, scores=[])
+        return RerankOutcome(
+            success=True, reason=None, message=None, details=None, chunks=chunks, scores=[]
+        )
 
     try:
         result = await asyncio.wait_for(
@@ -66,7 +68,9 @@ async def rerank_with_timeout(
         return RerankOutcome(
             success=False,
             reason="reranker_failed",
-            message=f"Rerank request failed with HTTP {status}." if status is not None else "Rerank HTTP failure.",
+            message=f"Rerank request failed with HTTP {status}."
+            if status is not None
+            else "Rerank HTTP failure.",
             details={
                 "status_code": status,
                 "provider_error": body or str(exc),
@@ -94,4 +98,6 @@ async def rerank_with_timeout(
             scores.append(float(score))
         if len(ranked) >= top_n:
             break
-    return RerankOutcome(success=True, reason=None, message=None, details=None, chunks=ranked, scores=scores)
+    return RerankOutcome(
+        success=True, reason=None, message=None, details=None, chunks=ranked, scores=scores
+    )

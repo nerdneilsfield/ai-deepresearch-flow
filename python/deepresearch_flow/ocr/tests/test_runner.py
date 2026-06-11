@@ -9,6 +9,7 @@ import pytest
 from deepresearch_flow.ocr.base import OcrBackend, OcrPage, OcrResult
 from deepresearch_flow.ocr.runner import (
     _merge_pages,
+    _ocr_with_retry,
     _resolve_output_dir,
     discover_files,
     run_ocr,
@@ -274,6 +275,13 @@ class TestRunOcr:
         assert stats["failed"] == 1
         assert progress.updates == [1]
 
+    def test_retry_rejects_non_positive_attempt_limit(self, tmp_path: Path) -> None:
+        pdf = tmp_path / "doc.pdf"
+        pdf.write_bytes(b"%PDF")
+
+        with pytest.raises(ValueError, match="max_retries"):
+            _ocr_with_retry(FakeBackend(), pdf, max_retries=0)
+
 
 class TestMigrateToHashNames:
     def test_renames_images_and_updates_md(self, tmp_path: Path) -> None:
@@ -292,9 +300,7 @@ class TestMigrateToHashNames:
         expected_hash = hashlib.sha256(img_data).hexdigest()[:12]
 
         # Create full.md referencing old name.
-        (doc_dir / "full.md").write_text(
-            "# Title\n\n![fig](images/page_0000_00_md.png)\n"
-        )
+        (doc_dir / "full.md").write_text("# Title\n\n![fig](images/page_0000_00_md.png)\n")
 
         stats, _ = migrate_to_hash_names(tmp_path)
 

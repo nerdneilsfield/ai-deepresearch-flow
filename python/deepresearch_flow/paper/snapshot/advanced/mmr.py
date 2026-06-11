@@ -28,9 +28,11 @@ def mmr_select(
     if not chunks or top_n <= 0:
         return []
 
-    relevance = relevance_scores if relevance_scores is not None and len(relevance_scores) == len(chunks) else [
-        chunk.fused_score for chunk in chunks
-    ]
+    relevance = (
+        relevance_scores
+        if relevance_scores is not None and len(relevance_scores) == len(chunks)
+        else [chunk.fused_score for chunk in chunks]
+    )
 
     if lambda_ >= 1.0:
         order = sorted(range(len(chunks)), key=lambda idx: (-relevance[idx], idx))
@@ -46,8 +48,7 @@ def mmr_select(
                 score = lambda_ * relevance[idx]
             else:
                 max_similarity = max(
-                    _cosine(chunks[idx].vector, chunks[chosen].vector)
-                    for chosen in selected
+                    _cosine(chunks[idx].vector, chunks[chosen].vector) for chosen in selected
                 )
                 score = lambda_ * relevance[idx] - (1.0 - lambda_) * max_similarity
             if best_score is None or score > best_score:

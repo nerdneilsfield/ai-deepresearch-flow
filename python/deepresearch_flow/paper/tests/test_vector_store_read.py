@@ -121,7 +121,7 @@ def test_delete_groups_escapes_filter_literals(tmp_path: Path) -> None:
     write_chunks(db, rows, dimensions=4)
     delete_groups(db, [("doc'a", "_shared")])
     chunks = read_all_chunks(db)
-    assert [chunk['doc_id'] for chunk in chunks] == ['docb']
+    assert [chunk["doc_id"] for chunk in chunks] == ["docb"]
 
 
 def test_read_chunks_for_group_returns_only_matching_doc_and_template(tmp_path: Path) -> None:
@@ -267,7 +267,9 @@ def test_write_chunks_creates_admin_scalar_indices_on_first_table_create(tmp_pat
     )
 
     table = db.open_table("paper_chunks")
-    indexed_columns = {column for index in table.list_indices() for column in getattr(index, "columns", [])}
+    indexed_columns = {
+        column for index in table.list_indices() for column in getattr(index, "columns", [])
+    }
     assert {"doc_id", "template_tag"} <= indexed_columns
 
 
@@ -275,7 +277,15 @@ def test_ensure_admin_scalar_indices_upgrades_existing_table(tmp_path: Path) -> 
     db = lancedb.connect(str(tmp_path))
     db.create_table(
         "paper_chunks",
-        data=[{"id": "1", "doc_id": "doc1", "template_tag": "simple", "content_hash": "h", "vector": [0.1, 0.2, 0.3, 0.4]}],
+        data=[
+            {
+                "id": "1",
+                "doc_id": "doc1",
+                "template_tag": "simple",
+                "content_hash": "h",
+                "vector": [0.1, 0.2, 0.3, 0.4],
+            }
+        ],
         mode="overwrite",
     )
 
@@ -299,7 +309,15 @@ def test_ensure_admin_scalar_indices_rebuilds_after_table_overwrite(tmp_path: Pa
     db = lancedb.connect(str(tmp_path))
     db.create_table(
         "paper_chunks",
-        data=[{"id": "1", "doc_id": "doc1", "template_tag": "simple", "content_hash": "h", "vector": [0.1, 0.2, 0.3, 0.4]}],
+        data=[
+            {
+                "id": "1",
+                "doc_id": "doc1",
+                "template_tag": "simple",
+                "content_hash": "h",
+                "vector": [0.1, 0.2, 0.3, 0.4],
+            }
+        ],
         mode="overwrite",
     )
 
@@ -308,7 +326,15 @@ def test_ensure_admin_scalar_indices_rebuilds_after_table_overwrite(tmp_path: Pa
 
     db.create_table(
         "paper_chunks",
-        data=[{"id": "2", "doc_id": "doc2", "template_tag": "deep", "content_hash": "h2", "vector": [0.4, 0.3, 0.2, 0.1]}],
+        data=[
+            {
+                "id": "2",
+                "doc_id": "doc2",
+                "template_tag": "deep",
+                "content_hash": "h2",
+                "vector": [0.4, 0.3, 0.2, 0.1],
+            }
+        ],
         mode="overwrite",
     )
     assert list(db.open_table("paper_chunks").list_indices()) == []
@@ -318,7 +344,9 @@ def test_ensure_admin_scalar_indices_rebuilds_after_table_overwrite(tmp_path: Pa
     assert set(second_result.created_names) == {"idx_chunks_doc_id", "idx_chunks_template_tag"}
 
 
-def test_read_admin_ingest_state_for_cold_doc_with_existing_template_elsewhere(tmp_path: Path) -> None:
+def test_read_admin_ingest_state_for_cold_doc_with_existing_template_elsewhere(
+    tmp_path: Path,
+) -> None:
     db = open_store(tmp_path)
     write_chunks(
         db,
@@ -355,7 +383,9 @@ def test_read_admin_ingest_state_for_cold_doc_with_existing_template_elsewhere(t
     )
 
 
-def test_read_admin_ingest_state_for_empty_target_group_with_other_doc_templates(tmp_path: Path) -> None:
+def test_read_admin_ingest_state_for_empty_target_group_with_other_doc_templates(
+    tmp_path: Path,
+) -> None:
     db = open_store(tmp_path)
     write_chunks(
         db,

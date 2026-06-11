@@ -7,7 +7,10 @@ from pathlib import Path
 import unittest
 
 from deepresearch_flow.paper.snapshot.schema import init_snapshot_db
-from deepresearch_flow.paper.snapshot.supplement import SnapshotSupplementOptions, supplement_snapshot
+from deepresearch_flow.paper.snapshot.supplement import (
+    SnapshotSupplementOptions,
+    supplement_snapshot,
+)
 
 
 class TestSupplementResolution(unittest.TestCase):
@@ -182,8 +185,12 @@ class TestSupplementResolution(unittest.TestCase):
             finally:
                 check_conn.close()
 
-            summary_path_c = static_dir / "summary" / "cccccccccccccccccccccccccccccccc" / "deep_read.json"
-            summary_path_d = static_dir / "summary" / "dddddddddddddddddddddddddddddddd" / "deep_read.json"
+            summary_path_c = (
+                static_dir / "summary" / "cccccccccccccccccccccccccccccccc" / "deep_read.json"
+            )
+            summary_path_d = (
+                static_dir / "summary" / "dddddddddddddddddddddddddddddddd" / "deep_read.json"
+            )
             self.assertTrue(summary_path_c.exists())
             self.assertTrue(summary_path_d.exists())
 

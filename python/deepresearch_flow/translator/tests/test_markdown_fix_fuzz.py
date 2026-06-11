@@ -75,13 +75,16 @@ def test_fix_markdown_text_fuzz(case: FuzzCase):
         )
     )
     assert isinstance(result, str)
-    assert asyncio.run(
-        fix_markdown_text(
-            case.text,
-            case.fix_level or "normal",
-            case.format_enabled if case.format_enabled is not None else False,
+    assert (
+        asyncio.run(
+            fix_markdown_text(
+                case.text,
+                case.fix_level or "normal",
+                case.format_enabled if case.format_enabled is not None else False,
+            )
         )
-    ) == result
+        == result
+    )
     for fragment in case.must_contain:
         assert fragment in result
     for fragment in case.must_not_contain:

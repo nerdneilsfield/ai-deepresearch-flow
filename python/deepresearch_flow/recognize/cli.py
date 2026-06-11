@@ -101,7 +101,9 @@ def _print_summary(title: str, rows: list[tuple[str, str]]) -> None:
     Console().print(table)
 
 
-async def _increase_progress_total(progress: tqdm | None, lock: asyncio.Lock | None, amount: int) -> None:
+async def _increase_progress_total(
+    progress: tqdm | None, lock: asyncio.Lock | None, amount: int
+) -> None:
     if progress is None or lock is None or amount <= 0:
         return
     async with lock:
@@ -480,10 +482,28 @@ def recognize() -> None:
     default=None,
     help="Override output directory from config.",
 )
-@click.option("--overwrite", is_flag=True, default=False, help="Overwrite existing output instead of skipping.")
-@click.option("--max-retries", type=int, default=3, show_default=True, help="Max retry attempts per file on failure.")
+@click.option(
+    "--overwrite",
+    is_flag=True,
+    default=False,
+    help="Overwrite existing output instead of skipping.",
+)
+@click.option(
+    "--max-retries",
+    type=int,
+    default=3,
+    show_default=True,
+    help="Max retry attempts per file on failure.",
+)
 @click.option("--verbose", is_flag=True, default=False, help="Enable debug logging.")
-def ocr(input_path: str, config_path: str, output_dir: str | None, overwrite: bool, max_retries: int, verbose: bool) -> None:
+def ocr(
+    input_path: str,
+    config_path: str,
+    output_dir: str | None,
+    overwrite: bool,
+    max_retries: int,
+    verbose: bool,
+) -> None:
     """Run OCR on PDF/image files using a configured backend."""
     from pathlib import Path
 
@@ -570,7 +590,12 @@ def ocr(input_path: str, config_path: str, output_dir: str | None, overwrite: bo
 
 @recognize.command("ocr-migrate")
 @click.argument("ocr_output_dir", type=click.Path(exists=True))
-@click.option("--dry-run", is_flag=True, default=False, help="Show what would be renamed without changing anything.")
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Show what would be renamed without changing anything.",
+)
 @click.option("--verbose", is_flag=True, default=False, help="Enable debug logging.")
 def ocr_migrate(ocr_output_dir: str, dry_run: bool, verbose: bool) -> None:
     """Migrate old OCR output images to content-hash filenames.
@@ -799,8 +824,12 @@ def unpack(
     help="Input directory (repeatable)",
 )
 @click.option("-r", "--recursive", is_flag=True, help="Recursively search for layout folders")
-@click.option("--output-simple", "output_simple", default=None, help="Output directory for copied markdown")
-@click.option("--output-base64", "output_base64", default=None, help="Output directory for embedded markdown")
+@click.option(
+    "--output-simple", "output_simple", default=None, help="Output directory for copied markdown"
+)
+@click.option(
+    "--output-base64", "output_base64", default=None, help="Output directory for embedded markdown"
+)
 @click.option("--fix", "enable_fix", is_flag=True, help="Apply OCR fix and rumdl formatting")
 @click.option(
     "--fix-level",
@@ -1118,8 +1147,14 @@ def recognize_fix(
 @click.option("--json", "json_mode", is_flag=True, help="Process JSON inputs instead of markdown")
 @click.option("-m", "--model", "model_ref", required=True, help="provider/model")
 @click.option("--batch-size", "batch_size", default=10, show_default=True, type=int)
-@click.option("--max-batch-chars", "max_batch_chars", default=200_000, show_default=True, type=int,
-              help="Max total characters per batch (prevents oversized prompts)")
+@click.option(
+    "--max-batch-chars",
+    "max_batch_chars",
+    default=200_000,
+    show_default=True,
+    type=int,
+    help="Max total characters per batch (prevents oversized prompts)",
+)
 @click.option("--context-chars", "context_chars", default=80, show_default=True, type=int)
 @click.option("--max-retries", "max_retries", default=3, show_default=True, type=int)
 @click.option("--workers", type=int, default=4, show_default=True, help="Concurrent workers")
@@ -1273,6 +1308,7 @@ def recognize_fix_math(
         stats_total = MathFixStats()
 
         async with httpx.AsyncClient() as client:
+
             async def handle_path(path: Path) -> MathFixStats:
                 stats = MathFixStats()
                 if json_mode:
@@ -1329,10 +1365,14 @@ def recognize_fix_math(
                                 item[field] = updated
                             error_records.extend(errors)
                     if not only_show_error:
-                        output_data: Any = items if payload is None else {**payload, "papers": items}
+                        output_data: Any = (
+                            items if payload is None else {**payload, "papers": items}
+                        )
                         output_path = output_map[path]
                         serialized = json.dumps(output_data, ensure_ascii=False, indent=2)
-                        await asyncio.to_thread(output_path.write_text, f"{serialized}\n", encoding="utf-8")
+                        await asyncio.to_thread(
+                            output_path.write_text, f"{serialized}\n", encoding="utf-8"
+                        )
                 else:
                     content = await asyncio.to_thread(read_text, path)
                     spans = extract_math_spans(content, context_chars)
@@ -1430,8 +1470,14 @@ def recognize_fix_math(
 @click.option("--json", "json_mode", is_flag=True, help="Process JSON inputs instead of markdown")
 @click.option("-m", "--model", "model_ref", required=True, help="provider/model")
 @click.option("--batch-size", "batch_size", default=10, show_default=True, type=int)
-@click.option("--max-batch-chars", "max_batch_chars", default=200_000, show_default=True, type=int,
-              help="Max total characters per batch (prevents oversized prompts)")
+@click.option(
+    "--max-batch-chars",
+    "max_batch_chars",
+    default=200_000,
+    show_default=True,
+    type=int,
+    help="Max total characters per batch (prevents oversized prompts)",
+)
 @click.option("--context-chars", "context_chars", default=80, show_default=True, type=int)
 @click.option("--max-retries", "max_retries", default=3, show_default=True, type=int)
 @click.option("--workers", type=int, default=4, show_default=True, help="Concurrent workers")
@@ -1576,10 +1622,12 @@ def recognize_fix_mermaid(
         return
 
     progress = tqdm(total=len(paths), desc="extract", unit="file")
-    field_progress = tqdm(total=0, desc="extract-field", unit="field", disable=not json_mode, leave=False)
+    field_progress = tqdm(
+        total=0, desc="extract-field", unit="field", disable=not json_mode, leave=False
+    )
     diagram_progress = tqdm(total=0, desc="repair", unit="diagram")
     error_records: list[dict[str, Any]] = []
-    
+
     # Performance metrics
     extract_start_time = time.monotonic()
     repair_start_time = 0.0
@@ -1594,36 +1642,44 @@ def recognize_fix_mermaid(
             progress_lock = asyncio.Lock()
             field_progress_lock = asyncio.Lock()
             diagram_progress_lock = asyncio.Lock()
-            
+
             async def extract_from_file(path: Path) -> list[DiagramTask]:
                 tasks: list[DiagramTask] = []
-                
+
                 if json_mode:
                     raw_text = await asyncio.to_thread(read_text, path)
                     items, payload, template_tag = _load_json_payload(path)
-                    
-                    logger.info("Extracting from JSON: %s (%d papers)", _relative_path(path), len(items))
-                    
+
+                    logger.info(
+                        "Extracting from JSON: %s (%d papers)", _relative_path(path), len(items)
+                    )
+
                     # Pre-calculate all field positions for parallel extraction
                     field_locations: list[tuple[int, str, str, str | None, int]] = []
                     cursor = 0
-                    
+
                     for item_index, item in enumerate(items):
                         if not isinstance(item, dict):
                             continue
                         template = _resolve_item_template(item, template_tag)
                         fields = _template_markdown_fields(template)
-                        
+
                         for field in fields:
                             value = item.get(field)
                             if not isinstance(value, str):
                                 continue
                             line_start, cursor = locate_json_field_start(raw_text, value, cursor)
                             field_path = f"papers[{item_index}].{field}"
-                            field_locations.append((line_start, value, field_path, None, item_index))
-                    
-                    logger.info("Pre-calculated %d field locations from %s", len(field_locations), _relative_path(path))
-                    
+                            field_locations.append(
+                                (line_start, value, field_path, None, item_index)
+                            )
+
+                    logger.info(
+                        "Pre-calculated %d field locations from %s",
+                        len(field_locations),
+                        _relative_path(path),
+                    )
+
                     # Apply retry filter to field locations if needed
                     if retry_targets is not None:
                         retry_keys = retry_targets.get(path.resolve(), set())
@@ -1649,33 +1705,54 @@ def recognize_fix_mermaid(
                             for line_start, value, field_path, _, item_index in field_locations:
                                 spans = extract_mermaid_spans(value, context_chars)
                                 if any(
-                                    (line_start + span.line - 1, field_path, item_index) in retry_keys
+                                    (line_start + span.line - 1, field_path, item_index)
+                                    in retry_keys
                                     for span in spans
                                 ):
-                                    filtered_locations.append((line_start, value, field_path, None, item_index))
+                                    filtered_locations.append(
+                                        (line_start, value, field_path, None, item_index)
+                                    )
                             field_locations = filtered_locations
-                            logger.info("Retry filter: %d fields match (by line)", len(field_locations))
-                    
+                            logger.info(
+                                "Retry filter: %d fields match (by line)", len(field_locations)
+                            )
+
                     # Parallel extraction from all fields
-                    async def extract_from_field(loc: tuple[int, str, str, str | None, int]) -> list[DiagramTask]:
+                    async def extract_from_field(
+                        loc: tuple[int, str, str, str | None, int],
+                    ) -> list[DiagramTask]:
                         line_start, value, field_path, _, item_index = loc
                         field_tasks = extract_diagrams_from_text(
-                            value, path, line_start, field_path, item_index, context_chars,
-                            skip_validation=not only_show_error  # Skip validation unless validating only
+                            value,
+                            path,
+                            line_start,
+                            field_path,
+                            item_index,
+                            context_chars,
+                            skip_validation=not only_show_error,  # Skip validation unless validating only
                         )
-                        
+
                         # Apply retry filter to individual tasks
                         if retry_targets is not None:
                             retry_keys = retry_targets.get(path.resolve(), set())
                             field_tasks = [
-                                task for task in field_tasks
-                                if (task.file_line_offset + task.span.line - 1, task.field_path, task.item_index) in retry_keys
+                                task
+                                for task in field_tasks
+                                if (
+                                    task.file_line_offset + task.span.line - 1,
+                                    task.field_path,
+                                    task.item_index,
+                                )
+                                in retry_keys
                             ]
-                        
+
                         return field_tasks
-                    
+
                     if field_locations:
-                        logger.info("Extracting diagrams from %d fields in parallel...", len(field_locations))
+                        logger.info(
+                            "Extracting diagrams from %d fields in parallel...",
+                            len(field_locations),
+                        )
 
                         async with field_progress_lock:
                             field_progress.total += len(field_locations)
@@ -1684,7 +1761,9 @@ def recognize_fix_mermaid(
                         # Bounded worker pool (avoid scheduling thousands of coroutines at once).
                         max_field_workers = 50
                         field_workers = min(max_field_workers, len(field_locations))
-                        field_queue: asyncio.Queue[tuple[int, str, str, str | None, int] | None] = asyncio.Queue()
+                        field_queue: asyncio.Queue[tuple[int, str, str, str | None, int] | None] = (
+                            asyncio.Queue()
+                        )
                         for loc in field_locations:
                             field_queue.put_nowait(loc)
                         for _ in range(field_workers):
@@ -1707,30 +1786,43 @@ def recognize_fix_mermaid(
                                     field_progress.update(1)
                             return out
 
-                        worker_results = await asyncio.gather(*[field_worker() for _ in range(field_workers)])
+                        worker_results = await asyncio.gather(
+                            *[field_worker() for _ in range(field_workers)]
+                        )
                         for batch in worker_results:
                             tasks.extend(batch)
-                    
+
                     logger.info("Extracted %d diagrams from %s", len(tasks), _relative_path(path))
                 else:
                     content = await asyncio.to_thread(read_text, path)
-                    
+
                     logger.info("Extracting from markdown: %s", _relative_path(path))
-                    
+
                     # Extract diagrams from markdown
                     file_tasks = extract_diagrams_from_text(
-                        content, path, 1, None, None, context_chars,
-                        skip_validation=not only_show_error  # Skip validation unless validating only
+                        content,
+                        path,
+                        1,
+                        None,
+                        None,
+                        context_chars,
+                        skip_validation=not only_show_error,  # Skip validation unless validating only
                     )
-                    
+
                     # Apply retry filter if needed
                     if retry_targets is not None:
                         retry_keys = retry_targets.get(path.resolve(), set())
                         file_tasks = [
-                            task for task in file_tasks
-                            if (task.file_line_offset + task.span.line - 1, task.field_path, task.item_index) in retry_keys
+                            task
+                            for task in file_tasks
+                            if (
+                                task.file_line_offset + task.span.line - 1,
+                                task.field_path,
+                                task.item_index,
+                            )
+                            in retry_keys
                         ]
-                    
+
                     tasks.extend(file_tasks)
                     await _increase_progress_total(
                         diagram_progress,
@@ -1738,23 +1830,23 @@ def recognize_fix_mermaid(
                         len(file_tasks),
                     )
                     logger.info("Extracted %d diagrams from %s", len(tasks), _relative_path(path))
-                
+
                 async with progress_lock:
                     progress.update(1)
                 return tasks
-            
+
             # Parallel extraction with progress
             file_task_lists = await asyncio.gather(*[extract_from_file(path) for path in paths])
             all_tasks = [task for tasks in file_task_lists for task in tasks]
-            
+
             progress.close()
             field_progress.close()
             nonlocal extract_duration, repair_start_time
             extract_duration = time.monotonic() - extract_start_time
-            
+
             if not all_tasks:
                 return stats_total
-            
+
             # Phase 2: Global parallel repair (flatten all batches)
             repair_start_time = time.monotonic()
             file_replacements, errors = await repair_all_diagrams_global(
@@ -1769,66 +1861,72 @@ def recognize_fix_mermaid(
                 progress_cb=lambda: diagram_progress.update(1) if not only_show_error else None,
                 max_batch_chars=max_batch_chars,
             )
-            
+
             error_records.extend(errors)
             diagram_progress.close()
             nonlocal repair_duration
             repair_duration = time.monotonic() - repair_start_time
-            
+
             # Phase 3: Write back to files
             if not only_show_error:
                 write_progress = tqdm(total=len(paths), desc="write", unit="file")
-                
+
                 for path in paths:
                     replacements = file_replacements.get(path, [])
                     output_path = output_map[path]
-                    
+
                     if json_mode:
                         # For JSON, apply replacements to fields
                         raw_text = await asyncio.to_thread(read_text, path)
                         items, payload, template_tag = _load_json_payload(path)
                         cursor = 0
-                        
+
                         for item_index, item in enumerate(items):
                             if not isinstance(item, dict):
                                 continue
                             template = _resolve_item_template(item, template_tag)
                             fields = _template_markdown_fields(template)
-                            
+
                             for field in fields:
                                 value = item.get(field)
                                 if not isinstance(value, str):
                                     continue
                                 field_path = f"papers[{item_index}].{field}"
-                                
+
                                 # Find replacements for this specific field
                                 field_replacements = [
                                     (start, end, repl)
                                     for start, end, repl in replacements
                                     if any(
-                                        t.field_path == field_path and t.item_index == item_index and t.span.start == start
+                                        t.field_path == field_path
+                                        and t.item_index == item_index
+                                        and t.span.start == start
                                         for t in all_tasks
                                         if t.file_path == path
                                     )
                                 ]
-                                
+
                                 if field_replacements:
                                     updated_value = apply_replacements(value, field_replacements)
                                     item[field] = updated_value
-                        
-                        output_data: Any = items if payload is None else {**payload, "papers": items}
+
+                        output_data: Any = (
+                            items if payload is None else {**payload, "papers": items}
+                        )
                         serialized = json.dumps(output_data, ensure_ascii=False, indent=2)
-                        await asyncio.to_thread(output_path.write_text, f"{serialized}\n", encoding="utf-8")
+                        await asyncio.to_thread(
+                            output_path.write_text, f"{serialized}\n", encoding="utf-8"
+                        )
                     else:
                         # For markdown, apply replacements directly
                         content = await asyncio.to_thread(read_text, path)
                         updated = apply_replacements(content, replacements)
                         await asyncio.to_thread(output_path.write_text, updated, encoding="utf-8")
-                    
+
                     write_progress.update(1)
-                
+
                 write_progress.close()
-        
+
         return stats_total
 
     try:
@@ -1855,9 +1953,19 @@ def recognize_fix_mermaid(
         ("Repaired", str(stats.diagrams_repaired)),
         ("Failed", str(stats.diagrams_failed)),
         ("Extract time", _format_duration(extract_duration)),
-        ("Extract avg", f"{extract_duration / stats.diagrams_total:.3f}s/diagram" if stats.diagrams_total > 0 else "-"),
+        (
+            "Extract avg",
+            f"{extract_duration / stats.diagrams_total:.3f}s/diagram"
+            if stats.diagrams_total > 0
+            else "-",
+        ),
         ("Repair time", _format_duration(repair_duration)),
-        ("Repair avg", f"{repair_duration / stats.diagrams_invalid:.3f}s/diagram" if stats.diagrams_invalid > 0 else "-"),
+        (
+            "Repair avg",
+            f"{repair_duration / stats.diagrams_invalid:.3f}s/diagram"
+            if stats.diagrams_invalid > 0
+            else "-",
+        ),
         ("Retry failed", "yes" if retry_failed else "no"),
         ("Only show error", "yes" if only_show_error else "no"),
         ("Report", _relative_path(report_target) if report_target else "-"),

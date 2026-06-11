@@ -88,9 +88,7 @@ def _collect_list_block(lines: list[str], start: int) -> tuple[list[str], int]:
         line = lines[i]
         if _is_blank(line):
             break
-        if _looks_like_list_item(line) and (
-            len(line) - len(line.lstrip())
-        ) <= indent:
+        if _looks_like_list_item(line) and (len(line) - len(line.lstrip())) <= indent:
             break
         if len(line) - len(line.lstrip()) > indent:
             block.append(line)
@@ -100,9 +98,7 @@ def _collect_list_block(lines: list[str], start: int) -> tuple[list[str], int]:
     return block, i
 
 
-def split_to_segments(
-    text: str, max_chunk_chars: int
-) -> tuple[list[Segment], dict[int, Node]]:
+def split_to_segments(text: str, max_chunk_chars: int) -> tuple[list[Segment], dict[int, Node]]:
     lines = text.splitlines(keepends=True)
     segments: list[Segment] = []
     nodes: dict[int, Node] = {}

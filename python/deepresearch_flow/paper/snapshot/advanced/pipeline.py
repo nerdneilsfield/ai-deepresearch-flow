@@ -54,7 +54,11 @@ def _exception_message_and_details(
     if isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code if exc.response is not None else None
         body = exc.response.text if exc.response is not None else str(exc)
-        message = f"{default_message} Upstream HTTP status: {status}." if status is not None else default_message
+        message = (
+            f"{default_message} Upstream HTTP status: {status}."
+            if status is not None
+            else default_message
+        )
         return message, {
             "status_code": status,
             "provider_error": body,
@@ -109,6 +113,7 @@ async def run_advanced_search(
         top_k=search_cfg.advanced_dense_top_k,
         lance_where=parsed_filters.lance_where,
     )
+
     async def _run_sparse():
         sparse_started = _now_ms()
         try:
@@ -253,13 +258,9 @@ async def run_advanced_search(
 
     final_rerank_scores: list[float] = []
     if rerank_applied and rerank_scores:
-        rerank_by_chunk_id = {
-            chunk.chunk_id: score
-            for chunk, score in zip(deduped, rerank_scores)
-        }
+        rerank_by_chunk_id = {chunk.chunk_id: score for chunk, score in zip(deduped, rerank_scores)}
         final_rerank_scores = [
-            rerank_by_chunk_id.get(chunk.chunk_id, chunk.fused_score)
-            for chunk in final_chunks
+            rerank_by_chunk_id.get(chunk.chunk_id, chunk.fused_score) for chunk in final_chunks
         ]
 
     counts = {

@@ -74,7 +74,9 @@ def _semantic_tag_label(template_tag: str) -> str:
     return template_tag or SHARED_TEMPLATE_KEY
 
 
-def _log_semantic_phase(doc_id: str, template_tag: str, phase: str, started_at: float, *, detail: str = "") -> float:
+def _log_semantic_phase(
+    doc_id: str, template_tag: str, phase: str, started_at: float, *, detail: str = ""
+) -> float:
     elapsed = time.perf_counter() - started_at
     log_fn = logger.warning if elapsed >= _SLOW_SEMANTIC_PHASE_SECONDS else logger.info
     suffix = f" {detail}" if detail else ""
@@ -92,6 +94,7 @@ def _log_semantic_phase(doc_id: str, template_tag: str, phase: str, started_at: 
 # ---------------------------------------------------------------------------
 # Auth helper
 # ---------------------------------------------------------------------------
+
 
 def _check_auth(request: Request) -> bool:
     """Return ``True`` if the request is authenticated, ``False`` otherwise."""
@@ -112,6 +115,7 @@ _AUTH_ERROR = JSONResponse({"error": "unauthorized"}, status_code=401)
 # Paper identity resolution (slim version from update.py)
 # ---------------------------------------------------------------------------
 
+
 def _resolve_paper_identity(
     conn: sqlite3.Connection, paper: dict[str, Any]
 ) -> tuple[str, str, str, str | None, list[Any]]:
@@ -123,7 +127,13 @@ def _resolve_paper_identity(
             (cand.paper_key,),
         ).fetchone()
         if row:
-            return str(row["paper_id"]), cand.paper_key, cand.key_type, cand.meta_fingerprint, candidates
+            return (
+                str(row["paper_id"]),
+                cand.paper_key,
+                cand.key_type,
+                cand.meta_fingerprint,
+                candidates,
+            )
 
     preferred = choose_preferred_key(candidates)
     paper_id = explicit_id or paper_id_for_key(preferred.paper_key)
@@ -133,6 +143,7 @@ def _resolve_paper_identity(
 # ---------------------------------------------------------------------------
 # Metadata-only paper insertion (no static file I/O)
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class _InsertStats:
@@ -160,9 +171,7 @@ def _insert_paper_metadata(
 
     paper_id, paper_key, paper_key_type, _, candidates = _resolve_paper_identity(conn, paper)
 
-    existing = conn.execute(
-        "SELECT 1 FROM paper WHERE paper_id = ?", (paper_id,)
-    ).fetchone()
+    existing = conn.execute("SELECT 1 FROM paper WHERE paper_id = ?", (paper_id,)).fetchone()
     if existing:
         stats.skipped += 1
         return
@@ -172,7 +181,9 @@ def _insert_paper_metadata(
     venue = _extract_venue(paper)
 
     bib = paper.get("bibtex") if isinstance(paper.get("bibtex"), dict) else None
-    bib_fields = bib.get("fields") if isinstance(bib, dict) and isinstance(bib.get("fields"), dict) else {}
+    bib_fields = (
+        bib.get("fields") if isinstance(bib, dict) and isinstance(bib.get("fields"), dict) else {}
+    )
     doi = extract_canonical_doi(paper, bib_fields or {})
     bibtex_raw, bibtex_key, entry_type, _ = extract_current_bibtex_payload(paper)
     if paper_key_type == "bib" and paper_key.startswith("bib:") and not bibtex_key:
@@ -193,7 +204,9 @@ def _insert_paper_metadata(
     )
     template_payloads = _extract_template_payloads(paper)
     preferred_summary_template = _choose_preferred_template(paper, template_payloads)
-    preferred_markdown = _extract_template_markdown(template_payloads.get(preferred_summary_template, {}))
+    preferred_markdown = _extract_template_markdown(
+        template_payloads.get(preferred_summary_template, {})
+    )
 
     # Prefer the preview carried from source DB when no real template content
     # exists (avoids polluting preview/FTS with raw JSON dumps of the paper dict)
@@ -213,11 +226,25 @@ def _insert_paper_metadata(
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            paper_id, paper_key, paper_key_type, doi, title, year, month,
-            publication_date, venue, preferred_summary_template,
+            paper_id,
+            paper_key,
+            paper_key_type,
+            doi,
+            title,
+            year,
+            month,
+            publication_date,
+            venue,
+            preferred_summary_template,
             summary_preview,
-            source_hash, output_language, provider, model, prompt_template,
-            extracted_at, pdf_content_hash, source_md_content_hash,
+            source_hash,
+            output_language,
+            provider,
+            model,
+            prompt_template,
+            extracted_at,
+            pdf_content_hash,
+            source_md_content_hash,
         ),
     )
 
@@ -232,7 +259,12 @@ def _insert_paper_metadata(
     for cand in candidates:
         conn.execute(
             "INSERT OR REPLACE INTO paper_key_alias(paper_key, paper_id, paper_key_type, meta_fingerprint) VALUES (?, ?, ?, ?)",
-            (cand.paper_key, paper_id, cand.key_type, cand.meta_fingerprint if cand.key_type == "meta" else None),
+            (
+                cand.paper_key,
+                paper_id,
+                cand.key_type,
+                cand.meta_fingerprint if cand.key_type == "meta" else None,
+            ),
         )
 
     # Summary templates (metadata only, no JSON file writes)
@@ -261,11 +293,51 @@ def _insert_paper_metadata(
     institutions = _normalize_str_list(paper.get("paper_institutions"))
     tags = _normalize_str_list(paper.get("ai_generated_tags"))
 
-    _link_dim(conn, paper_id=paper_id, table="author", id_col="author_id", join_table="paper_author", join_col="author_id", values=authors)
-    _link_dim(conn, paper_id=paper_id, table="keyword", id_col="keyword_id", join_table="paper_keyword", join_col="keyword_id", values=keywords)
-    _link_dim(conn, paper_id=paper_id, table="institution", id_col="institution_id", join_table="paper_institution", join_col="institution_id", values=institutions)
-    _link_dim(conn, paper_id=paper_id, table="tag", id_col="tag_id", join_table="paper_tag", join_col="tag_id", values=tags)
-    _link_dim(conn, paper_id=paper_id, table="venue", id_col="venue_id", join_table="paper_venue", join_col="venue_id", values=[venue] if venue else [])
+    _link_dim(
+        conn,
+        paper_id=paper_id,
+        table="author",
+        id_col="author_id",
+        join_table="paper_author",
+        join_col="author_id",
+        values=authors,
+    )
+    _link_dim(
+        conn,
+        paper_id=paper_id,
+        table="keyword",
+        id_col="keyword_id",
+        join_table="paper_keyword",
+        join_col="keyword_id",
+        values=keywords,
+    )
+    _link_dim(
+        conn,
+        paper_id=paper_id,
+        table="institution",
+        id_col="institution_id",
+        join_table="paper_institution",
+        join_col="institution_id",
+        values=institutions,
+    )
+    _link_dim(
+        conn,
+        paper_id=paper_id,
+        table="tag",
+        id_col="tag_id",
+        join_table="paper_tag",
+        join_col="tag_id",
+        values=tags,
+    )
+    _link_dim(
+        conn,
+        paper_id=paper_id,
+        table="venue",
+        id_col="venue_id",
+        join_table="paper_venue",
+        join_col="venue_id",
+        values=[venue] if venue else [],
+    )
 
     # Facet graph
     graph_nodes: set[int] = set()
@@ -302,7 +374,9 @@ def _insert_paper_metadata(
 
     node_list = sorted(graph_nodes)
     if len(node_list) > 1:
-        edge_rows = [(left, right) for idx, left in enumerate(node_list) for right in node_list[idx + 1:]]
+        edge_rows = [
+            (left, right) for idx, left in enumerate(node_list) for right in node_list[idx + 1 :]
+        ]
         conn.executemany(
             """
             INSERT INTO facet_edge(node_id_a, node_id_b, paper_count)
@@ -317,17 +391,35 @@ def _insert_paper_metadata(
     # to summary_preview to avoid indexing JSON dumps of the paper dict
     if has_real_templates:
         summary_text = markdown_to_plain_text(
-            " ".join(_extract_template_markdown(template_payloads[tag]) for tag in ordered_template_tags)
+            " ".join(
+                _extract_template_markdown(template_payloads[tag]) for tag in ordered_template_tags
+            )
         )
     else:
         summary_text = summary_preview
     metadata_text = " ".join(
-        part for part in [title, " ".join(authors), venue, " ".join(keywords), " ".join(institutions), year, doi or ""]
+        part
+        for part in [
+            title,
+            " ".join(authors),
+            venue,
+            " ".join(keywords),
+            " ".join(institutions),
+            year,
+            doi or "",
+        ]
         if part
     )
     conn.execute(
         "INSERT INTO paper_fts(paper_id, title, summary, source, translated, metadata) VALUES (?, ?, ?, ?, ?, ?)",
-        (paper_id, insert_cjk_spaces(title), insert_cjk_spaces(summary_text), "", "", insert_cjk_spaces(metadata_text)),
+        (
+            paper_id,
+            insert_cjk_spaces(title),
+            insert_cjk_spaces(summary_text),
+            "",
+            "",
+            insert_cjk_spaces(metadata_text),
+        ),
     )
     conn.execute(
         "INSERT INTO paper_fts_trigram(paper_id, title, venue) VALUES (?, ?, ?)",
@@ -341,6 +433,7 @@ def _insert_paper_metadata(
 # ---------------------------------------------------------------------------
 # Delete helper
 # ---------------------------------------------------------------------------
+
 
 def _delete_paper(conn: sqlite3.Connection, paper_id: str) -> bool:
     """Delete a paper and all its cascading relations. Returns True if found."""
@@ -356,6 +449,7 @@ def _delete_paper(conn: sqlite3.Connection, paper_id: str) -> bool:
 # Route handlers
 # ---------------------------------------------------------------------------
 
+
 async def _admin_add_papers(request: Request) -> JSONResponse:
     if not _check_auth(request):
         return _AUTH_ERROR
@@ -363,12 +457,14 @@ async def _admin_add_papers(request: Request) -> JSONResponse:
     try:
         body = await request.json()
     except (json.JSONDecodeError, ValueError):
-        return JSONResponse({"error": "bad_request", "detail": "invalid JSON body"}, status_code=400)
+        return JSONResponse(
+            {"error": "bad_request", "detail": "invalid JSON body"}, status_code=400
+        )
 
     papers = body.get("papers") if isinstance(body, dict) else None
     if not isinstance(papers, list):
         return JSONResponse(
-            {"error": "bad_request", "detail": "body must be {\"papers\": [...]}"},
+            {"error": "bad_request", "detail": 'body must be {"papers": [...]}'},
             status_code=400,
         )
 
@@ -408,12 +504,14 @@ async def _admin_add_papers(request: Request) -> JSONResponse:
     finally:
         conn.close()
 
-    return JSONResponse({
-        "added": stats.added,
-        "skipped": stats.skipped,
-        "errors": stats.errors,
-        "paper_ids": stats.paper_ids,
-    })
+    return JSONResponse(
+        {
+            "added": stats.added,
+            "skipped": stats.skipped,
+            "errors": stats.errors,
+            "paper_ids": stats.paper_ids,
+        }
+    )
 
 
 async def _admin_delete_paper(request: Request) -> JSONResponse:
@@ -448,8 +546,6 @@ async def _admin_delete_paper(request: Request) -> JSONResponse:
         )
 
     return JSONResponse({"deleted": True, "paper_id": paper_id})
-
-
 
 
 def _staging_table_exists(conn: sqlite3.Connection) -> bool:
@@ -497,7 +593,9 @@ def _stage_part(
             "SELECT group_hash, part_count FROM semantic_staging WHERE doc_id = ? AND template_tag = ? LIMIT 1",
             (doc_id, template_tag),
         ).fetchone()
-        if existing and (str(existing["group_hash"]) != group_hash or int(existing["part_count"]) != part_count):
+        if existing and (
+            str(existing["group_hash"]) != group_hash or int(existing["part_count"]) != part_count
+        ):
             conn.execute(
                 "DELETE FROM semantic_staging WHERE doc_id = ? AND template_tag = ?",
                 (doc_id, template_tag),
@@ -508,7 +606,14 @@ def _stage_part(
             (doc_id, template_tag, group_hash, part_index, part_count, chunk_data)
             VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (doc_id, template_tag, group_hash, part_index, part_count, json.dumps(chunks, ensure_ascii=False)),
+            (
+                doc_id,
+                template_tag,
+                group_hash,
+                part_index,
+                part_count,
+                json.dumps(chunks, ensure_ascii=False),
+            ),
         )
         conn.commit()
     finally:
@@ -529,7 +634,9 @@ def _count_staged_parts(cfg: AdminConfig, doc_id: str, template_tag: str, group_
         conn.close()
 
 
-def _collect_staged_parts(cfg: AdminConfig, doc_id: str, template_tag: str, group_hash: str) -> list[dict[str, Any]]:
+def _collect_staged_parts(
+    cfg: AdminConfig, doc_id: str, template_tag: str, group_hash: str
+) -> list[dict[str, Any]]:
     conn = _open_ro_conn(cfg.snapshot_db)
     try:
         if not _staging_table_exists(conn):
@@ -639,8 +746,12 @@ def _apply_semantic_chunk_batch(
             cfg.embed_db,
             {
                 "model": str(index_meta.get("model") or ""),
-                "canonical_model": str(index_meta.get("canonical_model") or index_meta.get("model") or ""),
-                "dimensions": cfg.embed_dimensions if cfg.embed_dimensions is not None else dimensions,
+                "canonical_model": str(
+                    index_meta.get("canonical_model") or index_meta.get("model") or ""
+                ),
+                "dimensions": cfg.embed_dimensions
+                if cfg.embed_dimensions is not None
+                else dimensions,
                 "normalized": bool(index_meta.get("normalized")),
                 "provider": str(index_meta.get("provider") or ""),
                 "index_version": int(index_meta.get("index_version") or 1),
@@ -815,17 +926,31 @@ async def _admin_ingest_semantic_chunks(request: Request) -> JSONResponse:
     try:
         body = json.loads(raw_body.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
-        return JSONResponse({"error": "bad_request", "detail": "invalid JSON body"}, status_code=400)
+        return JSONResponse(
+            {"error": "bad_request", "detail": "invalid JSON body"}, status_code=400
+        )
 
     index_meta = body.get("index_meta") if isinstance(body, dict) else None
     group = body.get("group") if isinstance(body, dict) else None
     chunks = body.get("chunks") if isinstance(body, dict) else None
-    if not isinstance(index_meta, dict) or not isinstance(group, dict) or not isinstance(chunks, list):
-        return JSONResponse({"error": "bad_request", "detail": "body must include index_meta, group, and chunks"}, status_code=400)
+    if (
+        not isinstance(index_meta, dict)
+        or not isinstance(group, dict)
+        or not isinstance(chunks, list)
+    ):
+        return JSONResponse(
+            {"error": "bad_request", "detail": "body must include index_meta, group, and chunks"},
+            status_code=400,
+        )
 
     dimensions = int(index_meta.get("dimensions") or 0)
     if cfg.embed_dimensions is not None and dimensions != cfg.embed_dimensions:
-        return JSONResponse({"error": f"Dimension mismatch: server expects {cfg.embed_dimensions}, got {dimensions}"}, status_code=400)
+        return JSONResponse(
+            {
+                "error": f"Dimension mismatch: server expects {cfg.embed_dimensions}, got {dimensions}"
+            },
+            status_code=400,
+        )
 
     doc_id = str(group.get("doc_id") or "")
     template_tag = str(group.get("template_tag") or "")
@@ -833,7 +958,9 @@ async def _admin_ingest_semantic_chunks(request: Request) -> JSONResponse:
     part_index = int(group.get("part_index") or 0)
     part_count = int(group.get("part_count") or 0)
     if not doc_id or not group_hash or part_count < 1:
-        return JSONResponse({"error": "bad_request", "detail": "invalid group metadata"}, status_code=400)
+        return JSONResponse(
+            {"error": "bad_request", "detail": "invalid group metadata"}, status_code=400
+        )
 
     request_started_at = time.perf_counter()
     logger.info(
@@ -871,7 +998,15 @@ async def _admin_ingest_semantic_chunks(request: Request) -> JSONResponse:
                     staged_parts,
                     part_count,
                 )
-                return JSONResponse({"received": len(chunks), "inserted": 0, "updated": 0, "skipped": 0, "deleted": 0})
+                return JSONResponse(
+                    {
+                        "received": len(chunks),
+                        "inserted": 0,
+                        "updated": 0,
+                        "skipped": 0,
+                        "deleted": 0,
+                    }
+                )
             logger.info(
                 "semantic batch ready doc=%s tag=%s part=%d/%d staged_parts=%d/%d",
                 doc_id,
@@ -895,10 +1030,15 @@ async def _admin_ingest_semantic_chunks(request: Request) -> JSONResponse:
 
         from deepresearch_flow.paper.vector_store import compute_group_hash
 
-        expected_group_hash = compute_group_hash([str(chunk.get("content_hash") or "") for chunk in all_chunks])
+        expected_group_hash = compute_group_hash(
+            [str(chunk.get("content_hash") or "") for chunk in all_chunks]
+        )
         if expected_group_hash != group_hash:
             return JSONResponse(
-                {"error": "bad_request", "detail": "group_hash does not match chunk content_hash values"},
+                {
+                    "error": "bad_request",
+                    "detail": "group_hash does not match chunk content_hash values",
+                },
                 status_code=400,
             )
 
@@ -927,7 +1067,9 @@ async def _admin_ingest_semantic_chunks(request: Request) -> JSONResponse:
         if part_count > 1:
             _clear_staged_parts(cfg, doc_id, template_tag, group_hash)
         total_request_elapsed = time.perf_counter() - request_started_at
-        done_log_fn = logger.warning if total_request_elapsed >= _SLOW_SEMANTIC_BATCH_SECONDS else logger.info
+        done_log_fn = (
+            logger.warning if total_request_elapsed >= _SLOW_SEMANTIC_BATCH_SECONDS else logger.info
+        )
         done_log_fn(
             "semantic batch response doc=%s tag=%s part=%d/%d elapsed_ms=%.1f",
             doc_id,
@@ -943,9 +1085,21 @@ async def _admin_ingest_semantic_chunks(request: Request) -> JSONResponse:
 # Sub-application factory
 # ---------------------------------------------------------------------------
 
-def create_admin_app(*, snapshot_db: Path, admin_token: str, embed_db: Path | None = None, embed_dimensions: int | None = None) -> Starlette:
+
+def create_admin_app(
+    *,
+    snapshot_db: Path,
+    admin_token: str,
+    embed_db: Path | None = None,
+    embed_dimensions: int | None = None,
+) -> Starlette:
     """Create the admin sub-application mounted at ``/api/v1/admin``."""
-    cfg = AdminConfig(snapshot_db=snapshot_db, admin_token=admin_token, embed_db=embed_db, embed_dimensions=embed_dimensions)
+    cfg = AdminConfig(
+        snapshot_db=snapshot_db,
+        admin_token=admin_token,
+        embed_db=embed_db,
+        embed_dimensions=embed_dimensions,
+    )
     if embed_db is not None:
         _ensure_staging_table(cfg)
 

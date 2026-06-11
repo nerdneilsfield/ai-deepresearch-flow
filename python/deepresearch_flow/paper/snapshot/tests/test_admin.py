@@ -196,9 +196,7 @@ class TestAdminAddPapers(unittest.TestCase):
             assert "noam shazeer" in author_values
 
             # Check FTS
-            fts = conn.execute(
-                "SELECT * FROM paper_fts WHERE paper_id = ?", (paper_id,)
-            ).fetchone()
+            fts = conn.execute("SELECT * FROM paper_fts WHERE paper_id = ?", (paper_id,)).fetchone()
             assert fts is not None
             assert "attention" in fts["title"].lower()
 
@@ -283,7 +281,9 @@ class TestAdminDeletePaper(unittest.TestCase):
             assert fts is None
 
             # Cascading deletes: paper_author, paper_tag, etc.
-            pa = conn.execute("SELECT 1 FROM paper_author WHERE paper_id = ?", (paper_id,)).fetchone()
+            pa = conn.execute(
+                "SELECT 1 FROM paper_author WHERE paper_id = ?", (paper_id,)
+            ).fetchone()
             assert pa is None
         finally:
             conn.close()
@@ -448,7 +448,6 @@ class TestSummaryPreviewNotPolluted(unittest.TestCase):
             assert fts["summary"] != "{}"
         finally:
             conn.close()
-
 
     def test_no_templates_no_preview_yields_empty(self) -> None:
         """When neither templates nor summary_preview is provided,

@@ -223,7 +223,11 @@ def ensure_admin_scalar_indices(
     table = db.open_table(_CHUNKS_TABLE)
     indexed_columns, existing_names = _scalar_index_columns(table)
     missing_columns = {column for column in _ADMIN_SCALAR_INDICES if column not in indexed_columns}
-    if cache_key is not None and cache_key in _ENSURED_ADMIN_SCALAR_INDEX_DIRS and not missing_columns:
+    if (
+        cache_key is not None
+        and cache_key in _ENSURED_ADMIN_SCALAR_INDEX_DIRS
+        and not missing_columns
+    ):
         return ScalarIndexEnsureResult(
             table_exists=True,
             existing_names=existing_names,
@@ -409,7 +413,9 @@ def read_all_chunks(db: lancedb.DBConnection) -> list[dict[str, Any]]:
     return table.to_arrow().to_pylist()
 
 
-def read_chunks_for_group(db: lancedb.DBConnection, doc_id: str, template_tag: str) -> list[dict[str, Any]]:
+def read_chunks_for_group(
+    db: lancedb.DBConnection, doc_id: str, template_tag: str
+) -> list[dict[str, Any]]:
     if _CHUNKS_TABLE not in _table_names(db):
         return []
     table = db.open_table(_CHUNKS_TABLE)
@@ -433,10 +439,7 @@ def read_admin_ingest_state(
     doc_filter = f"doc_id = {_quote_filter_literal(doc_id)}"
     current_template_key = template_tag or SHARED_TEMPLATE_KEY
     doc_rows = (
-        table.search()
-        .where(doc_filter)
-        .select(["id", "template_tag", "content_hash"])
-        .to_list()
+        table.search().where(doc_filter).select(["id", "template_tag", "content_hash"]).to_list()
     )
 
     existing_by_id: dict[str, str] = {}

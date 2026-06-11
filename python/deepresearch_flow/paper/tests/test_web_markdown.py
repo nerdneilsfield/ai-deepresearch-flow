@@ -140,15 +140,26 @@ def test_extract_math_placeholders_skips_fences_and_inline_code() -> None:
 
 
 def test_sanitize_table_html_and_images() -> None:
-    safe = sanitize_table_html('<table><tr><td colspan="2" align="center">ok</td></tr><script>x</script></table>')
+    safe = sanitize_table_html(
+        '<table><tr><td colspan="2" align="center">ok</td></tr><script>x</script></table>'
+    )
     assert "<table>" in safe
     assert 'colspan="2"' in safe
     assert "<script>" not in safe
-    assert sanitize_table_html("<table><tr><td>&amp;&#169;</td></tr></table>") == "<table><tr><td>&amp;©</td></tr></table>"
+    assert (
+        sanitize_table_html("<table><tr><td>&amp;&#169;</td></tr></table>")
+        == "<table><tr><td>&amp;©</td></tr></table>"
+    )
 
     assert sanitize_table_html("<table") == "<pre><code>&lt;table</code></pre>"
-    assert sanitize_img_html('<img src="data:image/png;base64,AA==" alt="x">') == '<img src="data:image/png;base64,AA==" alt="x" />'
-    assert sanitize_img_html('<img src=data:image/png;base64,AA==>') == '<img src="data:image/png;base64,AA==" />'
+    assert (
+        sanitize_img_html('<img src="data:image/png;base64,AA==" alt="x">')
+        == '<img src="data:image/png;base64,AA==" alt="x" />'
+    )
+    assert (
+        sanitize_img_html("<img src=data:image/png;base64,AA==>")
+        == '<img src="data:image/png;base64,AA==" />'
+    )
     assert sanitize_img_html('<img src="/static/x.png">') is None
 
 
@@ -158,12 +169,12 @@ def test_extract_html_img_and_table_placeholders() -> None:
     assert list(img_placeholders.values()) == ['<img src="data:image/png;base64,AA==" alt="x" />']
     assert "<img src=" not in img_rendered
 
-    img_fenced = "```\n<img src=\"data:image/png;base64,AA==\">\n```"
+    img_fenced = '```\n<img src="data:image/png;base64,AA==">\n```'
     same_img, same_placeholders = extract_html_img_placeholders(img_fenced)
     assert same_img == img_fenced
     assert same_placeholders == {}
 
-    img_inline = "`<img src=\"data:image/png;base64,AA==\">`"
+    img_inline = '`<img src="data:image/png;base64,AA==">`'
     same_inline, inline_placeholders = extract_html_img_placeholders(img_inline)
     assert same_inline == img_inline
     assert inline_placeholders == {}
@@ -247,7 +258,9 @@ def test_render_paper_markdown_uses_requested_or_default_template() -> None:
         "prompt_template": "missing-template",
         "publication_venue": "{{ACL}}",
     }
-    fallback_rendered, fallback_template_name, fallback_warning = render_paper_markdown(fallback_paper, "en")
+    fallback_rendered, fallback_template_name, fallback_warning = render_paper_markdown(
+        fallback_paper, "en"
+    )
     assert fallback_template_name == "default_paper"
     assert fallback_warning == "Rendered using default template (missing template)."
     assert "# Paper" in fallback_rendered

@@ -55,7 +55,9 @@ def _requires_secure_transport(url: str) -> bool:
 
 def _validate_authenticated_url(url: str) -> None:
     if _requires_secure_transport(url):
-        raise ValueError("remote.api_base_url must use HTTPS when sending admin_token outside localhost")
+        raise ValueError(
+            "remote.api_base_url must use HTTPS when sending admin_token outside localhost"
+        )
 
 
 @dataclass
@@ -113,9 +115,7 @@ def load_remote_config(config_path: Path) -> RemoteConfig:
 
     batch_size = int(remote.get("batch_size", DEFAULT_BATCH_SIZE))
     if batch_size < 1 or batch_size > 200:
-        raise ValueError(
-            f"remote.batch_size must be between 1 and 200, got {batch_size}"
-        )
+        raise ValueError(f"remote.batch_size must be between 1 and 200, got {batch_size}")
     storage_raw = remote.get("storage")
     storage: StorageConfig | None = None
     if storage_raw:
@@ -186,6 +186,7 @@ def load_remote_config(config_path: Path) -> RemoteConfig:
 # ---------------------------------------------------------------------------
 # Extract papers from local snapshot DB
 # ---------------------------------------------------------------------------
+
 
 def _fetch_facet_values(
     conn: sqlite3.Connection,
@@ -280,10 +281,18 @@ def extract_papers_from_db(
             paper: dict[str, Any] = {
                 "paper_id": paper_id,
                 "paper_title": row["title"],
-                "paper_authors": _fetch_facet_values(conn, paper_id, "author", "author_id", "paper_author"),
-                "keywords": _fetch_facet_values(conn, paper_id, "keyword", "keyword_id", "paper_keyword"),
-                "paper_institutions": _fetch_facet_values(conn, paper_id, "institution", "institution_id", "paper_institution"),
-                "ai_generated_tags": _fetch_facet_values(conn, paper_id, "tag", "tag_id", "paper_tag"),
+                "paper_authors": _fetch_facet_values(
+                    conn, paper_id, "author", "author_id", "paper_author"
+                ),
+                "keywords": _fetch_facet_values(
+                    conn, paper_id, "keyword", "keyword_id", "paper_keyword"
+                ),
+                "paper_institutions": _fetch_facet_values(
+                    conn, paper_id, "institution", "institution_id", "paper_institution"
+                ),
+                "ai_generated_tags": _fetch_facet_values(
+                    conn, paper_id, "tag", "tag_id", "paper_tag"
+                ),
                 "publication_venue": row["venue"] or "",
                 "publication_date": row["publication_date"] or "",
                 "source_hash": row["source_hash"] or "",
@@ -355,6 +364,7 @@ def _post_batch_with_retries(
                 raise
             attempt += 1
             sleep_fn(retry_backoff_seconds * attempt)
+
 
 def push_papers(
     papers: list[dict[str, Any]],

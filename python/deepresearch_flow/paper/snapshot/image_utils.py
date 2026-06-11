@@ -33,7 +33,9 @@ def _hash_file(path: Path) -> str:
 _MD_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 _DATA_URL_PATTERN = re.compile(r"^data:([^;,]+)(;base64)?,(.*)$", re.DOTALL)
 _IMG_TAG_PATTERN = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
-_SRC_ATTR_PATTERN = re.compile(r"\bsrc\s*=\s*(\"[^\"]*\"|'[^']*'|[^\s>]+)", re.IGNORECASE | re.DOTALL)
+_SRC_ATTR_PATTERN = re.compile(
+    r"\bsrc\s*=\s*(\"[^\"]*\"|'[^']*'|[^\s>]+)", re.IGNORECASE | re.DOTALL
+)
 _EXTENSION_OVERRIDES = {".jpe": ".jpg"}
 
 
@@ -65,7 +67,9 @@ def _parse_data_url(target: str) -> tuple[str, bytes] | None:
 def _is_absolute_url(target: str) -> bool:
     """Check if URL is absolute."""
     lowered = target.lower()
-    return lowered.startswith(("http://", "https://", "data:", "mailto:", "file:", "#")) or target.startswith("/")
+    return lowered.startswith(
+        ("http://", "https://", "data:", "mailto:", "file:", "#")
+    ) or target.startswith("/")
 
 
 def _split_link_target(raw_link: str) -> tuple[str, str, str, str]:
@@ -143,10 +147,19 @@ def rewrite_markdown_images(
                     _write_bytes_with_eio_retry(dest, data, log_label="snapshot image")
                 except OSError as exc:
                     logger.warning("Failed to export snapshot image %s: %s", dest, exc)
-                    images.append({"path": rel, "sha256": digest, "ext": ext.lstrip("."), "status": "write_failed"})
+                    images.append(
+                        {
+                            "path": rel,
+                            "sha256": digest,
+                            "ext": ext.lstrip("."),
+                            "status": "write_failed",
+                        }
+                    )
                     return None
             written.add(filename)
-        images.append({"path": rel, "sha256": digest, "ext": ext.lstrip("."), "status": "available"})
+        images.append(
+            {"path": rel, "sha256": digest, "ext": ext.lstrip("."), "status": "available"}
+        )
         return rel
 
     def store_local(target: str) -> str | None:
@@ -168,16 +181,36 @@ def rewrite_markdown_images(
                 dest = images_output_dir / filename
                 if not dest.exists():
                     try:
-                        _write_bytes_with_eio_retry(dest, local_path.read_bytes(), log_label="snapshot image copy")
+                        _write_bytes_with_eio_retry(
+                            dest, local_path.read_bytes(), log_label="snapshot image copy"
+                        )
                     except OSError as exc:
-                        logger.warning("Failed to copy snapshot image %s to %s: %s", local_path, dest, exc)
-                        images.append({"path": rel, "sha256": digest, "ext": ext.lstrip("."), "status": "write_failed"})
+                        logger.warning(
+                            "Failed to copy snapshot image %s to %s: %s", local_path, dest, exc
+                        )
+                        images.append(
+                            {
+                                "path": rel,
+                                "sha256": digest,
+                                "ext": ext.lstrip("."),
+                                "status": "write_failed",
+                            }
+                        )
                         return None
                 written.add(filename)
-            images.append({"path": rel, "sha256": digest, "ext": ext.lstrip("."), "status": "available"})
+            images.append(
+                {"path": rel, "sha256": digest, "ext": ext.lstrip("."), "status": "available"}
+            )
             return rel
 
-        images.append({"path": cleaned, "sha256": None, "ext": Path(cleaned).suffix.lstrip("."), "status": "missing"})
+        images.append(
+            {
+                "path": cleaned,
+                "sha256": None,
+                "ext": Path(cleaned).suffix.lstrip("."),
+                "status": "missing",
+            }
+        )
         return None
 
     def replace(match) -> str:
@@ -210,7 +243,7 @@ def rewrite_markdown_images(
             return tag
         raw_value = src_match.group(1)
         quote = ""
-        if raw_value and raw_value[0] in {"\"", "'"}:
+        if raw_value and raw_value[0] in {'"', "'"}:
             quote = raw_value[0]
             value = raw_value[1:-1]
         else:

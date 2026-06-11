@@ -6,8 +6,17 @@ import json
 import httpx
 import pytest
 
-from deepresearch_flow.paper.config import BaseConfig, EmbeddingModelConfig, EmbeddingProviderConfig, KeyConfig
-from deepresearch_flow.paper.embedding import EmbeddingResult, call_embedding, call_embedding_with_route_pool
+from deepresearch_flow.paper.config import (
+    BaseConfig,
+    EmbeddingModelConfig,
+    EmbeddingProviderConfig,
+    KeyConfig,
+)
+from deepresearch_flow.paper.embedding import (
+    EmbeddingResult,
+    call_embedding,
+    call_embedding_with_route_pool,
+)
 from deepresearch_flow.paper.routing import RoutePool
 
 
@@ -20,9 +29,7 @@ def _mock_transport() -> httpx.MockTransport:
         return httpx.Response(
             200,
             json={
-                "data": [
-                    {"embedding": [0.1] * 1024, "index": idx} for idx in range(count)
-                ],
+                "data": [{"embedding": [0.1] * 1024, "index": idx} for idx in range(count)],
                 "usage": {"prompt_tokens": count * 10},
             },
         )
@@ -104,7 +111,9 @@ def test_call_embedding_ollama_uses_native_api_embed() -> None:
     assert result.usage_tokens == 8
 
 
-def test_call_embedding_with_route_pool_passes_provider_type(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_call_embedding_with_route_pool_passes_provider_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     seen: dict[str, object] = {}
 
     async def fake_call_embedding(
@@ -134,11 +143,21 @@ def test_call_embedding_with_route_pool_passes_provider_type(monkeypatch: pytest
     provider = EmbeddingProviderConfig(
         name="ollama",
         type="ollama",
-        base=[BaseConfig(url="http://localhost:11434", weight=1, key=[KeyConfig(value="placeholder", weight=1)])],
-        models=[EmbeddingModelConfig(model_name="embeddinggemma", dimensions=768, max_context=8192)],
+        base=[
+            BaseConfig(
+                url="http://localhost:11434",
+                weight=1,
+                key=[KeyConfig(value="placeholder", weight=1)],
+            )
+        ],
+        models=[
+            EmbeddingModelConfig(model_name="embeddinggemma", dimensions=768, max_context=8192)
+        ],
     )
     route_pool = RoutePool.from_embedding_provider(
-        type("ResolvedConfig", (), {"resolve_active": lambda self: (provider, provider.models[0])})(),
+        type(
+            "ResolvedConfig", (), {"resolve_active": lambda self: (provider, provider.models[0])}
+        )(),
         cooldown_seconds=0.0,
     )
 
@@ -181,16 +200,28 @@ def test_call_embedding_with_route_pool_waits_before_retry(monkeypatch: pytest.M
 
     monkeypatch.setattr("deepresearch_flow.paper.embedding.call_embedding", fake_call_embedding)
     monkeypatch.setattr("deepresearch_flow.paper.embedding.asyncio.sleep", fake_sleep)
-    monkeypatch.setattr("deepresearch_flow.paper.embedding.backoff_delay", lambda base, attempt, max_delay: 0.5)
+    monkeypatch.setattr(
+        "deepresearch_flow.paper.embedding.backoff_delay", lambda base, attempt, max_delay: 0.5
+    )
 
     provider = EmbeddingProviderConfig(
         name="ollama",
         type="ollama",
-        base=[BaseConfig(url="http://localhost:11434", weight=1, key=[KeyConfig(value="placeholder", weight=1)])],
-        models=[EmbeddingModelConfig(model_name="embeddinggemma", dimensions=768, max_context=8192)],
+        base=[
+            BaseConfig(
+                url="http://localhost:11434",
+                weight=1,
+                key=[KeyConfig(value="placeholder", weight=1)],
+            )
+        ],
+        models=[
+            EmbeddingModelConfig(model_name="embeddinggemma", dimensions=768, max_context=8192)
+        ],
     )
     route_pool = RoutePool.from_embedding_provider(
-        type("ResolvedConfig", (), {"resolve_active": lambda self: (provider, provider.models[0])})(),
+        type(
+            "ResolvedConfig", (), {"resolve_active": lambda self: (provider, provider.models[0])}
+        )(),
         cooldown_seconds=0.0,
     )
 

@@ -17,7 +17,11 @@ from deepresearch_flow.paper.config import (
     PaperConfig,
     ProviderConfig,
 )
-from deepresearch_flow.paper.routing import ProviderOutOfActiveWindow, RoutePool, parse_model_selector
+from deepresearch_flow.paper.routing import (
+    ProviderOutOfActiveWindow,
+    RoutePool,
+    parse_model_selector,
+)
 
 
 def _build_config(
@@ -237,7 +241,11 @@ def test_route_pool_wait_time_ignores_window_inactive_candidates() -> None:
     async def _run() -> tuple[str, float]:
         first = await pool.get()
         await pool.mark_error(first)
-        blocked_route = next(candidate.route for candidate in pool._candidates if candidate.route.base.url.endswith("night.example.com/v1"))
+        blocked_route = next(
+            candidate.route
+            for candidate in pool._candidates
+            if candidate.route.base.url.endswith("night.example.com/v1")
+        )
         pool._cooldowns[blocked_route.route_id] = time.monotonic() + 10.0
         start = time.monotonic()
         second = await pool.get()

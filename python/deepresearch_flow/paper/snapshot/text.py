@@ -144,12 +144,12 @@ def rewrite_search_query(user_query: str) -> str:
                 continue
             if all(_is_cjk_char(ch) for ch in seg):
                 phrase = insert_cjk_spaces(seg)
-                out.append(f"\"{phrase}\"")
+                out.append(f'"{phrase}"')
             else:
                 # Keep safe punctuation inside a quoted term so FTS5 does not
                 # reinterpret tokens like `end-to-end` as operators.
                 safe = re.sub(r"[^0-9A-Za-z._+-]+", "", seg)
                 if safe:
-                    out.append(f"\"{safe.lower()}\"")
+                    out.append(f'"{safe.lower()}"')
 
     return " ".join(out)

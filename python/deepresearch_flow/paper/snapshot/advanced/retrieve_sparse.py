@@ -106,9 +106,7 @@ def sparse_retrieve(
                 "bm25(paper_fts_trigram) AS rank "
                 "FROM paper_fts_trigram "
                 "JOIN paper p ON p.paper_id = paper_fts_trigram.paper_id "
-                "WHERE "
-                + " AND ".join(trigram_where_parts)
-                + " ORDER BY rank ASC LIMIT ?"
+                "WHERE " + " AND ".join(trigram_where_parts) + " ORDER BY rank ASC LIMIT ?"
             )
             trigram_params.append(top_k)
             trigram_rows = conn.execute(trigram_sql, trigram_params).fetchall()
@@ -118,13 +116,14 @@ def sparse_retrieve(
             paper_id = str(row["paper_id"])
             trigram_rank = float(row["rank"])
             current_rank = hits.get(paper_id)
-            hits[paper_id] = trigram_rank if current_rank is None else min(current_rank, trigram_rank)
+            hits[paper_id] = (
+                trigram_rank if current_rank is None else min(current_rank, trigram_rank)
+            )
 
     ranked = sorted(hits.items(), key=lambda item: (item[1], item[0]))
     max_rank = ranked[-1][1] if ranked else 0.0
     output = [
-        PaperHit(paper_id=paper_id, sparse_score=max_rank - rank)
-        for paper_id, rank in ranked
+        PaperHit(paper_id=paper_id, sparse_score=max_rank - rank) for paper_id, rank in ranked
     ]
     output.sort(key=lambda item: (-item.sparse_score, item.paper_id))
     return output[:top_k]

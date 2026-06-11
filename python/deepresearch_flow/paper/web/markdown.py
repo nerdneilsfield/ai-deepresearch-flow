@@ -159,11 +159,11 @@ def normalize_markdown_images(text: str) -> str:
         if list_re.match(line) or (line.lstrip().startswith("|") and line.count("|") >= 2):
             out.append(line)
             continue
-        prefix = line[:match.start()]
+        prefix = line[: match.start()]
         if prefix.strip():
             out.append(prefix.rstrip())
             out.append("")
-            out.append(line[match.start():].lstrip())
+            out.append(line[match.start() :].lstrip())
             continue
         if out and out[-1].strip():
             out.append("")
@@ -424,7 +424,7 @@ def extract_math_placeholders(text: str) -> tuple[str, dict[str, str]]:
 
 class _TableSanitizer(HTMLParser):
     """HTML parser for sanitizing table HTML."""
-    
+
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self._out: list[str] = []
@@ -511,7 +511,7 @@ def sanitize_img_html(raw: str) -> str | None:
     for match in re.finditer(r"(\w+)\s*=\s*(\"[^\"]*\"|'[^']*'|[^\s>]+)", raw):
         name = match.group(1).lower()
         value = match.group(2).strip()
-        if value and value[0] in {"\"", "'"} and value[-1] == value[0]:
+        if value and value[0] in {'"', "'"} and value[-1] == value[0]:
             value = value[1:-1]
         attrs[name] = value
 

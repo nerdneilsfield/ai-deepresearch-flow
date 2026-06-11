@@ -277,7 +277,11 @@ def html_table_math_space_cases(seed: int = 404, count: int = 120) -> list[FuzzC
             expected = text
         else:
             code = _fenced_code(
-                _table(_table_cell(f"{_word(rng)}  {_math_inline(_pick(rng, _MATH_SNIPPETS), spaced=True)}"))
+                _table(
+                    _table_cell(
+                        f"{_word(rng)}  {_math_inline(_pick(rng, _MATH_SNIPPETS), spaced=True)}"
+                    )
+                )
             )
             text = code
             expected = text
@@ -313,7 +317,10 @@ def markdown_fix_cases(seed: int = 505, count: int = 120) -> list[FuzzCase]:
             ref = _ref_range(rng)
             multi = _ref_list(rng)
             text = f"Paragraph {ref} and {multi} with {_word(rng)}"
-            must_contain = tuple(f"[^{n}]" for n in [ref[1 : ref.index("-")], *[p.strip() for p in multi[1:-1].split(",")]])
+            must_contain = tuple(
+                f"[^{n}]"
+                for n in [ref[1 : ref.index("-")], *[p.strip() for p in multi[1:-1].split(",")]]
+            )
             must_not_contain = (ref, multi)
             cases.append(
                 FuzzCase(
@@ -378,7 +385,10 @@ def markdown_text_fix_cases(seed: int = 606, count: int = 120) -> list[FuzzCase]
             ref = _ref_range(rng)
             multi = _ref_list(rng)
             text = f"Paragraph {ref} and {multi} with {_word(rng)}"
-            must_contain = tuple(f"[^{n}]" for n in [ref[1 : ref.index("-")], *[p.strip() for p in multi[1:-1].split(",")]])
+            must_contain = tuple(
+                f"[^{n}]"
+                for n in [ref[1 : ref.index("-")], *[p.strip() for p in multi[1:-1].split(",")]]
+            )
             must_not_contain = (ref, multi)
         elif kind == 2:
             code = _fenced_code(f"{_url(rng)} {_email(rng)} {_phone(rng)} [2]")

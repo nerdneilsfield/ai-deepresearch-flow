@@ -107,9 +107,7 @@ def test_cleanup_mermaid_preserves_valid_html_break_variants(break_tag: str) -> 
         ),
     ],
 )
-def test_cleanup_mermaid_minimally_repairs_broken_structure(
-    original: str, expected: str
-) -> None:
+def test_cleanup_mermaid_minimally_repairs_broken_structure(original: str, expected: str) -> None:
     cleaned = mermaid.cleanup_mermaid(original)
 
     assert cleaned.rstrip("\n") == expected.rstrip("\n")
@@ -134,8 +132,8 @@ def test_cleanup_mermaid_handles_multiple_compacted_statements_in_one_snippet() 
     assert cleaned.count('A["x"]') == 1
     assert cleaned.count('C["y"]') == 1
     assert cleaned.count('E["z"]') == 1
-    assert "A[\"x\"]B -->" not in cleaned
-    assert "C[\"y\"]D -->" not in cleaned
+    assert 'A["x"]B -->' not in cleaned
+    assert 'C["y"]D -->' not in cleaned
 
 
 def test_cleanup_mermaid_normalizes_crlf_to_valid_output() -> None:
@@ -156,10 +154,12 @@ def test_cleanup_mermaid_handles_crlf_and_compacted_statement_together() -> None
     assert cleaned.startswith("flowchart TD\n")
     assert 'A["x"]' in cleaned
     assert 'B --> C["y"]' in cleaned
-    assert 'D --> E' in cleaned
+    assert "D --> E" in cleaned
 
 
-def test_cleanup_mermaid_repairs_nested_brackets_with_inner_quotes_without_fixating_escape_style() -> None:
+def test_cleanup_mermaid_repairs_nested_brackets_with_inner_quotes_without_fixating_escape_style() -> (
+    None
+):
     original = 'flowchart LR\nA[outer[inner "quoted"] text] --> B[ok]\n'
 
     cleaned = mermaid.cleanup_mermaid(original)
@@ -169,7 +169,7 @@ def test_cleanup_mermaid_repairs_nested_brackets_with_inner_quotes_without_fixat
     assert "outer" in cleaned
     assert "inner" in cleaned
     assert "quoted" in cleaned
-    assert 'B[ok]' in cleaned
+    assert "B[ok]" in cleaned
 
 
 def test_cleanup_mermaid_preserves_latex_primes_and_commands_inside_labels() -> None:
@@ -189,8 +189,7 @@ def test_cleanup_mermaid_preserves_latex_primes_and_commands_inside_labels() -> 
 
 def test_cleanup_mermaid_quotes_unquoted_math_labels_with_nested_square_brackets() -> None:
     original = (
-        "flowchart TD\n"
-        "R2[意图解析：生成 $\\mathbf{B}=[b_{fine},b_{abs},b_{event},b_{atomic}]$]\n"
+        "flowchart TD\nR2[意图解析：生成 $\\mathbf{B}=[b_{fine},b_{abs},b_{event},b_{atomic}]$]\n"
     )
 
     cleaned = mermaid.cleanup_mermaid(original)
@@ -202,16 +201,8 @@ def test_cleanup_mermaid_quotes_unquoted_math_labels_with_nested_square_brackets
 def test_fix_mermaid_text_accepts_valid_repair_and_preserves_unrelated_lines(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    original = (
-        "flowchart LR\n"
-        'A[区间[-π, π)] --> B["ok"]\n'
-        "D --> E\n"
-    )
-    repaired = (
-        "flowchart LR\n"
-        'A["区间[-π, π)]"] --> B["ok"]\n'
-        "D --> E\n"
-    )
+    original = 'flowchart LR\nA[区间[-π, π)] --> B["ok"]\nD --> E\n'
+    repaired = 'flowchart LR\nA["区间[-π, π)]"] --> B["ok"]\nD --> E\n'
 
     updated_text, error_records, stats = _run_fix(
         text=original,
@@ -229,10 +220,7 @@ def test_fix_mermaid_text_repairs_one_statement_among_multiple_valid_statements(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     original = (
-        "flowchart LR\n"
-        'A["stable"] --> B["ok"]\n'
-        "C[区间[-π, π)] --> D[ok]\n"
-        'E["stable"] --> F["ok"]\n'
+        'flowchart LR\nA["stable"] --> B["ok"]\nC[区间[-π, π)] --> D[ok]\nE["stable"] --> F["ok"]\n'
     )
     repaired = (
         "flowchart LR\n"
@@ -257,16 +245,8 @@ def test_fix_mermaid_text_repairs_one_statement_among_multiple_valid_statements(
 def test_fix_mermaid_text_keeps_direction_when_repairing_non_lr_flowchart(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    original = (
-        "flowchart TB\n"
-        'A["stable"] --> B["ok"]\n'
-        "C[区间[-π, π)] --> D[ok]\n"
-    )
-    repaired = (
-        "flowchart TB\n"
-        'A["stable"] --> B["ok"]\n'
-        'C["区间[-π, π)]"] --> D[ok]\n'
-    )
+    original = 'flowchart TB\nA["stable"] --> B["ok"]\nC[区间[-π, π)] --> D[ok]\n'
+    repaired = 'flowchart TB\nA["stable"] --> B["ok"]\nC["区间[-π, π)]"] --> D[ok]\n'
 
     updated_text, error_records, stats = _run_fix(
         text=original,
@@ -328,17 +308,10 @@ def test_fix_mermaid_text_rejects_partially_mutated_repaired_output_with_mixed_v
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     original = (
-        "flowchart LR\n"
-        'A["stable"] --> B["ok"]\n'
-        'C["x"]B --> D["y"]\n'
-        'E["stable"] --> F["ok"]\n'
+        'flowchart LR\nA["stable"] --> B["ok"]\nC["x"]B --> D["y"]\nE["stable"] --> F["ok"]\n'
     )
     invalid_repaired = (
-        "flowchart LR\n"
-        'A["stable"] --> B["ok"]\n'
-        'C["x"]\n'
-        'B --> D["y"]\n'
-        'E["stable"] --> F["ok"]\n'
+        'flowchart LR\nA["stable"] --> B["ok"]\nC["x"]\nB --> D["y"]\nE["stable"] --> F["ok"]\n'
     )
 
     def validate(value: str) -> str | None:

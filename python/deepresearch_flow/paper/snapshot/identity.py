@@ -152,7 +152,9 @@ def _extract_arxiv(paper: dict[str, Any]) -> str | None:
     for key in ("arxiv", "arxivid", "arxiv_id", "arxiv-id"):
         if key in fields:
             return fields[key]
-    archive_prefix = (fields.get("archiveprefix") or fields.get("archive_prefix") or "").strip().lower()
+    archive_prefix = (
+        (fields.get("archiveprefix") or fields.get("archive_prefix") or "").strip().lower()
+    )
     if archive_prefix == "arxiv" and fields.get("eprint"):
         return fields.get("eprint")
     if isinstance(paper.get("arxiv"), str):
@@ -190,9 +192,15 @@ def build_paper_key_candidates(paper: dict[str, Any]) -> list[PaperKeyCandidate]
     title = normalize_meta_title(str(paper.get("paper_title") or ""))
     authors = normalized_authors(paper.get("paper_authors"))
     year = (
-        extract_year(str(_bib_fields_lower(paper).get("year") or "")) or extract_year(str(paper.get("publication_date") or "")) or "unknown"
+        extract_year(str(_bib_fields_lower(paper).get("year") or ""))
+        or extract_year(str(paper.get("publication_date") or ""))
+        or "unknown"
     )
-    venue_raw = _bib_fields_lower(paper).get("journal") or _bib_fields_lower(paper).get("booktitle") or str(paper.get("publication_venue") or "")
+    venue_raw = (
+        _bib_fields_lower(paper).get("journal")
+        or _bib_fields_lower(paper).get("booktitle")
+        or str(paper.get("publication_venue") or "")
+    )
     venue = normalize_meta_venue(venue_raw)
     fingerprint = meta_fingerprint_json(title=title, authors=authors, year=year, venue=venue)
     candidates.append(
@@ -236,4 +244,3 @@ def meta_fingerprint_divergent(
     jaccard = (len(prev_authors & cur_authors) / len(union)) if union else 1.0
 
     return title_similarity < min_title_similarity and jaccard < min_author_jaccard
-

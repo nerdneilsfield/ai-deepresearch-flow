@@ -144,7 +144,11 @@ def test_rejects_unknown_model_in_json_pool() -> None:
 
 
 def test_single_item_main_model_is_equivalent_to_fixed_route() -> None:
-    from deepresearch_flow.paper.routing import ParsedModelSelector, parse_model_selector, select_runtime_route
+    from deepresearch_flow.paper.routing import (
+        ParsedModelSelector,
+        parse_model_selector,
+        select_runtime_route,
+    )
 
     config = _build_config()
     single_pool_config = PaperConfig(
@@ -352,7 +356,9 @@ def test_route_pool_marks_quota_and_skips_exhausted_route() -> None:
     )
     selector = parse_model_selector("openai/gpt-4.1", config)
     pool = RoutePool.from_selector(config, selector, cooldown_seconds=0.01, rng=Random(1))
-    quota_route = next(candidate.route for candidate in pool._candidates if candidate.route.key.value == "key-a")
+    quota_route = next(
+        candidate.route for candidate in pool._candidates if candidate.route.key.value == "key-a"
+    )
 
     async def _run() -> tuple[bool, str]:
         flagged = await pool.mark_quota_exceeded(
@@ -424,9 +430,15 @@ def test_route_pool_waits_until_route_recovers() -> None:
     assert elapsed >= 0.04
 
 
-def test_select_runtime_route_raises_when_all_candidates_are_out_of_window(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_select_runtime_route_raises_when_all_candidates_are_out_of_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import deepresearch_flow.paper.routing as routing
-    from deepresearch_flow.paper.routing import ParsedModelSelector, ProviderOutOfActiveWindow, select_runtime_route
+    from deepresearch_flow.paper.routing import (
+        ParsedModelSelector,
+        ProviderOutOfActiveWindow,
+        select_runtime_route,
+    )
 
     class _FrozenDateTime(datetime):
         @classmethod
@@ -466,7 +478,9 @@ def test_select_runtime_route_raises_when_all_candidates_are_out_of_window(monke
         )
 
 
-def test_select_runtime_route_filters_out_window_inactive_candidates(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_select_runtime_route_filters_out_window_inactive_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import deepresearch_flow.paper.routing as routing
     from deepresearch_flow.paper.routing import ParsedModelSelector, select_runtime_route
 
@@ -529,7 +543,9 @@ def test_select_runtime_route_filters_out_window_inactive_candidates(monkeypatch
         assert route.base.url == "https://always-on.example.com/v1"
 
 
-def test_select_runtime_route_keeps_default_no_window_behavior(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_select_runtime_route_keeps_default_no_window_behavior(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import deepresearch_flow.paper.routing as routing
     from deepresearch_flow.paper.routing import ParsedModelSelector, select_runtime_route
 
@@ -544,7 +560,9 @@ def test_select_runtime_route_keeps_default_no_window_behavior(monkeypatch: pyte
     config = _build_config()
     route = select_runtime_route(
         config,
-        ParsedModelSelector(kind="pool", fixed_model=None, pool=[MainModelConfig(model="openai/gpt-4.1", weight=1)]),
+        ParsedModelSelector(
+            kind="pool", fixed_model=None, pool=[MainModelConfig(model="openai/gpt-4.1", weight=1)]
+        ),
         rng=Random(7),
     )
 

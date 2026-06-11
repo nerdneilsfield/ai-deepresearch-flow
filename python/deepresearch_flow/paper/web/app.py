@@ -11,7 +11,11 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from deepresearch_flow.paper.db_ops import build_index, load_and_merge_papers
-from deepresearch_flow.paper.web.constants import DEFAULT_PDFJS_CDN_BASE_URL, PDFJS_STATIC_DIR, STATIC_DIR
+from deepresearch_flow.paper.web.constants import (
+    DEFAULT_PDFJS_CDN_BASE_URL,
+    PDFJS_STATIC_DIR,
+    STATIC_DIR,
+)
 from deepresearch_flow.paper.web.handlers import (
     api_markdown,
     api_papers,
@@ -32,7 +36,9 @@ logger = logging.getLogger(__name__)
 class _NoIndexMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):  # type: ignore[override]
         response = await call_next(request)
-        response.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive, nosnippet, noai, noimageai"
+        response.headers["X-Robots-Tag"] = (
+            "noindex, nofollow, noarchive, nosnippet, noai, noimageai"
+        )
         return response
 
 
@@ -95,15 +101,17 @@ def create_app(
         pdf_roots=pdf_roots,
     )
     md = create_md_renderer()
-    static_base_url = static_base_url or os.getenv("PAPER_DB_STATIC_BASE") or os.getenv("PAPER_DB_STATIC_BASE_URL")
+    static_base_url = (
+        static_base_url
+        or os.getenv("PAPER_DB_STATIC_BASE")
+        or os.getenv("PAPER_DB_STATIC_BASE_URL")
+    )
     static_mode = _normalize_static_mode(static_mode or os.getenv("PAPER_DB_STATIC_MODE"))
     resolved_mode = _resolve_static_mode(static_mode, static_base_url)
     export_dir_value = static_export_dir or os.getenv("PAPER_DB_STATIC_EXPORT_DIR")
     export_dir = Path(export_dir_value) if export_dir_value else None
     pdfjs_cdn_base_url = (
-        pdfjs_cdn_base_url
-        or os.getenv("PAPER_DB_PDFJS_CDN_BASE_URL")
-        or DEFAULT_PDFJS_CDN_BASE_URL
+        pdfjs_cdn_base_url or os.getenv("PAPER_DB_PDFJS_CDN_BASE_URL") or DEFAULT_PDFJS_CDN_BASE_URL
     )
     if pdfjs_cdn_base_url:
         lowered = pdfjs_cdn_base_url.strip().lower()
@@ -178,22 +186,30 @@ def create_app(
             [
                 Mount(
                     "/pdf",
-                    app=_StaticAssetFiles(directory=str(export_dir / "pdf"), cache_control=cache_header),
+                    app=_StaticAssetFiles(
+                        directory=str(export_dir / "pdf"), cache_control=cache_header
+                    ),
                     name="static_pdf",
                 ),
                 Mount(
                     "/images",
-                    app=_StaticAssetFiles(directory=str(export_dir / "images"), cache_control=cache_header),
+                    app=_StaticAssetFiles(
+                        directory=str(export_dir / "images"), cache_control=cache_header
+                    ),
                     name="static_images",
                 ),
                 Mount(
                     "/md",
-                    app=_StaticAssetFiles(directory=str(export_dir / "md"), cache_control=cache_header),
+                    app=_StaticAssetFiles(
+                        directory=str(export_dir / "md"), cache_control=cache_header
+                    ),
                     name="static_md",
                 ),
                 Mount(
                     "/md_translate",
-                    app=_StaticAssetFiles(directory=str(export_dir / "md_translate"), cache_control=cache_header),
+                    app=_StaticAssetFiles(
+                        directory=str(export_dir / "md_translate"), cache_control=cache_header
+                    ),
                     name="static_md_translate",
                 ),
             ]

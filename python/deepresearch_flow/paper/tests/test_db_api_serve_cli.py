@@ -178,11 +178,18 @@ advanced_enabled = true
         result = runner.invoke(
             cli,
             [
-                "paper", "db", "api", "serve",
-                "--snapshot-db", str(db),
-                "--config", str(config),
-                "--embed-db", str(tmp_path / "lance"),
-                "--search-access-token", "t",
+                "paper",
+                "db",
+                "api",
+                "serve",
+                "--snapshot-db",
+                str(db),
+                "--config",
+                str(config),
+                "--embed-db",
+                str(tmp_path / "lance"),
+                "--search-access-token",
+                "t",
             ],
         )
 
@@ -239,17 +246,26 @@ advanced_enabled = true
     with (
         patch("uvicorn.run"),
         patch("deepresearch_flow.paper.vector_store.validate_index_meta"),
-        patch("deepresearch_flow.paper.db.RoutePool.from_embedding_provider", return_value=object()),
+        patch(
+            "deepresearch_flow.paper.db.RoutePool.from_embedding_provider", return_value=object()
+        ),
         patch("deepresearch_flow.paper.snapshot.api.create_app") as create_app,
     ):
         result = runner.invoke(
             cli,
             [
-                "paper", "db", "api", "serve",
-                "--snapshot-db", str(db),
-                "--config", str(config),
-                "--embed-db", str(embed_dir),
-                "--search-access-token", "t",
+                "paper",
+                "db",
+                "api",
+                "serve",
+                "--snapshot-db",
+                str(db),
+                "--config",
+                str(config),
+                "--embed-db",
+                str(embed_dir),
+                "--search-access-token",
+                "t",
             ],
         )
 
@@ -307,16 +323,21 @@ advanced_enabled = true
     result = runner.invoke(
         cli,
         [
-            "paper", "db", "api", "serve",
-            "--snapshot-db", str(db),
-            "--config", str(config),
-            "--search-access-token", "t",
+            "paper",
+            "db",
+            "api",
+            "serve",
+            "--snapshot-db",
+            str(db),
+            "--config",
+            str(config),
+            "--search-access-token",
+            "t",
         ],
     )
 
     assert result.exit_code != 0
     assert "--embed-db" in result.output or "config.search.vector_dir" in result.output
-
 
 
 def test_api_serve_github_oauth_options_expose_oauth_and_keep_sse_bearer(tmp_path: Path) -> None:
@@ -328,7 +349,7 @@ def test_api_serve_github_oauth_options_expose_oauth_and_keep_sse_bearer(tmp_pat
     config.write_text(
         config.read_text(encoding="utf-8").replace(
             "[search]\n",
-            "[search]\nvector_dir = \"./unused\"\n",
+            '[search]\nvector_dir = "./unused"\n',
         ),
         encoding="utf-8",
     )
@@ -337,16 +358,28 @@ def test_api_serve_github_oauth_options_expose_oauth_and_keep_sse_bearer(tmp_pat
         result = runner.invoke(
             cli,
             [
-                "paper", "db", "api", "serve",
-                "--snapshot-db", str(db),
-                "--config", str(config),
-                "--mcp-auth-mode", "github-oauth",
-                "--mcp-public-base-url", "https://papers.example.com",
-                "--github-oauth-client-id", "github-client",
-                "--github-oauth-client-secret", "github-secret",
-                "--mcp-github-allowed-user-id", "123",
-                "--mcp-github-allowed-user-id", "456",
-                "--mcp-access-token", "static-token",
+                "paper",
+                "db",
+                "api",
+                "serve",
+                "--snapshot-db",
+                str(db),
+                "--config",
+                str(config),
+                "--mcp-auth-mode",
+                "github-oauth",
+                "--mcp-public-base-url",
+                "https://papers.example.com",
+                "--github-oauth-client-id",
+                "github-client",
+                "--github-oauth-client-secret",
+                "github-secret",
+                "--mcp-github-allowed-user-id",
+                "123",
+                "--mcp-github-allowed-user-id",
+                "456",
+                "--mcp-access-token",
+                "static-token",
             ],
         )
 
@@ -372,7 +405,7 @@ def test_api_serve_github_oauth_reads_comma_separated_allowed_ids_from_env(tmp_p
     config.write_text(
         config.read_text(encoding="utf-8").replace(
             "[search]\n",
-            "[search]\nvector_dir = \"./unused\"\n",
+            '[search]\nvector_dir = "./unused"\n',
         ),
         encoding="utf-8",
     )
@@ -381,9 +414,14 @@ def test_api_serve_github_oauth_reads_comma_separated_allowed_ids_from_env(tmp_p
         result = runner.invoke(
             cli,
             [
-                "paper", "db", "api", "serve",
-                "--snapshot-db", str(db),
-                "--config", str(config),
+                "paper",
+                "db",
+                "api",
+                "serve",
+                "--snapshot-db",
+                str(db),
+                "--config",
+                str(config),
             ],
             env={
                 "MCP_AUTH_MODE": "github-oauth",
@@ -415,17 +453,27 @@ def test_api_serve_mounts_admin_semantic_push_with_cli_embed_db(tmp_path: Path) 
     with (
         patch("uvicorn.run") as mock_run,
         patch("deepresearch_flow.paper.vector_store.validate_index_meta"),
-        patch("deepresearch_flow.paper.db.RoutePool.from_embedding_provider", return_value=object()),
+        patch(
+            "deepresearch_flow.paper.db.RoutePool.from_embedding_provider", return_value=object()
+        ),
     ):
         result = runner.invoke(
             cli,
             [
-                "paper", "db", "api", "serve",
-                "--snapshot-db", str(db),
-                "--config", str(config),
-                "--embed-db", str(embed_dir),
-                "--search-access-token", "search-token",
-                "--admin-token", "admin-token",
+                "paper",
+                "db",
+                "api",
+                "serve",
+                "--snapshot-db",
+                str(db),
+                "--config",
+                str(config),
+                "--embed-db",
+                str(embed_dir),
+                "--search-access-token",
+                "search-token",
+                "--admin-token",
+                "admin-token",
             ],
         )
 
@@ -457,7 +505,7 @@ def test_api_serve_startup_builds_missing_scalar_indices_for_existing_table(tmp_
     config.write_text(
         config.read_text(encoding="utf-8").replace(
             "[search]\n",
-            f"[search]\nvector_dir = \"{embed_dir}\"\n",
+            f'[search]\nvector_dir = "{embed_dir}"\n',
         ),
         encoding="utf-8",
     )
@@ -465,7 +513,15 @@ def test_api_serve_startup_builds_missing_scalar_indices_for_existing_table(tmp_
     lance_db = lancedb.connect(str(embed_dir))
     lance_db.create_table(
         "paper_chunks",
-        data=[{"id": "1", "doc_id": "d1", "template_tag": "simple", "content_hash": "h", "vector": [0.1, 0.2, 0.3, 0.4]}],
+        data=[
+            {
+                "id": "1",
+                "doc_id": "d1",
+                "template_tag": "simple",
+                "content_hash": "h",
+                "vector": [0.1, 0.2, 0.3, 0.4],
+            }
+        ],
         mode="overwrite",
     )
     assert list(lance_db.open_table("paper_chunks").list_indices()) == []
@@ -474,11 +530,18 @@ def test_api_serve_startup_builds_missing_scalar_indices_for_existing_table(tmp_
         result = runner.invoke(
             cli,
             [
-                "paper", "db", "api", "serve",
-                "--snapshot-db", str(db),
-                "--config", str(config),
-                "--embed-db", str(embed_dir),
-                "--admin-token", "admin-token",
+                "paper",
+                "db",
+                "api",
+                "serve",
+                "--snapshot-db",
+                str(db),
+                "--config",
+                str(config),
+                "--embed-db",
+                str(embed_dir),
+                "--admin-token",
+                "admin-token",
             ],
         )
 
@@ -502,7 +565,7 @@ def test_api_serve_startup_skips_index_creation_for_empty_vector_dir(tmp_path: P
     config.write_text(
         config.read_text(encoding="utf-8").replace(
             "[search]\n",
-            f"[search]\nvector_dir = \"{embed_dir}\"\n",
+            f'[search]\nvector_dir = "{embed_dir}"\n',
         ),
         encoding="utf-8",
     )
@@ -511,11 +574,18 @@ def test_api_serve_startup_skips_index_creation_for_empty_vector_dir(tmp_path: P
         result = runner.invoke(
             cli,
             [
-                "paper", "db", "api", "serve",
-                "--snapshot-db", str(db),
-                "--config", str(config),
-                "--embed-db", str(embed_dir),
-                "--admin-token", "admin-token",
+                "paper",
+                "db",
+                "api",
+                "serve",
+                "--snapshot-db",
+                str(db),
+                "--config",
+                str(config),
+                "--embed-db",
+                str(embed_dir),
+                "--admin-token",
+                "admin-token",
             ],
         )
 
@@ -533,7 +603,7 @@ def test_api_serve_reports_index_build_timeout_with_guidance(tmp_path: Path) -> 
     config.write_text(
         config.read_text(encoding="utf-8").replace(
             "[search]\n",
-            f"[search]\nvector_dir = \"{embed_dir}\"\n",
+            f'[search]\nvector_dir = "{embed_dir}"\n',
         ),
         encoding="utf-8",
     )
@@ -545,11 +615,18 @@ def test_api_serve_reports_index_build_timeout_with_guidance(tmp_path: Path) -> 
         result = runner.invoke(
             cli,
             [
-                "paper", "db", "api", "serve",
-                "--snapshot-db", str(db),
-                "--config", str(config),
-                "--embed-db", str(embed_dir),
-                "--admin-token", "admin-token",
+                "paper",
+                "db",
+                "api",
+                "serve",
+                "--snapshot-db",
+                str(db),
+                "--config",
+                str(config),
+                "--embed-db",
+                str(embed_dir),
+                "--admin-token",
+                "admin-token",
             ],
         )
 
@@ -575,17 +652,27 @@ def test_api_serve_admin_semantic_push_accepts_reduced_dimensions(tmp_path: Path
     with (
         patch("uvicorn.run") as mock_run,
         patch("deepresearch_flow.paper.vector_store.validate_index_meta"),
-        patch("deepresearch_flow.paper.db.RoutePool.from_embedding_provider", return_value=object()),
+        patch(
+            "deepresearch_flow.paper.db.RoutePool.from_embedding_provider", return_value=object()
+        ),
     ):
         result = runner.invoke(
             cli,
             [
-                "paper", "db", "api", "serve",
-                "--snapshot-db", str(db),
-                "--config", str(config),
-                "--embed-db", str(embed_dir),
-                "--search-access-token", "search-token",
-                "--admin-token", "admin-token",
+                "paper",
+                "db",
+                "api",
+                "serve",
+                "--snapshot-db",
+                str(db),
+                "--config",
+                str(config),
+                "--embed-db",
+                str(embed_dir),
+                "--search-access-token",
+                "search-token",
+                "--admin-token",
+                "admin-token",
             ],
         )
 
@@ -621,7 +708,7 @@ def test_api_serve_skips_embedding_resolution_when_admin_sync_disabled(tmp_path:
     config.write_text(
         config.read_text(encoding="utf-8").replace(
             "[search]\n",
-            "[search]\nvector_dir = \"./unused\"\n",
+            '[search]\nvector_dir = "./unused"\n',
         ),
         encoding="utf-8",
     )
@@ -630,9 +717,14 @@ def test_api_serve_skips_embedding_resolution_when_admin_sync_disabled(tmp_path:
         result = runner.invoke(
             cli,
             [
-                "paper", "db", "api", "serve",
-                "--snapshot-db", str(db),
-                "--config", str(config),
+                "paper",
+                "db",
+                "api",
+                "serve",
+                "--snapshot-db",
+                str(db),
+                "--config",
+                str(config),
             ],
         )
 

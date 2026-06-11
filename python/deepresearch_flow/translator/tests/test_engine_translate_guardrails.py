@@ -69,10 +69,10 @@ def test_restored_protected_content_survives_post_processing(monkeypatch) -> Non
 
     monkeypatch.setattr(MarkdownTranslator, "_translate_group", fake_translate_group)
     monkeypatch.setattr(MarkdownTranslator, "_format_markdown", fake_format)
+    monkeypatch.setattr(MarkdownTranslator, "_normalize_markdown_blocks", fake_normalize)
     monkeypatch.setattr(
-        MarkdownTranslator, "_normalize_markdown_blocks", fake_normalize
+        MarkdownTranslator, "_collect_failed_nodes", lambda self, nodes: dict(nodes)
     )
-    monkeypatch.setattr(MarkdownTranslator, "_collect_failed_nodes", lambda self, nodes: dict(nodes))
 
     result = asyncio.run(_run_translate(translator, text))
 
@@ -96,13 +96,9 @@ def test_strict_placeholder_check_rejects_residual_placeholder_tokens(
 
     monkeypatch.setattr(MarkdownTranslator, "_translate_group", fake_translate_group)
     monkeypatch.setattr(MarkdownTranslator, "_format_markdown", fake_format)
-    monkeypatch.setattr(
-        MarkdownTranslator, "_normalize_markdown_blocks", fake_normalize
-    )
+    monkeypatch.setattr(MarkdownTranslator, "_normalize_markdown_blocks", fake_normalize)
     monkeypatch.setattr(MarkdownTranslator, "_collect_failed_nodes", lambda self, nodes: {})
-    monkeypatch.setattr(
-        MarkdownTranslator, "_align_placeholders", lambda self, orig, trans: trans
-    )
+    monkeypatch.setattr(MarkdownTranslator, "_align_placeholders", lambda self, orig, trans: trans)
     monkeypatch.setattr(
         MarkdownTranslator, "_fix_placeholder_typos", lambda self, text, valid: text
     )
@@ -135,9 +131,7 @@ def test_failed_nodes_fall_back_to_origin_without_post_processing_mutation(
 
     monkeypatch.setattr(MarkdownTranslator, "_translate_group", fake_translate_group)
     monkeypatch.setattr(MarkdownTranslator, "_format_markdown", fake_format)
-    monkeypatch.setattr(
-        MarkdownTranslator, "_normalize_markdown_blocks", fake_normalize
-    )
+    monkeypatch.setattr(MarkdownTranslator, "_normalize_markdown_blocks", fake_normalize)
     monkeypatch.setattr(
         MarkdownTranslator, "_collect_failed_nodes", lambda self, nodes: dict(nodes)
     )
@@ -197,14 +191,22 @@ def test_node_with_missing_math_placeholders_falls_back_to_original_text(
 
 
 def test_translation_messages_include_placeholder_integrity_and_fallback_rules() -> None:
-    messages = build_translation_messages("en", "zh", "@@NODE_START_0000@@\n__PH_FOOTREF_000001__\n@@NODE_END_0000@@")
+    messages = build_translation_messages(
+        "en", "zh", "@@NODE_START_0000@@\n__PH_FOOTREF_000001__\n@@NODE_END_0000@@"
+    )
 
     system_text = messages[0]["content"]
     user_text = messages[1]["content"]
 
     assert "multiset of placeholders" in system_text
-    assert "If any placeholder would be lost or changed, output the ORIGINAL NODE CONTENT unchanged." in system_text
-    assert "Footnote-reference placeholders such as __PH_FOOTREF_######__ are mandatory anchors" in user_text
+    assert (
+        "If any placeholder would be lost or changed, output the ORIGINAL NODE CONTENT unchanged."
+        in system_text
+    )
+    assert (
+        "Footnote-reference placeholders such as __PH_FOOTREF_######__ are mandatory anchors"
+        in user_text
+    )
 
 
 def test_translated_headings_keep_original_levels_after_post_format(monkeypatch) -> None:
@@ -264,7 +266,9 @@ def test_engine_format_markdown_returns_original_on_rumdl_timeout(monkeypatch) -
         raise subprocess.TimeoutExpired(cmd=["rumdl", "fmt"], timeout=5.0)
 
     monkeypatch.setattr(translator, "_rumdl_timeout_seconds", 5.0)
-    monkeypatch.setattr("deepresearch_flow.translator.engine.subprocess.run", lambda *a, **k: fake_run())
+    monkeypatch.setattr(
+        "deepresearch_flow.translator.engine.subprocess.run", lambda *a, **k: fake_run()
+    )
 
     assert asyncio.run(translator._format_markdown("# Title\n", "post")) == "# Title\n"
 

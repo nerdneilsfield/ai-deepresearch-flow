@@ -81,9 +81,7 @@ class PlaceHolderStore:
         referenced: set[str] = set()
         for raw in self._rev.values():
             referenced.update(
-                token
-                for token in self.find_placeholder_like_tokens(raw)
-                if token in self._rev
+                token for token in self.find_placeholder_like_tokens(raw) if token in self._rev
             )
         return referenced
 
@@ -134,9 +132,7 @@ class PlaceHolderStore:
     def restore_all_checked(self, text: str, *, ignore_source_literals: bool = True) -> str:
         missing = self.diff_missing(text)
         if missing:
-            raise ValueError(
-                "placeholder token(s) missing before restore: " + ", ".join(missing)
-            )
+            raise ValueError("placeholder token(s) missing before restore: " + ", ".join(missing))
         restored = self.restore_all(text)
         source_literals = self._source_placeholder_likes if ignore_source_literals else set()
         residual = [
@@ -146,8 +142,7 @@ class PlaceHolderStore:
         ]
         if residual:
             raise ValueError(
-                "unresolved placeholder token(s) remain after restore: "
-                + ", ".join(residual)
+                "unresolved placeholder token(s) remain after restore: " + ", ".join(residual)
             )
         return restored
 
@@ -158,10 +153,7 @@ class PlaceHolderStore:
         return [ph for ph in sorted(self.root_placeholders()) if ph not in text]
 
     def snapshot(self) -> Dict[str, str]:
-        return {
-            f"{kind}\n{text}": placeholder
-            for (kind, text), placeholder in self._map.items()
-        }
+        return {f"{kind}\n{text}": placeholder for (kind, text), placeholder in self._map.items()}
 
     def placeholders(self) -> set[str]:
         return set(self._rev)

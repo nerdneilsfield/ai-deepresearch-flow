@@ -85,7 +85,10 @@ def _build_fix_math_fuzz_cases(count: int = 120, seed: int = 20240415) -> list[F
             return "$", f"x\\nabla_{case_id}_{slot}"
         if slot % 3 == 1:
             return "$", f"__PH_AUTOLINK_{case_id:06d}__"
-        return "$", f"Downloaded on March 30, 2026 at 20:06:42 UTC from IEEE Xplore {case_id}_{slot}"
+        return (
+            "$",
+            f"Downloaded on March 30, 2026 at 20:06:42 UTC from IEEE Xplore {case_id}_{slot}",
+        )
 
     for case_id in range(count):
         lines = [prose_pool[case_id % len(prose_pool)]]
@@ -166,9 +169,7 @@ def _build_fix_math_fuzz_cases(count: int = 120, seed: int = 20240415) -> list[F
         allowed_specs = [
             (delimiter, content, status, repaired, line_no)
             for delimiter, content, status, repaired, line_no in spec_rows
-            if final_allowed_keys is None
-            or (line_no, None, None)
-            in final_allowed_keys
+            if final_allowed_keys is None or (line_no, None, None) in final_allowed_keys
         ]
         if not repair_enabled:
             expected_text = text
@@ -507,24 +508,38 @@ def test_fix_text_handles_missing_repair_for_one_of_multiple_spans(
 @pytest.mark.parametrize(
     ("module", "fix_fn", "span_factory", "stats_factory"),
     [
-        pytest.param(math, math.fix_math_text, lambda text, start, end, line: math.FormulaSpan(
-            start=start,
-            end=end,
-            delimiter="$$",
-            content=text[start + 2 : end - 2],
-            line=line,
-            context="",
-        ), math.MathFixStats, id="math"),
-        pytest.param(mermaid, mermaid.fix_mermaid_text, lambda text, start, end, line: mermaid.MermaidSpan(
-            start=start,
-            end=end,
-            content=text[start:end],
-            line=line,
-            context="",
-        ), mermaid.MermaidFixStats, id="mermaid"),
+        pytest.param(
+            math,
+            math.fix_math_text,
+            lambda text, start, end, line: math.FormulaSpan(
+                start=start,
+                end=end,
+                delimiter="$$",
+                content=text[start + 2 : end - 2],
+                line=line,
+                context="",
+            ),
+            math.MathFixStats,
+            id="math",
+        ),
+        pytest.param(
+            mermaid,
+            mermaid.fix_mermaid_text,
+            lambda text, start, end, line: mermaid.MermaidSpan(
+                start=start,
+                end=end,
+                content=text[start:end],
+                line=line,
+                context="",
+            ),
+            mermaid.MermaidFixStats,
+            id="mermaid",
+        ),
     ],
 )
-def test_fix_text_rejects_invalid_repaired_output(monkeypatch, module, fix_fn, span_factory, stats_factory) -> None:
+def test_fix_text_rejects_invalid_repaired_output(
+    monkeypatch, module, fix_fn, span_factory, stats_factory
+) -> None:
     if module is math:
         original = "$$bad$$"
         repaired = "still broken"
@@ -595,21 +610,33 @@ def test_fix_text_rejects_invalid_repaired_output(monkeypatch, module, fix_fn, s
 @pytest.mark.parametrize(
     ("module", "fix_fn", "span_factory", "stats_factory"),
     [
-        pytest.param(math, math.fix_math_text, lambda text, start, end, line: math.FormulaSpan(
-            start=start,
-            end=end,
-            delimiter="$$",
-            content=text[start + 2 : end - 2],
-            line=line,
-            context="",
-        ), math.MathFixStats, id="math"),
-        pytest.param(mermaid, mermaid.fix_mermaid_text, lambda text, start, end, line: mermaid.MermaidSpan(
-            start=start,
-            end=end,
-            content=text[start:end],
-            line=line,
-            context="",
-        ), mermaid.MermaidFixStats, id="mermaid"),
+        pytest.param(
+            math,
+            math.fix_math_text,
+            lambda text, start, end, line: math.FormulaSpan(
+                start=start,
+                end=end,
+                delimiter="$$",
+                content=text[start + 2 : end - 2],
+                line=line,
+                context="",
+            ),
+            math.MathFixStats,
+            id="math",
+        ),
+        pytest.param(
+            mermaid,
+            mermaid.fix_mermaid_text,
+            lambda text, start, end, line: mermaid.MermaidSpan(
+                start=start,
+                end=end,
+                content=text[start:end],
+                line=line,
+                context="",
+            ),
+            mermaid.MermaidFixStats,
+            id="mermaid",
+        ),
     ],
 )
 def test_fix_text_returns_original_when_repair_batch_is_cancelled(
@@ -675,6 +702,7 @@ def test_fix_math_text_blackbox_fuzz_contracts(monkeypatch) -> None:
     monkeypatch.setattr(math, "short_hash", lambda _path: "abc")
 
     for idx, case in enumerate(FIX_MATH_FUZZ_CASES):
+
         def fake_validate_formula(text: str, _display_mode: bool) -> list[str]:
             return case.validation_errors.get(text, [])
 

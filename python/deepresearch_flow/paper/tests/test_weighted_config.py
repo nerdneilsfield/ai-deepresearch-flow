@@ -7,9 +7,7 @@ import pytest
 from deepresearch_flow.paper.config import load_config
 
 
-def test_loads_weighted_provider_config(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_loads_weighted_provider_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     config_path = tmp_path / "config.toml"
     config_path.write_text(
@@ -111,9 +109,7 @@ def test_rejects_non_positive_weight(tmp_path: Path) -> None:
         load_config(str(config_path))
 
 
-def test_env_resolution_failure_is_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_env_resolution_failure_is_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     config_path = tmp_path / "config.toml"
     config_path.write_text(

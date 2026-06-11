@@ -6,7 +6,10 @@ import sqlite3
 import pytest
 
 from deepresearch_flow.paper.snapshot.advanced.chunk_select import SelectedChunk
-from deepresearch_flow.paper.snapshot.advanced.errors import TotalFailureError, VectorStoreUnavailableError
+from deepresearch_flow.paper.snapshot.advanced.errors import (
+    TotalFailureError,
+    VectorStoreUnavailableError,
+)
 from deepresearch_flow.paper.snapshot.advanced.pipeline import RequestSpec, run_advanced_search
 
 

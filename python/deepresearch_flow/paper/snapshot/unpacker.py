@@ -63,7 +63,7 @@ def _split_link_target(raw_link: str) -> tuple[str, str, str, str]:
 
 def _embed_images_in_markdown(content: str, md_file_path: Path, images_root: Path) -> str:
     """Embed local images as base64 data URLs in markdown content.
-    
+
     Args:
         content: Markdown file content
         md_file_path: Path to the markdown file (for resolving relative paths)
@@ -71,25 +71,29 @@ def _embed_images_in_markdown(content: str, md_file_path: Path, images_root: Pat
     """
     output: list[str] = []
     last_idx = 0
-    
+
     for match in IMAGE_PATTERN.finditer(content):
-        output.append(content[last_idx:match.start()])
+        output.append(content[last_idx : match.start()])
         alt_text = match.group(1)
         raw_link = match.group(2)
-        
+
         # Parse link (handle optional angle bracket and title suffix)
         target, suffix, wrap_prefix, wrap_suffix = _split_link_target(raw_link)
-        
+
         # Skip if already data URL or http URL
-        if target.startswith("data:") or target.startswith("http://") or target.startswith("https://"):
+        if (
+            target.startswith("data:")
+            or target.startswith("http://")
+            or target.startswith("https://")
+        ):
             output.append(match.group(0))
             last_idx = match.end()
             continue
-        
+
         # Resolve image path - images are in images_root
         # Target could be like "images/xxx.png" or just "xxx.png"
         img_path = images_root / Path(target).name
-        
+
         if not img_path.exists():
             # Try full path
             img_path = images_root / target
@@ -97,14 +101,14 @@ def _embed_images_in_markdown(content: str, md_file_path: Path, images_root: Pat
                 output.append(match.group(0))
                 last_idx = match.end()
                 continue
-        
+
         # Check if it's an image
         mime = _mime_from_path(img_path)
         if not mime or not mime.startswith("image/"):
             output.append(match.group(0))
             last_idx = match.end()
             continue
-        
+
         # Read and embed
         try:
             data = img_path.read_bytes()
@@ -113,9 +117,9 @@ def _embed_images_in_markdown(content: str, md_file_path: Path, images_root: Pat
             output.append(f"![{alt_text}]({new_link})")
         except Exception:
             output.append(match.group(0))
-        
+
         last_idx = match.end()
-    
+
     output.append(content[last_idx:])
     return "".join(output)
 
@@ -239,9 +243,7 @@ def _print_summary(
         if is_info:
             # Failure reasons for unpack info
             fail_table = Table(
-                title="Failed Reasons",
-                header_style="bold red",
-                title_style="bold magenta"
+                title="Failed Reasons", header_style="bold red", title_style="bold magenta"
             )
             fail_table.add_column("Reason", style="cyan", no_wrap=True)
             fail_table.add_column("Count", style="white", overflow="fold")
@@ -254,7 +256,7 @@ def _print_summary(
             fail_table = Table(
                 title="Source Markdown Failed Reasons",
                 header_style="bold red",
-                title_style="bold magenta"
+                title_style="bold magenta",
             )
             fail_table.add_column("Reason", style="cyan", no_wrap=True)
             fail_table.add_column("Count", style="white", overflow="fold")
@@ -268,7 +270,7 @@ def _print_summary(
         tr_fail_table = Table(
             title="Translated Markdown Failed Reasons",
             header_style="bold red",
-            title_style="bold magenta"
+            title_style="bold magenta",
         )
         tr_fail_table.add_column("Reason", style="cyan", no_wrap=True)
         tr_fail_table.add_column("Count", style="white", overflow="fold")
@@ -282,7 +284,7 @@ def _print_summary(
         examples_table = Table(
             title=f"Failed Paper Examples (showing up to 10 of {len(counts.failed_details)})",
             header_style="bold yellow",
-            title_style="bold magenta"
+            title_style="bold magenta",
         )
         examples_table.add_column("Paper ID", style="yellow", no_wrap=True, overflow="fold")
         examples_table.add_column("Title", style="white", overflow="fold")
@@ -349,7 +351,9 @@ def unpack_md(opts: SnapshotUnpackMdOptions) -> None:
                                 # Embed images as base64
                                 images_root = opts.static_export_dir / "images"
                                 if images_root.exists():
-                                    content = _embed_images_in_markdown(content, src_md, images_root)
+                                    content = _embed_images_in_markdown(
+                                        content, src_md, images_root
+                                    )
                                 dst_md.write_text(content, encoding="utf-8")
                             except OSError as e:
                                 counts.failed += 1
@@ -361,7 +365,9 @@ def unpack_md(opts: SnapshotUnpackMdOptions) -> None:
                     else:
                         counts.failed += 1
                         counts.failed_md_file_missing += 1
-                        counts.failed_details.append((paper_id, title, "Source Markdown file missing"))
+                        counts.failed_details.append(
+                            (paper_id, title, "Source Markdown file missing")
+                        )
                 else:
                     counts.failed += 1
                     counts.failed_no_md_hash += 1
@@ -405,7 +411,7 @@ def unpack_md(opts: SnapshotUnpackMdOptions) -> None:
         conn.close()
 
     _print_summary("snapshot unpack md summary", counts)
-    
+
     # Export error log if requested
     if opts.log_json and counts.failed_details:
         _export_error_log(opts.log_json, counts, "unpack_md")
@@ -438,7 +444,7 @@ def _export_error_log(log_path: Path, counts: UnpackCounts, command: str) -> Non
             for pid, title, reason in counts.failed_details
         ],
     }
-    
+
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_path.write_text(json.dumps(log_data, ensure_ascii=False, indent=2), encoding="utf-8")
     Console().print(f"[green]Error log exported to: {log_path}[/green]")
@@ -467,7 +473,7 @@ def unpack_info(opts: SnapshotUnpackInfoOptions) -> None:
             ORDER BY paper_index, title
             """
         )
-        
+
         with tqdm(total=total_papers, desc="Unpacking info", unit="paper") as pbar:
             for row in cursor.fetchall():
                 counts.total += 1
@@ -477,7 +483,9 @@ def unpack_info(opts: SnapshotUnpackInfoOptions) -> None:
                 if not (pdf_hash and pdf_hash in pdf_index):
                     counts.missing_pdf += 1
 
-                summary_path = opts.static_export_dir / "summary" / paper_id / f"{opts.template}.json"
+                summary_path = (
+                    opts.static_export_dir / "summary" / paper_id / f"{opts.template}.json"
+                )
                 fallback_path = opts.static_export_dir / "summary" / f"{paper_id}.json"
                 used_fallback = False
                 if summary_path.exists():
@@ -485,20 +493,24 @@ def unpack_info(opts: SnapshotUnpackInfoOptions) -> None:
                 elif opts.strict_template:
                     counts.failed += 1
                     counts.failed_no_md_hash += 1  # Using this field for "Template not found"
-                    counts.failed_details.append((paper_id, title, f"Template '{opts.template}' not found (strict mode)"))
+                    counts.failed_details.append(
+                        (paper_id, title, f"Template '{opts.template}' not found (strict mode)")
+                    )
                     pbar.update(1)
                     continue
                 else:
                     target_path = fallback_path
                     used_fallback = True
-                
+
                 if not target_path.exists():
                     counts.failed += 1
                     counts.failed_no_md_hash += 1  # Using this field for "Summary file missing"
-                    counts.failed_details.append((paper_id, title, f"Summary not found for template '{opts.template}'"))
+                    counts.failed_details.append(
+                        (paper_id, title, f"Summary not found for template '{opts.template}'")
+                    )
                     pbar.update(1)
                     continue
-                    
+
                 try:
                     payload = json.loads(target_path.read_text(encoding="utf-8"))
                 except json.JSONDecodeError as e:
@@ -507,11 +519,13 @@ def unpack_info(opts: SnapshotUnpackInfoOptions) -> None:
                     counts.failed_details.append((paper_id, title, f"JSON decode error: {e}"))
                     pbar.update(1)
                     continue
-                    
+
                 if not isinstance(payload, dict):
                     counts.failed += 1
                     counts.failed_md_write_error += 1  # Using this field for "Invalid payload type"
-                    counts.failed_details.append((paper_id, title, "Invalid payload type (not a dict)"))
+                    counts.failed_details.append(
+                        (paper_id, title, "Invalid payload type (not a dict)")
+                    )
                     pbar.update(1)
                     continue
 
@@ -529,8 +543,16 @@ def unpack_info(opts: SnapshotUnpackInfoOptions) -> None:
 
                 if used_fallback:
                     counts.failed += 1
-                    counts.failed_no_md_hash += 1  # Using this field for "Template not found, using fallback"
-                    counts.failed_details.append((paper_id, title, f"Using fallback summary (template '{opts.template}' not found)"))
+                    counts.failed_no_md_hash += (
+                        1  # Using this field for "Template not found, using fallback"
+                    )
+                    counts.failed_details.append(
+                        (
+                            paper_id,
+                            title,
+                            f"Using fallback summary (template '{opts.template}' not found)",
+                        )
+                    )
                 else:
                     counts.succeeded += 1
                 items.append(payload)
@@ -543,7 +565,9 @@ def unpack_info(opts: SnapshotUnpackInfoOptions) -> None:
         "papers": items,
     }
     opts.output_json.parent.mkdir(parents=True, exist_ok=True)
-    opts.output_json.write_text(json.dumps(output_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    opts.output_json.write_text(
+        json.dumps(output_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     _print_summary(
         "snapshot unpack info summary",
         counts,
@@ -554,7 +578,7 @@ def unpack_info(opts: SnapshotUnpackInfoOptions) -> None:
             else "Template not found (using fallback)"
         ),
     )
-    
+
     # Export error log if requested
     if opts.log_json and counts.failed_details:
         _export_error_log(opts.log_json, counts, "unpack_info")

@@ -35,6 +35,7 @@ _MAX_INLINE_MATH_CHARS = 80
 _MAX_INLINE_PROSE_WORDS = 6
 _MAX_INLINE_CJK_CHARS = 6
 
+
 @dataclass(frozen=True)
 class FormulaSpan:
     start: int
@@ -111,7 +112,9 @@ def extract_math_spans(text: str, context_chars: int) -> list[FormulaSpan]:
         )
 
     block_ranges = [(span.start, span.end) for span in spans]
-    spans.extend(_extract_inline_math_spans(text, masked, context_chars, block_ranges, raw_block_ranges))
+    spans.extend(
+        _extract_inline_math_spans(text, masked, context_chars, block_ranges, raw_block_ranges)
+    )
 
     return sorted(spans, key=lambda span: span.start)
 
@@ -142,7 +145,10 @@ def _looks_like_inline_math(content: str) -> bool:
         return False
     if len(prose_words) >= 3 and re.search(r"[A-Za-z]{3,}\s*$", tail):
         return False
-    if any(token in stripped for token in ("\\", "^", "_", "{", "}", "=", "+", "-", "*", "/", "(", ")", "[", "]")):
+    if any(
+        token in stripped
+        for token in ("\\", "^", "_", "{", "}", "=", "+", "-", "*", "/", "(", ")", "[", "]")
+    ):
         return True
     if re.fullmatch(r"[A-Za-z](?:[A-Za-z0-9]|_[A-Za-z0-9]+)*", stripped):
         return True
@@ -372,7 +378,7 @@ def _replace_balanced_braced_command(
             pieces.append(text[idx:])
             return "".join(pieces)
 
-        pieces.append(text[idx:match.start()])
+        pieces.append(text[idx : match.start()])
         content = text[match.end() : close_index]
         if "{" in content or "}" in content:
             pieces.append(text[match.start() : close_index + 1])
@@ -737,7 +743,7 @@ def build_repair_messages(issues: list[FormulaIssue]) -> list[dict[str, str]]:
         "Do not turn prose into math. If the input is not salvageable as LaTeX, "
         "return it unchanged.\n"
         "Preserve valid delimiters and environments exactly when possible.\n"
-        "Return JSON with key 'items' and each item containing {\"id\", \"latex\"}. "
+        'Return JSON with key \'items\' and each item containing {"id", "latex"}. '
         "Output JSON only."
     )
     user = json.dumps({"items": payload}, ensure_ascii=False, indent=2)
@@ -749,7 +755,12 @@ def build_repair_messages(issues: list[FormulaIssue]) -> list[dict[str, str]]:
 
 def _estimate_issue_chars(issue: FormulaIssue) -> int:
     """Estimate the character count an issue contributes to the prompt."""
-    return len(issue.span.content) + len(issue.span.context or "") + sum(len(e) for e in issue.errors) + 80
+    return (
+        len(issue.span.content)
+        + len(issue.span.context or "")
+        + sum(len(e) for e in issue.errors)
+        + 80
+    )
 
 
 def iter_batches(
@@ -784,7 +795,7 @@ def locate_json_field_start(
     search_start: int,
 ) -> tuple[int, int]:
     needle = json.dumps(field_value, ensure_ascii=False)
-    inner = needle[1:-1] if needle.startswith("\"") and needle.endswith("\"") else needle
+    inner = needle[1:-1] if needle.startswith('"') and needle.endswith('"') else needle
     idx = raw_text.find(inner, search_start)
     if idx == -1:
         idx = raw_text.find(needle, search_start)
@@ -1001,13 +1012,17 @@ async def fix_math_text(
         batch_results = await asyncio.gather(
             *[
                 repair_batch(
-                    batch, route_pool, timeout, max_retries, client,
+                    batch,
+                    route_pool,
+                    timeout,
+                    max_retries,
+                    client,
                 )
                 for batch in batches
             ],
             return_exceptions=True,
         )
-        
+
         # Process results
         for batch, result in zip(batches, batch_results):
             if isinstance(result, BaseException):
@@ -1015,19 +1030,21 @@ async def fix_math_text(
                 error = str(result)
                 for issue in batch:
                     stats.formulas_failed += 1
-                    error_records.append({
-                        "path": file_path,
-                        "line": line_offset + issue.span.line - 1,
-                        "delimiter": issue.span.delimiter,
-                        "latex": issue.span.content,
-                        "errors": issue.errors + [f"batch_exception: {error}"],
-                        "field_path": issue.field_path,
-                        "item_index": issue.item_index,
-                    })
+                    error_records.append(
+                        {
+                            "path": file_path,
+                            "line": line_offset + issue.span.line - 1,
+                            "delimiter": issue.span.delimiter,
+                            "latex": issue.span.content,
+                            "errors": issue.errors + [f"batch_exception: {error}"],
+                            "field_path": issue.field_path,
+                            "item_index": issue.item_index,
+                        }
+                    )
                 continue
-            
+
             repairs, error = result
-            
+
             if error:
                 for issue in batch:
                     stats.formulas_failed += 1

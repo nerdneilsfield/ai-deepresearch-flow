@@ -123,7 +123,9 @@ $TEXT_TO_TRANSLATE
 )
 
 
-def build_translation_messages(source_lang: str | None, target_lang: str, text: str) -> list[dict[str, str]]:
+def build_translation_messages(
+    source_lang: str | None, target_lang: str, text: str
+) -> list[dict[str, str]]:
     source_name = source_lang or "auto"
     target_name = target_lang
     user_xml = TRANSLATE_XML_TEMPLATE.substitute(

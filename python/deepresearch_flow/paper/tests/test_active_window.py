@@ -47,19 +47,37 @@ def test_parse_windows_rejects_invalid_values(raw: list[str]) -> None:
 def test_is_active_respects_boundaries_and_cross_midnight() -> None:
     windows = parse_windows(["08:00-12:00"])
 
-    assert is_active(datetime(2026, 4, 21, 8, 0, tzinfo=timezone.utc), windows, timezone.utc) is True
-    assert is_active(datetime(2026, 4, 21, 12, 0, tzinfo=timezone.utc), windows, timezone.utc) is False
-    assert is_active(datetime(2026, 4, 21, 7, 59, tzinfo=timezone.utc), windows, timezone.utc) is False
+    assert (
+        is_active(datetime(2026, 4, 21, 8, 0, tzinfo=timezone.utc), windows, timezone.utc) is True
+    )
+    assert (
+        is_active(datetime(2026, 4, 21, 12, 0, tzinfo=timezone.utc), windows, timezone.utc) is False
+    )
+    assert (
+        is_active(datetime(2026, 4, 21, 7, 59, tzinfo=timezone.utc), windows, timezone.utc) is False
+    )
 
     cross_midnight = parse_windows(["22:00-06:00"])
-    assert is_active(datetime(2026, 4, 21, 23, 30, tzinfo=timezone.utc), cross_midnight, timezone.utc) is True
-    assert is_active(datetime(2026, 4, 21, 3, 0, tzinfo=timezone.utc), cross_midnight, timezone.utc) is True
+    assert (
+        is_active(datetime(2026, 4, 21, 23, 30, tzinfo=timezone.utc), cross_midnight, timezone.utc)
+        is True
+    )
+    assert (
+        is_active(datetime(2026, 4, 21, 3, 0, tzinfo=timezone.utc), cross_midnight, timezone.utc)
+        is True
+    )
 
     end_of_day = parse_windows(["23:00-24:00"])
-    assert is_active(datetime(2026, 4, 21, 23, 59, tzinfo=timezone.utc), end_of_day, timezone.utc) is True
+    assert (
+        is_active(datetime(2026, 4, 21, 23, 59, tzinfo=timezone.utc), end_of_day, timezone.utc)
+        is True
+    )
 
     full_day = parse_windows(["00:00-24:00"])
-    assert is_active(datetime(2026, 4, 21, 17, 45, tzinfo=timezone.utc), full_day, timezone.utc) is True
+    assert (
+        is_active(datetime(2026, 4, 21, 17, 45, tzinfo=timezone.utc), full_day, timezone.utc)
+        is True
+    )
     assert is_active(datetime(2026, 4, 21, 17, 45, tzinfo=timezone.utc), [], timezone.utc) is True
 
 

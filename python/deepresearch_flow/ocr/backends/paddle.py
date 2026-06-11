@@ -159,8 +159,8 @@ class PaddleOcrBackend:
         normalized_markdown = _HTML_IMG_RE.sub(_replace_html_ref, normalized_markdown)
         # Clean up empty <div ...>  </div> wrappers left behind.
         normalized_markdown = re.sub(
-            r'<div[^>]*>\s*(!\[[^\]]*\]\([^)]+\))\s*</div>',
-            r'\1',
+            r"<div[^>]*>\s*(!\[[^\]]*\]\([^)]+\))\s*</div>",
+            r"\1",
             normalized_markdown,
         )
 

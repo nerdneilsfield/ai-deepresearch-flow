@@ -64,8 +64,7 @@ def rank_keyword_rows(
         if not doc_id:
             continue
         haystack = " ".join(
-            str(row.get(field) or "")
-            for field in ("title", "text", "authors", "venue", "tags")
+            str(row.get(field) or "") for field in ("title", "text", "authors", "venue", "tags")
         ).lower()
         score = 0.0
         if phrase and phrase in haystack:
@@ -146,7 +145,9 @@ async def hybrid_search(
 ) -> list[SearchResult]:
     from deepresearch_flow.paper.vector_store import query_vector as query_vector_store
 
-    raw_vector_hits = query_vector_store(vector_store_db, query_vector, top_k=vector_top_k, where=where)
+    raw_vector_hits = query_vector_store(
+        vector_store_db, query_vector, top_k=vector_top_k, where=where
+    )
     vector_hits = aggregate_by_doc_id(vector_hits_to_search_hits(raw_vector_hits))
     if progress is not None:
         progress.vector_candidates = len(vector_hits)
@@ -159,8 +160,7 @@ async def hybrid_search(
         fused_scores = reciprocal_rank_fusion([vector_ranked, keyword_ranked], k=60)
         hit_map = {hit.doc_id: hit for hit in vector_hits}
         candidates: list[tuple[str, float, SearchHit | None]] = [
-            (doc_id, score, hit_map.get(doc_id))
-            for doc_id, score in fused_scores.items()
+            (doc_id, score, hit_map.get(doc_id)) for doc_id, score in fused_scores.items()
         ]
         candidates.sort(key=lambda item: item[1], reverse=True)
         score_type = "rrf"
@@ -179,7 +179,9 @@ async def hybrid_search(
             (
                 hit.chunk_text
                 if hit
-                else (document_text_resolver(doc_id) if document_text_resolver is not None else doc_id)
+                else (
+                    document_text_resolver(doc_id) if document_text_resolver is not None else doc_id
+                )
             )
             for doc_id, _, hit in candidates
         ]
@@ -206,11 +208,29 @@ async def hybrid_search(
                     doc_id=doc_ids[index],
                     score=score,
                     score_type="rerank",
-                    matched_chunk=(hit_map.get(doc_ids[index]).chunk_text if hit_map.get(doc_ids[index]) else ""),
-                    matched_field=(hit_map.get(doc_ids[index]).field_name if hit_map.get(doc_ids[index]) else ""),
-                    matched_template=(hit_map.get(doc_ids[index]).template_tag if hit_map.get(doc_ids[index]) else ""),
-                    matched_chunk_type=(hit_map.get(doc_ids[index]).chunk_type if hit_map.get(doc_ids[index]) else ""),
-                    matched_lang=(hit_map.get(doc_ids[index]).lang if hit_map.get(doc_ids[index]) else ""),
+                    matched_chunk=(
+                        hit_map.get(doc_ids[index]).chunk_text
+                        if hit_map.get(doc_ids[index])
+                        else ""
+                    ),
+                    matched_field=(
+                        hit_map.get(doc_ids[index]).field_name
+                        if hit_map.get(doc_ids[index])
+                        else ""
+                    ),
+                    matched_template=(
+                        hit_map.get(doc_ids[index]).template_tag
+                        if hit_map.get(doc_ids[index])
+                        else ""
+                    ),
+                    matched_chunk_type=(
+                        hit_map.get(doc_ids[index]).chunk_type
+                        if hit_map.get(doc_ids[index])
+                        else ""
+                    ),
+                    matched_lang=(
+                        hit_map.get(doc_ids[index]).lang if hit_map.get(doc_ids[index]) else ""
+                    ),
                 )
                 for index, score in zip(rerank_result.indices, rerank_result.scores)
             ]

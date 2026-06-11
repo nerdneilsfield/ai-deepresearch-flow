@@ -60,7 +60,9 @@ def is_active(now: datetime, windows: list[tuple[time, time]], tz: tzinfo | None
     return False
 
 
-def next_active_start(now: datetime, windows: list[tuple[time, time]], tz: tzinfo | None) -> datetime | None:
+def next_active_start(
+    now: datetime, windows: list[tuple[time, time]], tz: tzinfo | None
+) -> datetime | None:
     """Return the next datetime when an inactive route becomes active."""
     if not windows:
         return None

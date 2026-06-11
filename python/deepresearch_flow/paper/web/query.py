@@ -87,4 +87,3 @@ def _tokenize(text: str) -> list[str]:
         out.append(token)
 
     return out
-

@@ -99,7 +99,10 @@ class TestOcrCommand:
         assert result.exit_code == 0
         # Verify run_ocr was called with the custom output dir.
         call_args = mock_run.call_args
-        assert str(call_args[0][2]) == custom_out or str(call_args[1].get("output_dir", call_args[0][2])) == custom_out
+        assert (
+            str(call_args[0][2]) == custom_out
+            or str(call_args[1].get("output_dir", call_args[0][2])) == custom_out
+        )
 
     def test_interactive_terminal_creates_progress_bar(
         self, mock_load: object, mock_factory: object, mock_run: object, tmp_path: Path

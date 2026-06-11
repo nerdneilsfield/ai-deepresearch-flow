@@ -451,9 +451,7 @@ def _build_dependency_graph(
     for stage_name, dependencies in deps.items():
         for dependency in dependencies:
             if dependency not in stage_names:
-                raise ValueError(
-                    f"Stage '{stage_name}' depends on unknown stage '{dependency}'"
-                )
+                raise ValueError(f"Stage '{stage_name}' depends on unknown stage '{dependency}'")
 
     dependents: dict[str, list[str]] = {name: [] for name in stage_names}
     indegree: dict[str, int] = {name: 0 for name in stage_names}
@@ -572,7 +570,10 @@ class ExtractionStats:
         prompt_tokens = _estimate_tokens_for_chars(self.prompt_chars)
         completion_tokens = _estimate_tokens_for_chars(self.output_chars)
         total_tokens = prompt_tokens + completion_tokens
-        self.doc_bar.set_postfix_str(f"tok p/c/t {prompt_tokens}/{completion_tokens}/{total_tokens}")
+        self.doc_bar.set_postfix_str(
+            f"tok p/c/t {prompt_tokens}/{completion_tokens}/{total_tokens}"
+        )
+
 
 def _single_model_selector(provider: ProviderConfig, model_name: str) -> ParsedModelSelector:
     return ParsedModelSelector(
@@ -639,7 +640,6 @@ def should_retry_error(exc: ProviderError) -> bool:
     return exc.retryable
 
 
-
 def append_metadata(
     payload: dict[str, Any],
     source_path: str,
@@ -665,7 +665,9 @@ def append_metadata(
     return payload
 
 
-def _paper_archetype_hint_from_stages(stages: dict[str, dict[str, Any]], stage_name: str | None) -> str:
+def _paper_archetype_hint_from_stages(
+    stages: dict[str, dict[str, Any]], stage_name: str | None
+) -> str:
     if not stage_name or stage_name == "module_a":
         return ""
     module_a_payload = stages.get("module_a")
@@ -879,9 +881,7 @@ def plan_sequential_stage_tasks(
         )
         if not needs_run:
             continue
-        planned.append(
-            PlannedStage(name=stage_name, fields=metadata_fields + stage_def.fields)
-        )
+        planned.append(PlannedStage(name=stage_name, fields=metadata_fields + stage_def.fields))
     return planned
 
 
@@ -913,9 +913,7 @@ def write_json_atomic(path: Path, data: Any) -> None:
     tmp_path.replace(path)
 
 
-def build_stage_schema(
-    base_schema: dict[str, Any], required_fields: list[str]
-) -> dict[str, Any]:
+def build_stage_schema(base_schema: dict[str, Any], required_fields: list[str]) -> dict[str, Any]:
     properties = base_schema.get("properties", {})
     unique_fields: list[str] = []
     for field in required_fields:
@@ -1024,7 +1022,9 @@ async def call_with_retries(
             if route_pool is not None:
                 quota_hit = await route_pool.mark_quota_exceeded(route, str(exc), exc.status_code)
             elif current_api_key and key_rotator:
-                quota_hit = await key_rotator.mark_quota_exceeded(current_api_key, str(exc), exc.status_code)
+                quota_hit = await key_rotator.mark_quota_exceeded(
+                    current_api_key, str(exc), exc.status_code
+                )
             if exc.structured_error and current_structured != "none":
                 logger.warning(
                     "Structured response failed; retrying without structured output "
@@ -1046,7 +1046,9 @@ async def call_with_retries(
             elif current_api_key and key_rotator and not quota_hit and should_retry_error(exc):
                 await key_rotator.mark_error(current_api_key)
             if should_retry_error(exc) and attempt < max_retries:
-                await asyncio.sleep(backoff_delay(backoff_base_seconds, attempt, backoff_max_seconds))
+                await asyncio.sleep(
+                    backoff_delay(backoff_base_seconds, attempt, backoff_max_seconds)
+                )
                 continue
             raise
 
@@ -1054,7 +1056,9 @@ async def call_with_retries(
             data = parse_json(response_text)
         except Exception as exc:
             if attempt < max_retries:
-                await asyncio.sleep(backoff_delay(backoff_base_seconds, attempt, backoff_max_seconds))
+                await asyncio.sleep(
+                    backoff_delay(backoff_base_seconds, attempt, backoff_max_seconds)
+                )
                 continue
             raise ProviderError(f"JSON parse failed: {exc}", error_type="parse_error") from exc
 
@@ -1063,7 +1067,9 @@ async def call_with_retries(
         errors_in_doc = sorted(validator.iter_errors(data), key=lambda e: e.path)
         if errors_in_doc:
             if attempt < max_retries:
-                await asyncio.sleep(backoff_delay(backoff_base_seconds, attempt, backoff_max_seconds))
+                await asyncio.sleep(
+                    backoff_delay(backoff_base_seconds, attempt, backoff_max_seconds)
+                )
                 continue
             raise ProviderError(
                 f"Schema validation failed: {errors_in_doc[0].message}",
@@ -1189,9 +1195,7 @@ async def extract_documents(
 
     if retry_mode:
         retry_paths = set(retry_full_paths) | set(retry_stage_map.keys())
-        markdown_files = [
-            path for path in markdown_files if str(path.resolve()) in retry_paths
-        ]
+        markdown_files = [path for path in markdown_files if str(path.resolve()) in retry_paths]
         logger.debug("Retrying %d markdown files", len(markdown_files))
         if not markdown_files:
             logger.warning("Retry list produced 0 files to process")
@@ -1367,9 +1371,7 @@ async def extract_documents(
         except (NotImplementedError, RuntimeError, ValueError):
             signal.signal(
                 sig,
-                lambda *_args, _sig=sig: loop.call_soon_threadsafe(
-                    request_shutdown, _sig.name
-                ),
+                lambda *_args, _sig=sig: loop.call_soon_threadsafe(request_shutdown, _sig.name),
             )
 
     async def await_key_pool_ready() -> None:
@@ -1544,8 +1546,14 @@ async def extract_documents(
                 errors.append(
                     ExtractionError(
                         path=path,
-                        provider=(doc_provider.name if 'doc_provider' in locals() else provider.name if provider else "<unknown>"),
-                        model=(doc_model if 'doc_model' in locals() else model or "<unknown>"),
+                        provider=(
+                            doc_provider.name
+                            if "doc_provider" in locals()
+                            else provider.name
+                            if provider
+                            else "<unknown>"
+                        ),
+                        model=(doc_model if "doc_model" in locals() else model or "<unknown>"),
                         error_type=exc.error_type,
                         error_message=str(exc),
                         stage_name=current_stage if multi_stage else None,
@@ -1556,8 +1564,14 @@ async def extract_documents(
                 errors.append(
                     ExtractionError(
                         path=path,
-                        provider=(doc_provider.name if 'doc_provider' in locals() else provider.name if provider else "<unknown>"),
-                        model=(doc_model if 'doc_model' in locals() else model or "<unknown>"),
+                        provider=(
+                            doc_provider.name
+                            if "doc_provider" in locals()
+                            else provider.name
+                            if provider
+                            else "<unknown>"
+                        ),
+                        model=(doc_model if "doc_model" in locals() else model or "<unknown>"),
                         error_type="unexpected_error",
                         error_message=str(exc),
                         stage_name=current_stage if multi_stage else None,
@@ -2366,7 +2380,9 @@ async def extract_documents(
                 continue
             base_name = split_output_name(Path(source_path))
             file_name = unique_split_name(base_name, used_names, source_path)
-            write_json(target_dir / f"{file_name}.json", {"template_tag": template_tag, "papers": [entry]})
+            write_json(
+                target_dir / f"{file_name}.json", {"template_tag": template_tag, "papers": [entry]}
+            )
 
     if render_md:
         try:

@@ -123,10 +123,14 @@ class TestPushStaticFiles:
 
     def test_skip_existing_files(self, tmp_path: Path) -> None:
         root = _setup_static_dir(tmp_path)
-        storage = FakeStorage(existing={
-            "pdf/abc123.pdf", "images/def456.png",
-            "md/ghi789.md", "summary/paper1/default.json",
-        })
+        storage = FakeStorage(
+            existing={
+                "pdf/abc123.pdf",
+                "images/def456.png",
+                "md/ghi789.md",
+                "summary/paper1/default.json",
+            }
+        )
         stats = push_static_files(root, storage)
 
         assert stats.uploaded == 0

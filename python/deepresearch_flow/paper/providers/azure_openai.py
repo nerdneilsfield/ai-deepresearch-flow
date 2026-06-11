@@ -102,9 +102,13 @@ async def chat(
     data = response.json()
     choices = data.get("choices") or []
     if not choices:
-        raise ProviderError("Azure OpenAI response missing choices", status_code=response.status_code)
+        raise ProviderError(
+            "Azure OpenAI response missing choices", status_code=response.status_code
+        )
     message = choices[0].get("message", {})
     content = message.get("content")
     if not content:
-        raise ProviderError("Azure OpenAI response missing content", status_code=response.status_code)
+        raise ProviderError(
+            "Azure OpenAI response missing content", status_code=response.status_code
+        )
     return content

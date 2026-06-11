@@ -73,8 +73,12 @@ def parse_filters(params: Mapping[str, list[str]]) -> ParsedFilters:
         except ValueError as exc:
             raise InvalidFilterError(f"venue filter rejected: {exc}") from exc
 
-    authors = tuple(_validate_ident(v.lower(), "authors") for v in _multi(params, "filters.authors"))
-    keywords = tuple(_validate_ident(v.lower(), "keywords") for v in _multi(params, "filters.keywords"))
+    authors = tuple(
+        _validate_ident(v.lower(), "authors") for v in _multi(params, "filters.authors")
+    )
+    keywords = tuple(
+        _validate_ident(v.lower(), "keywords") for v in _multi(params, "filters.keywords")
+    )
     tags = tuple(_validate_ident(v.lower(), "tags") for v in _multi(params, "filters.tags"))
     lang_values = _multi(params, "filters.lang")
     lang = _validate_ident(lang_values[0], "lang") if lang_values else None
@@ -91,9 +95,7 @@ def parse_filters(params: Mapping[str, list[str]]) -> ParsedFilters:
     if venues:
         quoted = ", ".join(f"'{_sql_quote(venue)}'" for venue in venues)
         sql_parts.append(f"p.venue IN ({quoted})")
-        lance_parts.append(" OR ".join(
-            f"venue = '{_sql_quote(venue)}'" for venue in venues
-        ))
+        lance_parts.append(" OR ".join(f"venue = '{_sql_quote(venue)}'" for venue in venues))
         applied["venues"] = list(venues)
 
     if lang is not None:

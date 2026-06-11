@@ -176,6 +176,18 @@ The project exposes MCP tools for AI agent access via FastMCP. The recommended p
 
 Full-content MCP reads and full-content paper URI resources are old/removed/archived public-surface patterns. Do not recommend `get_paper_summary`, `get_paper_source`, source/translation line-specific legacy tools, or full-content `paper://...` resources for agent workflows; use the bounded tools below instead. The small `paper://{paper_id}/metadata` resource may remain for compatibility, but agents should prefer `get_paper_metadata`.
 
+Endpoint behavior by deployment mode:
+
+| Endpoint | Static bearer mode | GitHub OAuth mode |
+| --- | --- | --- |
+| `/mcp` | Streamable HTTP with `Authorization: Bearer <MCP_ACCESS_TOKEN>` | Still static bearer only |
+| `/mcp-sse` | SSE with `Authorization: Bearer <MCP_ACCESS_TOKEN>` | Still static bearer only |
+| `/oauth/mcp` | Not used | Streamable HTTP with GitHub OAuth |
+| `/oauth/mcp-sse` | Not used | Unsupported/absent for now |
+| OAuth protocol routes | Not used | Required for discovery, registration, authorization, token exchange, callback, and consent |
+
+Use static bearer for ordinary CLI agents and automation. Use GitHub OAuth for hosted clients such as ChatGPT/Claude that need an interactive OAuth flow. Do not send the static bearer token to `/oauth/mcp`; that endpoint deliberately rejects it.
+
 ### Auth Modes
 
 #### Static Bearer
@@ -214,6 +226,13 @@ OAuth client setup summary:
 4. Do not use `/oauth/mcp-sse`; the OAuth SSE gate currently makes it absent/unsupported.
 
 > **Note:** MCP token, advanced-search token, admin token, and GitHub OAuth credentials are separate credentials.
+
+Operational notes:
+
+- `MCP_PUBLIC_BASE_URL` must be the externally reachable HTTPS origin only. Do not append `/mcp` or `/oauth/mcp`.
+- `MCP_GITHUB_ALLOWED_USER_IDS` uses stable numeric GitHub user IDs, not display names. This keeps drflow single-library/single-tenant while allowing only specific GitHub identities to access MCP.
+- The GitHub OAuth app callback must match the server's OAuth callback route exposed by this deployment, currently `/auth/callback` behind the same public base URL.
+- If a client keeps a stale `Authorization: Bearer ...` header while testing OAuth, remove that header before starting the OAuth flow.
 
 ### Recommended Agent Workflow
 
@@ -292,11 +311,15 @@ Get a bounded line window for source or translated markdown.
 
 - Common arguments: `paper_id`, `content_type`, optional `lang`
 - Modes: `head`, `tail`, `head_tail`, `around`, `range`
-- Range arguments: `start_line`, `end_line`
-- Around arguments: `center_line`, `before_lines`, `after_lines`
-- Tail/head arguments: `line_count`, or `head_lines` and `tail_lines` for `head_tail`
+- `head`: first `line_count` lines
+- `tail`: last `line_count` lines
+- `head_tail`: first `head_lines` plus last `tail_lines`
+- `around`: `center_line` with `before_lines` and `after_lines`
+- `range`: inclusive `start_line` to `end_line`
 
 Returns: `paper_id`, `content_type`, `lang`, line bounds, `total_lines`, `content`, and truncation/window metadata.
+
+Line numbers are 1-based and inclusive. Explicit ranges must be valid; use `outline` first when you need section boundaries. Responses are bounded by server line/character caps and include truncation metadata when the requested window is reduced.
 </details>
 
 <details>
@@ -310,6 +333,8 @@ Get recursive summary key paths in document order.
 - `max_paths`: maximum paths returned
 
 Returns: `paper_id`, `template`, `paths`, `total_paths`, `returned_paths`, `truncated`.
+
+Keys use JSON-style dot/index paths such as `contribution.main` or `experiments[0].result`. Discover keys first instead of downloading the entire summary JSON.
 </details>
 
 <details>

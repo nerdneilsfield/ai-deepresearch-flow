@@ -35,10 +35,12 @@ def _make_source_db(tmp: Path) -> Path:
         init_snapshot_db(conn)
 
         # Insert two papers
-        for i, (pid, title, year) in enumerate([
-            ("paper-alpha", "Alpha Paper on Transformers", "2023"),
-            ("paper-beta", "Beta Paper on Diffusion", "2024"),
-        ]):
+        for i, (pid, title, year) in enumerate(
+            [
+                ("paper-alpha", "Alpha Paper on Transformers", "2023"),
+                ("paper-beta", "Beta Paper on Diffusion", "2024"),
+            ]
+        ):
             conn.execute(
                 """
                 INSERT INTO paper(
@@ -49,32 +51,63 @@ def _make_source_db(tmp: Path) -> Path:
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    pid, f"doi:10.1234/{pid}", "doi", f"10.1234/{pid}",
-                    title, year, "06", f"{year}-06-01",
-                    "NeurIPS", "simple", f"Preview of {title}",
-                    f"hash_{pid}", "en", "openai", "gpt-4", "simple",
-                    "2025-01-01T00:00:00Z", f"pdf_{pid}", f"md_{pid}",
+                    pid,
+                    f"doi:10.1234/{pid}",
+                    "doi",
+                    f"10.1234/{pid}",
+                    title,
+                    year,
+                    "06",
+                    f"{year}-06-01",
+                    "NeurIPS",
+                    "simple",
+                    f"Preview of {title}",
+                    f"hash_{pid}",
+                    "en",
+                    "openai",
+                    "gpt-4",
+                    "simple",
+                    "2025-01-01T00:00:00Z",
+                    f"pdf_{pid}",
+                    f"md_{pid}",
                 ),
             )
 
             # Authors
             conn.execute("INSERT OR IGNORE INTO author(value) VALUES (?)", ("alice",))
             conn.execute("INSERT OR IGNORE INTO author(value) VALUES (?)", ("bob",))
-            alice_id = conn.execute("SELECT author_id FROM author WHERE value = 'alice'").fetchone()["author_id"]
-            bob_id = conn.execute("SELECT author_id FROM author WHERE value = 'bob'").fetchone()["author_id"]
-            conn.execute("INSERT OR IGNORE INTO paper_author(paper_id, author_id) VALUES (?, ?)", (pid, alice_id))
+            alice_id = conn.execute(
+                "SELECT author_id FROM author WHERE value = 'alice'"
+            ).fetchone()["author_id"]
+            bob_id = conn.execute("SELECT author_id FROM author WHERE value = 'bob'").fetchone()[
+                "author_id"
+            ]
+            conn.execute(
+                "INSERT OR IGNORE INTO paper_author(paper_id, author_id) VALUES (?, ?)",
+                (pid, alice_id),
+            )
             if i == 0:
-                conn.execute("INSERT OR IGNORE INTO paper_author(paper_id, author_id) VALUES (?, ?)", (pid, bob_id))
+                conn.execute(
+                    "INSERT OR IGNORE INTO paper_author(paper_id, author_id) VALUES (?, ?)",
+                    (pid, bob_id),
+                )
 
             # Keywords
             conn.execute("INSERT OR IGNORE INTO keyword(value) VALUES (?)", ("deep learning",))
-            kw_id = conn.execute("SELECT keyword_id FROM keyword WHERE value = 'deep learning'").fetchone()["keyword_id"]
-            conn.execute("INSERT OR IGNORE INTO paper_keyword(paper_id, keyword_id) VALUES (?, ?)", (pid, kw_id))
+            kw_id = conn.execute(
+                "SELECT keyword_id FROM keyword WHERE value = 'deep learning'"
+            ).fetchone()["keyword_id"]
+            conn.execute(
+                "INSERT OR IGNORE INTO paper_keyword(paper_id, keyword_id) VALUES (?, ?)",
+                (pid, kw_id),
+            )
 
             # Tags
             conn.execute("INSERT OR IGNORE INTO tag(value) VALUES (?)", ("ml",))
             tag_id = conn.execute("SELECT tag_id FROM tag WHERE value = 'ml'").fetchone()["tag_id"]
-            conn.execute("INSERT OR IGNORE INTO paper_tag(paper_id, tag_id) VALUES (?, ?)", (pid, tag_id))
+            conn.execute(
+                "INSERT OR IGNORE INTO paper_tag(paper_id, tag_id) VALUES (?, ?)", (pid, tag_id)
+            )
 
             # Summary template
             conn.execute(
@@ -187,7 +220,9 @@ class TestLoadRemoteConfig(TestCase):
 
     def test_load_basic_config(self) -> None:
         with tempfile.NamedTemporaryFile(suffix=".toml", mode="w", delete=False) as f:
-            f.write('[remote]\napi_base_url = "https://api.example.com"\nadmin_token = "my-token"\n')
+            f.write(
+                '[remote]\napi_base_url = "https://api.example.com"\nadmin_token = "my-token"\n'
+            )
             f.flush()
             cfg = load_remote_config(Path(f.name))
         assert cfg.api_base_url == "https://api.example.com"
@@ -197,7 +232,9 @@ class TestLoadRemoteConfig(TestCase):
 
     def test_load_env_token(self) -> None:
         with tempfile.NamedTemporaryFile(suffix=".toml", mode="w", delete=False) as f:
-            f.write('[remote]\napi_base_url = "https://api.example.com"\nadmin_token = "env:TEST_PUSH_TOKEN"\n')
+            f.write(
+                '[remote]\napi_base_url = "https://api.example.com"\nadmin_token = "env:TEST_PUSH_TOKEN"\n'
+            )
             f.flush()
             with mock.patch.dict("os.environ", {"TEST_PUSH_TOKEN": "resolved-secret"}):
                 cfg = load_remote_config(Path(f.name))
@@ -233,7 +270,9 @@ class TestLoadRemoteConfig(TestCase):
 
     def test_custom_batch_size(self) -> None:
         with tempfile.NamedTemporaryFile(suffix=".toml", mode="w", delete=False) as f:
-            f.write('[remote]\napi_base_url = "https://x.com"\nadmin_token = "t"\nbatch_size = 50\n')
+            f.write(
+                '[remote]\napi_base_url = "https://x.com"\nadmin_token = "t"\nbatch_size = 50\n'
+            )
             f.flush()
             cfg = load_remote_config(Path(f.name))
         assert cfg.batch_size == 50
@@ -247,7 +286,9 @@ class TestLoadRemoteConfig(TestCase):
 
     def test_batch_size_over_limit_raises(self) -> None:
         with tempfile.NamedTemporaryFile(suffix=".toml", mode="w", delete=False) as f:
-            f.write('[remote]\napi_base_url = "https://x.com"\nadmin_token = "t"\nbatch_size = 300\n')
+            f.write(
+                '[remote]\napi_base_url = "https://x.com"\nadmin_token = "t"\nbatch_size = 300\n'
+            )
             f.flush()
             with self.assertRaises(ValueError):
                 load_remote_config(Path(f.name))
@@ -346,7 +387,9 @@ class TestPushPapers(TestCase):
             result.raise_for_status = mock.MagicMock()
             return result
 
-        config = RemoteConfig(api_base_url="http://testserver", admin_token=ADMIN_TOKEN, batch_size=10)
+        config = RemoteConfig(
+            api_base_url="http://testserver", admin_token=ADMIN_TOKEN, batch_size=10
+        )
 
         with mock.patch("deepresearch_flow.paper.snapshot.push.httpx.Client") as mock_cls:
             inst = mock.MagicMock()
@@ -377,7 +420,9 @@ class TestPushPapers(TestCase):
             result.raise_for_status = mock.MagicMock()
             return result
 
-        config = RemoteConfig(api_base_url="http://testserver", admin_token=ADMIN_TOKEN, batch_size=1)
+        config = RemoteConfig(
+            api_base_url="http://testserver", admin_token=ADMIN_TOKEN, batch_size=1
+        )
 
         with mock.patch("deepresearch_flow.paper.snapshot.push.httpx.Client") as mock_cls:
             inst = mock.MagicMock()
@@ -407,10 +452,17 @@ class TestPushPapers(TestCase):
             else:
                 result.status_code = 200
                 result.raise_for_status = mock.MagicMock()
-                result.json.return_value = {"added": 1, "skipped": 0, "errors": [], "paper_ids": ["paper-alpha"]}
+                result.json.return_value = {
+                    "added": 1,
+                    "skipped": 0,
+                    "errors": [],
+                    "paper_ids": ["paper-alpha"],
+                }
             return result
 
-        config = RemoteConfig(api_base_url="http://testserver", admin_token=ADMIN_TOKEN, batch_size=10)
+        config = RemoteConfig(
+            api_base_url="http://testserver", admin_token=ADMIN_TOKEN, batch_size=10
+        )
 
         with mock.patch("deepresearch_flow.paper.snapshot.push.httpx.Client") as mock_cls:
             inst = mock.MagicMock()
@@ -441,10 +493,10 @@ class TestStorageConfigLoading:
     def test_storage_config_parsed(self, tmp_path: Path) -> None:
         f = tmp_path / "remote.toml"
         f.write_text(
-            '[remote]\n'
+            "[remote]\n"
             'api_base_url = "https://api.example.com"\n'
             'admin_token = "my-token"\n\n'
-            '[remote.storage]\n'
+            "[remote.storage]\n"
             'type = "webdav"\n'
             'url = "https://cdn.example.com/static"\n'
             'username = "deploy"\n'
@@ -460,9 +512,7 @@ class TestStorageConfigLoading:
     def test_storage_config_optional(self, tmp_path: Path) -> None:
         f = tmp_path / "remote.toml"
         f.write_text(
-            '[remote]\n'
-            'api_base_url = "https://api.example.com"\n'
-            'admin_token = "my-token"\n'
+            '[remote]\napi_base_url = "https://api.example.com"\nadmin_token = "my-token"\n'
         )
         cfg = load_remote_config(f)
         assert cfg.storage is None
@@ -471,10 +521,10 @@ class TestStorageConfigLoading:
         monkeypatch.setenv("TEST_STORAGE_PW", "env-resolved")
         f = tmp_path / "remote.toml"
         f.write_text(
-            '[remote]\n'
+            "[remote]\n"
             'api_base_url = "https://api.example.com"\n'
             'admin_token = "my-token"\n\n'
-            '[remote.storage]\n'
+            "[remote.storage]\n"
             'type = "webdav"\n'
             'url = "https://cdn.example.com/static"\n'
             'username = "deploy"\n'
@@ -487,10 +537,10 @@ class TestStorageConfigLoading:
     def test_storage_missing_type_raises(self, tmp_path: Path) -> None:
         f = tmp_path / "remote.toml"
         f.write_text(
-            '[remote]\n'
+            "[remote]\n"
             'api_base_url = "https://api.example.com"\n'
             'admin_token = "my-token"\n\n'
-            '[remote.storage]\n'
+            "[remote.storage]\n"
             'url = "https://cdn.example.com/static"\n'
             'username = "deploy"\n'
             'password = "secret"\n'
@@ -501,10 +551,10 @@ class TestStorageConfigLoading:
     def test_storage_missing_password_raises(self, tmp_path: Path) -> None:
         f = tmp_path / "remote.toml"
         f.write_text(
-            '[remote]\n'
+            "[remote]\n"
             'api_base_url = "https://api.example.com"\n'
             'admin_token = "my-token"\n\n'
-            '[remote.storage]\n'
+            "[remote.storage]\n"
             'type = "webdav"\n'
             'url = "https://cdn.example.com/static"\n'
             'username = "deploy"\n'
@@ -512,14 +562,16 @@ class TestStorageConfigLoading:
         with pytest.raises(ValueError, match="password"):
             load_remote_config(f)
 
-    def test_storage_env_missing_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_storage_env_missing_raises(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.delenv("NONEXISTENT_PW", raising=False)
         f = tmp_path / "remote.toml"
         f.write_text(
-            '[remote]\n'
+            "[remote]\n"
             'api_base_url = "https://api.example.com"\n'
             'admin_token = "my-token"\n\n'
-            '[remote.storage]\n'
+            "[remote.storage]\n"
             'type = "webdav"\n'
             'url = "https://cdn.example.com/static"\n'
             'username = "deploy"\n'
@@ -533,15 +585,15 @@ class TestSemanticConfigLoading:
     def test_semantic_config_parsed(self, tmp_path: Path) -> None:
         f = tmp_path / "remote.toml"
         f.write_text(
-            '[remote]\n'
+            "[remote]\n"
             'api_base_url = "https://api.example.com"\n'
             'admin_token = "my-token"\n\n'
-            '[remote.semantic]\n'
-            'max_rows = 25\n'
-            'max_payload_bytes = 4000000\n'
-            'timeout = 120\n'
-            'retries = 3\n'
-            'retry_backoff_seconds = 2\n'
+            "[remote.semantic]\n"
+            "max_rows = 25\n"
+            "max_payload_bytes = 4000000\n"
+            "timeout = 120\n"
+            "retries = 3\n"
+            "retry_backoff_seconds = 2\n"
         )
 
         cfg = load_remote_config(f)
@@ -557,11 +609,11 @@ class TestSemanticConfigLoading:
     def test_semantic_config_invalid_rows_raise(self, tmp_path: Path) -> None:
         f = tmp_path / "remote.toml"
         f.write_text(
-            '[remote]\n'
+            "[remote]\n"
             'api_base_url = "https://api.example.com"\n'
             'admin_token = "my-token"\n\n'
-            '[remote.semantic]\n'
-            'max_rows = 0\n'
+            "[remote.semantic]\n"
+            "max_rows = 0\n"
         )
 
         with pytest.raises(ValueError, match="max_rows"):

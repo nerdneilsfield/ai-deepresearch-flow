@@ -22,6 +22,7 @@ from deepresearch_flow.paper.utils import parse_json, short_hash
 
 logger = logging.getLogger(__name__)
 
+
 @dataclass(frozen=True)
 class MermaidSpan:
     start: int
@@ -43,6 +44,7 @@ class MermaidIssue:
 @dataclass
 class DiagramTask:
     """Global diagram task for parallel processing."""
+
     file_path: Path
     file_line_offset: int
     field_path: str | None
@@ -72,7 +74,9 @@ def require_mmdc() -> None:
         return
     _MMDC_PATH = shutil.which("mmdc")
     if not _MMDC_PATH:
-        raise RuntimeError("mmdc (mermaid-cli) not found; install with npm i -g @mermaid-js/mermaid-cli")
+        raise RuntimeError(
+            "mmdc (mermaid-cli) not found; install with npm i -g @mermaid-js/mermaid-cli"
+        )
 
 
 def extract_mermaid_spans(text: str, context_chars: int) -> list[MermaidSpan]:
@@ -99,7 +103,7 @@ def extract_mermaid_spans(text: str, context_chars: int) -> list[MermaidSpan]:
 def cleanup_mermaid(text: str) -> str:
     cleaned = text.replace("\r\n", "\n").replace("\r", "\n").lstrip("\ufeff")
     cleaned = cleaned.replace("\u2028", "\n").replace("\u2029", "\n")
-    cleaned = cleaned.replace("“", "\"").replace("”", "\"").replace("‘", "'").replace("’", "'")
+    cleaned = cleaned.replace("“", '"').replace("”", '"').replace("‘", "'").replace("’", "'")
     cleaned = _expand_escaped_newlines(cleaned)
     cleaned = _normalize_mermaid_lines(cleaned)
     cleaned = _normalize_subgraph_lines(cleaned)
@@ -228,7 +232,13 @@ def _normalize_subgraph_lines(text: str) -> str:
 
 def _normalize_label_linebreaks(text: str) -> str:
     def fix_block(block: str) -> str:
-        if "-->" in block or "-.->" in block or "==>" in block or "\nsubgraph" in block or "\nend" in block:
+        if (
+            "-->" in block
+            or "-.->" in block
+            or "==>" in block
+            or "\nsubgraph" in block
+            or "\nend" in block
+        ):
             return block
         return block.replace("\n", "<br/>")
 
@@ -279,10 +289,11 @@ def _normalize_cylinder_labels(text: str) -> str:
             if ")]" in line:
                 line = line.replace("[(", '["(').replace(")]", ')"]')
             else:
+
                 def fix_label(match: re.Match[str]) -> str:
                     inner = match.group(1).strip()
                     wrapped = f"({inner}" if ")" in inner else f"({inner})"
-                    return f'[\"{wrapped}\"]'
+                    return f'["{wrapped}"]'
 
                 line = re.sub(r"\[\(([^]]+)\]", fix_label, line)
         lines.append(line)
@@ -323,7 +334,7 @@ def _sanitize_quoted_label_text(text: str) -> str:
             return block
         if stripped[0] == '"' and stripped[-1] == '"':
             sanitized_inner = stripped[1:-1].replace('"', "&quot;")
-            return f'[\"{sanitized_inner}\"]'
+            return f'["{sanitized_inner}"]'
         return block
 
     return _replace_square_blocks(text, fix_block)
@@ -395,7 +406,7 @@ def _iter_square_blocks(text: str) -> Iterable[tuple[int, int]]:
                 elif ch == quote:
                     quote = None
             else:
-                if ch == "\"":
+                if ch == '"':
                     quote = ch
                 elif ch == "[":
                     depth += 1
@@ -420,7 +431,7 @@ def _count_structural_square_brackets(text: str) -> tuple[int, int]:
             elif ch == quote:
                 quote = None
             continue
-        if ch == "\"":
+        if ch == '"':
             quote = ch
         elif ch == "[":
             opens += 1
@@ -523,7 +534,9 @@ def _dedupe_subgraph_ids(text: str) -> str:
         end_idx = idx + 1
         while end_idx < len(lines) and not re.match(r"\s*end\b", lines[end_idx]):
             end_idx += 1
-        conflict = any(re.match(rf"\s*{re.escape(sub_id)}\b", ln) for ln in lines[idx + 1 : end_idx])
+        conflict = any(
+            re.match(rf"\s*{re.escape(sub_id)}\b", ln) for ln in lines[idx + 1 : end_idx]
+        )
         if conflict:
             new_id = f"{sub_id}_group"
             lines[idx] = line.replace(sub_id, new_id, 1)
@@ -604,7 +617,7 @@ def build_repair_messages(issues: list[MermaidIssue]) -> list[dict[str, str]]:
         "You repair Mermaid diagrams. Fix syntax errors only and keep the "
         "meaning unchanged.\n"
         "Preserve the original diagram type and direction unless they are themselves invalid.\n"
-        "Always emit labels as ID[\"...\"] when you need to rebuild a node.\n"
+        'Always emit labels as ID["..."] when you need to rebuild a node.\n'
         "Escape double quotes inside labels as &quot;.\n"
         "If label text contains [ or ], keep them inside the quoted label text; "
         "do not create nested node delimiters.\n"
@@ -615,7 +628,7 @@ def build_repair_messages(issues: list[MermaidIssue]) -> list[dict[str, str]]:
         "Keep one statement per line; do not glue multiple edges on one line.\n"
         "If you cannot produce a syntactically valid Mermaid diagram with a minimal "
         "fix, return the original diagram unchanged.\n"
-        "Return JSON with key 'items' and each item containing {\"id\", \"mermaid\"}. "
+        'Return JSON with key \'items\' and each item containing {"id", "mermaid"}. '
         "Output JSON only."
     )
     user = json.dumps({"items": payload}, ensure_ascii=False, indent=2)
@@ -627,7 +640,12 @@ def build_repair_messages(issues: list[MermaidIssue]) -> list[dict[str, str]]:
 
 def _estimate_issue_chars(issue: MermaidIssue) -> int:
     """Estimate the character count an issue contributes to the prompt."""
-    return len(issue.span.content) + len(issue.span.context or "") + sum(len(e) for e in issue.errors) + 80
+    return (
+        len(issue.span.content)
+        + len(issue.span.context or "")
+        + sum(len(e) for e in issue.errors)
+        + 80
+    )
 
 
 def iter_batches(
@@ -832,13 +850,17 @@ async def fix_mermaid_text(
         batch_results = await asyncio.gather(
             *[
                 repair_batch(
-                    batch, route_pool, timeout, max_retries, client,
+                    batch,
+                    route_pool,
+                    timeout,
+                    max_retries,
+                    client,
                 )
                 for batch in batches
             ],
             return_exceptions=True,
         )
-        
+
         # Process results
         for batch, result in zip(batches, batch_results):
             if isinstance(result, BaseException):
@@ -846,18 +868,20 @@ async def fix_mermaid_text(
                 error = str(result)
                 for issue in batch:
                     stats.diagrams_failed += 1
-                    error_records.append({
-                        "path": file_path,
-                        "line": line_offset + issue.span.line - 1,
-                        "mermaid": issue.span.content,
-                        "errors": issue.errors + [f"batch_exception: {error}"],
-                        "field_path": issue.field_path,
-                        "item_index": issue.item_index,
-                    })
+                    error_records.append(
+                        {
+                            "path": file_path,
+                            "line": line_offset + issue.span.line - 1,
+                            "mermaid": issue.span.content,
+                            "errors": issue.errors + [f"batch_exception: {error}"],
+                            "field_path": issue.field_path,
+                            "item_index": issue.item_index,
+                        }
+                    )
                 continue
-            
+
             repairs, error = result
-            
+
             if error:
                 for issue in batch:
                     stats.diagrams_failed += 1
@@ -932,7 +956,7 @@ def extract_diagrams_from_text(
     skip_validation: bool = False,
 ) -> list[DiagramTask]:
     """Extract all diagram tasks from a text block.
-    
+
     Args:
         skip_validation: If True, skip validation and mark all diagrams as having issues.
                         This is faster for initial extraction when you'll validate later.
@@ -940,10 +964,10 @@ def extract_diagrams_from_text(
     tasks: list[DiagramTask] = []
     spans = extract_mermaid_spans(text, context_chars)
     file_id = short_hash(str(file_path))
-    
+
     for idx, span in enumerate(spans):
         issue: MermaidIssue | None = None
-        
+
         if skip_validation:
             # Mark all diagrams as needing validation (skip expensive mmdc call)
             issue_id = f"{file_id}:{line_offset + span.line - 1}:{idx}"
@@ -957,7 +981,7 @@ def extract_diagrams_from_text(
         else:
             # Full validation (expensive)
             validation = validate_mermaid(span.content)
-            
+
             if validation:
                 # Try cleanup first
                 candidate = cleanup_mermaid(span.content)
@@ -968,7 +992,7 @@ def extract_diagrams_from_text(
                         pass
                     else:
                         validation = candidate_validation
-                
+
                 if validation:
                     # Still invalid after cleanup
                     issue_id = f"{file_id}:{line_offset + span.line - 1}:{idx}"
@@ -979,7 +1003,7 @@ def extract_diagrams_from_text(
                         field_path=field_path,
                         item_index=item_index,
                     )
-        
+
         tasks.append(
             DiagramTask(
                 file_path=file_path,
@@ -990,7 +1014,7 @@ def extract_diagrams_from_text(
                 issue=issue,
             )
         )
-    
+
     return tasks
 
 
@@ -1008,7 +1032,7 @@ async def repair_all_diagrams_global(
 ) -> tuple[dict[Path, list[tuple[int, int, str]]], list[dict[str, Any]]]:
     """
     Globally repair all diagrams in parallel.
-    
+
     Returns:
         - dict mapping file paths to list of (start, end, replacement) tuples
         - list of error records
@@ -1084,7 +1108,9 @@ async def repair_all_diagrams_global(
                 continue
             if status == "cleaned":
                 stats.diagrams_repaired += 1
-                file_replacements[task.file_path].append((task.span.start, task.span.end, payload or task.span.content))
+                file_replacements[task.file_path].append(
+                    (task.span.start, task.span.end, payload or task.span.content)
+                )
                 if progress_cb:
                     progress_cb()
                 continue

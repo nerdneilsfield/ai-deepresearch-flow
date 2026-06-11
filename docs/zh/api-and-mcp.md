@@ -176,6 +176,18 @@ uv run deepresearch-flow paper db api push-semantic \
 
 Full-content MCP 读取和全文 paper URI resources 是旧的/已移除/归档的 public-surface 模式。不要再为 agent workflow 推荐 `get_paper_summary`、`get_paper_source`、旧的 source/translation line 工具或全文 `paper://...` resources；请使用下面的有边界工具。小型 `paper://{paper_id}/metadata` resource 可为兼容保留，但 agent 应优先使用 `get_paper_metadata`。
 
+不同部署模式下的端点行为：
+
+| Endpoint | Static bearer 模式 | GitHub OAuth 模式 |
+| --- | --- | --- |
+| `/mcp` | Streamable HTTP，使用 `Authorization: Bearer <MCP_ACCESS_TOKEN>` | 仍然只接受 static bearer |
+| `/mcp-sse` | SSE，使用 `Authorization: Bearer <MCP_ACCESS_TOKEN>` | 仍然只接受 static bearer |
+| `/oauth/mcp` | 不使用 | GitHub OAuth 的 Streamable HTTP |
+| `/oauth/mcp-sse` | 不使用 | 当前不支持/不存在 |
+| OAuth protocol 路由 | 不使用 | 用于 discovery、registration、authorization、token exchange、callback 和 consent |
+
+普通 CLI agent 和自动化脚本使用 static bearer。ChatGPT/Claude 这类需要交互式 OAuth 的托管客户端使用 GitHub OAuth。不要把 static bearer token 发到 `/oauth/mcp`；该端点会有意拒绝它。
+
 ### 鉴权模式
 
 #### Static Bearer
@@ -214,6 +226,13 @@ OAuth 客户端配置摘要：
 4. 不要使用 `/oauth/mcp-sse`；当前 OAuth SSE gate 结果是缺失/不支持。
 
 > **注意：** MCP token、advanced-search token、admin token 和 GitHub OAuth 凭据是相互独立的凭据。
+
+运维注意事项：
+
+- `MCP_PUBLIC_BASE_URL` 必须是外部可访问的 HTTPS origin，不要追加 `/mcp` 或 `/oauth/mcp`。
+- `MCP_GITHUB_ALLOWED_USER_IDS` 使用稳定的 GitHub 数字用户 ID，不使用用户名/显示名。这样 drflow 仍然是单库/单租户，只是限制哪些 GitHub 身份可以访问 MCP。
+- GitHub OAuth App callback 需要匹配本部署暴露的 OAuth callback 路由，目前是同一 public base URL 下的 `/auth/callback`。
+- 测试 OAuth 时，如果客户端保留了旧的 `Authorization: Bearer ...` 请求头，先移除该请求头再开始 OAuth flow。
 
 ### 推荐 Agent Workflow
 
@@ -292,11 +311,15 @@ OAuth 客户端配置摘要：
 
 - 常用参数：`paper_id`、`content_type`、可选 `lang`
 - 模式：`head`、`tail`、`head_tail`、`around`、`range`
-- Range 参数：`start_line`、`end_line`
-- Around 参数：`center_line`、`before_lines`、`after_lines`
-- Head/tail 参数：`line_count`，或 `head_tail` 模式下的 `head_lines` 和 `tail_lines`
+- `head`：前 `line_count` 行
+- `tail`：后 `line_count` 行
+- `head_tail`：前 `head_lines` 行加后 `tail_lines` 行
+- `around`：以 `center_line` 为中心，包含 `before_lines` 和 `after_lines`
+- `range`：从 `start_line` 到 `end_line` 的闭区间
 
 返回：`paper_id`、`content_type`、`lang`、行边界、`total_lines`、`content` 以及截断/窗口 metadata。
+
+行号从 1 开始，且首尾都包含。显式 range 必须合法；需要 section 边界时先调用 `outline`。响应受服务器行数/字符数上限约束，请根据返回的截断 metadata 判断窗口是否被裁剪。
 </details>
 
 <details>
@@ -310,6 +333,8 @@ OAuth 客户端配置摘要：
 - `max_paths`：最多返回的路径数
 
 返回：`paper_id`、`template`、`paths`、`total_paths`、`returned_paths`、`truncated`。
+
+Key 使用类似 JSON 的 dot/index 路径，例如 `contribution.main` 或 `experiments[0].result`。应先发现 key，再读取具体值，避免下载完整 summary JSON。
 </details>
 
 <details>

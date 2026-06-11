@@ -58,13 +58,16 @@ def _base_config() -> str:
 
 
 def test_advanced_defaults_present_when_search_section_exists(tmp_path: Path) -> None:
-    body = _base_config() + """
+    body = (
+        _base_config()
+        + """
         [search]
         vector_dir = "./embed_db"
         vector_top_k = 50
         keyword_top_k = 30
         hybrid = true
     """
+    )
     cfg = load_config(str(_write_toml(tmp_path, body)))
     assert cfg.search is not None
     assert cfg.search.advanced_enabled is False
@@ -81,7 +84,9 @@ def test_advanced_defaults_present_when_search_section_exists(tmp_path: Path) ->
 
 
 def test_advanced_fields_overridable(tmp_path: Path) -> None:
-    body = _base_config() + """
+    body = (
+        _base_config()
+        + """
         [search]
         vector_dir = "./embed_db"
         vector_top_k = 40
@@ -92,6 +97,7 @@ def test_advanced_fields_overridable(tmp_path: Path) -> None:
         advanced_rerank_timeout_ms = 2500
         advanced_top_n_max = 25
     """
+    )
     cfg = load_config(str(_write_toml(tmp_path, body)))
     assert cfg.search is not None
     assert cfg.search.advanced_enabled is True
@@ -101,22 +107,29 @@ def test_advanced_fields_overridable(tmp_path: Path) -> None:
 
 
 def test_advanced_config_allows_cli_only_vector_dir(tmp_path: Path) -> None:
-    body = _base_config() + """
+    body = (
+        _base_config()
+        + """
         [search]
         vector_top_k = 40
         keyword_top_k = 20
         hybrid = true
         advanced_enabled = true
     """
+    )
     cfg = load_config(str(_write_toml(tmp_path, body)))
     assert cfg.search is not None
     assert cfg.search.advanced_enabled is True
     assert cfg.search.vector_dir == ""
 
 
-def test_existing_search_fields_still_parse(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_existing_search_fields_still_parse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("SEARCH_ACCESS_TOKEN", "token")
-    body = _base_config() + """
+    body = (
+        _base_config()
+        + """
         [search]
         vector_dir = "./v"
         vector_top_k = 10
@@ -124,6 +137,7 @@ def test_existing_search_fields_still_parse(tmp_path: Path, monkeypatch: pytest.
         hybrid = false
         access_token = "env:SEARCH_ACCESS_TOKEN"
     """
+    )
     cfg = load_config(str(_write_toml(tmp_path, body)))
     assert cfg.search is not None
     assert cfg.search.vector_dir == "./v"

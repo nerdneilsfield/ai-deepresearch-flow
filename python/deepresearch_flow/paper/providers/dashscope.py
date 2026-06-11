@@ -41,14 +41,11 @@ async def chat(
     status_code = data.get("status_code")
     if status_code and status_code != 200:
         retryable = status_code in (429, 500, 502, 503, 504)
-        raise ProviderError(data.get("message") or "DashScope error", status_code=status_code, retryable=retryable)
+        raise ProviderError(
+            data.get("message") or "DashScope error", status_code=status_code, retryable=retryable
+        )
 
-    content = (
-        data.get("output", {})
-        .get("choices", [{}])[0]
-        .get("message", {})
-        .get("content")
-    )
+    content = data.get("output", {}).get("choices", [{}])[0].get("message", {}).get("content")
     if not content:
         raise ProviderError("DashScope response missing content")
     return content

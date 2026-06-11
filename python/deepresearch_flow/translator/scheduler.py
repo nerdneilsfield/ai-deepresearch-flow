@@ -457,7 +457,9 @@ class Scheduler:
         return tasks
 
     def _make_group_builder(self) -> GroupBuilder:
-        def build(ctx: DocumentContext, failed_nodes: dict[int, Node], stage: DocStage) -> list[GroupTask]:
+        def build(
+            ctx: DocumentContext, failed_nodes: dict[int, Node], stage: DocStage
+        ) -> list[GroupTask]:
             if not failed_nodes:
                 return []
             cfg = self._configs[stage]
@@ -488,6 +490,7 @@ class Scheduler:
                     )
                 )
             return tasks
+
         return build
 
     def _make_finalize_fn(
@@ -541,7 +544,8 @@ class Scheduler:
                     )
             failed = self._translator._collect_failed_nodes(ctx.translated_nodes)
             retry_groups = sum(
-                count for stage, count in ctx.stage_group_counts.items()
+                count
+                for stage, count in ctx.stage_group_counts.items()
                 if stage != DocStage.TRANSLATING.value
             )
             logger.info(

@@ -45,11 +45,7 @@ def _make_inline_formula(case_id: int, slot: int, suffix: str = "") -> str:
 
 def _make_display_formula(case_id: int, slot: int, suffix: str = "") -> str:
     tail = f"_{suffix}" if suffix else ""
-    return (
-        "\n"
-        f"{case_id + slot}{tail} + z_{case_id}_{slot}{tail}\n"
-        "\n"
-    )
+    return f"\n{case_id + slot}{tail} + z_{case_id}_{slot}{tail}\n\n"
 
 
 def _build_extract_fuzz_cases(count: int = 120, seed: int = 20240413) -> list[ExtractFuzzCase]:
@@ -262,11 +258,7 @@ def test_extract_math_spans_ignores_unmatched_or_non_math_dollar_sequences(text:
             "A prose line with $x+y$ and $z^2$.\n"
             "$$\n"
         ),
-        (
-            "$$\n"
-            "\\underline{\\text{__PH_AUTOLINK_000106__}}\n"
-            "$$\n"
-        ),
+        ("$$\n\\underline{\\text{__PH_AUTOLINK_000106__}}\n$$\n"),
     ],
 )
 def test_extract_math_spans_rejects_prose_or_placeholder_pollution(text: str) -> None:
@@ -355,9 +347,7 @@ def test_fix_math_text_keeps_valid_display_formula_with_cjk_punctuation(monkeypa
     monkeypatch.setattr(
         math_module,
         "validate_formula",
-        lambda text, _display_mode: []
-        if text == original[2:-2]
-        else ["unexpected mutation"],
+        lambda text, _display_mode: [] if text == original[2:-2] else ["unexpected mutation"],
     )
     monkeypatch.setattr(math_module, "short_hash", lambda _path: "abc")
 
@@ -408,7 +398,7 @@ def test_apply_replacements_rejects_overlapping_spans() -> None:
     ],
 )
 def test_apply_replacements_rejects_same_start_or_containment_overlaps(
-    replacements: list[tuple[int, int, str]]
+    replacements: list[tuple[int, int, str]],
 ) -> None:
     with pytest.raises(ValueError, match="overlap"):
         apply_replacements("abcdef", replacements)

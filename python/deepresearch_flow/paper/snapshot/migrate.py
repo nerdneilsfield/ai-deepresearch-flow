@@ -81,12 +81,14 @@ def enrich_db_with_bibtex(
     papers: list[dict[str, Any]] = []
     for row in rows:
         paper_id, title, year, pub_date, venue = row
-        papers.append({
-            "paper_id": paper_id,
-            "paper_title": title,
-            "publication_date": pub_date or year,
-            "publication_venue": venue,
-        })
+        papers.append(
+            {
+                "paper_id": paper_id,
+                "paper_title": title,
+                "publication_date": pub_date or year,
+                "publication_venue": venue,
+            }
+        )
 
     # Match with BibTeX
     enrich_with_bibtex(papers, bibtex_path)

@@ -231,8 +231,12 @@ def _update_model_flags(config: PaperConfig, updates: dict[str, dict[str, bool]]
                 new_models.append(
                     replace(
                         model,
-                        is_support_json_schema=flags.get("json_schema", model.is_support_json_schema),
-                        is_support_json_object=flags.get("json_object", model.is_support_json_object),
+                        is_support_json_schema=flags.get(
+                            "json_schema", model.is_support_json_schema
+                        ),
+                        is_support_json_object=flags.get(
+                            "json_object", model.is_support_json_object
+                        ),
                     )
                 )
             else:
@@ -242,7 +246,14 @@ def _update_model_flags(config: PaperConfig, updates: dict[str, dict[str, bool]]
 
 
 @utils.command("test-mode")
-@click.option("-c", "--config", "config_path", default="config.toml", type=click.Path(path_type=Path), help="Path to config.toml")
+@click.option(
+    "-c",
+    "--config",
+    "config_path",
+    default="config.toml",
+    type=click.Path(path_type=Path),
+    help="Path to config.toml",
+)
 @click.option(
     "-m",
     "--model",

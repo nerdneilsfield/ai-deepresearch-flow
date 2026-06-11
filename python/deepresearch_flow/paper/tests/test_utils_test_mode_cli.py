@@ -69,9 +69,7 @@ def test_rejects_unknown_declared_model(tmp_path: Path) -> None:
     assert "does not resolve" in result.output
 
 
-def test_reports_probe_results_without_write_back(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_reports_probe_results_without_write_back(tmp_path: Path, monkeypatch) -> None:
     runner = CliRunner()
     config_path = _write_config(tmp_path)
     original = config_path.read_text(encoding="utf-8")
@@ -100,9 +98,7 @@ def test_reports_probe_results_without_write_back(
     assert config_path.read_text(encoding="utf-8") == original
 
 
-def test_write_back_updates_only_probed_modes(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_write_back_updates_only_probed_modes(tmp_path: Path, monkeypatch) -> None:
     runner = CliRunner()
     config_path = _write_config(tmp_path)
 
@@ -133,9 +129,7 @@ def test_write_back_updates_only_probed_modes(
     assert [item.model for item in reloaded.main_model] == ["openai/gpt-4.1"]
 
 
-def test_probe_failure_exits_non_zero_and_does_not_write_back(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_probe_failure_exits_non_zero_and_does_not_write_back(tmp_path: Path, monkeypatch) -> None:
     runner = CliRunner()
     config_path = _write_config(tmp_path)
     original = config_path.read_text(encoding="utf-8")
@@ -163,9 +157,7 @@ def test_probe_failure_exits_non_zero_and_does_not_write_back(
     assert config_path.read_text(encoding="utf-8") == original
 
 
-def test_explicit_unsupported_error_writes_back_false(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_explicit_unsupported_error_writes_back_false(tmp_path: Path, monkeypatch) -> None:
     runner = CliRunner()
     config_path = _write_config(tmp_path)
 
@@ -209,7 +201,9 @@ def test_write_back_preserves_active_window_fields(tmp_path: Path, monkeypatch) 
         encoding="utf-8",
     )
 
-    monkeypatch.setattr("deepresearch_flow.utils.cli.probe_model_mode", lambda route, mode: mode == "json_schema")
+    monkeypatch.setattr(
+        "deepresearch_flow.utils.cli.probe_model_mode", lambda route, mode: mode == "json_schema"
+    )
 
     result = runner.invoke(
         cli,

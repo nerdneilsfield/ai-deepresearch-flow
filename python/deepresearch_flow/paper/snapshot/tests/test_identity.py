@@ -42,7 +42,9 @@ class TestIdentity(unittest.TestCase):
                 min_author_jaccard=0.5,
             )
         )
-        cur_same_authors = '{"authors":["a","b"],"title":"completely different","venue":"y","year":"2020"}'
+        cur_same_authors = (
+            '{"authors":["a","b"],"title":"completely different","venue":"y","year":"2020"}'
+        )
         self.assertFalse(
             meta_fingerprint_divergent(
                 prev,
@@ -58,13 +60,17 @@ class TestSearchText(unittest.TestCase):
         self.assertEqual(rewrite_search_query("深度学习"), '"深 度 学 习"')
 
     def test_rewrite_search_query_mixed(self) -> None:
-        self.assertEqual(rewrite_search_query("深度学习 transformer"), '"深 度 学 习" "transformer"')
+        self.assertEqual(
+            rewrite_search_query("深度学习 transformer"), '"深 度 学 习" "transformer"'
+        )
 
     def test_rewrite_search_query_splits_mixed_latin_cjk_tokens(self) -> None:
         self.assertEqual(rewrite_search_query("abc深度def"), '"abc" "深 度" "def"')
 
     def test_rewrite_search_query_boolean(self) -> None:
-        self.assertEqual(rewrite_search_query("lidar AND localization"), '"lidar" AND "localization"')
+        self.assertEqual(
+            rewrite_search_query("lidar AND localization"), '"lidar" AND "localization"'
+        )
 
     def test_rewrite_search_query_empty_after_cleanup(self) -> None:
         self.assertEqual(rewrite_search_query("  ，。！？  "), "")
@@ -85,7 +91,9 @@ class TestSearchText(unittest.TestCase):
 
     def test_markdown_to_plain_text_handles_empty_and_breaks_and_images(self) -> None:
         self.assertEqual(markdown_to_plain_text(""), "")
-        md = "hello  \nworld\n![Alt Text](https://example.com/a.png)\n![](https://example.com/b.png)"
+        md = (
+            "hello  \nworld\n![Alt Text](https://example.com/a.png)\n![](https://example.com/b.png)"
+        )
         plain = markdown_to_plain_text(md)
         self.assertIn("hello", plain)
         self.assertIn("world", plain)

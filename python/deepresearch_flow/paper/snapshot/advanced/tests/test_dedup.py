@@ -4,7 +4,9 @@ from deepresearch_flow.paper.snapshot.advanced.chunk_select import SelectedChunk
 from deepresearch_flow.paper.snapshot.advanced.dedup import dedup
 
 
-def _selected(chunk_id: str, paper_id: str, text: str, vector: tuple[float, ...], fused: float) -> SelectedChunk:
+def _selected(
+    chunk_id: str, paper_id: str, text: str, vector: tuple[float, ...], fused: float
+) -> SelectedChunk:
     return SelectedChunk(
         paper_id=paper_id,
         chunk_id=chunk_id,

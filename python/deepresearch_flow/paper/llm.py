@@ -56,12 +56,16 @@ async def call_provider(
     if provider.type == "dashscope":
         if not api_key:
             raise ProviderError("dashscope provider requires api_key")
-        return await dashscope_chat(api_key=api_key, model=model, messages=messages, timeout=timeout)
+        return await dashscope_chat(
+            api_key=api_key, model=model, messages=messages, timeout=timeout
+        )
 
     if provider.type == "gemini_ai_studio":
         if not api_key:
             raise ProviderError("gemini_ai_studio provider requires api_key")
-        return await gemini_ai_studio_chat(api_key=api_key, model=model, messages=messages, timeout=timeout)
+        return await gemini_ai_studio_chat(
+            api_key=api_key, model=model, messages=messages, timeout=timeout
+        )
 
     if provider.type == "gemini_vertex":
         if not provider.project_id or not provider.location:

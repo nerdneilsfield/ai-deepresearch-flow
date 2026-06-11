@@ -86,13 +86,25 @@ def test_group_multiple_groups_separate_batches() -> None:
 
 def test_push_sends_requests_and_accumulates_stats() -> None:
     chunks = [_make_chunk("doc1", "simple", i) for i in range(3)]
-    index_meta = {"model": "m", "dimensions": 4, "normalized": True, "provider": "p", "index_version": 1}
+    index_meta = {
+        "model": "m",
+        "dimensions": 4,
+        "normalized": True,
+        "provider": "p",
+        "index_version": 1,
+    }
 
     with mock.patch("deepresearch_flow.paper.snapshot.push_semantic.httpx.Client") as mock_cls:
         mock_client = mock.MagicMock()
         mock_resp = mock.MagicMock()
         mock_resp.status_code = 200
-        mock_resp.json.return_value = {"received": 3, "inserted": 3, "updated": 0, "skipped": 0, "deleted": 0}
+        mock_resp.json.return_value = {
+            "received": 3,
+            "inserted": 3,
+            "updated": 0,
+            "skipped": 0,
+            "deleted": 0,
+        }
         mock_resp.raise_for_status = mock.MagicMock()
         mock_client.post.return_value = mock_resp
         mock_client.__enter__ = mock.MagicMock(return_value=mock_client)
@@ -113,14 +125,26 @@ def test_push_sends_requests_and_accumulates_stats() -> None:
 
 def test_push_retries_transport_errors_then_succeeds() -> None:
     chunks = [_make_chunk("doc1", "simple", i) for i in range(2)]
-    index_meta = {"model": "m", "dimensions": 4, "normalized": True, "provider": "p", "index_version": 1}
+    index_meta = {
+        "model": "m",
+        "dimensions": 4,
+        "normalized": True,
+        "provider": "p",
+        "index_version": 1,
+    }
 
     with mock.patch("deepresearch_flow.paper.snapshot.push_semantic.httpx.Client") as mock_cls:
         mock_client = mock.MagicMock()
         retry_error = httpx.RemoteProtocolError("Server disconnected")
         mock_resp = mock.MagicMock()
         mock_resp.status_code = 200
-        mock_resp.json.return_value = {"received": 2, "inserted": 2, "updated": 0, "skipped": 0, "deleted": 0}
+        mock_resp.json.return_value = {
+            "received": 2,
+            "inserted": 2,
+            "updated": 0,
+            "skipped": 0,
+            "deleted": 0,
+        }
         mock_resp.raise_for_status = mock.MagicMock()
         mock_client.post.side_effect = [retry_error, mock_resp]
         mock_client.__enter__ = mock.MagicMock(return_value=mock_client)
@@ -144,7 +168,13 @@ def test_push_retries_transport_errors_then_succeeds() -> None:
 
 def test_push_failure_carries_batch_metadata_and_report(tmp_path) -> None:
     chunks = [_make_chunk("doc1", "simple", i) for i in range(2)]
-    index_meta = {"model": "m", "dimensions": 4, "normalized": True, "provider": "p", "index_version": 1}
+    index_meta = {
+        "model": "m",
+        "dimensions": 4,
+        "normalized": True,
+        "provider": "p",
+        "index_version": 1,
+    }
 
     with mock.patch("deepresearch_flow.paper.snapshot.push_semantic.httpx.Client") as mock_cls:
         mock_client = mock.MagicMock()

@@ -6,9 +6,7 @@ import subprocess
 from pathlib import Path
 
 
-SCRIPT_PATH = (
-    Path(__file__).resolve().parents[4] / "scripts" / "docker" / "start-api.sh"
-)
+SCRIPT_PATH = Path(__file__).resolve().parents[4] / "scripts" / "docker" / "start-api.sh"
 
 
 def _write_fake_cli(tmp_path: Path) -> tuple[Path, Path]:
@@ -17,8 +15,8 @@ def _write_fake_cli(tmp_path: Path) -> tuple[Path, Path]:
     cli_path = tmp_path / "deepresearch-flow"
     cli_path.write_text(
         "#!/usr/bin/env bash\n"
-        "printf '%s\n' \"$@\" > \"$CAPTURE_ARGS_FILE\"\n"
-        "printf '%s' \"${SEARCH_ACCESS_TOKEN:-}\" > \"$CAPTURE_TOKEN_FILE\"\n",
+        'printf \'%s\n\' "$@" > "$CAPTURE_ARGS_FILE"\n'
+        'printf \'%s\' "${SEARCH_ACCESS_TOKEN:-}" > "$CAPTURE_TOKEN_FILE"\n',
         encoding="utf-8",
     )
     cli_path.chmod(cli_path.stat().st_mode | stat.S_IEXEC)
@@ -64,7 +62,9 @@ def test_start_api_script_rejects_placeholder_mcp_access_token(tmp_path: Path) -
     assert not (tmp_path / "args.txt").exists()
 
 
-def test_start_api_script_allows_explicit_unsafe_public_mcp_for_isolated_testing(tmp_path: Path) -> None:
+def test_start_api_script_allows_explicit_unsafe_public_mcp_for_isolated_testing(
+    tmp_path: Path,
+) -> None:
     result = _run_start_api(tmp_path, MCP_ACCESS_TOKEN="", MCP_PUBLIC_UNSAFE="1")
 
     assert result.returncode == 0
@@ -92,11 +92,7 @@ def test_start_api_script_accepts_restricted_cors_origins(tmp_path: Path) -> Non
 
     assert result.returncode == 0
     args = (tmp_path / "args.txt").read_text(encoding="utf-8").splitlines()
-    cors_values = [
-        args[index + 1]
-        for index, value in enumerate(args)
-        if value == "--cors-origin"
-    ]
+    cors_values = [args[index + 1] for index, value in enumerate(args) if value == "--cors-origin"]
     assert cors_values == ["https://papers.example.com", "http://localhost:5173"]
 
 

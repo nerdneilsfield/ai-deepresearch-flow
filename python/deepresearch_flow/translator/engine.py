@@ -30,14 +30,11 @@ logger = logging.getLogger(__name__)
 
 
 class TranslationProgress(Protocol):
-    async def add_groups(self, count: int) -> None:
-        ...
+    async def add_groups(self, count: int) -> None: ...
 
-    async def advance_groups(self, count: int) -> None:
-        ...
+    async def advance_groups(self, count: int) -> None: ...
 
-    async def set_group_status(self, text: str) -> None:
-        ...
+    async def set_group_status(self, text: str) -> None: ...
 
 
 @dataclass
@@ -120,9 +117,7 @@ class MarkdownTranslator:
         self._rumdl_warned = False
         self._rumdl_timeout_seconds = 120.0
 
-        self._rx_preserve = re.compile(
-            r"@@PRESERVE_(\d+)@@[\s\S]*?@@/PRESERVE_\1@@", re.DOTALL
-        )
+        self._rx_preserve = re.compile(r"@@PRESERVE_(\d+)@@[\s\S]*?@@/PRESERVE_\1@@", re.DOTALL)
         self._rx_placeholder = re.compile(r"__PH_[A-Z0-9_]+?_\d+__")
         self._rx_placeholder_fuzzy = re.compile(
             r"__PH[^A-Za-z0-9]*([A-Za-z0-9]+)[^0-9]*([0-9]{6})__"
@@ -248,7 +243,9 @@ class MarkdownTranslator:
         text = s.strip()
         if not text:
             return False
-        if "__PH_MATHBLOCK_" in text and re.search(r"\\(?:left|right|begin|end|mathbf|mathrm|mathcal)", text):
+        if "__PH_MATHBLOCK_" in text and re.search(
+            r"\\(?:left|right|begin|end|mathbf|mathrm|mathcal)", text
+        ):
             return True
         marker_count = len(re.findall(r"\\[A-Za-z]+|\\\[|\\\]|\$|_\{|[\^_]", text))
         if marker_count < 3:
@@ -628,8 +625,8 @@ class MarkdownTranslator:
             if list_re.match(line) or (line.lstrip().startswith("|") and line.count("|") >= 2):
                 out.append(line)
                 continue
-            prefix = line[:match.start()]
-            suffix = line[match.end():]
+            prefix = line[: match.start()]
+            suffix = line[match.end() :]
             prefix_text = prefix.strip()
             suffix_text = suffix.strip()
             indent = prefix if not prefix_text else ""
@@ -638,7 +635,7 @@ class MarkdownTranslator:
                 out.append("")
             elif out and out[-1].strip():
                 out.append("")
-            out.append(f"{indent}{line[match.start():match.end()]}")
+            out.append(f"{indent}{line[match.start() : match.end()]}")
             if suffix_text:
                 out.append("")
                 out.append(suffix.strip())
@@ -745,7 +742,11 @@ class MarkdownTranslator:
     def _collect_failed_nodes(self, nodes: dict[int, Node]) -> dict[int, Node]:
         failed: dict[int, Node] = {}
         for nid, node in nodes.items():
-            ok = self._is_translation_success(node.origin_text, node.translated_text) if node.translated_text else False
+            ok = (
+                self._is_translation_success(node.origin_text, node.translated_text)
+                if node.translated_text
+                else False
+            )
             if not ok:
                 failed[nid] = node
         return failed
@@ -1060,8 +1061,7 @@ class MarkdownTranslator:
         self._log_failed_sample(failed_nodes, "initial")
         if progress:
             await progress.set_group_status(
-                f"nodes {total_nodes} ok {success_count} "
-                f"fail {len(failed_nodes)} skip {skip_count}"
+                f"nodes {total_nodes} ok {success_count} fail {len(failed_nodes)} skip {skip_count}"
             )
 
         retry_groups_total = 0
@@ -1103,9 +1103,7 @@ class MarkdownTranslator:
                     model,
                     route_pool,
                 )
-                retry_nodes = self._ungroup_groups(
-                    retry_outputs, failed_nodes, fill_missing=False
-                )
+                retry_nodes = self._ungroup_groups(retry_outputs, failed_nodes, fill_missing=False)
                 if valid_placeholders:
                     for node in retry_nodes.values():
                         if node.translated_text:
@@ -1137,12 +1135,7 @@ class MarkdownTranslator:
                     )
                 attempt += 1
 
-        if (
-            self.cfg.retry_failed_nodes
-            and failed_nodes
-            and fallback_provider
-            and fallback_model
-        ):
+        if self.cfg.retry_failed_nodes and failed_nodes and fallback_provider and fallback_model:
             fallback_rotator = KeyRotator(resolve_api_keys(fallback_provider.api_keys))
             attempt = 1
             fallback_retry_limit = fallback_retry_times or retry_limit
@@ -1179,9 +1172,7 @@ class MarkdownTranslator:
                     fallback_model,
                     fallback_route_pool,
                 )
-                retry_nodes = self._ungroup_groups(
-                    retry_outputs, failed_nodes, fill_missing=False
-                )
+                retry_nodes = self._ungroup_groups(retry_outputs, failed_nodes, fill_missing=False)
                 if valid_placeholders:
                     for node in retry_nodes.values():
                         if node.translated_text:
@@ -1255,9 +1246,7 @@ class MarkdownTranslator:
                     fallback_model_2,
                     fallback_route_pool_2,
                 )
-                retry_nodes = self._ungroup_groups(
-                    retry_outputs, failed_nodes, fill_missing=False
-                )
+                retry_nodes = self._ungroup_groups(retry_outputs, failed_nodes, fill_missing=False)
                 if valid_placeholders:
                     for node in retry_nodes.values():
                         if node.translated_text:

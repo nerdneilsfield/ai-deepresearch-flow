@@ -84,7 +84,9 @@ def multi_page_response() -> dict:
 _HASH_IMG_RE = re.compile(r"images/[0-9a-f]{12}\.\w+")
 
 
-def _mock_transport(ocr_response: dict, image_bytes: bytes = FAKE_IMAGE_BYTES) -> httpx.MockTransport:
+def _mock_transport(
+    ocr_response: dict, image_bytes: bytes = FAKE_IMAGE_BYTES
+) -> httpx.MockTransport:
     """Build a MockTransport that returns the OCR response for POST and image bytes for GET."""
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -167,7 +169,13 @@ class TestPaddleOcrBackend:
                 captured_request.append(request)
                 return httpx.Response(
                     200,
-                    json={"result": {"layoutParsingResults": [{"markdown": {"text": "ok", "images": {}}, "outputImages": {}}]}},
+                    json={
+                        "result": {
+                            "layoutParsingResults": [
+                                {"markdown": {"text": "ok", "images": {}}, "outputImages": {}}
+                            ]
+                        }
+                    },
                 )
             return httpx.Response(200, content=b"img")
 
@@ -246,9 +254,7 @@ class TestPaddleOcrBackend:
         assert len(page.images) == 1
         assert page.missing_images == ()
 
-    def test_unmapped_url_download_failure(
-        self, backend: PaddleOcrBackend, tmp_path: Path
-    ) -> None:
+    def test_unmapped_url_download_failure(self, backend: PaddleOcrBackend, tmp_path: Path) -> None:
         """Unmapped URL that fails to download should be in missing_images."""
         pdf_file = tmp_path / "test.pdf"
         pdf_file.write_bytes(b"%PDF-1.4 fake")
@@ -277,9 +283,7 @@ class TestPaddleOcrBackend:
         assert "http://cdn.example.com" not in page.markdown
         assert _HASH_IMG_RE.search(page.markdown)
 
-    def test_html_img_tags_normalized(
-        self, backend: PaddleOcrBackend, tmp_path: Path
-    ) -> None:
+    def test_html_img_tags_normalized(self, backend: PaddleOcrBackend, tmp_path: Path) -> None:
         """HTML <img src="..."> tags should also be normalized to local paths."""
         pdf_file = tmp_path / "test.pdf"
         pdf_file.write_bytes(b"%PDF-1.4 fake")
@@ -290,11 +294,11 @@ class TestPaddleOcrBackend:
                     {
                         "markdown": {
                             "text": (
-                                'Text\n\n'
+                                "Text\n\n"
                                 '<div style="text-align: center;">'
                                 '<img src="http://cdn.example.com/chart.jpg" alt="Image" width="35%" />'
-                                '</div>\n\n'
-                                'More text'
+                                "</div>\n\n"
+                                "More text"
                             ),
                             "images": {},
                         },
@@ -331,8 +335,7 @@ class TestPaddleOcrBackend:
                     {
                         "markdown": {
                             "text": (
-                                '<div><img src="imgs/chart.jpg" '
-                                'alt="Image" width="35%" /></div>'
+                                '<div><img src="imgs/chart.jpg" alt="Image" width="35%" /></div>'
                             ),
                             "images": {
                                 "chart.jpg": "http://cdn.example.com/chart.jpg",
@@ -367,8 +370,7 @@ class TestPaddleOcrBackend:
                     {
                         "markdown": {
                             "text": (
-                                '<div><img src="imgs/unknown.jpg" '
-                                'alt="Image" width="35%" /></div>'
+                                '<div><img src="imgs/unknown.jpg" alt="Image" width="35%" /></div>'
                             ),
                             "images": {},  # No mapping.
                         },
@@ -386,9 +388,7 @@ class TestPaddleOcrBackend:
         assert "<img" not in page.markdown
         assert "![Image](imgs/unknown.jpg)" in page.markdown
 
-    def test_html_img_reuses_mapped_image(
-        self, backend: PaddleOcrBackend, tmp_path: Path
-    ) -> None:
+    def test_html_img_reuses_mapped_image(self, backend: PaddleOcrBackend, tmp_path: Path) -> None:
         """HTML <img src="imgs/foo.jpg"> should reuse the same local key as markdown.images["foo.jpg"]."""
         pdf_file = tmp_path / "test.pdf"
         pdf_file.write_bytes(b"%PDF-1.4 fake")
@@ -399,7 +399,7 @@ class TestPaddleOcrBackend:
                     {
                         "markdown": {
                             "text": (
-                                '![md_ref](http://cdn.example.com/fig.jpg)\n\n'
+                                "![md_ref](http://cdn.example.com/fig.jpg)\n\n"
                                 '<div><img src="imgs/fig.jpg" alt="Table" /></div>'
                             ),
                             "images": {
@@ -422,9 +422,7 @@ class TestPaddleOcrBackend:
         hash_key = f"images/{FAKE_IMAGE_HASH}.jpg"
         assert page.markdown.count(hash_key) == 2
 
-    def test_same_content_deduplicates(
-        self, backend: PaddleOcrBackend, tmp_path: Path
-    ) -> None:
+    def test_same_content_deduplicates(self, backend: PaddleOcrBackend, tmp_path: Path) -> None:
         """Two different URLs returning same content should produce one image file."""
         pdf_file = tmp_path / "test.pdf"
         pdf_file.write_bytes(b"%PDF-1.4 fake")

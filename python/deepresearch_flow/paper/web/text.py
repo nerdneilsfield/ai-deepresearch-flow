@@ -5,7 +5,9 @@ from __future__ import annotations
 import html
 import re
 
-_INLINE_FORMULA_RE = re.compile(r"<inline-formula[^>]*>.*?</inline-formula>", re.IGNORECASE | re.DOTALL)
+_INLINE_FORMULA_RE = re.compile(
+    r"<inline-formula[^>]*>.*?</inline-formula>", re.IGNORECASE | re.DOTALL
+)
 _TEX_MATH_RE = re.compile(r"<tex-math[^>]*>(.*?)</tex-math>", re.IGNORECASE | re.DOTALL)
 _TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")

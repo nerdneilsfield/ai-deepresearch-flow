@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import re
 from typing import Any, Callable
 
+
 @dataclass(frozen=True)
 class SearchableField:
     field_name: str
