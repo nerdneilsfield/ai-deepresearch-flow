@@ -425,13 +425,19 @@ MCP 客户端配置：
 - Streamable HTTP 端点：`http://<host>:8001/mcp`
 - SSE 端点：`http://<host>:8001/mcp-sse`
 - 传输行为：
-  - `/mcp`：仅支持 HTTP POST（GET 返回 405）
+  - `/mcp`：Streamable HTTP 传输（普通 JSON-RPC 调用使用 POST；DELETE 可用于 session 清理）
   - `/mcp-sse`：支持 SSE（允许 GET 握手）
 - Summary/Source/Translation 由 MCP 服务器代理读取静态资源并返回文本内容（不返回 URL）
-- MCP 鉴权：启用后，客户端必须携带 `Authorization: Bearer <token>`。
-  - 通过 `--mcp-access-token` 或 `MCP_ACCESS_TOKEN` 配置该 token。
+- MCP 鉴权模式：
+  - 静态 bearer：通过 `--mcp-access-token` 或 `MCP_ACCESS_TOKEN` 配置；客户端携带 `Authorization: Bearer <token>`。`/mcp-sse` 仍使用这种鉴权方式。
+  - GitHub OAuth：设置 `MCP_AUTH_MODE=github-oauth`、`MCP_PUBLIC_BASE_URL=https://papers.example.com`、`GITHUB_OAUTH_CLIENT_ID`、`GITHUB_OAUTH_CLIENT_SECRET`、`MCP_GITHUB_ALLOWED_USER_IDS`、`MCP_ACCESS_TOKEN`（数字 GitHub user id；env 里用逗号分隔，CLI 可重复 `--mcp-github-allowed-user-id`）。OAuth 只用于 Streamable HTTP `/mcp`；`MCP_ACCESS_TOKEN` 仍然是必需的，用于 `/mcp-sse`，并作为普通 agent CLI 的可选静态 bearer fallback。
+  - `MCP_PUBLIC_BASE_URL` 只是公网 origin，不带 `/mcp` 后缀。它用于 issuer / OAuth 路由，并把 MCP resource 声明为 `${MCP_PUBLIC_BASE_URL}/mcp`。
+  - GitHub OAuth App 的 callback URL 固定配置为 `${MCP_PUBLIC_BASE_URL}/auth/callback`。不要把 ChatGPT、Claude 或 Inspector 的回调地址配置到 GitHub App；MCP client redirect URI 来自 DCR / client metadata。
+  - 根路径 OAuth 路由包括：`/.well-known/`、`/authorize`、`/token`、`/register`、`/auth/callback`、`/consent`。
+  - drflow/FastMCP 是 MCP authorization server/resource integration，MCP 客户端拿到的是 drflow/FastMCP JWT，不是 GitHub opaque access token；GitHub 只是上游身份提供方。
+  - GitHub OAuth 模式必须配置 `MCP_GITHUB_ALLOWED_USER_IDS`；应使用数字 GitHub user ID，不要使用用户名。
   - MCP token、高级搜索 token 和 admin token 是彼此独立的凭据，分别保护不同的接口面。
-  - `search_papers_semantic(...)` 只受 MCP 这一层 bearer 保护，不会额外校验 `SEARCH_ACCESS_TOKEN`。如果你启用了 advanced search 且不希望它通过 MCP 暴露，必须配置 `MCP_ACCESS_TOKEN`。
+  - `search_papers_semantic(...)` 只受 MCP 这一层保护，不会额外校验 `SEARCH_ACCESS_TOKEN`。如果你启用了 advanced search 且不希望它通过 MCP 暴露，必须配置 `MCP_ACCESS_TOKEN` 或 GitHub OAuth。
 
 **FastMCP 特性**：
 - 使用 `fastmcp>=3.0.0b1`，支持 stateless HTTP 模式
@@ -1624,7 +1630,7 @@ docker run --rm -p 8899:8899 \
 ```
 
 说明：
-- nginx 对外监听 8899，并将 `/api`、`/mcp`、`/mcp-sse` 代理到内部 API `127.0.0.1:8000`。
+- nginx 对外监听 8899，并将 `/api`、`/mcp`、`/mcp-sse` 以及根路径 OAuth 路由（`/.well-known/`、`/authorize`、`/token`、`/register`、`/auth/callback`、`/consent`）代理到内部 API `127.0.0.1:8000`。使用 GitHub OAuth 时，`${MCP_PUBLIC_BASE_URL}/auth/callback` 必须能被公网访问。
 - 将 snapshot 数据库挂载到容器内 `/db/papers.db`。
 - 如果静态资源由此容器提供，请将 snapshot 静态目录挂载到 `/static`（默认 `PAPER_DB_STATIC_BASE` 为 `/static`）。
 - 如果 `PAPER_DB_STATIC_BASE` 是完整 URL（例如 `https://static.example.com`），nginx 仍仅提供本地前端，API 响应中的静态资源链接会使用该外部域名。
@@ -1632,8 +1638,9 @@ docker run --rm -p 8899:8899 \
 - `0` 个 → 基础模式。
 - `1` 个 → 视为高级搜索配置不完整，直接启动失败。
 - `>=2` 个 → 进入嵌入式模式；脚本会在存在时自动追加 `--embed-db` 和 `--config`，`SEARCH_ACCESS_TOKEN` 继续通过现有 CLI envvar 读取。
+- 只有明确需要 prefix nginx 模板时才设置 `PAPER_DB_NGINX_TEMPLATE=prefix`；默认使用 `root`。
 
-Docker Compose 示例（四个 profile）：
+Docker Compose 示例（四个 profile；从仓库根目录运行，使 `${PWD}` volume 路径指向你的数据文件）：
 
 ```bash
 docker compose -f scripts/docker/docker-compose.example.yml --profile local-static up

@@ -1128,10 +1128,16 @@ This project exposes MCP servers mounted on the snapshot API:
   - `/mcp-sse`: SSE-enabled transport (supports `GET` handshake)
 - Protocol header: optional `mcp-protocol-version` (`2025-03-26` or `2025-06-18`)
 - Static reads: summary/source/translation are served as **text content** by reading snapshot static assets (local-first via `PAPER_DB_STATIC_EXPORT_DIR`, HTTP fallback via `PAPER_DB_STATIC_BASE` / `PAPER_DB_STATIC_BASE_URL`)
-- MCP auth: when enabled, clients must send `Authorization: Bearer <token>`.
-  - Configure it with `--mcp-access-token` or `MCP_ACCESS_TOKEN`.
+- MCP auth modes:
+  - Static bearer: configure `--mcp-access-token` or `MCP_ACCESS_TOKEN`; clients send `Authorization: Bearer <token>`. This remains the auth mode for `/mcp-sse`.
+  - GitHub OAuth: set `MCP_AUTH_MODE=github-oauth`, `MCP_PUBLIC_BASE_URL=https://papers.example.com`, `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`, `MCP_GITHUB_ALLOWED_USER_IDS`, and `MCP_ACCESS_TOKEN` (numeric GitHub user IDs; comma-separated in env or repeat `--mcp-github-allowed-user-id`). OAuth is available only on Streamable HTTP `/mcp`; `MCP_ACCESS_TOKEN` is still required for `/mcp-sse` and as the optional static bearer fallback for agent CLIs.
+  - `MCP_PUBLIC_BASE_URL` is the public origin only, with no `/mcp` suffix. It is used as the issuer/route base and advertises the MCP resource as `${MCP_PUBLIC_BASE_URL}/mcp`.
+  - In the GitHub OAuth App, configure the callback URL as `${MCP_PUBLIC_BASE_URL}/auth/callback` only. Do not add ChatGPT, Claude, or Inspector redirect URIs to the GitHub app; MCP client redirect URIs come from DCR/client metadata.
+  - Root OAuth routes are exposed at `/.well-known/`, `/authorize`, `/token`, `/register`, `/auth/callback`, and `/consent`.
+  - drflow/FastMCP issues the tokens that MCP clients use. GitHub is only the upstream identity provider, so clients receive drflow/FastMCP JWTs, not GitHub opaque access tokens.
+  - `MCP_GITHUB_ALLOWED_USER_IDS` is required in GitHub OAuth mode; use numeric GitHub user IDs, not usernames.
   - The MCP token, advanced-search token, and admin token are separate credentials that protect different surfaces.
-  - `search_papers_semantic(...)` is gated only by the MCP surface, not by `SEARCH_ACCESS_TOKEN`. If advanced search is enabled and should not be exposed through MCP, set `MCP_ACCESS_TOKEN`.
+  - `search_papers_semantic(...)` is gated only by the MCP surface, not by `SEARCH_ACCESS_TOKEN`. If advanced search is enabled and should not be exposed through MCP, set `MCP_ACCESS_TOKEN` or GitHub OAuth.
 
 Optional (avoid HTTP fetch by reading exported assets directly on the API host):
 
@@ -1646,7 +1652,7 @@ docker run --rm -p 8899:8899 \
 ```
 
 Notes:
-- nginx listens on 8899 and proxies `/api`, `/mcp`, and `/mcp-sse` to the internal API at `127.0.0.1:8000`.
+- nginx listens on 8899 and proxies `/api`, `/mcp`, `/mcp-sse`, and root OAuth routes (`/.well-known/`, `/authorize`, `/token`, `/register`, `/auth/callback`, `/consent`) to the internal API at `127.0.0.1:8000`. For GitHub OAuth, `${MCP_PUBLIC_BASE_URL}/auth/callback` must be publicly reachable.
 - Mount your snapshot DB to `/db/papers.db` inside the container.
 - Mount snapshot static assets to `/static` when serving assets from this container (default `PAPER_DB_STATIC_BASE` is `/static`).
 - If `PAPER_DB_STATIC_BASE` is a full URL (e.g. `https://static.example.com`), nginx still serves the frontend locally, while API responses use that external static base for asset links.
@@ -1654,8 +1660,9 @@ Notes:
 - `0` set → basic mode.
 - `1` set → fail fast as partial advanced configuration.
 - `>=2` set → embedded mode; the script passes `--embed-db` and `--config` when present, and `SEARCH_ACCESS_TOKEN` is consumed via the existing CLI envvar.
+- Set `PAPER_DB_NGINX_TEMPLATE=prefix` only if you intentionally need the prefix nginx template; the default is `root`.
 
-Docker Compose example (four profiles):
+Docker Compose example (four profiles, run from the repository root so `${PWD}` volume paths resolve to your data files):
 
 ```bash
 docker compose -f scripts/docker/docker-compose.example.yml --profile local-static up
