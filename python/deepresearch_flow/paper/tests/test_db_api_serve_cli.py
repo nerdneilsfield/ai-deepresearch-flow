@@ -318,6 +318,91 @@ advanced_enabled = true
     assert "--embed-db" in result.output or "config.search.vector_dir" in result.output
 
 
+
+def test_api_serve_github_oauth_options_expose_oauth_and_keep_sse_bearer(tmp_path: Path) -> None:
+    runner = CliRunner()
+    db = tmp_path / "snap.db"
+    db.write_text("", encoding="utf-8")
+    config = tmp_path / "config.toml"
+    _write_semantic_config(config, advanced_enabled=False)
+    config.write_text(
+        config.read_text(encoding="utf-8").replace(
+            "[search]\n",
+            "[search]\nvector_dir = \"./unused\"\n",
+        ),
+        encoding="utf-8",
+    )
+
+    with patch("uvicorn.run") as mock_run:
+        result = runner.invoke(
+            cli,
+            [
+                "paper", "db", "api", "serve",
+                "--snapshot-db", str(db),
+                "--config", str(config),
+                "--mcp-auth-mode", "github-oauth",
+                "--mcp-public-base-url", "https://papers.example.com",
+                "--github-oauth-client-id", "github-client",
+                "--github-oauth-client-secret", "github-secret",
+                "--mcp-github-allowed-user-id", "123",
+                "--mcp-github-allowed-user-id", "456",
+                "--mcp-access-token", "static-token",
+            ],
+        )
+
+    assert result.exit_code == 0
+    app = mock_run.call_args.args[0]
+    client = TestClient(app, raise_server_exceptions=False)
+
+    resource = client.get("/.well-known/oauth-protected-resource/mcp")
+    assert resource.status_code == 200
+    assert resource.json()["resource"] == "https://papers.example.com/mcp"
+
+    sse = client.get("/mcp-sse", headers={"Accept": "text/event-stream"})
+    assert sse.status_code == 401
+    assert sse.headers.get("www-authenticate") == "Bearer"
+
+
+def test_api_serve_github_oauth_reads_comma_separated_allowed_ids_from_env(tmp_path: Path) -> None:
+    runner = CliRunner()
+    db = tmp_path / "snap.db"
+    db.write_text("", encoding="utf-8")
+    config = tmp_path / "config.toml"
+    _write_semantic_config(config, advanced_enabled=False)
+    config.write_text(
+        config.read_text(encoding="utf-8").replace(
+            "[search]\n",
+            "[search]\nvector_dir = \"./unused\"\n",
+        ),
+        encoding="utf-8",
+    )
+
+    with patch("uvicorn.run") as mock_run:
+        result = runner.invoke(
+            cli,
+            [
+                "paper", "db", "api", "serve",
+                "--snapshot-db", str(db),
+                "--config", str(config),
+            ],
+            env={
+                "MCP_AUTH_MODE": "github-oauth",
+                "MCP_PUBLIC_BASE_URL": "https://papers.example.com",
+                "GITHUB_OAUTH_CLIENT_ID": "github-client",
+                "GITHUB_OAUTH_CLIENT_SECRET": "github-secret",
+                "MCP_GITHUB_ALLOWED_USER_IDS": "123,456",
+                "MCP_ACCESS_TOKEN": "static-token",
+            },
+        )
+
+    assert result.exit_code == 0
+    app = mock_run.call_args.args[0]
+    client = TestClient(app, raise_server_exceptions=False)
+    response = client.get("/.well-known/oauth-protected-resource/mcp")
+    assert response.status_code == 200
+    assert response.json()["resource"] == "https://papers.example.com/mcp"
+
+
 def test_api_serve_mounts_admin_semantic_push_with_cli_embed_db(tmp_path: Path) -> None:
     runner = CliRunner()
     db = tmp_path / "snap.db"

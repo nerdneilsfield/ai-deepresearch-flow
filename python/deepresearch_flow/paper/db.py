@@ -989,6 +989,43 @@ def register_db_commands(db_group: click.Group) -> None:
         envvar="MCP_ACCESS_TOKEN",
         help="Bearer token for /mcp and /mcp-sse endpoints (or set MCP_ACCESS_TOKEN)",
     )
+    @click.option(
+        "--mcp-auth-mode",
+        "mcp_auth_mode",
+        type=click.Choice(["static", "github-oauth"]),
+        default="static",
+        show_default=True,
+        envvar="MCP_AUTH_MODE",
+        help="MCP auth mode: static bearer or GitHub OAuth for /mcp.",
+    )
+    @click.option(
+        "--mcp-public-base-url",
+        "mcp_public_base_url",
+        default=None,
+        envvar="MCP_PUBLIC_BASE_URL",
+        help="Public origin for MCP OAuth endpoints, without /mcp.",
+    )
+    @click.option(
+        "--github-oauth-client-id",
+        "github_oauth_client_id",
+        default=None,
+        envvar="GITHUB_OAUTH_CLIENT_ID",
+        help="GitHub OAuth App client ID for MCP GitHub OAuth.",
+    )
+    @click.option(
+        "--github-oauth-client-secret",
+        "github_oauth_client_secret",
+        default=None,
+        envvar="GITHUB_OAUTH_CLIENT_SECRET",
+        help="GitHub OAuth App client secret for MCP GitHub OAuth.",
+    )
+    @click.option(
+        "--mcp-github-allowed-user-id",
+        "mcp_github_allowed_user_ids",
+        multiple=True,
+        envvar="MCP_GITHUB_ALLOWED_USER_IDS",
+        help="Allowed numeric GitHub user ID for MCP OAuth; repeat or set a comma-separated env value.",
+    )
     def api_serve(
         snapshot_db: str,
         static_base_url: str | None,
@@ -1003,6 +1040,11 @@ def register_db_commands(db_group: click.Group) -> None:
         config_path: str,
         admin_token: str | None,
         mcp_access_token: str | None,
+        mcp_auth_mode: str,
+        mcp_public_base_url: str | None,
+        github_oauth_client_id: str | None,
+        github_oauth_client_secret: str | None,
+        mcp_github_allowed_user_ids: tuple[str, ...],
     ) -> None:
         """Serve the snapshot-backed JSON API."""
         import os
@@ -1141,12 +1183,23 @@ def register_db_commands(db_group: click.Group) -> None:
                 search_access_token=token,
                 search_config=paper_config.search,
             )
+        allowed_github_user_ids = [
+            item.strip()
+            for raw in mcp_github_allowed_user_ids
+            for item in str(raw).split(",")
+            if item.strip()
+        ]
         app = create_app(
             snapshot_db=Path(snapshot_db),
             static_base_url=static_base_url_value,
             cors_allowed_origins=cors_allowed,
             limits=limits,
             mcp_access_token=mcp_access_token,
+            mcp_auth_mode=mcp_auth_mode,
+            mcp_public_base_url=mcp_public_base_url,
+            github_oauth_client_id=github_oauth_client_id,
+            github_oauth_client_secret=github_oauth_client_secret,
+            mcp_github_allowed_user_ids=allowed_github_user_ids,
             admin_token=admin_token,
             admin_embed_db=admin_embed_db,
             admin_embed_dimensions=admin_embed_dimensions,

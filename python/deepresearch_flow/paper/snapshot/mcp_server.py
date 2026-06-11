@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import threading
 from typing import Any, Literal
 import uuid
 
@@ -15,7 +16,12 @@ import httpx
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError as FastMCPToolError
 
-from deepresearch_flow.paper.snapshot.auth import bearer_auth_app
+from deepresearch_flow.paper.snapshot.auth import (
+    McpGitHubOAuthConfig,
+    bearer_auth_app,
+    build_mcp_github_oauth_provider,
+    oauth_metadata_compat_app,
+)
 from deepresearch_flow.paper.snapshot.common import ApiLimits, _column_exists, _open_ro_conn, _table_exists
 from deepresearch_flow.paper.snapshot.mcp_content import (
     DEFAULT_MAX_CHARS as _DEFAULT_MAX_CHARS,
@@ -54,6 +60,8 @@ class McpSnapshotConfig:
     origin_allowlist: list[str]
     advanced_config: Any | None = None
     mcp_access_token: str | None = None
+    mcp_auth_mode: Literal["static", "github-oauth"] = "static"
+    mcp_github_oauth: McpGitHubOAuthConfig | None = None
     max_chars_default: int = _DEFAULT_MAX_CHARS
     http_timeout: float = _DEFAULT_TIMEOUT
     max_paper_id_length: int = 64
@@ -91,6 +99,7 @@ _REQUEST_CONFIG: ContextVar[McpSnapshotConfig | None] = ContextVar(
     "paper_db_mcp_request_config",
     default=None,
 )
+_MCP_AUTH_BINDING_LOCK = threading.Lock()
 mcp = FastMCP("Paper DB MCP")
 
 
@@ -126,6 +135,8 @@ def create_mcp_transport_app(
     *,
     transport: Literal["streamable-http", "sse"] = "streamable-http",
 ) -> tuple[Any, Any]:
+    if config.mcp_auth_mode == "github-oauth":
+        raise ValueError("GitHub OAuth requires create_mcp_apps() so /mcp and OAuth routes share one app")
     bound_app, transport_lifespan = _create_mcp_transport_binding(config, transport=transport)
 
     @asynccontextmanager
@@ -143,20 +154,36 @@ def _create_mcp_transport_binding(
     config: McpSnapshotConfig,
     *,
     transport: Literal["streamable-http", "sse"],
+    path: str = "/",
+    auth_provider: Any | None = None,
+    static_bearer: bool = True,
 ) -> tuple[Any, Any]:
     """Create MCP app for a specific transport following FastMCP 3.0 best practices.
 
     See: https://gofastmcp.com/deployment/running-server
     """
-    # Use stateless_http=True for optimal scalability with streamable-http transport
-    # Don't wrap in additional middleware - FastMCP handles the protocol
-    mcp_app = mcp.http_app(
-        path="/",
-        transport=transport,
-        stateless_http=(transport == "streamable-http"),
-        json_response=True,
-    )
-    bound_app = bearer_auth_app(_bind_mcp_config_app(mcp_app, config), config.mcp_access_token)
+    # Use stateless_http=True for optimal scalability with streamable-http transport.
+    # FastMCP expands auth routes when http_app() is called, so bind auth only
+    # while creating this transport app.
+    with _MCP_AUTH_BINDING_LOCK:
+        previous_auth = mcp.auth
+        mcp.auth = auth_provider
+        try:
+            mcp_app = mcp.http_app(
+                path=path,
+                transport=transport,
+                stateless_http=(transport == "streamable-http"),
+                json_response=True,
+            )
+        finally:
+            mcp.auth = previous_auth
+
+    if auth_provider is not None:
+        mcp_app = oauth_metadata_compat_app(mcp_app)
+
+    bound_app = _bind_mcp_config_app(mcp_app, config)
+    if static_bearer:
+        bound_app = bearer_auth_app(bound_app, config.mcp_access_token)
 
     @asynccontextmanager
     async def transport_lifespan(app):
@@ -172,10 +199,28 @@ def create_mcp_apps(config: McpSnapshotConfig) -> tuple[dict[str, Any], Any]:
     Returns:
         A tuple of (apps_by_transport, lifespan_context).
     """
-    streamable_app, streamable_lifespan = _create_mcp_transport_binding(
-        config,
-        transport="streamable-http",
-    )
+    if config.mcp_auth_mode == "github-oauth":
+        if config.mcp_github_oauth is None:
+            raise ValueError("GitHub OAuth config is required when mcp_auth_mode='github-oauth'")
+        if not config.mcp_access_token:
+            raise ValueError("MCP access token is required for /mcp-sse when GitHub OAuth is enabled")
+        oauth_provider = build_mcp_github_oauth_provider(
+            config.mcp_github_oauth,
+            static_access_token=config.mcp_access_token,
+        )
+        streamable_app, streamable_lifespan = _create_mcp_transport_binding(
+            config,
+            transport="streamable-http",
+            path="/mcp",
+            auth_provider=oauth_provider,
+            static_bearer=False,
+        )
+    else:
+        streamable_app, streamable_lifespan = _create_mcp_transport_binding(
+            config,
+            transport="streamable-http",
+        )
+
     sse_app, sse_lifespan = _create_mcp_transport_binding(
         config,
         transport="sse",

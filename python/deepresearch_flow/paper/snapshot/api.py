@@ -23,8 +23,9 @@ _MCP_CANONICAL_PATHS = {"/mcp": "/mcp/", "/mcp-sse": "/mcp-sse/"}
 class _McpTrailingSlashMiddleware:
     """Route exact MCP mount paths without forcing clients through redirects."""
 
-    def __init__(self, app) -> None:
+    def __init__(self, app, canonical_paths: dict[str, str] | None = None) -> None:
         self.app = app
+        self.canonical_paths = canonical_paths or _MCP_CANONICAL_PATHS
 
     async def __call__(self, scope, receive, send) -> None:
         if scope.get("type") != "http":
@@ -32,7 +33,7 @@ class _McpTrailingSlashMiddleware:
             return
 
         path = scope.get("path")
-        canonical = _MCP_CANONICAL_PATHS.get(path)
+        canonical = self.canonical_paths.get(path)
         if canonical is None:
             await self.app(scope, receive, send)
             return
@@ -1021,6 +1022,11 @@ def create_app(
     cors_allowed_origins: list[str] | None = None,
     limits: ApiLimits | None = None,
     mcp_access_token: str | None = None,
+    mcp_auth_mode: str = "static",
+    mcp_public_base_url: str | None = None,
+    github_oauth_client_id: str | None = None,
+    github_oauth_client_secret: str | None = None,
+    mcp_github_allowed_user_ids: list[str] | None = None,
     admin_token: str | None = None,
     admin_embed_db: Path | None = None,
     admin_embed_dimensions: int | None = None,
@@ -1034,11 +1040,25 @@ def create_app(
     )
 
     # Lazy import to avoid circular dependency
+    from deepresearch_flow.paper.snapshot.auth import McpGitHubOAuthConfig
     from deepresearch_flow.paper.snapshot.mcp_server import (
         McpSnapshotConfig,
         create_mcp_apps,
         resolve_static_export_dir,
     )
+
+    if mcp_auth_mode not in {"static", "github-oauth"}:
+        raise ValueError("mcp_auth_mode must be 'static' or 'github-oauth'")
+    mcp_github_oauth = None
+    if mcp_auth_mode == "github-oauth":
+        if not mcp_access_token:
+            raise ValueError("MCP_ACCESS_TOKEN is required for /mcp-sse when GitHub OAuth is enabled")
+        mcp_github_oauth = McpGitHubOAuthConfig(
+            public_base_url=mcp_public_base_url or "",
+            client_id=github_oauth_client_id or "",
+            client_secret=github_oauth_client_secret or "",
+            allowed_github_user_ids=tuple(mcp_github_allowed_user_ids or ()),
+        )
 
     mcp_config = McpSnapshotConfig(
         snapshot_db=snapshot_db,
@@ -1048,6 +1068,8 @@ def create_app(
         origin_allowlist=cors_allowed_origins or ["*"],
         advanced_config=advanced_config,
         mcp_access_token=mcp_access_token,
+        mcp_auth_mode=mcp_auth_mode,
+        mcp_github_oauth=mcp_github_oauth,
     )
     mcp_apps, mcp_lifespan = create_mcp_apps(mcp_config)
 
@@ -1063,10 +1085,10 @@ def create_app(
         Route("/api/v1/facets/{facet:str}/{facet_id:str}/stats", _api_facet_stats, methods=["GET"]),
         Route("/api/v1/facets/{facet:str}/by-value/{value:str}/papers", _api_facet_by_value_papers, methods=["GET"]),
         Route("/api/v1/facets/{facet:str}/by-value/{value:str}/stats", _api_facet_by_value_stats, methods=["GET"]),
-        # Mount at root path - Starlette will handle trailing slash automatically
-        Mount("/mcp", app=mcp_apps["streamable-http"]),
-        Mount("/mcp-sse", app=mcp_apps["sse"]),
     ]
+    if mcp_auth_mode != "github-oauth":
+        routes.append(Mount("/mcp", app=mcp_apps["streamable-http"]))
+    routes.append(Mount("/mcp-sse", app=mcp_apps["sse"]))
 
     if admin_token:
         from deepresearch_flow.paper.snapshot.admin import create_admin_app
@@ -1084,13 +1106,19 @@ def create_app(
 
         routes.extend(create_advanced_routes(advanced_config))
 
+    if mcp_auth_mode == "github-oauth":
+        routes.append(Mount("", app=mcp_apps["streamable-http"]))
+
     # Pass MCP lifespan to ensure session manager initializes properly
     # https://gofastmcp.com/deployment/http#mounting-in-starlette
     app = Starlette(
         routes=routes,
         lifespan=mcp_lifespan,
     )
-    app.add_middleware(_McpTrailingSlashMiddleware)
+    if mcp_auth_mode == "github-oauth":
+        app.add_middleware(_McpTrailingSlashMiddleware, canonical_paths={"/mcp/": "/mcp", "/mcp-sse": "/mcp-sse/"})
+    else:
+        app.add_middleware(_McpTrailingSlashMiddleware)
     if cfg.cors_allowed_origins:
         app.add_middleware(
             CORSMiddleware,

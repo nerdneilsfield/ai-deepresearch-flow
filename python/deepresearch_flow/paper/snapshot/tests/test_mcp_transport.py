@@ -9,9 +9,12 @@ import unittest
 
 from deepresearch_flow.paper.snapshot.api import create_app
 from deepresearch_flow.paper.snapshot.common import ApiLimits
+from deepresearch_flow.paper.snapshot.auth import McpGitHubOAuthConfig
 from deepresearch_flow.paper.snapshot.mcp_server import (
     McpSnapshotConfig,
     _allowed_methods_for_transport,
+    create_mcp_app,
+    create_mcp_apps,
 )
 
 
@@ -50,7 +53,7 @@ async def _capture_response_start(
         if not request_sent:
             request_sent = True
             return {"type": "http.request", "body": b"", "more_body": False}
-        await asyncio.Event().wait()
+        return {"type": "http.disconnect"}
 
     async def send(message: dict[str, object]) -> None:
         if message["type"] != "http.response.start" or response_started.is_set():
@@ -245,6 +248,221 @@ class TestMcpTransportAuth(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["result"]["serverInfo"]["name"], "Paper DB MCP")
+
+
+class TestMcpGitHubOAuth(unittest.IsolatedAsyncioTestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.tmpdir = tempfile.TemporaryDirectory()
+        cls.snapshot_db = Path(cls.tmpdir.name) / "snapshot.db"
+        cls.snapshot_db.touch()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.tmpdir.cleanup()
+
+    def _app(self):
+        return create_app(
+            snapshot_db=self.snapshot_db,
+            static_base_url="",
+            cors_allowed_origins=["*"],
+            limits=ApiLimits(),
+            mcp_auth_mode="github-oauth",
+            mcp_public_base_url="https://papers.example.com",
+            github_oauth_client_id="github-client",
+            github_oauth_client_secret="github-secret",
+            mcp_github_allowed_user_ids=["12345"],
+            mcp_access_token="static-token",
+        )
+
+    def _initialize_payload(self) -> dict[str, object]:
+        return {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "test-client", "version": "0"},
+            },
+        }
+
+
+    def test_github_oauth_rejects_incomplete_or_unsafe_configuration(self) -> None:
+        base_kwargs = {
+            "snapshot_db": self.snapshot_db,
+            "static_base_url": "",
+            "cors_allowed_origins": ["*"],
+            "limits": ApiLimits(),
+            "mcp_auth_mode": "github-oauth",
+            "mcp_public_base_url": "https://papers.example.com",
+            "github_oauth_client_id": "github-client",
+            "github_oauth_client_secret": "github-secret",
+            "mcp_github_allowed_user_ids": ["12345"],
+            "mcp_access_token": "static-token",
+        }
+        invalid_cases = (
+            {"mcp_access_token": None},
+            {"mcp_public_base_url": ""},
+            {"mcp_public_base_url": "https://papers.example.com/mcp"},
+            {"mcp_public_base_url": "https://papers.example.com?x=1"},
+            {"mcp_public_base_url": "http://papers.example.com"},
+            {"github_oauth_client_id": ""},
+            {"github_oauth_client_secret": ""},
+            {"mcp_github_allowed_user_ids": []},
+            {"mcp_github_allowed_user_ids": ["octocat"]},
+        )
+
+        for override in invalid_cases:
+            kwargs = {**base_kwargs, **override}
+            with self.subTest(override=override):
+                with self.assertRaises(ValueError):
+                    create_app(**kwargs)
+
+
+
+    def test_mcp_apps_reject_oauth_without_static_token_for_sse(self) -> None:
+        cfg = McpSnapshotConfig(
+            snapshot_db=self.snapshot_db,
+            static_base_url="",
+            static_export_dir=None,
+            limits=ApiLimits(),
+            origin_allowlist=["*"],
+            mcp_auth_mode="github-oauth",
+            mcp_github_oauth=McpGitHubOAuthConfig(
+                public_base_url="https://papers.example.com",
+                client_id="github-client",
+                client_secret="github-secret",
+                allowed_github_user_ids=("12345",),
+            ),
+        )
+
+        with self.assertRaises(ValueError):
+            create_mcp_apps(cfg)
+
+    def test_single_transport_helper_rejects_github_oauth_config(self) -> None:
+        cfg = McpSnapshotConfig(
+            snapshot_db=self.snapshot_db,
+            static_base_url="",
+            static_export_dir=None,
+            limits=ApiLimits(),
+            origin_allowlist=["*"],
+            mcp_auth_mode="github-oauth",
+        )
+
+        with self.assertRaises(ValueError):
+            create_mcp_app(cfg)
+
+    async def test_oauth_mode_preserves_api_routes_before_mcp_catch_all(self) -> None:
+        app = self._app()
+        transport = httpx.ASGITransport(app=app)
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(transport=transport, base_url="https://papers.example.com") as client:
+                response = await client.get("/api/v1/config")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["static_base_url"], "")
+
+    async def test_oauth_discovery_is_root_level_for_mcp_resource(self) -> None:
+        app = self._app()
+        transport = httpx.ASGITransport(app=app)
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(transport=transport, base_url="https://papers.example.com") as client:
+                resource = await client.get("/.well-known/oauth-protected-resource/mcp")
+                authorization = await client.get("/.well-known/oauth-authorization-server")
+                nested = await client.get("/mcp/.well-known/oauth-authorization-server")
+                registration = await client.post(
+                    "/register",
+                    json={
+                        "redirect_uris": ["http://localhost:12345/callback"],
+                        "token_endpoint_auth_method": "none",
+                        "grant_types": ["authorization_code", "refresh_token"],
+                        "response_types": ["code"],
+                    },
+                )
+
+        self.assertEqual(resource.status_code, 200)
+        self.assertEqual(resource.json()["resource"], "https://papers.example.com/mcp")
+        self.assertIn("https://papers.example.com/", resource.json()["authorization_servers"])
+        self.assertEqual(authorization.status_code, 200)
+        metadata = authorization.json()
+        self.assertEqual(metadata["issuer"], "https://papers.example.com/")
+        self.assertEqual(metadata["registration_endpoint"], "https://papers.example.com/register")
+        self.assertIn("none", metadata["token_endpoint_auth_methods_supported"])
+        self.assertFalse(metadata.get("client_id_metadata_document_supported", False))
+        self.assertNotEqual(nested.status_code, 200)
+        self.assertIn(registration.status_code, {200, 201})
+        self.assertTrue(registration.json()["client_id"])
+        self.assertEqual(registration.json()["token_endpoint_auth_method"], "none")
+
+    async def test_oauth_mcp_challenges_with_resource_metadata_without_redirect(self) -> None:
+        app = self._app()
+        response = await _capture_response_start(app, method="POST", path="/mcp")
+
+        self.assertEqual(response["status_code"], 401)
+        challenge = str(response["headers"].get("www-authenticate", ""))
+        self.assertIn("Bearer", challenge)
+        self.assertIn("https://papers.example.com/.well-known/oauth-protected-resource/mcp", challenge)
+
+    async def test_oauth_mcp_accepts_static_bearer_without_redirect_on_both_mcp_paths(self) -> None:
+        for path in ("/mcp", "/mcp/"):
+            app = self._app()
+            transport = httpx.ASGITransport(app=app)
+            async with app.router.lifespan_context(app):
+                async with httpx.AsyncClient(transport=transport, base_url="https://papers.example.com") as client:
+                    response = await client.post(
+                        path,
+                        headers={
+                            "Authorization": "Bearer static-token",
+                            "Accept": "application/json, text/event-stream",
+                            "Content-Type": "application/json",
+                        },
+                        json=self._initialize_payload(),
+                    )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["result"]["serverInfo"]["name"], "Paper DB MCP")
+
+    async def test_oauth_mcp_still_accepts_static_bearer_for_agent_cli(self) -> None:
+        app = self._app()
+        transport = httpx.ASGITransport(app=app)
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(transport=transport, base_url="https://papers.example.com") as client:
+                response = await client.post(
+                    "/mcp",
+                    headers={
+                        "Authorization": "Bearer static-token",
+                        "Accept": "application/json, text/event-stream",
+                        "Content-Type": "application/json",
+                    },
+                    json=self._initialize_payload(),
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["result"]["serverInfo"]["name"], "Paper DB MCP")
+
+    async def test_oauth_mode_keeps_sse_on_static_bearer_only(self) -> None:
+        app = self._app()
+        transport = httpx.ASGITransport(app=app)
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(transport=transport, base_url="https://papers.example.com"):
+                missing = await _capture_response_start(
+                    app,
+                    method="GET",
+                    path="/mcp-sse",
+                    headers={"Accept": "text/event-stream"},
+                )
+                allowed = await _capture_response_start(
+                    app,
+                    method="GET",
+                    path="/mcp-sse",
+                    headers={"Accept": "text/event-stream", "Authorization": "Bearer static-token"},
+                )
+
+        self.assertEqual(missing["status_code"], 401)
+        self.assertEqual(missing["headers"].get("www-authenticate"), "Bearer")
+        self.assertEqual(allowed["status_code"], 200)
+        self.assertTrue(str(allowed["headers"].get("content-type", "")).startswith("text/event-stream"))
 
 
 if __name__ == "__main__":
