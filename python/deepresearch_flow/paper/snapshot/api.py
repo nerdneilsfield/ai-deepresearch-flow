@@ -5,7 +5,7 @@ import sqlite3
 from pathlib import Path
 import re
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import parse_qsl, quote, urlencode
 
 from starlette.applications import Starlette
 from starlette.middleware.cors import CORSMiddleware
@@ -74,9 +74,54 @@ class _ExactAsgiBridge:
         await self.app(rewritten, receive, send)
 
 
+class _OAuthAuthorizeResourceAliasBridge:
+    """Normalize known ChatGPT OAuth resource aliases before FastMCP validation."""
+
+    def __init__(
+        self,
+        app,
+        *,
+        resource_metadata_url: str,
+        canonical_resource_url: str,
+    ) -> None:
+        self.app = app
+        self.resource_metadata_url = resource_metadata_url.rstrip("/")
+        self.canonical_resource_url = canonical_resource_url.rstrip("/")
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        raw_query = scope.get("query_string", b"")
+        if not raw_query:
+            await self.app(scope, receive, send)
+            return
+
+        query_text = raw_query.decode("latin-1")
+        query_items = parse_qsl(query_text, keep_blank_values=True)
+        changed = False
+        rewritten_items: list[tuple[str, str]] = []
+        for key, value in query_items:
+            if key == "resource" and value.rstrip("/") == self.resource_metadata_url:
+                rewritten_items.append((key, self.canonical_resource_url))
+                changed = True
+            else:
+                rewritten_items.append((key, value))
+
+        if not changed:
+            await self.app(scope, receive, send)
+            return
+
+        rewritten = dict(scope)
+        rewritten["query_string"] = urlencode(rewritten_items).encode("latin-1")
+        await self.app(rewritten, receive, send)
+
+
 def _oauth_protocol_routes(oauth_app, *, public_base_url: str) -> list[Route]:
     """Expose only proven FastMCP/GitHub OAuth protocol routes at root."""
 
+    canonical_resource_url = f"{public_base_url.rstrip('/')}/oauth/mcp"
     resource_metadata_url = (
         f"{public_base_url.rstrip('/')}/.well-known/oauth-protected-resource/oauth/mcp"
     )
@@ -104,7 +149,15 @@ def _oauth_protocol_routes(oauth_app, *, public_base_url: str) -> list[Route]:
         bridge("/.well-known/oauth-protected-resource/oauth/mcp", methods=["GET", "OPTIONS"]),
         bridge("/.well-known/oauth-authorization-server", methods=["GET", "OPTIONS"]),
         bridge("/register", methods=["POST", "OPTIONS"]),
-        bridge("/authorize", methods=["GET", "POST"]),
+        Route(
+            "/authorize",
+            _OAuthAuthorizeResourceAliasBridge(
+                oauth_app,
+                resource_metadata_url=resource_metadata_url,
+                canonical_resource_url=canonical_resource_url,
+            ),
+            methods=["GET", "POST"],
+        ),
         bridge("/token", methods=["POST", "OPTIONS"]),
         bridge("/auth/callback", methods=["GET"]),
         bridge("/consent", methods=["GET", "POST"]),

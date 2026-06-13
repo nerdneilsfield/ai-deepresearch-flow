@@ -570,6 +570,46 @@ class TestMcpGitHubOAuth(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(registration.json()["client_id"])
         self.assertEqual(registration.json()["token_endpoint_auth_method"], "none")
 
+    async def test_authorize_accepts_chatgpt_metadata_url_resource_alias(self) -> None:
+        app = self._app()
+        transport = httpx.ASGITransport(app=app)
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(
+                transport=transport,
+                base_url="https://papers.example.com",
+                follow_redirects=False,
+            ) as client:
+                registration = await client.post(
+                    "/register",
+                    json={
+                        "redirect_uris": ["https://chatgpt.com/connector/oauth/test"],
+                        "token_endpoint_auth_method": "none",
+                        "grant_types": ["authorization_code", "refresh_token"],
+                        "response_types": ["code"],
+                    },
+                )
+                response = await client.get(
+                    "/authorize",
+                    params={
+                        "response_type": "code",
+                        "client_id": registration.json()["client_id"],
+                        "redirect_uri": "https://chatgpt.com/connector/oauth/test",
+                        "scope": "user",
+                        "code_challenge": "test-challenge",
+                        "code_challenge_method": "S256",
+                        "resource": (
+                            "https://papers.example.com/.well-known/"
+                            "oauth-protected-resource/oauth/mcp"
+                        ),
+                        "state": "test-state",
+                    },
+                )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(
+            response.headers["location"].startswith("https://papers.example.com/consent?")
+        )
+
     async def test_oauth_mcp_challenges_with_resource_metadata_without_redirect(self) -> None:
         app = self._app()
         response = await _capture_response_start(app, method="POST", path="/oauth/mcp")
