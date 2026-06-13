@@ -259,6 +259,12 @@ OAuth 客户端配置摘要：
 7. 点击 **Generate a new client secret**，复制生成的 secret，填入 `GITHUB_OAUTH_CLIENT_SECRET`。这个值通常只显示一次，按密钥处理，不要提交到仓库。
 8. 找到允许访问 MCP 的 GitHub 数字用户 ID，填入 `MCP_GITHUB_ALLOWED_USER_IDS`。
 
+   这个值是 GitHub API 返回的稳定数字 `id` 字段。它**不是** GitHub username、显示名、邮箱，也不是 OAuth client ID。如果这个变量为空，或者填成了 username，drflow 会在启动时报错：
+
+   ```text
+   MCP_GITHUB_ALLOWED_USER_IDS must contain numeric GitHub user IDs
+   ```
+
    查询当前 GitHub CLI 登录用户：
 
    ```bash
@@ -273,10 +279,27 @@ OAuth 客户端配置摘要：
    curl -s https://api.github.com/users/<github-username> | jq -r .id
    ```
 
+   示例：
+
+   ```bash
+   gh api users/octocat --jq .id
+   ```
+
    多个用户用英文逗号分隔：
 
    ```env
    MCP_GITHUB_ALLOWED_USER_IDS=12345678,87654321
+   ```
+
+   不要加引号，也不要加空格：
+
+   ```env
+   # 正确：
+   MCP_GITHUB_ALLOWED_USER_IDS=12345678,87654321
+
+   # 错误：
+   MCP_GITHUB_ALLOWED_USER_IDS=alice,bob
+   MCP_GITHUB_ALLOWED_USER_IDS="12345678, 87654321"
    ```
 
 9. 配置 drflow：

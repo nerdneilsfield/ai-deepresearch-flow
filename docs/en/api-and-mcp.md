@@ -259,6 +259,12 @@ Create a **GitHub OAuth App**, not a GitHub App. The GitHub OAuth App is only th
 7. Click **Generate a new client secret**, copy it once, and store it in `GITHUB_OAUTH_CLIENT_SECRET`. Treat it as a secret; do not commit it.
 8. Find the numeric GitHub user IDs allowed to access MCP and put them in `MCP_GITHUB_ALLOWED_USER_IDS`.
 
+   This value is the stable numeric `id` field returned by the GitHub API. It is **not** the GitHub username, display name, email address, or OAuth client ID. If this variable is empty or contains a username, drflow refuses to start with:
+
+   ```text
+   MCP_GITHUB_ALLOWED_USER_IDS must contain numeric GitHub user IDs
+   ```
+
    For your currently authenticated GitHub CLI user:
 
    ```bash
@@ -273,10 +279,27 @@ Create a **GitHub OAuth App**, not a GitHub App. The GitHub OAuth App is only th
    curl -s https://api.github.com/users/<github-username> | jq -r .id
    ```
 
+   Example:
+
+   ```bash
+   gh api users/octocat --jq .id
+   ```
+
    Multiple users are comma-separated:
 
    ```env
    MCP_GITHUB_ALLOWED_USER_IDS=12345678,87654321
+   ```
+
+   Do not quote the list and do not add spaces:
+
+   ```env
+   # Correct:
+   MCP_GITHUB_ALLOWED_USER_IDS=12345678,87654321
+
+   # Incorrect:
+   MCP_GITHUB_ALLOWED_USER_IDS=alice,bob
+   MCP_GITHUB_ALLOWED_USER_IDS="12345678, 87654321"
    ```
 
 9. Configure drflow:
