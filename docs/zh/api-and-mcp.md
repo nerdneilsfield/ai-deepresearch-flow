@@ -227,6 +227,89 @@ OAuth 客户端配置摘要：
 
 > **注意：** MCP token、advanced-search token、admin token 和 GitHub OAuth 凭据是相互独立的凭据。
 
+##### 创建 GitHub OAuth App
+
+这里要创建的是 **GitHub OAuth App**，不是 GitHub App。GitHub OAuth App 只作为上游身份提供方；对 ChatGPT、Claude 和其他 MCP client 来说，drflow 仍然是 MCP authorization/resource server。
+
+1. 用应该拥有该 OAuth App 的个人账号或组织账号登录 GitHub。
+2. 打开 **Settings → Developer settings → OAuth Apps**。
+   - 个人账号：点击头像 → **Settings** → **Developer settings** → **OAuth Apps**。
+   - 组织拥有的 App：进入组织 → **Settings** → **Developer settings** → **OAuth Apps**。
+3. 点击 **New OAuth App**。
+4. 填写：
+
+   | GitHub 字段 | 填写值 |
+   | --- | --- |
+   | Application name | 任意清晰名称，例如 `drflow-registration-mcp` |
+   | Homepage URL | `https://<public-host>` |
+   | Application description | 可选 |
+   | Authorization callback URL | `https://<public-host>/auth/callback` |
+
+   例如，如果 `MCP_PUBLIC_BASE_URL=https://drflow.example.com`，则填写：
+
+   ```text
+   Homepage URL: https://drflow.example.com
+   Authorization callback URL: https://drflow.example.com/auth/callback
+   ```
+
+   不要把 GitHub callback URL 填成 `/oauth/mcp`。`/oauth/mcp` 是 MCP client 连接的端点；`/auth/callback` 才是 GitHub 登录完成后浏览器回跳到 drflow 的地址。
+
+5. 点击 **Register application**。
+6. 复制 **Client ID**，填入 `GITHUB_OAUTH_CLIENT_ID`。
+7. 点击 **Generate a new client secret**，复制生成的 secret，填入 `GITHUB_OAUTH_CLIENT_SECRET`。这个值通常只显示一次，按密钥处理，不要提交到仓库。
+8. 找到允许访问 MCP 的 GitHub 数字用户 ID，填入 `MCP_GITHUB_ALLOWED_USER_IDS`。
+
+   查询当前 GitHub CLI 登录用户：
+
+   ```bash
+   gh api user --jq .id
+   ```
+
+   查询指定用户名：
+
+   ```bash
+   gh api users/<github-username> --jq .id
+   # 或：
+   curl -s https://api.github.com/users/<github-username> | jq -r .id
+   ```
+
+   多个用户用英文逗号分隔：
+
+   ```env
+   MCP_GITHUB_ALLOWED_USER_IDS=12345678,87654321
+   ```
+
+9. 配置 drflow：
+
+   ```env
+   MCP_AUTH_MODE=github-oauth
+   MCP_PUBLIC_BASE_URL=https://<public-host>
+   GITHUB_OAUTH_CLIENT_ID=...
+   GITHUB_OAUTH_CLIENT_SECRET=...
+   MCP_GITHUB_ALLOWED_USER_IDS=12345678
+
+   # /mcp 和 /mcp-sse 的 static bearer 端点仍然需要：
+   MCP_ACCESS_TOKEN=...
+   ```
+
+10. 确认反向代理把这些 OAuth 路由转发到 drflow：
+
+    - `/oauth/mcp`
+    - `/.well-known/`
+    - `/authorize`
+    - `/token`
+    - `/register`
+    - `/auth/callback`
+    - `/consent`
+
+11. 配置 MCP 客户端：
+
+    - ChatGPT/Claude OAuth 端点：`https://<public-host>/oauth/mcp`
+    - 普通 CLI/static bearer 端点：`https://<public-host>/mcp`，并带上 `Authorization: Bearer <MCP_ACCESS_TOKEN>`
+    - 需要 SSE 时使用 static bearer 端点：`https://<public-host>/mcp-sse`
+
+如果 GitHub 报 callback mismatch，优先检查 GitHub OAuth App 里的 callback URL。它必须和外部可访问的 drflow callback URL 完全一致，包括 scheme、host 和 path。如果 staging/production 使用不同 public host，建议创建两个 GitHub OAuth App，让每个环境有独立的 callback URL 和 client secret。
+
 运维注意事项：
 
 - `MCP_PUBLIC_BASE_URL` 必须是外部可访问的 HTTPS origin，不要追加 `/mcp` 或 `/oauth/mcp`。

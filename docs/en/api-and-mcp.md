@@ -227,6 +227,89 @@ OAuth client setup summary:
 
 > **Note:** MCP token, advanced-search token, admin token, and GitHub OAuth credentials are separate credentials.
 
+##### Create the GitHub OAuth App
+
+Create a **GitHub OAuth App**, not a GitHub App. The GitHub OAuth App is only the upstream identity provider; drflow remains the MCP authorization/resource server for ChatGPT, Claude, and other MCP clients.
+
+1. Open GitHub while signed in as the account or organization that should own the OAuth app.
+2. Go to **Settings → Developer settings → OAuth Apps**.
+   - Personal account: click your avatar → **Settings** → **Developer settings** → **OAuth Apps**.
+   - Organization-owned app: open the organization → **Settings** → **Developer settings** → **OAuth Apps**.
+3. Click **New OAuth App**.
+4. Fill in:
+
+   | GitHub field | Value |
+   | --- | --- |
+   | Application name | Any clear name, for example `drflow-registration-mcp` |
+   | Homepage URL | `https://<public-host>` |
+   | Application description | Optional |
+   | Authorization callback URL | `https://<public-host>/auth/callback` |
+
+   For example, if `MCP_PUBLIC_BASE_URL=https://drflow.example.com`, use:
+
+   ```text
+   Homepage URL: https://drflow.example.com
+   Authorization callback URL: https://drflow.example.com/auth/callback
+   ```
+
+   Do **not** use `/oauth/mcp` as the GitHub callback URL. `/oauth/mcp` is the MCP client endpoint; `/auth/callback` is where GitHub redirects the user's browser after login.
+
+5. Click **Register application**.
+6. Copy the **Client ID** into `GITHUB_OAUTH_CLIENT_ID`.
+7. Click **Generate a new client secret**, copy it once, and store it in `GITHUB_OAUTH_CLIENT_SECRET`. Treat it as a secret; do not commit it.
+8. Find the numeric GitHub user IDs allowed to access MCP and put them in `MCP_GITHUB_ALLOWED_USER_IDS`.
+
+   For your currently authenticated GitHub CLI user:
+
+   ```bash
+   gh api user --jq .id
+   ```
+
+   For a specific username:
+
+   ```bash
+   gh api users/<github-username> --jq .id
+   # or:
+   curl -s https://api.github.com/users/<github-username> | jq -r .id
+   ```
+
+   Multiple users are comma-separated:
+
+   ```env
+   MCP_GITHUB_ALLOWED_USER_IDS=12345678,87654321
+   ```
+
+9. Configure drflow:
+
+   ```env
+   MCP_AUTH_MODE=github-oauth
+   MCP_PUBLIC_BASE_URL=https://<public-host>
+   GITHUB_OAUTH_CLIENT_ID=...
+   GITHUB_OAUTH_CLIENT_SECRET=...
+   MCP_GITHUB_ALLOWED_USER_IDS=12345678
+
+   # Still required for static-bearer /mcp and /mcp-sse:
+   MCP_ACCESS_TOKEN=...
+   ```
+
+10. Ensure the reverse proxy forwards all OAuth routes to drflow:
+
+    - `/oauth/mcp`
+    - `/.well-known/`
+    - `/authorize`
+    - `/token`
+    - `/register`
+    - `/auth/callback`
+    - `/consent`
+
+11. Configure MCP clients:
+
+    - ChatGPT/Claude OAuth endpoint: `https://<public-host>/oauth/mcp`
+    - Static-bearer CLI endpoint: `https://<public-host>/mcp` with `Authorization: Bearer <MCP_ACCESS_TOKEN>`
+    - SSE static-bearer endpoint, when needed: `https://<public-host>/mcp-sse`
+
+If GitHub returns a callback mismatch error, check the callback URL in the GitHub OAuth App first. It must exactly match the externally reachable drflow callback URL, including scheme, host, and path. If you deploy staging and production under different public hosts, create separate GitHub OAuth Apps so each environment has its own callback URL and client secret.
+
 Operational notes:
 
 - `MCP_PUBLIC_BASE_URL` must be the externally reachable HTTPS origin only. Do not append `/mcp` or `/oauth/mcp`.
