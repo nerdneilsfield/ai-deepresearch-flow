@@ -10,11 +10,21 @@ import os
 from typing import Any, Literal
 from urllib.parse import urlparse
 
-# Import from the concrete module instead of the package re-export.  Some
-# FastMCP 3.x distributions expose an incomplete ``fastmcp.server.auth``
-# namespace during startup, which breaks deployment before the API can serve.
-from fastmcp.server.auth.auth import AccessToken, MultiAuth, TokenVerifier
-from fastmcp.server.auth.providers.github import GitHubProvider
+try:
+    from fastmcp.server.auth import AccessToken, MultiAuth, TokenVerifier
+    from fastmcp.server.auth.providers.github import GitHubProvider
+except (ImportError, ModuleNotFoundError) as exc:  # pragma: no cover - version guard
+    try:
+        from importlib.metadata import version
+
+        fastmcp_version = version("fastmcp")
+    except Exception:
+        fastmcp_version = "unknown"
+    raise ImportError(
+        "deepresearch-flow MCP auth requires FastMCP with server auth support; "
+        f"installed fastmcp={fastmcp_version}. Rebuild the Docker base image with "
+        "requirements.txt / pyproject.toml dependencies in sync."
+    ) from exc
 from starlette.responses import JSONResponse
 
 _BEARER_SCHEME = "bearer"
