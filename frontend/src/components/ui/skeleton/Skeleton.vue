@@ -9,13 +9,7 @@ const props = defineProps<{
 
 <template>
   <div
-    :class="
-      cn(
-        'rounded-xl border border-border/60 bg-card text-card-foreground shadow-card',
-        props.class,
-      )
-    "
-  >
-    <slot />
-  </div>
+    :class="cn('animate-pulse rounded-md bg-muted', props.class)"
+    aria-hidden="true"
+  />
 </template>

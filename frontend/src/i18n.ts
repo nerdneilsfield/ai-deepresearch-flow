@@ -4,6 +4,7 @@ const messages = {
   en: {
     appTitle: 'Paper DB',
     searchPlaceholder: 'Search papers, authors, venues...',
+    search: 'Search',
     // Navigation
     papers: 'Papers',
     stats: 'Stats',
@@ -224,6 +225,7 @@ const messages = {
   zh: {
     appTitle: '论文库',
     searchPlaceholder: '搜索论文、作者、期刊...',
+    search: '搜索',
     // Navigation
     papers: '论文',
     stats: '统计',

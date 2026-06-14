@@ -54,18 +54,18 @@ function formatAuthors(authors?: string[]) {
 </script>
 
 <template>
-  <div class="rounded-xl border border-ink-100 bg-white p-4 shadow-card transition-all hover:shadow-card-hover hover:border-ink-200 dark:border-ink-700 dark:bg-ink-800 dark:hover:border-ink-600">
+  <div class="group rounded-xl border border-border/60 bg-card p-5 shadow-elevated transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-elevated-lg">
     <div class="flex flex-col gap-3">
       <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div class="space-y-1">
           <router-link
             :to="`/paper/${item.paper_id}`"
-            class="text-lg font-semibold text-ink-900 hover:text-accent-600 dark:text-ink-100 dark:hover:text-accent-400"
+            class="font-display-serif text-lg font-semibold leading-snug tracking-tight text-foreground transition-colors hover:text-primary"
           >
             {{ item.title }}
           </router-link>
-          <div class="text-xs text-ink-500 dark:text-ink-400">{{ item.venue }} · {{ item.year }}</div>
-          <div v-if="item.authors?.length" class="text-xs text-ink-400 dark:text-ink-500">
+          <div class="text-xs text-muted-foreground">{{ item.venue }} · {{ item.year }}</div>
+          <div v-if="item.authors?.length" class="text-xs text-muted-foreground/80">
             {{ formatAuthors(item.authors) }}
           </div>
         </div>
@@ -83,7 +83,7 @@ function formatAuthors(authors?: string[]) {
               {{ isSelected ? t('selected_btn') : t('select') }}
             </Button>
           </TooltipProvider>
-          <Badge variant="outline">#{{ displayIndex }}</Badge>
+          <Badge variant="slate">#{{ displayIndex }}</Badge>
         </div>
       </div>
 
@@ -96,12 +96,12 @@ function formatAuthors(authors?: string[]) {
             :enable-outline="false"
             :enable-markmap="false"
             :enable-images="false"
-            class="prose prose-sm max-w-none text-ink-700 dark:text-ink-300 dark:prose-invert"
+            class="prose prose-sm max-w-none text-foreground/80 dark:prose-invert"
           />
-          <div v-else-if="item.snippet_markdown" class="prose prose-sm max-w-none text-ink-700 dark:text-ink-300 dark:prose-invert">
+          <div v-else-if="item.snippet_markdown" class="prose prose-sm max-w-none text-foreground/80 dark:prose-invert">
             <div v-html="snippetRenderer(item.snippet_markdown)"></div>
           </div>
-          <div v-else-if="item.summary_preview" class="text-sm text-ink-700 dark:text-ink-300 summary-clamp">
+          <div v-else-if="item.summary_preview" class="text-sm leading-relaxed text-foreground/80 summary-clamp">
             {{ item.summary_preview }}
           </div>
         </div>
@@ -118,12 +118,12 @@ function formatAuthors(authors?: string[]) {
         </Button>
       </div>
 
-      <div class="flex flex-wrap items-center gap-2 text-[11px] text-ink-500 dark:text-ink-400">
-        <span class="font-semibold text-ink-700 dark:text-ink-300">{{ t('resources') }}</span>
-        <Badge v-if="item.has_pdf" variant="outline">PDF</Badge>
-        <Badge v-if="item.has_source" variant="outline">Source</Badge>
-        <Badge v-if="item.has_translated" variant="outline">Translated</Badge>
-        <Badge v-if="item.preferred_summary_template" variant="outline">Summary</Badge>
+      <div class="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+        <span class="font-semibold text-foreground/70">{{ t('resources') }}</span>
+        <Badge v-if="item.has_pdf" variant="pdf">PDF</Badge>
+        <Badge v-if="item.has_source" variant="teal">Source</Badge>
+        <Badge v-if="item.has_translated" variant="violet">Translated</Badge>
+        <Badge v-if="item.preferred_summary_template" variant="navy">Summary</Badge>
       </div>
     </div>
   </div>

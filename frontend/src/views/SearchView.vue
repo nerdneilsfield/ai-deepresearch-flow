@@ -14,6 +14,7 @@ import { Badge } from '@/components/ui/badge'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
+import { Skeleton } from '@/components/ui/skeleton'
 import SearchResultItem from '@/components/search/SearchResultItem.vue'
 import AdvancedSearchPanel from '@/components/AdvancedSearchPanel.vue'
 import AdvancedSearchResults from '@/components/AdvancedSearchResults.vue'
@@ -223,11 +224,11 @@ watch(facetQuery.error, (err) => {
           <CardTitle class="text-sm">{{ t('stats') }}</CardTitle>
         </CardHeader>
         <CardContent v-if="stats" class="space-y-2 text-xs text-ink-600">
-          <div class="flex items-center justify-between">
-            <span>{{ t('total') }}</span>
-            <span class="font-semibold text-ink-900">{{ stats.total }}</span>
+          <div class="flex items-baseline justify-between gap-2">
+            <span class="text-muted-foreground">{{ t('total') }}</span>
+            <span class="font-display-serif text-2xl font-semibold leading-none text-primary">{{ stats.total.toLocaleString() }}</span>
           </div>
-          <div class="mt-3 text-xs font-semibold uppercase text-ink-400">{{ t('topAuthors') }}</div>
+          <div class="mt-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground/70">{{ t('topAuthors') }}</div>
           <div class="space-y-1">
             <button
               v-for="author in stats.authors.slice(0, 6)"
@@ -347,16 +348,17 @@ watch(facetQuery.error, (err) => {
     </aside>
 
     <section class="min-w-0 flex-1 space-y-4">
-      <Card class="mt-2">
+      <Card class="mt-2 shadow-elevated">
         <CardContent class="pt-4">
           <form class="flex flex-col gap-3 sm:flex-row sm:items-center" role="search" @submit.prevent="forceSearch">
             <Input
               v-model="query"
+              class="h-11 text-base"
               :placeholder="t('searchPlaceholder')"
               aria-label="Search papers"
               @input="handleSearchInput"
             />
-            <Button type="submit" variant="outline">Search</Button>
+            <Button type="submit" class="h-11 shrink-0">{{ t('search') }}</Button>
           </form>
           <div class="mt-3 flex flex-wrap items-center gap-3 text-xs text-ink-500">
             <span class="font-semibold text-ink-700">{{ t('sort') }}</span>
@@ -416,8 +418,8 @@ watch(facetQuery.error, (err) => {
         @toggle-select="onAdvancedToggleSelect"
       />
 
-      <div v-if="loading" class="rounded-xl border border-ink-100 bg-white p-6 text-sm text-ink-500" role="status">
-        {{ t('loading') }}
+      <div v-if="loading" class="space-y-3" role="status" aria-live="polite">
+        <Skeleton v-for="n in 5" :key="n" class="h-28 rounded-xl" />
       </div>
       <div
         v-else-if="error"

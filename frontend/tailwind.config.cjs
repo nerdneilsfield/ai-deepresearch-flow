@@ -88,20 +88,44 @@ module.exports = {
   			}
   		},
   		fontFamily: {
-  			display: [
+  			// Self-hosted: Inter (sans) for UI/body, Source Serif 4 (serif) for titles
+  			sans: [
+  				'Inter Variable',
   				'Noto Sans SC',
-  				'Source Han Sans SC',
-  				'PingFang SC',
-  				'Microsoft YaHei',
-  				'IBM Plex Sans',
-  				'Noto Sans',
+  				'system-ui',
+  				'-apple-system',
+  				'sans-serif'
+  			],
+  			serif: [
+  				'"Source Serif 4 Variable"',
+  				'Noto Serif SC',
+  				'Georgia',
+  				'serif'
+  			],
+  			mono: [
+  				'"JetBrains Mono Variable"',
+  				'ui-monospace',
+  				'SFMono-Regular',
+  				'monospace'
+  			],
+  			// Backwards-compat alias used by existing `font-display` utility
+  			display: [
+  				'Inter Variable',
+  				'Noto Sans SC',
   				'system-ui',
   				'sans-serif'
   			]
   		},
   		boxShadow: {
   			soft: '0 20px 45px -40px rgba(15, 23, 42, 0.45)',
-  			card: '0 1px 3px 0 rgba(15, 23, 42, 0.04), 0 1px 2px -1px rgba(15, 23, 42, 0.03)',
+  			// Flat card — sidebars, secondary panels
+  			card: '0 1px 2px 0 rgba(15, 23, 42, 0.04), 0 1px 3px 0 rgba(15, 23, 42, 0.04)',
+  			// Elevated — primary content cards (search results, main action area)
+  			elevated: '0 4px 6px -1px rgba(15, 23, 42, 0.06), 0 2px 4px -2px rgba(15, 23, 42, 0.05)',
+  			'elevated-lg': '0 10px 25px -5px rgba(15, 23, 42, 0.10), 0 8px 10px -6px rgba(15, 23, 42, 0.06)',
+  			// Floating layers — dropdowns, popovers, tooltips
+  			popover: '0 12px 32px -8px rgba(15, 23, 42, 0.18)',
+  			// Legacy alias kept for existing `shadow-card-hover` references
   			'card-hover': '0 4px 16px -4px rgba(15, 23, 42, 0.1), 0 2px 4px -2px rgba(15, 23, 42, 0.05)',
   		},
   		borderRadius: {

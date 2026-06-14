@@ -5,6 +5,7 @@ import { useI18n } from 'vue-i18n'
 import { getStats, type StatsResponse } from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 import VChart from 'vue-echarts'
 import { use } from 'echarts/core'
 import { BarChart, PieChart } from 'echarts/charts'
@@ -13,9 +14,11 @@ import { CanvasRenderer } from 'echarts/renderers'
 import { useQuery } from '@tanstack/vue-query'
 import { QUERY_CACHE_POLICY } from '@/lib/query-client'
 import StatsFacetCard from '@/components/stats/StatsFacetCard.vue'
+import { useChartTheme } from '@/composables/useChartTheme'
 
 const router = useRouter()
 const { t } = useI18n()
+const chartTheme = useChartTheme()
 const statsQuery = useQuery({
   queryKey: ['stats'],
   queryFn: () => getStats(),
@@ -46,82 +49,91 @@ function goFacet(facet: string, value: string) {
   router.push(`/facet/${facet}/${encodeURIComponent(value)}`)
 }
 
-const chartColor = '#3b82f6'
-
-const yearOption = computed(() => ({
-  animation: false,
-  grid: { left: 48, right: 16, top: 16, bottom: 40 },
-  tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-  xAxis: {
-    type: 'category',
-    data: sortedYears.value.map((item) => String(item.value)),
-    axisLabel: { color: '#475569' },
-    axisTick: { alignWithLabel: true },
-  },
-  yAxis: {
-    type: 'value',
-    axisLabel: { color: '#64748b' },
-    splitLine: { lineStyle: { color: '#e2e8f0' } },
-  },
-  series: [
-    {
-      name: t('pubYear'),
-      type: 'bar',
-      data: sortedYears.value.map((item) => item.paper_count),
-      barWidth: '60%',
-      itemStyle: { color: chartColor, borderRadius: [4, 4, 0, 0] },
+const yearOption = computed(() => {
+  const theme = chartTheme.value
+  return {
+    animation: false,
+    grid: { left: 48, right: 16, top: 16, bottom: 40 },
+    color: [theme.primary],
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, ...theme.tooltip },
+    xAxis: {
+      type: 'category',
+      data: sortedYears.value.map((item) => String(item.value)),
+      axisLabel: { color: theme.axis },
+      axisLine: { lineStyle: { color: theme.grid } },
+      axisTick: { alignWithLabel: true },
     },
-  ],
-}))
-
-const monthOption = computed(() => ({
-  animation: false,
-  grid: { left: 48, right: 16, top: 16, bottom: 40 },
-  tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-  xAxis: {
-    type: 'category',
-    data: sortedMonths.value.map((item) => String(item.value)),
-    axisLabel: { color: '#475569' },
-    axisTick: { alignWithLabel: true },
-  },
-  yAxis: {
-    type: 'value',
-    axisLabel: { color: '#64748b' },
-    splitLine: { lineStyle: { color: '#e2e8f0' } },
-  },
-  series: [
-    {
-      name: t('pubMonth'),
-      type: 'bar',
-      data: sortedMonths.value.map((item) => item.paper_count),
-      barWidth: '60%',
-      itemStyle: { color: chartColor, borderRadius: [4, 4, 0, 0] },
+    yAxis: {
+      type: 'value',
+      axisLabel: { color: theme.axis },
+      splitLine: { lineStyle: { color: theme.grid } },
     },
-  ],
-}))
+    series: [
+      {
+        name: t('pubYear'),
+        type: 'bar',
+        data: sortedYears.value.map((item) => item.paper_count),
+        barWidth: '60%',
+        itemStyle: { color: theme.primary, borderRadius: [4, 4, 0, 0] },
+      },
+    ],
+  }
+})
+
+const monthOption = computed(() => {
+  const theme = chartTheme.value
+  return {
+    animation: false,
+    grid: { left: 48, right: 16, top: 16, bottom: 40 },
+    color: [theme.primary],
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, ...theme.tooltip },
+    xAxis: {
+      type: 'category',
+      data: sortedMonths.value.map((item) => String(item.value)),
+      axisLabel: { color: theme.axis },
+      axisLine: { lineStyle: { color: theme.grid } },
+      axisTick: { alignWithLabel: true },
+    },
+    yAxis: {
+      type: 'value',
+      axisLabel: { color: theme.axis },
+      splitLine: { lineStyle: { color: theme.grid } },
+    },
+    series: [
+      {
+        name: t('pubMonth'),
+        type: 'bar',
+        data: sortedMonths.value.map((item) => item.paper_count),
+        barWidth: '60%',
+        itemStyle: { color: theme.primary, borderRadius: [4, 4, 0, 0] },
+      },
+    ],
+  }
+})
 </script>
 
 <template>
   <div class="space-y-6">
     <div class="flex flex-wrap items-center justify-between gap-3">
       <div>
-        <div class="text-sm font-semibold text-ink-900">{{ t('stats') }}</div>
-        <div class="text-xs text-ink-500">{{ t('chartsNote') }}</div>
+        <div class="font-display-serif text-lg font-semibold text-foreground">{{ t('stats') }}</div>
+        <div class="text-xs text-muted-foreground">{{ t('chartsNote') }}</div>
       </div>
       <Button variant="outline" @click="router.push('/')">{{ t('backToSearch') }}</Button>
     </div>
 
-    <div v-if="loading" class="rounded-xl border border-ink-100 bg-white p-6 text-sm text-ink-500">
-      {{ t('loading') }}
+    <div v-if="loading" class="space-y-4">
+      <Skeleton class="h-72 rounded-xl" />
+      <Skeleton class="h-72 rounded-xl" />
     </div>
-    <div v-else-if="error" class="rounded-xl border border-red-200 bg-red-50 p-6 text-sm text-red-600">
+    <div v-else-if="error" class="rounded-xl border border-destructive/30 bg-destructive/5 p-6 text-sm text-destructive">
       {{ error }}
     </div>
 
     <div v-if="stats" class="space-y-6">
       <Card class="space-y-0">
         <CardHeader>
-          <CardTitle class="text-sm">{{ t('pubYear') }}</CardTitle>
+          <CardTitle class="font-display-serif text-sm font-semibold">{{ t('pubYear') }}</CardTitle>
         </CardHeader>
         <CardContent class="pt-0">
           <VChart class="h-72 w-full" :option="yearOption" autoresize />
@@ -130,7 +142,7 @@ const monthOption = computed(() => ({
 
       <Card class="space-y-0">
         <CardHeader>
-          <CardTitle class="text-sm">{{ t('pubMonth') }}</CardTitle>
+          <CardTitle class="font-display-serif text-sm font-semibold">{{ t('pubMonth') }}</CardTitle>
         </CardHeader>
         <CardContent class="pt-0">
           <VChart class="h-72 w-full" :option="monthOption" autoresize />

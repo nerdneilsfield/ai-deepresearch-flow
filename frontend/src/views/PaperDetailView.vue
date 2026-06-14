@@ -5,6 +5,7 @@ import { useI18n } from 'vue-i18n'
 import { getSummaryPayloadCached, type PaperDetail } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useUiStore } from '@/stores/ui'
@@ -389,21 +390,23 @@ watch([viewMode, leftView, rightView, summaryTemplate], () => {
 </script>
 
 <template>
-  <div v-if="loading" class="rounded-xl border border-ink-100 bg-white p-6 text-sm text-ink-500">
-    {{ t('loadingPaperDetail') }}
+  <div v-if="loading" class="space-y-4">
+    <Skeleton class="h-6 w-2/3" />
+    <Skeleton class="h-4 w-1/3" />
+    <Skeleton class="h-64 w-full rounded-xl" />
   </div>
-  <div v-else-if="error" class="rounded-xl border border-red-200 bg-red-50 p-6 text-sm text-red-600">
+  <div v-else-if="error" class="rounded-xl border border-destructive/30 bg-destructive/5 p-6 text-sm text-destructive">
     {{ error }}
   </div>
   <div v-else-if="detail" class="space-y-4">
     <div
       v-if="advancedChunkText"
-      class="rounded-xl border border-accent-200 bg-accent-50 p-4 text-sm text-ink-800"
+      class="rounded-xl border border-accent-200 bg-accent-50 p-4 text-sm text-accent-foreground"
       data-testid="advanced-match-banner"
     >
-      <div class="font-semibold text-ink-900">Matched chunk from advanced search</div>
-      <div v-if="advancedChunkField" class="mt-1 text-xs text-ink-500">{{ advancedChunkField }}</div>
-      <p class="mt-2 whitespace-pre-wrap text-sm text-ink-700">{{ advancedChunkText }}</p>
+      <div class="font-display-serif font-semibold text-foreground">Matched chunk from advanced search</div>
+      <div v-if="advancedChunkField" class="mt-1 text-xs text-muted-foreground">{{ advancedChunkField }}</div>
+      <p class="mt-2 whitespace-pre-wrap text-sm text-foreground/80">{{ advancedChunkText }}</p>
     </div>
 
     <div
@@ -443,7 +446,7 @@ watch([viewMode, leftView, rightView, summaryTemplate], () => {
             <Button
               size="sm"
               :variant="viewMode === 'summary' ? 'default' : 'ghost'"
-              :class="viewMode === 'summary' ? 'bg-ink-900 text-white hover:bg-ink-800' : 'text-ink-600 hover:text-ink-900 dark:text-ink-400 dark:hover:text-ink-100'"
+              :class="viewMode === 'summary' ? 'bg-primary text-primary-foreground hover:bg-primary/90' : 'text-muted-foreground hover:bg-muted hover:text-foreground'"
               :aria-pressed="viewMode === 'summary'"
               @click="viewMode = 'summary'"
             >
@@ -516,7 +519,6 @@ watch([viewMode, leftView, rightView, summaryTemplate], () => {
             <Button
               size="sm"
               :variant="isZenMode ? 'default' : 'outline'"
-              :class="isZenMode ? 'bg-ink-900 text-white hover:bg-ink-800' : ''"
               @click="toggleZenMode"
             >
               {{ isZenMode ? t('exitZenMode') : t('zenMode') }}
