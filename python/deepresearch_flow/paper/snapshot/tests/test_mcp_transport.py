@@ -610,6 +610,74 @@ class TestMcpGitHubOAuth(unittest.IsolatedAsyncioTestCase):
             response.headers["location"].startswith("https://papers.example.com/consent?")
         )
 
+    async def test_token_accepts_chatgpt_metadata_url_resource_alias(self) -> None:
+        app = self._app()
+        transport = httpx.ASGITransport(app=app)
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(
+                transport=transport,
+                base_url="https://papers.example.com",
+                follow_redirects=False,
+            ) as client:
+                registration = await client.post(
+                    "/register",
+                    json={
+                        "redirect_uris": ["https://chatgpt.com/connector/oauth/test"],
+                        "token_endpoint_auth_method": "none",
+                        "grant_types": ["authorization_code", "refresh_token"],
+                        "response_types": ["code"],
+                    },
+                )
+                response = await client.post(
+                    "/token",
+                    data={
+                        "grant_type": "authorization_code",
+                        "code": "missing-code",
+                        "redirect_uri": "https://chatgpt.com/connector/oauth/test",
+                        "client_id": registration.json()["client_id"],
+                        "code_verifier": "test-verifier",
+                        "resource": (
+                            "https://papers.example.com/.well-known/"
+                            "oauth-protected-resource/oauth/mcp"
+                        ),
+                    },
+                )
+
+        self.assertEqual(response.json()["error"], "invalid_grant")
+
+    async def test_token_rejects_wrong_resource_indicator(self) -> None:
+        app = self._app()
+        transport = httpx.ASGITransport(app=app)
+        async with app.router.lifespan_context(app):
+            async with httpx.AsyncClient(
+                transport=transport,
+                base_url="https://papers.example.com",
+                follow_redirects=False,
+            ) as client:
+                registration = await client.post(
+                    "/register",
+                    json={
+                        "redirect_uris": ["https://chatgpt.com/connector/oauth/test"],
+                        "token_endpoint_auth_method": "none",
+                        "grant_types": ["authorization_code", "refresh_token"],
+                        "response_types": ["code"],
+                    },
+                )
+                response = await client.post(
+                    "/token",
+                    data={
+                        "grant_type": "authorization_code",
+                        "code": "missing-code",
+                        "redirect_uri": "https://chatgpt.com/connector/oauth/test",
+                        "client_id": registration.json()["client_id"],
+                        "code_verifier": "test-verifier",
+                        "resource": "https://other.example.com/oauth/mcp",
+                    },
+                )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"], "invalid_target")
+
     async def test_oauth_mcp_challenges_with_resource_metadata_without_redirect(self) -> None:
         app = self._app()
         response = await _capture_response_start(app, method="POST", path="/oauth/mcp")

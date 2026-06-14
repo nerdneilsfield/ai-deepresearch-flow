@@ -118,6 +118,101 @@ class _OAuthAuthorizeResourceAliasBridge:
         await self.app(rewritten, receive, send)
 
 
+class _OAuthTokenResourceBridge:
+    """Normalize and validate OAuth token request resource indicators."""
+
+    def __init__(
+        self,
+        app,
+        *,
+        resource_metadata_url: str,
+        canonical_resource_url: str,
+    ) -> None:
+        self.app = app
+        self.resource_metadata_url = resource_metadata_url.rstrip("/")
+        self.canonical_resource_url = canonical_resource_url.rstrip("/")
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope.get("type") != "http" or scope.get("method") != "POST":
+            await self.app(scope, receive, send)
+            return
+
+        body_parts: list[bytes] = []
+        more_body = True
+        while more_body:
+            message = await receive()
+            if message["type"] != "http.request":
+                await self._replay(scope, [message], send)
+                return
+            body_parts.append(message.get("body", b""))
+            more_body = bool(message.get("more_body", False))
+
+        body = b"".join(body_parts)
+        form_text = body.decode("latin-1")
+        form_items = parse_qsl(form_text, keep_blank_values=True)
+        changed = False
+        invalid_resource = False
+        rewritten_items: list[tuple[str, str]] = []
+
+        for key, value in form_items:
+            if key != "resource" or not value:
+                rewritten_items.append((key, value))
+                continue
+
+            normalized = value.rstrip("/")
+            if normalized == self.resource_metadata_url:
+                rewritten_items.append((key, self.canonical_resource_url))
+                changed = True
+            elif normalized == self.canonical_resource_url:
+                rewritten_items.append((key, value))
+            else:
+                rewritten_items.append((key, value))
+                invalid_resource = True
+
+        if invalid_resource:
+            response = JSONResponse(
+                {
+                    "error": "invalid_target",
+                    "error_description": "Resource does not match this server",
+                },
+                status_code=400,
+                headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
+            )
+            await response(scope, receive, send)
+            return
+
+        if not changed:
+            await self._replay(
+                scope, [{"type": "http.request", "body": body, "more_body": False}], send
+            )
+            return
+
+        rewritten_body = urlencode(rewritten_items).encode("latin-1")
+        rewritten_scope = dict(scope)
+        rewritten_headers = []
+        for key, value in scope.get("headers", []):
+            if key.lower() == b"content-length":
+                rewritten_headers.append((key, str(len(rewritten_body)).encode("latin-1")))
+            else:
+                rewritten_headers.append((key, value))
+        rewritten_scope["headers"] = rewritten_headers
+        await self._replay(
+            rewritten_scope,
+            [{"type": "http.request", "body": rewritten_body, "more_body": False}],
+            send,
+        )
+
+    async def _replay(self, scope, messages: list[dict[str, object]], send) -> None:
+        remaining = list(messages)
+
+        async def replay_receive() -> dict[str, object]:
+            if remaining:
+                return remaining.pop(0)
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        await self.app(scope, replay_receive, send)
+
+
 def _oauth_protocol_routes(oauth_app, *, public_base_url: str) -> list[Route]:
     """Expose only proven FastMCP/GitHub OAuth protocol routes at root."""
 
@@ -158,7 +253,15 @@ def _oauth_protocol_routes(oauth_app, *, public_base_url: str) -> list[Route]:
             ),
             methods=["GET", "POST"],
         ),
-        bridge("/token", methods=["POST", "OPTIONS"]),
+        Route(
+            "/token",
+            _OAuthTokenResourceBridge(
+                oauth_app,
+                resource_metadata_url=resource_metadata_url,
+                canonical_resource_url=canonical_resource_url,
+            ),
+            methods=["POST", "OPTIONS"],
+        ),
         bridge("/auth/callback", methods=["GET"]),
         bridge("/consent", methods=["GET", "POST"]),
     ]
