@@ -1,5 +1,4 @@
 @import "katex/dist/katex.min.css";
-@import "cherry-markdown/dist/cherry-markdown.css";
 
 @tailwind base;
 @tailwind components;

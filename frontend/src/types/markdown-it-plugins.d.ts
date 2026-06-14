@@ -3,7 +3,7 @@ declare module 'markdown-it-footnote' {
   export default plugin
 }
 
-declare module 'markdown-it-katex' {
+declare module '@vscode/markdown-it-katex' {
   const plugin: any
   export default plugin
 }

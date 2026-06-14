@@ -2,7 +2,7 @@ import MarkdownIt from 'markdown-it'
 import DOMPurify from 'dompurify'
 import type { Config } from 'dompurify'
 import markdownItFootnote from 'markdown-it-footnote'
-import markdownItKatex from 'markdown-it-katex'
+import markdownItKatex from '@vscode/markdown-it-katex'
 import { normalizeMarkdown } from './markdown-normalize'
 
 const md = new MarkdownIt({

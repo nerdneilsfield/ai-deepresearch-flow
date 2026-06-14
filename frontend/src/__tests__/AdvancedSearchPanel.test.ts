@@ -7,7 +7,7 @@ import * as tokenDb from '@/lib/token-db'
 type VerifyResultLike = { valid: true } | { valid: false; reason: 'missing' | 'invalid' }
 
 const { verifyTokenMock } = vi.hoisted(() => ({
-  verifyTokenMock: vi.fn<[string], Promise<VerifyResultLike>>(),
+  verifyTokenMock: vi.fn<(token: string) => Promise<VerifyResultLike>>(),
 }))
 const { pushToastMock } = vi.hoisted(() => ({
   pushToastMock: vi.fn(),

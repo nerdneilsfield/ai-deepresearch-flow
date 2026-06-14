@@ -1,6 +1,6 @@
 import type { Component, VNode } from "vue"
 import type { ToastProps } from "."
-import { computed, ref } from "vue"
+import { computed, shallowRef } from "vue"
 
 const TOAST_LIMIT = 1
 const TOAST_REMOVE_DELAY = 1000000
@@ -51,10 +51,6 @@ type Action
     toastId?: ToasterToast["id"]
   }
 
-interface State {
-  toasts: ToasterToast[]
-}
-
 const toastTimeouts = new Map<string, ReturnType<typeof setTimeout>>()
 
 function addToRemoveQueue(toastId: string) {
@@ -72,18 +68,16 @@ function addToRemoveQueue(toastId: string) {
   toastTimeouts.set(toastId, timeout)
 }
 
-const state = ref<State>({
-  toasts: [],
-})
+const toasts = shallowRef<ToasterToast[]>([])
 
 function dispatch(action: Action) {
   switch (action.type) {
     case actionTypes.ADD_TOAST:
-      state.value.toasts = [action.toast, ...state.value.toasts].slice(0, TOAST_LIMIT)
+      toasts.value = [action.toast, ...toasts.value].slice(0, TOAST_LIMIT)
       break
 
     case actionTypes.UPDATE_TOAST:
-      state.value.toasts = state.value.toasts.map(t =>
+      toasts.value = toasts.value.map(t =>
         t.id === action.toast.id ? { ...t, ...action.toast } : t,
       )
       break
@@ -95,12 +89,12 @@ function dispatch(action: Action) {
         addToRemoveQueue(toastId)
       }
       else {
-        state.value.toasts.forEach((toast) => {
+        toasts.value.forEach((toast) => {
           addToRemoveQueue(toast.id)
         })
       }
 
-      state.value.toasts = state.value.toasts.map(t =>
+      toasts.value = toasts.value.map(t =>
         t.id === toastId || toastId === undefined
           ? {
               ...t,
@@ -113,9 +107,9 @@ function dispatch(action: Action) {
 
     case actionTypes.REMOVE_TOAST:
       if (action.toastId === undefined)
-        state.value.toasts = []
+        toasts.value = []
       else
-        state.value.toasts = state.value.toasts.filter(t => t.id !== action.toastId)
+        toasts.value = toasts.value.filter(t => t.id !== action.toastId)
 
       break
   }
@@ -123,7 +117,7 @@ function dispatch(action: Action) {
 
 function useToast() {
   return {
-    toasts: computed(() => state.value.toasts),
+    toasts: computed(() => toasts.value),
     toast,
     dismiss: (toastId?: string) => dispatch({ type: actionTypes.DISMISS_TOAST, toastId }),
   }
