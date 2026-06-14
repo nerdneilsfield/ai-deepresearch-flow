@@ -6,7 +6,12 @@ from starlette.responses import PlainTextResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
-from deepresearch_flow.paper.snapshot.auth import BearerAuthError, bearer_auth_app, verify_bearer
+from deepresearch_flow.paper.snapshot.auth import (
+    BearerAuthError,
+    StaticBearerTokenVerifier,
+    bearer_auth_app,
+    verify_bearer,
+)
 
 
 def _echo_app() -> Starlette:
@@ -54,3 +59,21 @@ def test_bearer_auth_app_bypasses_options_and_enforces_other_methods() -> None:
     assert denied_response.headers["www-authenticate"] == "Bearer"
     assert allowed_response.status_code == 200
     assert allowed_response.text == "PUT /"
+
+
+@pytest.mark.anyio
+async def test_static_bearer_token_verifier_accepts_matching_token() -> None:
+    verifier = StaticBearerTokenVerifier(
+        "secret",
+        base_url="https://example.test",
+        required_scopes=["user"],
+    )
+
+    accepted = await verifier.verify_token("secret")
+    rejected = await verifier.verify_token("wrong")
+
+    assert accepted is not None
+    assert accepted.client_id == "static-bearer"
+    assert accepted.scopes == ["user"]
+    assert accepted.claims["auth_source"] == "static-bearer"
+    assert rejected is None

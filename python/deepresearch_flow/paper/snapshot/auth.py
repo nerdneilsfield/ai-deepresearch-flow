@@ -10,7 +10,10 @@ import os
 from typing import Any, Literal
 from urllib.parse import urlparse
 
-from fastmcp.server.auth import AccessToken, MultiAuth, TokenVerifier
+# Import from the concrete module instead of the package re-export.  Some
+# FastMCP 3.x distributions expose an incomplete ``fastmcp.server.auth``
+# namespace during startup, which breaks deployment before the API can serve.
+from fastmcp.server.auth.auth import AccessToken, MultiAuth, TokenVerifier
 from fastmcp.server.auth.providers.github import GitHubProvider
 from starlette.responses import JSONResponse
 
