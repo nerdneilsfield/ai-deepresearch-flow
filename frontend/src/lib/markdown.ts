@@ -4,24 +4,15 @@ import type { Config } from 'dompurify'
 import markdownItFootnote from 'markdown-it-footnote'
 import markdownItKatexModule from '@vscode/markdown-it-katex'
 import { normalizeMarkdown } from './markdown-normalize'
+import { resolveMarkdownItPlugin } from './module-interop'
 
 const md = new MarkdownIt({
   html: true,
   linkify: true,
   breaks: true,
 })
-md.use(markdownItFootnote)
-
-function resolveMarkdownItPlugin(plugin: unknown): (md: MarkdownIt, ...args: unknown[]) => void {
-  if (typeof plugin === 'function') return plugin as (md: MarkdownIt, ...args: unknown[]) => void
-  const nestedDefault = (plugin as { default?: unknown } | null)?.default
-  if (typeof nestedDefault === 'function') {
-    return nestedDefault as (md: MarkdownIt, ...args: unknown[]) => void
-  }
-  throw new TypeError('Markdown-it plugin export is not callable')
-}
-
-md.use(resolveMarkdownItPlugin(markdownItKatexModule), { throwOnError: false })
+md.use(resolveMarkdownItPlugin(markdownItFootnote))
+md.use(resolveMarkdownItPlugin(markdownItKatexModule), { throwOnError: false, strict: false })
 md.enable('table')
 
 const PURIFY_CONFIG: Config = {

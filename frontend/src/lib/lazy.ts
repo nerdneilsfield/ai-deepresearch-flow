@@ -1,7 +1,4 @@
-function unwrapDefault<T>(mod: unknown): T {
-  const first = (mod as { default?: unknown } | null)?.default ?? mod
-  return ((first as { default?: unknown } | null)?.default ?? first) as T
-}
+import { resolveCallableExport, resolveDefaultExport } from './module-interop'
 
 export async function lazySnippet() {
   const mod = await import('./snippet')
@@ -10,18 +7,18 @@ export async function lazySnippet() {
 
 export async function lazyZip() {
   const mod = await import('jszip')
-  return unwrapDefault<typeof import('jszip')>(mod)
+  return resolveDefaultExport<typeof import('jszip')>(mod)
 }
 
 export async function lazySaveAs() {
   const mod = await import('file-saver')
-  const unwrapped = unwrapDefault<((data: Blob | string, filename?: string) => void) & { saveAs?: (data: Blob | string, filename?: string) => void }>(mod)
-  return unwrapped.saveAs ?? unwrapped
+  const candidate = resolveDefaultExport<((data: Blob | string, filename?: string) => void) & { saveAs?: (data: Blob | string, filename?: string) => void }>(mod)
+  return candidate.saveAs ?? candidate
 }
 
 export async function lazyMermaid() {
   const mod = await import('mermaid')
-  return unwrapDefault<typeof import('mermaid').default>(mod)
+  return resolveDefaultExport<typeof import('mermaid').default>(mod)
 }
 
 export async function lazyMarkmap() {
@@ -34,5 +31,5 @@ export async function lazyMarkmap() {
 
 export async function lazyKatexAuto() {
   const mod = await import('katex/contrib/auto-render')
-  return unwrapDefault<(element: HTMLElement, options?: unknown) => void>(mod)
+  return resolveCallableExport<(element: HTMLElement, options?: unknown) => void>(mod)
 }

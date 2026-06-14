@@ -2,6 +2,8 @@
 import { computed, nextTick, onBeforeUnmount } from 'vue'
 import { MdPreview, config } from 'md-editor-v3'
 import 'md-editor-v3/lib/preview.css'
+import mermaid from 'mermaid'
+import katex from 'katex'
 import DOMPurify from 'dompurify'
 import footnote from 'markdown-it-footnote'
 import taskLists from 'markdown-it-task-lists'
@@ -10,12 +12,25 @@ import type { HeadList } from 'md-editor-v3'
 import type { OutlineItem } from '@/lib/outline'
 import { STATIC_BASE } from '@/lib/config'
 import { useTheme } from '@/composables/useTheme'
+import { resolveMarkdownItPlugin } from '@/lib/module-interop'
 
 // Global configuration for md-editor-v3
 config({
+  editorExtensions: {
+    mermaid: {
+      instance: mermaid,
+      enableZoom: true,
+    },
+    katex: {
+      instance: katex,
+    },
+  },
+  katexConfig(baseConfig) {
+    return { ...baseConfig, throwOnError: false, strict: false }
+  },
   markdownItConfig(md) {
-    md.use(footnote)
-    md.use(taskLists)
+    md.use(resolveMarkdownItPlugin(footnote))
+    md.use(resolveMarkdownItPlugin(taskLists))
   }
 })
 
