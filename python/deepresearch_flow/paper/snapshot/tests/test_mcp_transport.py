@@ -610,6 +610,77 @@ class TestMcpGitHubOAuth(unittest.IsolatedAsyncioTestCase):
             response.headers["location"].startswith("https://papers.example.com/consent?")
         )
 
+    async def test_oauth_client_registration_survives_app_restart_with_json_cache(self) -> None:
+        cache_path = Path(self.tmpdir.name) / "oauth-clients.json"
+        first_app = create_app(
+            snapshot_db=self.snapshot_db,
+            static_base_url="",
+            cors_allowed_origins=["*"],
+            limits=ApiLimits(),
+            mcp_auth_mode="github-oauth",
+            mcp_public_base_url="https://papers.example.com",
+            github_oauth_client_id="github-client",
+            github_oauth_client_secret="github-secret",
+            mcp_github_allowed_user_ids=["12345"],
+            mcp_access_token="static-token",
+            mcp_oauth_client_cache_path=cache_path,
+        )
+        first_transport = httpx.ASGITransport(app=first_app)
+        async with first_app.router.lifespan_context(first_app):
+            async with httpx.AsyncClient(
+                transport=first_transport,
+                base_url="https://papers.example.com",
+                follow_redirects=False,
+            ) as client:
+                registration = await client.post(
+                    "/register",
+                    json={
+                        "redirect_uris": ["https://chatgpt.com/connector/oauth/test"],
+                        "token_endpoint_auth_method": "none",
+                        "grant_types": ["authorization_code", "refresh_token"],
+                        "response_types": ["code"],
+                    },
+                )
+
+        restarted_app = create_app(
+            snapshot_db=self.snapshot_db,
+            static_base_url="",
+            cors_allowed_origins=["*"],
+            limits=ApiLimits(),
+            mcp_auth_mode="github-oauth",
+            mcp_public_base_url="https://papers.example.com",
+            github_oauth_client_id="github-client",
+            github_oauth_client_secret="github-secret",
+            mcp_github_allowed_user_ids=["12345"],
+            mcp_access_token="static-token",
+            mcp_oauth_client_cache_path=cache_path,
+        )
+        restarted_transport = httpx.ASGITransport(app=restarted_app)
+        async with restarted_app.router.lifespan_context(restarted_app):
+            async with httpx.AsyncClient(
+                transport=restarted_transport,
+                base_url="https://papers.example.com",
+                follow_redirects=False,
+            ) as client:
+                response = await client.get(
+                    "/authorize",
+                    params={
+                        "response_type": "code",
+                        "client_id": registration.json()["client_id"],
+                        "redirect_uri": "https://chatgpt.com/connector/oauth/test",
+                        "scope": "user",
+                        "code_challenge": "test-challenge",
+                        "code_challenge_method": "S256",
+                        "resource": "https://papers.example.com/oauth/mcp",
+                        "state": "test-state",
+                    },
+                )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(
+            response.headers["location"].startswith("https://papers.example.com/consent?")
+        )
+
     async def test_token_accepts_chatgpt_metadata_url_resource_alias(self) -> None:
         app = self._app()
         transport = httpx.ASGITransport(app=app)

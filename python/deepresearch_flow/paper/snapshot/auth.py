@@ -7,7 +7,12 @@ import inspect
 import json
 import hmac
 import os
+from pathlib import Path
+import tempfile
+import threading
+from collections.abc import Mapping, Sequence
 from typing import Any, Literal
+from typing import SupportsFloat
 from urllib.parse import urlparse
 
 try:
@@ -30,6 +35,7 @@ from starlette.responses import JSONResponse
 _BEARER_SCHEME = "bearer"
 _MCP_PUBLIC_UNSAFE_ENV = "MCP_PUBLIC_UNSAFE"
 _PLACEHOLDER_STATIC_TOKENS = {"your-mcp-token"}
+_OAUTH_CLIENT_COLLECTION = "mcp-oauth-proxy-clients"
 
 
 def is_mcp_public_unsafe_allowed() -> bool:
@@ -116,6 +122,7 @@ class McpGitHubOAuthConfig:
     allowed_github_user_ids: tuple[str, ...] = ()
     required_scopes: tuple[str, ...] = ("user",)
     jwt_signing_key: str | None = None
+    client_cache_path: Path | None = None
 
     def __post_init__(self) -> None:
         normalized = self.public_base_url.rstrip("/")
@@ -185,6 +192,128 @@ class _AllowedGitHubProvider(GitHubProvider):
         if github_id not in self._allowed_github_user_ids:
             return None
         return access_token
+
+
+class JsonOAuthClientCache:
+    """Persist OAuth DCR clients in a JSON file while keeping transient state in memory."""
+
+    def __init__(self, path: Path) -> None:
+        self._path = Path(path)
+        self._lock = threading.RLock()
+        self._memory: dict[str, dict[str, dict[str, Any]]] = {}
+
+    def _is_persistent_collection(self, collection: str | None) -> bool:
+        return collection == _OAUTH_CLIENT_COLLECTION
+
+    def _read_persistent(self) -> dict[str, dict[str, Any]]:
+        if not self._path.exists():
+            return {}
+        try:
+            raw = json.loads(self._path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        if not isinstance(raw, dict):
+            return {}
+        collections = raw.get("collections")
+        if not isinstance(collections, dict):
+            return {}
+        clients = collections.get(_OAUTH_CLIENT_COLLECTION)
+        if not isinstance(clients, dict):
+            return {}
+        return {str(key): value for key, value in clients.items() if isinstance(value, dict)}
+
+    def _write_persistent(self, values: dict[str, dict[str, Any]]) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "version": 1,
+            "collections": {_OAUTH_CLIENT_COLLECTION: values},
+        }
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=self._path.parent,
+            prefix=f".{self._path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as tmp:
+            json.dump(payload, tmp, ensure_ascii=False, sort_keys=True, indent=2)
+            tmp.write("\n")
+            tmp_path = Path(tmp.name)
+        try:
+            os.chmod(tmp_path, 0o600)
+        except OSError:
+            pass
+        os.replace(tmp_path, self._path)
+
+    async def get(self, key: str, *, collection: str | None = None) -> dict[str, Any] | None:
+        with self._lock:
+            if self._is_persistent_collection(collection):
+                value = self._read_persistent().get(key)
+                return dict(value) if value is not None else None
+            value = self._memory.get(collection or "", {}).get(key)
+            return dict(value) if value is not None else None
+
+    async def ttl(
+        self, key: str, *, collection: str | None = None
+    ) -> tuple[dict[str, Any] | None, float | None]:
+        return await self.get(key, collection=collection), None
+
+    async def put(
+        self,
+        key: str,
+        value: Mapping[str, Any],
+        *,
+        collection: str | None = None,
+        ttl: SupportsFloat | None = None,
+    ) -> None:
+        del ttl
+        with self._lock:
+            value_dict = dict(value)
+            if self._is_persistent_collection(collection):
+                values = self._read_persistent()
+                values[key] = value_dict
+                self._write_persistent(values)
+                return
+            self._memory.setdefault(collection or "", {})[key] = value_dict
+
+    async def delete(self, key: str, *, collection: str | None = None) -> bool:
+        with self._lock:
+            if self._is_persistent_collection(collection):
+                values = self._read_persistent()
+                existed = key in values
+                if existed:
+                    del values[key]
+                    self._write_persistent(values)
+                return existed
+            return self._memory.get(collection or "", {}).pop(key, None) is not None
+
+    async def get_many(
+        self, keys: Sequence[str], *, collection: str | None = None
+    ) -> list[dict[str, Any] | None]:
+        return [await self.get(key, collection=collection) for key in keys]
+
+    async def ttl_many(
+        self, keys: Sequence[str], *, collection: str | None = None
+    ) -> list[tuple[dict[str, Any] | None, float | None]]:
+        return [await self.ttl(key, collection=collection) for key in keys]
+
+    async def put_many(
+        self,
+        keys: Sequence[str],
+        values: Sequence[Mapping[str, Any]],
+        *,
+        collection: str | None = None,
+        ttl: SupportsFloat | None = None,
+    ) -> None:
+        for key, value in zip(keys, values, strict=True):
+            await self.put(key, value, collection=collection, ttl=ttl)
+
+    async def delete_many(self, keys: Sequence[str], *, collection: str | None = None) -> int:
+        deleted = 0
+        for key in keys:
+            if await self.delete(key, collection=collection):
+                deleted += 1
+        return deleted
 
 
 def oauth_metadata_compat_app(app):
@@ -278,6 +407,8 @@ def build_mcp_github_oauth_provider(
         "required_scopes": list(config.required_scopes),
         "jwt_signing_key": config.jwt_signing_key,
     }
+    if config.client_cache_path is not None:
+        github_kwargs["client_storage"] = JsonOAuthClientCache(config.client_cache_path)
     if "enable_cimd" in inspect.signature(GitHubProvider.__init__).parameters:
         github_kwargs["enable_cimd"] = False
     github_provider = _AllowedGitHubProvider(**github_kwargs)

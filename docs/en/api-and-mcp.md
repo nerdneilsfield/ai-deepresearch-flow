@@ -218,6 +218,10 @@ Required environment variables:
 - `MCP_GITHUB_ALLOWED_USER_IDS` (numeric GitHub user IDs, required)
 - `MCP_ACCESS_TOKEN` (still required for static bearer `/mcp` and `/mcp-sse`)
 
+Recommended additional setting:
+
+- `MCP_OAUTH_CLIENT_CACHE=/path/to/mcp-oauth-clients.json`: persists the Dynamic Client Registration client registry. Without a stable file path, a container restart, HOME change, or cache-directory change can make ChatGPT/Claude keep using an old `client_id` for `/authorize`, and the server will report `The client ID ... was not found in the server's client registry`; the client then has to Scan/Reconnect. Pinning this JSON file path keeps registered OAuth clients usable across restarts.
+
 OAuth client setup summary:
 
 1. Configure the MCP client URL as `https://<public-host>/oauth/mcp`.
@@ -307,13 +311,16 @@ Create a **GitHub OAuth App**, not a GitHub App. The GitHub OAuth App is only th
    ```env
    MCP_AUTH_MODE=github-oauth
    MCP_PUBLIC_BASE_URL=https://<public-host>
-   GITHUB_OAUTH_CLIENT_ID=...
-   GITHUB_OAUTH_CLIENT_SECRET=...
-   MCP_GITHUB_ALLOWED_USER_IDS=12345678
+  GITHUB_OAUTH_CLIENT_ID=...
+  GITHUB_OAUTH_CLIENT_SECRET=...
+  MCP_GITHUB_ALLOWED_USER_IDS=12345678
+  MCP_OAUTH_CLIENT_CACHE=/data/mcp-oauth-clients.json
 
-   # Still required for static-bearer /mcp and /mcp-sse:
-   MCP_ACCESS_TOKEN=...
-   ```
+  # Still required for static-bearer /mcp and /mcp-sse:
+  MCP_ACCESS_TOKEN=...
+  ```
+
+   The equivalent CLI option is `--mcp-oauth-client-cache /data/mcp-oauth-clients.json`. This file is only for the MCP OAuth client-registration cache; put it on a persistent container volume and treat it like config, not something to commit.
 
 10. Ensure the reverse proxy forwards all OAuth routes to drflow:
 

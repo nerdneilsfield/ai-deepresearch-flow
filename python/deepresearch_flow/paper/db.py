@@ -1188,6 +1188,14 @@ def register_db_commands(db_group: click.Group) -> None:
         envvar="MCP_GITHUB_ALLOWED_USER_IDS",
         help="Allowed numeric GitHub user ID for MCP OAuth; repeat or set a comma-separated env value.",
     )
+    @click.option(
+        "--mcp-oauth-client-cache",
+        "mcp_oauth_client_cache_path",
+        default=None,
+        envvar="MCP_OAUTH_CLIENT_CACHE",
+        type=click.Path(path_type=str),
+        help="JSON file path for persisted MCP OAuth dynamic client registrations.",
+    )
     def api_serve(
         snapshot_db: str,
         static_base_url: str | None,
@@ -1207,6 +1215,7 @@ def register_db_commands(db_group: click.Group) -> None:
         github_oauth_client_id: str | None,
         github_oauth_client_secret: str | None,
         mcp_github_allowed_user_ids: tuple[str, ...],
+        mcp_oauth_client_cache_path: str | None,
     ) -> None:
         """Serve the snapshot-backed JSON API."""
         import os
@@ -1364,6 +1373,9 @@ def register_db_commands(db_group: click.Group) -> None:
             github_oauth_client_id=github_oauth_client_id,
             github_oauth_client_secret=github_oauth_client_secret,
             mcp_github_allowed_user_ids=allowed_github_user_ids,
+            mcp_oauth_client_cache_path=(
+                Path(mcp_oauth_client_cache_path) if mcp_oauth_client_cache_path else None
+            ),
             admin_token=admin_token,
             admin_embed_db=admin_embed_db,
             admin_embed_dimensions=admin_embed_dimensions,

@@ -218,6 +218,10 @@ uv run deepresearch-flow paper db api serve \
 - `MCP_GITHUB_ALLOWED_USER_IDS`（GitHub 用户数字 ID，必填）
 - `MCP_ACCESS_TOKEN`（仍用于 static bearer `/mcp` 和 `/mcp-sse`）
 
+推荐再设置：
+
+- `MCP_OAUTH_CLIENT_CACHE=/path/to/mcp-oauth-clients.json`：持久化 Dynamic Client Registration 的 client registry。否则容器重启、HOME 变化或缓存目录变化后，ChatGPT/Claude 可能继续拿旧 `client_id` 调 `/authorize`，服务端会报 `The client ID ... was not found in the server's client registry`；此时客户端需要重新 Scan/Reconnect。固定这个 JSON 文件路径可以让已注册的 OAuth client 在重启后继续可用。
+
 OAuth 客户端配置摘要：
 
 1. 将 MCP client URL 配为 `https://<public-host>/oauth/mcp`。
@@ -307,13 +311,16 @@ OAuth 客户端配置摘要：
    ```env
    MCP_AUTH_MODE=github-oauth
    MCP_PUBLIC_BASE_URL=https://<public-host>
-   GITHUB_OAUTH_CLIENT_ID=...
-   GITHUB_OAUTH_CLIENT_SECRET=...
-   MCP_GITHUB_ALLOWED_USER_IDS=12345678
+  GITHUB_OAUTH_CLIENT_ID=...
+  GITHUB_OAUTH_CLIENT_SECRET=...
+  MCP_GITHUB_ALLOWED_USER_IDS=12345678
+  MCP_OAUTH_CLIENT_CACHE=/data/mcp-oauth-clients.json
 
-   # /mcp 和 /mcp-sse 的 static bearer 端点仍然需要：
-   MCP_ACCESS_TOKEN=...
-   ```
+  # /mcp 和 /mcp-sse 的 static bearer 端点仍然需要：
+  MCP_ACCESS_TOKEN=...
+  ```
+
+   等价 CLI 参数是 `--mcp-oauth-client-cache /data/mcp-oauth-clients.json`。这个文件只用于 MCP OAuth client registration 缓存；建议放到容器持久化 volume 中，并按配置文件处理，不要提交到仓库。
 
 10. 确认反向代理把这些 OAuth 路由转发到 drflow：
 

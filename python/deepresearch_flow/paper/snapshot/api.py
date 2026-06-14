@@ -1387,6 +1387,7 @@ def create_app(
     github_oauth_client_id: str | None = None,
     github_oauth_client_secret: str | None = None,
     mcp_github_allowed_user_ids: list[str] | None = None,
+    mcp_oauth_client_cache_path: Path | None = None,
     admin_token: str | None = None,
     admin_embed_db: Path | None = None,
     admin_embed_dimensions: int | None = None,
@@ -1421,6 +1422,7 @@ def create_app(
             client_id=github_oauth_client_id or "",
             client_secret=github_oauth_client_secret or "",
             allowed_github_user_ids=tuple(mcp_github_allowed_user_ids or ()),
+            client_cache_path=mcp_oauth_client_cache_path,
         )
 
     mcp_config = McpSnapshotConfig(
