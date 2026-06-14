@@ -249,6 +249,7 @@ def create_mcp_apps(config: McpSnapshotConfig) -> tuple[dict[str, Any], Any]:
             auth_provider=oauth_provider,
             static_bearer=False,
         )
+        setattr(oauth_streamable_app, "_drflow_oauth_provider", oauth_provider)
         apps["oauth-streamable-http"] = oauth_streamable_app
         lifespans.append(oauth_streamable_lifespan)
 
