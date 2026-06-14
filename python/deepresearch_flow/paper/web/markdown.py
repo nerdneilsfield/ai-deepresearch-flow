@@ -175,18 +175,49 @@ def normalize_fenced_code_blocks(text: str) -> str:
     """Ensure fenced code block markers appear on their own lines."""
     fence_re = re.compile(r"(`{3,}|~{3,})")
     out: list[str] = []
+    in_fence = False
+    fence_char = ""
+    fence_len = 0
+
     for line in text.splitlines():
-        match = fence_re.search(line)
+        if not in_fence:
+            match = fence_re.search(line)
+            if not match:
+                out.append(line)
+                continue
+            prefix = line[: match.start()]
+            suffix = line[match.start() :]
+            if prefix.strip():
+                out.append(prefix.rstrip())
+                out.append(suffix.lstrip())
+            else:
+                out.append(line)
+            fence = match.group(1)
+            fence_char = fence[0]
+            fence_len = len(fence)
+            in_fence = True
+            continue
+
+        stripped = line.lstrip(" ")
+        leading_spaces = len(line) - len(stripped)
+        match = fence_re.match(stripped) if leading_spaces <= 3 else None
         if not match:
             out.append(line)
             continue
-        prefix = line[: match.start()]
-        suffix = line[match.start() :]
-        if prefix.strip():
-            out.append(prefix.rstrip())
-            out.append(suffix.lstrip())
-        else:
+
+        fence = match.group(1)
+        if fence[0] != fence_char or len(fence) < fence_len:
             out.append(line)
+            continue
+
+        close_end = leading_spaces + match.end()
+        trailing = line[close_end:]
+        out.append(line[:close_end])
+        if trailing.strip():
+            out.append(trailing.lstrip())
+        in_fence = False
+        fence_char = ""
+        fence_len = 0
     return "\n".join(out)
 
 

@@ -68,7 +68,13 @@ include-package-data = true
 "deepresearch_flow.recognize" = ["*.js"]
 
 [dependency-groups]
-dev = ["pytest>=9.0.2", "pytest-cov>=4.1.0", "ruff>=0.13.1", "ty>=0.0.27"]
+dev = [
+    "hypothesis>=6.155.2",
+    "pytest>=9.0.2",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.13.1",
+    "ty>=0.0.27",
+]
 
 [tool.ruff]
 line-length = 100
@@ -129,6 +135,13 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "-v -s"
+markers = [
+    "fuzz_fast: bounded, deterministic property/fuzz tests suitable for pull-request gates",
+    "fuzz_deep: higher-budget property/fuzz tests intended for scheduled or explicit runs",
+    "fault: black-box fault-injection and recovery tests",
+    "slow: tests that are intentionally outside the fast developer gate",
+    "no_network: tests that must not require external network access",
+]
 
 [tool.coverage.run]
 source = ["deepresearch_flow"]

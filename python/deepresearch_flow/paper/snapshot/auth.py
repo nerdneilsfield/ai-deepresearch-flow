@@ -195,17 +195,18 @@ class _AllowedGitHubProvider(GitHubProvider):
 
 
 class JsonOAuthClientCache:
-    """Persist OAuth DCR clients in a JSON file while keeping transient state in memory."""
+    """Persist OAuth DCR clients in a JSON file with an in-memory hot cache."""
 
     def __init__(self, path: Path) -> None:
         self._path = Path(path)
         self._lock = threading.RLock()
-        self._memory: dict[str, dict[str, dict[str, Any]]] = {}
+        self._persistent_clients = self._read_persistent_unlocked()
+        self._transient: dict[str, dict[str, dict[str, Any]]] = {}
 
     def _is_persistent_collection(self, collection: str | None) -> bool:
         return collection == _OAUTH_CLIENT_COLLECTION
 
-    def _read_persistent(self) -> dict[str, dict[str, Any]]:
+    def _read_persistent_unlocked(self) -> dict[str, dict[str, Any]]:
         if not self._path.exists():
             return {}
         try:
@@ -222,7 +223,7 @@ class JsonOAuthClientCache:
             return {}
         return {str(key): value for key, value in clients.items() if isinstance(value, dict)}
 
-    def _write_persistent(self, values: dict[str, dict[str, Any]]) -> None:
+    def _write_persistent_unlocked(self, values: dict[str, dict[str, Any]]) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "version": 1,
@@ -248,9 +249,9 @@ class JsonOAuthClientCache:
     async def get(self, key: str, *, collection: str | None = None) -> dict[str, Any] | None:
         with self._lock:
             if self._is_persistent_collection(collection):
-                value = self._read_persistent().get(key)
+                value = self._persistent_clients.get(key)
                 return dict(value) if value is not None else None
-            value = self._memory.get(collection or "", {}).get(key)
+            value = self._transient.get(collection or "", {}).get(key)
             return dict(value) if value is not None else None
 
     async def ttl(
@@ -270,22 +271,23 @@ class JsonOAuthClientCache:
         with self._lock:
             value_dict = dict(value)
             if self._is_persistent_collection(collection):
-                values = self._read_persistent()
-                values[key] = value_dict
-                self._write_persistent(values)
+                values = {**self._persistent_clients, key: value_dict}
+                self._write_persistent_unlocked(values)
+                self._persistent_clients = values
                 return
-            self._memory.setdefault(collection or "", {})[key] = value_dict
+            self._transient.setdefault(collection or "", {})[key] = value_dict
 
     async def delete(self, key: str, *, collection: str | None = None) -> bool:
         with self._lock:
             if self._is_persistent_collection(collection):
-                values = self._read_persistent()
-                existed = key in values
+                existed = key in self._persistent_clients
                 if existed:
+                    values = dict(self._persistent_clients)
                     del values[key]
-                    self._write_persistent(values)
+                    self._write_persistent_unlocked(values)
+                    self._persistent_clients = values
                 return existed
-            return self._memory.get(collection or "", {}).pop(key, None) is not None
+            return self._transient.get(collection or "", {}).pop(key, None) is not None
 
     async def get_many(
         self, keys: Sequence[str], *, collection: str | None = None

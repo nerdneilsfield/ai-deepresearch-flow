@@ -118,7 +118,7 @@ class MarkdownTranslator:
         self._rumdl_timeout_seconds = 120.0
 
         self._rx_preserve = re.compile(r"@@PRESERVE_(\d+)@@[\s\S]*?@@/PRESERVE_\1@@", re.DOTALL)
-        self._rx_placeholder = re.compile(r"__PH_[A-Z0-9_]+?_\d+__")
+        self._rx_placeholder = re.compile(r"__PH_[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*_\d{6}__")
         self._rx_placeholder_fuzzy = re.compile(
             r"__PH[^A-Za-z0-9]*([A-Za-z0-9]+)[^0-9]*([0-9]{6})__"
         )

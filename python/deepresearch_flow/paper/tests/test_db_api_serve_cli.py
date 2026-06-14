@@ -346,10 +346,11 @@ def test_api_serve_github_oauth_options_expose_oauth_and_keep_sse_bearer(tmp_pat
     db.write_text("", encoding="utf-8")
     config = tmp_path / "config.toml"
     _write_semantic_config(config, advanced_enabled=False)
+    vector_dir = (tmp_path / "unused").as_posix()
     config.write_text(
         config.read_text(encoding="utf-8").replace(
             "[search]\n",
-            '[search]\nvector_dir = "./unused"\n',
+            f'[search]\nvector_dir = "{vector_dir}"\n',
         ),
         encoding="utf-8",
     )
@@ -387,9 +388,9 @@ def test_api_serve_github_oauth_options_expose_oauth_and_keep_sse_bearer(tmp_pat
     app = mock_run.call_args.args[0]
     client = TestClient(app, raise_server_exceptions=False)
 
-    resource = client.get("/.well-known/oauth-protected-resource/mcp")
+    resource = client.get("/.well-known/oauth-protected-resource/oauth/mcp")
     assert resource.status_code == 200
-    assert resource.json()["resource"] == "https://papers.example.com/mcp"
+    assert resource.json()["resource"] == "https://papers.example.com/oauth/mcp"
 
     sse = client.get("/mcp-sse", headers={"Accept": "text/event-stream"})
     assert sse.status_code == 401
@@ -402,10 +403,11 @@ def test_api_serve_github_oauth_reads_comma_separated_allowed_ids_from_env(tmp_p
     db.write_text("", encoding="utf-8")
     config = tmp_path / "config.toml"
     _write_semantic_config(config, advanced_enabled=False)
+    vector_dir = (tmp_path / "unused").as_posix()
     config.write_text(
         config.read_text(encoding="utf-8").replace(
             "[search]\n",
-            '[search]\nvector_dir = "./unused"\n',
+            f'[search]\nvector_dir = "{vector_dir}"\n',
         ),
         encoding="utf-8",
     )
@@ -436,9 +438,9 @@ def test_api_serve_github_oauth_reads_comma_separated_allowed_ids_from_env(tmp_p
     assert result.exit_code == 0
     app = mock_run.call_args.args[0]
     client = TestClient(app, raise_server_exceptions=False)
-    response = client.get("/.well-known/oauth-protected-resource/mcp")
+    response = client.get("/.well-known/oauth-protected-resource/oauth/mcp")
     assert response.status_code == 200
-    assert response.json()["resource"] == "https://papers.example.com/mcp"
+    assert response.json()["resource"] == "https://papers.example.com/oauth/mcp"
 
 
 def test_api_serve_mounts_admin_semantic_push_with_cli_embed_db(tmp_path: Path) -> None:
@@ -474,6 +476,8 @@ def test_api_serve_mounts_admin_semantic_push_with_cli_embed_db(tmp_path: Path) 
                 "search-token",
                 "--admin-token",
                 "admin-token",
+                "--mcp-access-token",
+                "static-token",
             ],
         )
 
@@ -542,6 +546,8 @@ def test_api_serve_startup_builds_missing_scalar_indices_for_existing_table(tmp_
                 str(embed_dir),
                 "--admin-token",
                 "admin-token",
+                "--mcp-access-token",
+                "static-token",
             ],
         )
 
@@ -586,6 +592,8 @@ def test_api_serve_startup_skips_index_creation_for_empty_vector_dir(tmp_path: P
                 str(embed_dir),
                 "--admin-token",
                 "admin-token",
+                "--mcp-access-token",
+                "static-token",
             ],
         )
 
@@ -627,6 +635,8 @@ def test_api_serve_reports_index_build_timeout_with_guidance(tmp_path: Path) -> 
                 str(embed_dir),
                 "--admin-token",
                 "admin-token",
+                "--mcp-access-token",
+                "static-token",
             ],
         )
 
@@ -673,6 +683,8 @@ def test_api_serve_admin_semantic_push_accepts_reduced_dimensions(tmp_path: Path
                 "search-token",
                 "--admin-token",
                 "admin-token",
+                "--mcp-access-token",
+                "static-token",
             ],
         )
 
@@ -705,10 +717,11 @@ def test_api_serve_skips_embedding_resolution_when_admin_sync_disabled(tmp_path:
         chunk_max_tokens=99999,
         advanced_enabled=False,
     )
+    vector_dir = (tmp_path / "unused").as_posix()
     config.write_text(
         config.read_text(encoding="utf-8").replace(
             "[search]\n",
-            '[search]\nvector_dir = "./unused"\n',
+            f'[search]\nvector_dir = "{vector_dir}"\n',
         ),
         encoding="utf-8",
     )
@@ -725,6 +738,8 @@ def test_api_serve_skips_embedding_resolution_when_admin_sync_disabled(tmp_path:
                 str(db),
                 "--config",
                 str(config),
+                "--mcp-access-token",
+                "static-token",
             ],
         )
 

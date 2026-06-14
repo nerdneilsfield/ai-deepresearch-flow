@@ -91,6 +91,12 @@ def test_normalize_fenced_code_blocks_and_mermaid_blocks() -> None:
     text = "Before ```python\ncode"
     assert normalize_fenced_code_blocks(text) == "Before\n```python\ncode"
 
+    fenced_with_trailing_text = "Before ```python\ncode\n``` after"
+    assert (
+        normalize_unbalanced_fences(normalize_fenced_code_blocks(fenced_with_trailing_text))
+        == "Before\n```python\ncode\n```\nafter"
+    )
+
     mermaid = "\n".join(
         [
             "```mermaid",

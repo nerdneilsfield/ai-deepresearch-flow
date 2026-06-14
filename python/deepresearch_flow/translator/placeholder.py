@@ -8,7 +8,7 @@ from typing import Dict, List
 
 
 class PlaceHolderStore:
-    _placeholder_like = re.compile(r"__PH_[A-Z0-9_]+?_\d+__")
+    _placeholder_like = re.compile(r"__PH_[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*_\d{6}__")
 
     def __init__(self) -> None:
         self._map: dict[tuple[str, str], str] = {}

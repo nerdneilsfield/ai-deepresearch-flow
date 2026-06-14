@@ -340,7 +340,7 @@ def markdown_fix_cases(seed: int = 505, count: int = 120) -> list[FuzzCase]:
                 FuzzCase(
                     name=f"markdown_protected_{i:03d}",
                     text=text,
-                    must_contain=(code, inline, math),
+                    must_contain=(code, inline, _normalize_math_spaces(math)),
                     level="normal",
                 )
             )
@@ -395,7 +395,7 @@ def markdown_text_fix_cases(seed: int = 606, count: int = 120) -> list[FuzzCase]
             inline = _inline_code(f"{_url(rng)} {_email(rng)} {_phone(rng)} [3]")
             math = _math_inline(f"{_url(rng)} {_email(rng)} {_phone(rng)} [4]", spaced=True)
             text = f"Keep {code}\n{inline}\n{math}"
-            must_contain = (code, inline, math)
+            must_contain = (code, inline, _normalize_math_spaces(math))
             must_not_contain = ()
         else:
             email = _email(rng)

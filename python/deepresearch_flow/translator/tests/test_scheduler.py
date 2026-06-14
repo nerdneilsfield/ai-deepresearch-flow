@@ -480,7 +480,7 @@ def _build_doc_plan(case_index: int, doc_index: int, mode: str, prefix: str) -> 
         "fallback_1": [(round(fallback_1_delay + 0.006, 3), "")],
         "fallback_2": [(fallback_2_delay, "")],
     }
-    return _FuzzDocPlan(stem, source_text, None, stage_scripts)
+    return _FuzzDocPlan(stem, source_text, source_text, stage_scripts)
 
 
 def _build_fuzz_case_set(
@@ -684,7 +684,6 @@ async def _run_scheduler_fuzz_case(
 ) -> tuple[list[Path], int]:
     sources: dict[Path, Path] = {}
     expected_outputs: dict[Path, str] = {}
-    expected_empty_outputs: set[Path] = set()
     stage_scripts: dict[str, dict[str, list[tuple[float, str]]]] = {}
 
     for doc in case.docs:
@@ -692,10 +691,7 @@ async def _run_scheduler_fuzz_case(
         output = tmp_path / f"{doc.stem}.zh.md"
         source.write_text(doc.source_text, encoding="utf-8")
         sources[source] = output
-        if doc.expected_output is not None:
-            expected_outputs[output] = doc.expected_output
-        else:
-            expected_empty_outputs.add(output)
+        expected_outputs[output] = doc.expected_output or doc.source_text
         stage_scripts[doc.source_text] = {
             stage: list(actions) for stage, actions in doc.stage_scripts.items()
         }
@@ -729,12 +725,6 @@ async def _run_scheduler_fuzz_case(
     assert translator.max_active_docs <= case.document_window
     for output_path, expected_text in expected_outputs.items():
         assert output_path.read_text(encoding="utf-8") == expected_text
-    observed_empty_outputs = {
-        output_path
-        for output_path in sources.values()
-        if not output_path.exists() or output_path.read_text(encoding="utf-8") == ""
-    }
-    assert observed_empty_outputs == expected_empty_outputs
     return [], translator.max_active_docs
 
 
@@ -752,7 +742,7 @@ async def _run_scheduler_fuzz_case_twice(
             output = run_root / f"{doc.stem}.zh.md"
             source.write_text(doc.source_text, encoding="utf-8")
             sources[source] = output
-            expected_outputs[output] = doc.expected_output or ""
+            expected_outputs[output] = doc.expected_output or doc.source_text
             stage_scripts[doc.source_text] = {
                 stage: list(actions) for stage, actions in doc.stage_scripts.items()
             }

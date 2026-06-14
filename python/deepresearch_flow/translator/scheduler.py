@@ -507,6 +507,8 @@ class Scheduler:
             for nid, node in ctx.translated_nodes.items():
                 if nid in ctx.nodes:
                     ctx.nodes[nid].translated_text = node.translated_text
+            for nid in self._translator._collect_failed_nodes(ctx.nodes):
+                ctx.nodes[nid].translated_text = ctx.nodes[nid].origin_text
             result = await self._translator.finalize_document(
                 reference_text=ctx.original_text,
                 segments=ctx.segments,

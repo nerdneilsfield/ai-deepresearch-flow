@@ -237,6 +237,34 @@ def test_restore_checked_recovers_nested_placeholders_reachable_from_outer_token
     assert store.restore_all_checked(outer_placeholder) == "<p>Command: `open`</p>"
 
 
+def test_restore_checked_recovers_adjacent_source_literal_and_generated_placeholder() -> None:
+    store = PlaceHolderStore()
+    source_literal = "__PH_301__"
+    store.record_source_placeholder_like_tokens(source_literal)
+    html_placeholder = store.add("HTMLINLINE", "<em>edge</em>")
+
+    assert (
+        store.restore_all_checked(f"{source_literal}{html_placeholder}")
+        == "__PH_301__<em>edge</em>"
+    )
+
+
+def test_root_placeholders_excludes_adjacent_nested_generated_placeholders() -> None:
+    store = PlaceHolderStore()
+    image_placeholder = store.add("IMAGE", "![Image](https://example.com/image.png)")
+    footref_placeholder = store.add("FOOTREF", "[^1]")
+    html_placeholder = store.add(
+        "HTMLINLINE",
+        f"<span>{image_placeholder}{footref_placeholder}</span>",
+    )
+
+    assert store.diff_missing(html_placeholder) == []
+    assert (
+        store.restore_all_checked(html_placeholder)
+        == "<span>![Image](https://example.com/image.png)[^1]</span>"
+    )
+
+
 def test_protect_unprotect_restores_html_inline_with_nested_math_image_and_footrefs() -> None:
     protector = MarkdownProtector()
     store = PlaceHolderStore()

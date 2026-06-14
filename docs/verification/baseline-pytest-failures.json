@@ -1,0 +1,11 @@
+{
+  "command": "uv run pytest --tb=short -q",
+  "exit_code": 0,
+  "failed_nodeids": [],
+  "status": "no known pytest baseline failures after repo-wide verification fixes",
+  "last_observed": {
+    "date": "2026-06-15",
+    "passed": 2294,
+    "warnings": 1
+  }
+}
