@@ -92,7 +92,11 @@ ZIP can include:
 - Source Markdown
 - Translated Markdown
 - Images
-- Selected Summary Templates as JSON
+- Selected Summary Templates as manifest-defined files (currently JSON summary assets from the snapshot builder)
+
+ZIP mode defaults should preserve the current `Download ZIP` behavior for compatibility: PDF, source markdown, default summary asset, translated markdown, all manifest summary template assets, and images are selected by default when available. In ZIP mode, the summary template picker therefore defaults to all discovered/manifest-backed templates, not only the preferred/default template. Users can opt out of individual content classes or templates.
+
+The manifest default summary asset (`manifest.assets.summary`) and template assets (`manifest.assets.summary_templates[]`) are distinct sources. When the selected template set includes the preferred/default template, ZIP export should include `manifest.assets.summary`. It should also include matching `summary_templates[]` assets by `template_tag`. If both sources resolve to the same `zip_path`, add the file only once. Do not override manifest `zip_path` extensions; current snapshots use `summary.json` and `summaries/<template>.json`. ZIP compatibility must not depend solely on detail-derived `summary_urls`: when ZIP summary export is enabled and the user has not manually narrowed templates, include all manifest `summary_templates[]` assets discovered during export, even if detail/template discovery failed or was stale. Manual template narrowing applies only to templates that can be matched by `template_tag`; unmatched manifest templates are included in the default all-templates ZIP mode.
 
 #### JSONL mode
 
@@ -124,15 +128,18 @@ The user can select any subset of discovered templates.
 
 Default initial selection:
 
-- Select the preferred/default template if available.
-- If no preferred/default can be inferred, select all discovered templates.
+- ZIP mode: select all discovered templates by default to preserve the current Download ZIP behavior.
+- JSONL mode: select the preferred/default template if available.
+- JSONL mode: if no preferred/default can be inferred, select all discovered templates.
 - While template discovery is running, show a `Loading templates…` state. If summary export is enabled, disable the Download button until discovery completes; if summary export is disabled, allow metadata/file-only downloads to proceed.
 - If no templates are discovered after detail loading, summary export remains disabled and the user can still download non-summary content.
+
+Template discovery must be tied to a selected-items snapshot/revision. If the selection changes while discovery is running, stale discovery results are discarded and discovery restarts for the latest snapshot. Export actions also capture their own item snapshot so progress, available templates, and output rows/files refer to a consistent batch.
 
 ## UX Flow
 
 1. User opens Selected page.
-2. Page initializes selected items as today.
+2. Page initializes selected items from the selection store.
 3. Export panel shows:
    - Output mode: ZIP / JSONL
    - Content checkboxes depending on mode
@@ -185,12 +192,13 @@ Rules:
 - `summaries` includes only successfully fetched selected templates.
 - `missing.summaries` lists selected templates not available for that paper.
 - `errors` records fetch/parse failures without aborting the whole export.
+- JSONL emits exactly one line for every selected paper snapshot. If detail fetching fails, emit a minimal record from the `SearchItem` fallback fields. Set `missing.metadata = true` and increment `metadataFailures` only when metadata export was requested. If summary export was requested and `item.summary_url` plus fallback template is available, still fetch that summary; otherwise mark the selected templates unavailable/failed as appropriate.
 - The file name is always `paperdb_selected_<timestamp>.jsonl`, including single-paper exports. ZIP keeps its existing single-paper folder-name behavior for compatibility.
 
 
 ## Metadata JSON Shape
 
-When metadata export is enabled, both ZIP `metadata.json` and JSONL `metadata` use the same object shape: the JSON-serializable `PaperDetail` returned by `getPaperDetailCached`, after schema parsing. This intentionally includes useful URL fields such as `summary_url`, `summary_urls`, `manifest_url`, PDF/markdown URLs, and facet metadata. It does not inline fetched binary files or fetched summary payloads; summaries live under the separate `summaries` field/path.
+When metadata export is enabled and detail resolution succeeds, both ZIP `metadata.json` and JSONL `metadata` use the same object shape: the JSON-serializable `PaperDetail` returned by `getPaperDetailCached`, after schema parsing. This intentionally includes useful URL fields such as `summary_url`, `summary_urls`, `manifest_url`, PDF/markdown URLs, and facet metadata. It does not inline fetched binary files or fetched summary payloads; summaries live under the separate `summaries` field/path. If detail resolution fails, do not write ZIP `metadata.json`; increment `metadataFailures`. JSONL still emits the minimal fallback row described above, but omits `metadata`.
 
 Top-level convenience fields in the JSONL record (`paper_id`, `title`, `year`, `venue`, `authors`, `doi`) duplicate common metadata for stream processing, but `metadata` remains the authoritative full detail object.
 
@@ -208,8 +216,8 @@ paperdb_selected_<timestamp>.zip
     source.md
     translated-zh.md
     summaries/
-      default.md
-      deep_read.md
+      deep_read.json
+    summary.json
     images/...
 ```
 
@@ -217,9 +225,29 @@ Rules:
 
 - `metadata.json` is written only when metadata is selected.
 - PDF/source/translated/images are added only when selected.
-- File-oriented assets, including ZIP-mode summaries, use manifest `static_path` and `zip_path` where available.
-- ZIP-mode summary templates preserve the current manifest asset behavior, usually markdown files, to avoid silently breaking existing ZIP consumers.
+- PDF/source/images and summary assets use manifest `static_path` and `zip_path` where available. Translated markdown is the compatibility exception: preserve the current frontend path override `translated-<lang>.md` for v0.10.4 rather than switching to manifest `translated/<lang>.md`.
+- ZIP-mode summary templates preserve the current manifest asset behavior, including manifest-defined file names/extensions. Current snapshots use JSON summary files (`summary.json`, `summaries/<template>.json`), and the frontend must not hard-code `.md` or rewrite these paths.
 - Raw JSON summary payloads are used for JSONL mode only in v0.10.4. A future explicit option can add JSON summaries to ZIP if needed.
+
+## Export Result Statistics
+
+Export helpers should return a stable stats object so UI messages and tests use the same meaning:
+
+```ts
+type SelectedExportStats = {
+  papersTotal: number
+  papersProcessed: number
+  filesAdded: number
+  jsonlRows: number
+  missingAssets: number
+  failedAssets: number
+  missingSummaries: number
+  failedSummaries: number
+  metadataFailures: number
+}
+```
+
+Progress advances once per selected paper snapshot regardless of success, skip, or error, and should reach 100% when the batch loop finishes. The partial-success toast should use the sum of `missingAssets + failedAssets + missingSummaries + failedSummaries + metadataFailures` as `N`. `filesAdded` counts actual file entries written to a ZIP, including `metadata.json`, but not folder entries, skipped/de-duplicated assets, missing assets, or the JSONL file itself. In JSONL mode, `filesAdded` remains 0 and `jsonlRows` reports emitted rows. Manifest image entries with `status` present and not `available` count as `missingAssets` and should not be fetched.
 
 ## Missing Content Behavior
 
@@ -227,7 +255,7 @@ The batch export should be partial-success oriented.
 
 Per paper:
 
-- Missing manifest: skip file-oriented assets; metadata and JSONL summaries can still be exported if details have URLs.
+- Missing manifest: ZIP skips manifest-backed file assets and manifest-backed summaries, but can still write `metadata.json` when metadata is selected and detail resolution succeeds. In that metadata-only ZIP case, create the per-paper folder from `buildFolderName(detail ?? item)` with `item.paper_id` fallback; for a single-paper ZIP, use the same fallback folder name for the ZIP filename. If detail resolution fails, do not write ZIP `metadata.json`; count `metadataFailures`. JSONL metadata and summaries can still be exported if details or item fallback fields have summary URLs.
 - Missing selected summary template: record it in JSONL `missing.summaries`; skip it in ZIP.
 - Failed summary fetch: record in `errors`; continue.
 - Failed binary asset fetch: skip asset and count it as missing/failed; continue.
@@ -265,24 +293,20 @@ type ResolvedSelectedPaper = {
 
 ## Architecture
 
-Refactor Selected page download code into smaller helpers, preferably local to `SelectedView.vue` for v0.10.4 unless it becomes too large:
+Refactor Selected page download code into `frontend/src/lib/selected-export.ts` for v0.10.4 so export behavior can be black-box tested outside the large `SelectedView.vue` component. `SelectedView.vue` should own UI state and callbacks only. The helper module should expose:
 
 - `resolvePaperDetail(item)`
 - `resolveSummaryUrls(item, detail)`
 - `discoverSummaryTemplates(items)`
 - `downloadSelectedZip(items, options)`
 - `downloadSelectedJsonl(items, options)`
-- `writeMetadataJson(folder, detailOrItem)`
-- `writeSummaryJson(folderOrRecord, paperId, template, url)`
+- `writeMetadataJson(folder, detail)`; only writes parsed `PaperDetail`, never a `SearchItem` fallback
+- `writeJsonlSummaryPayload(record, paperId, template, url)` for JSONL raw summary payloads
 - `addManifestAsset(folder, baseUrl, asset, overrideZipPath?)`
 
-If `SelectedView.vue` becomes too large, extract to:
+ZIP asset URL base resolution should use the existing `resolveStaticBaseUrl` helper from `frontend/src/lib/static-base.ts`, with candidates such as `manifestUrl`, `detail?.manifest_url`, `item.manifest_url`, and relevant asset/detail URLs. Do not duplicate the old SelectedView-only `/manifest/` parser.
 
-```text
-frontend/src/lib/selected-export.ts
-```
-
-The extraction is recommended because current `SelectedView.vue` already contains multiple responsibilities: selected list rendering, JSON save/load, BibTeX import, and ZIP download.
+This extraction is required for v0.10.4 because current `SelectedView.vue` already contains multiple responsibilities and the export behavior needs black-box helper tests.
 
 ## Performance Considerations
 
@@ -309,6 +333,13 @@ Add English and Chinese strings for:
 - No summary templates available
 - Download completed with missing items
 - Download JSONL
+- Loading templates…
+- Preparing download…
+- Fetching manifest…
+- Building JSONL…
+- Compressing ZIP…
+- Download ready
+- Download failed
 
 ## Testing Strategy
 
@@ -333,7 +364,7 @@ Tests should avoid asserting internal helper call order.
    - Mitigation: lazy discovery and fallback from existing item fields.
 
 3. **ZIP summary compatibility**
-   - Mitigation: preserve current manifest-based ZIP summary assets in v0.10.4; JSON summary payloads are limited to JSONL mode.
+   - Mitigation: preserve current manifest-based ZIP summary assets and manifest-defined paths/extensions in v0.10.4; JSON summary payload fetching is limited to JSONL mode.
 
 4. **Partial failures hide data loss**
    - Mitigation: count missing/failed items and surface a warning toast.
@@ -351,6 +382,6 @@ Resolved by user:
 
 Implementation decisions for v0.10.4:
 
-- ZIP summary output preserves existing manifest asset behavior.
+- ZIP summary output preserves existing manifest asset behavior and manifest-defined paths/extensions.
 - JSONL summary output uses raw JSON payloads.
 - Full template discovery requires `getPaperDetailCached` because `SearchItem` has no `summary_urls` field.
