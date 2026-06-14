@@ -15,6 +15,7 @@ import { useTheme } from '@/composables/useTheme'
 import { resolveMarkdownItPlugin } from '@/lib/module-interop'
 
 // Global configuration for md-editor-v3
+mermaid.initialize({ startOnLoad: false })
 config({
   editorExtensions: {
     mermaid: {
