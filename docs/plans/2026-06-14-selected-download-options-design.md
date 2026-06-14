@@ -1,4 +1,4 @@
-# Selected Download Options Design (v0.10.4)
+# Selected Download Options Design (planned for v0.10.4)
 
 ## Background
 
@@ -6,7 +6,7 @@ The Selected page currently downloads every selected paper as a ZIP with a fixed
 
 For research workflows this is too coarse. Sometimes the user only wants metadata and selected summary templates for downstream agent/LLM processing. In that case a ZIP of many files is inconvenient; a JSONL file with one paper per line is easier to feed into tools.
 
-This feature targets `v0.10.4`.
+This feature is planned for `v0.10.4`; the current released/project version may still be earlier until implementation and release tagging are complete.
 
 ## Goals
 
@@ -47,7 +47,7 @@ However, not every selected item is guaranteed to contain full detail fields.
 
 ### Paper detail
 
-`getPaperDetail(paperId)` returns richer `PaperDetail`, including:
+`getPaperDetailCached(paperId)` should be used by the export path to share the same IndexedDB-backed freshness behavior as the detail page. It returns richer `PaperDetail`, including:
 
 - metadata fields
 - `summary_url`
@@ -109,9 +109,10 @@ Summary templates are shown as individual checkboxes/multi-select items.
 
 Template availability is computed as the union of all templates discovered from selected papers:
 
-1. `detail.summary_urls` keys when detail has been fetched.
-2. `item.summary_urls` if present on the selected item.
-3. `item.preferred_summary_template` and/or `summary_url` as a fallback default template.
+1. `detail.summary_urls` keys after fetching/caching `PaperDetail` with `getPaperDetailCached`.
+2. `item.preferred_summary_template` and/or `item.summary_url` as a fallback default template before detail discovery completes.
+
+`SearchItem` does not currently contain `summary_urls`; full per-template discovery therefore requires fetching paper details. No backend/search-result schema change is planned for v0.10.4.
 
 Recommended fallback name for a single `summary_url` without an explicit template is:
 
@@ -125,7 +126,8 @@ Default initial selection:
 
 - Select the preferred/default template if available.
 - If no preferred/default can be inferred, select all discovered templates.
-- If no templates are discovered yet, summary export is disabled until paper details are loaded or the user downloads with no summaries.
+- While template discovery is running, show a `Loading templates…` state. If summary export is enabled, disable the Download button until discovery completes; if summary export is disabled, allow metadata/file-only downloads to proceed.
+- If no templates are discovered after detail loading, summary export remains disabled and the user can still download non-summary content.
 
 ## UX Flow
 
@@ -183,7 +185,14 @@ Rules:
 - `summaries` includes only successfully fetched selected templates.
 - `missing.summaries` lists selected templates not available for that paper.
 - `errors` records fetch/parse failures without aborting the whole export.
-- The file name is `paperdb_selected_<timestamp>.jsonl`.
+- The file name is always `paperdb_selected_<timestamp>.jsonl`, including single-paper exports. ZIP keeps its existing single-paper folder-name behavior for compatibility.
+
+
+## Metadata JSON Shape
+
+When metadata export is enabled, both ZIP `metadata.json` and JSONL `metadata` use the same object shape: the JSON-serializable `PaperDetail` returned by `getPaperDetailCached`, after schema parsing. This intentionally includes useful URL fields such as `summary_url`, `summary_urls`, `manifest_url`, PDF/markdown URLs, and facet metadata. It does not inline fetched binary files or fetched summary payloads; summaries live under the separate `summaries` field/path.
+
+Top-level convenience fields in the JSONL record (`paper_id`, `title`, `year`, `venue`, `authors`, `doi`) duplicate common metadata for stream processing, but `metadata` remains the authoritative full detail object.
 
 ## ZIP Format
 
@@ -199,18 +208,18 @@ paperdb_selected_<timestamp>.zip
     source.md
     translated-zh.md
     summaries/
-      default.json
-      deep_read.json
+      default.md
+      deep_read.md
     images/...
 ```
 
 Rules:
 
 - `metadata.json` is written only when metadata is selected.
-- Summary templates are exported as raw JSON payloads under `summaries/<template>.json`.
 - PDF/source/translated/images are added only when selected.
-- File-oriented assets use manifest `static_path` and `zip_path` where available.
-- Summary template JSON should prefer `detail.summary_urls` + `getSummaryPayloadCached` over manifest summary markdown assets so ZIP and JSONL summary semantics are consistent.
+- File-oriented assets, including ZIP-mode summaries, use manifest `static_path` and `zip_path` where available.
+- ZIP-mode summary templates preserve the current manifest asset behavior, usually markdown files, to avoid silently breaking existing ZIP consumers.
+- Raw JSON summary payloads are used for JSONL mode only in v0.10.4. A future explicit option can add JSON summaries to ZIP if needed.
 
 ## Missing Content Behavior
 
@@ -218,7 +227,7 @@ The batch export should be partial-success oriented.
 
 Per paper:
 
-- Missing manifest: skip file-oriented assets; metadata/summary JSON can still be exported if details have URLs.
+- Missing manifest: skip file-oriented assets; metadata and JSONL summaries can still be exported if details have URLs.
 - Missing selected summary template: record it in JSONL `missing.summaries`; skip it in ZIP.
 - Failed summary fetch: record in `errors`; continue.
 - Failed binary asset fetch: skip asset and count it as missing/failed; continue.
@@ -278,7 +287,7 @@ The extraction is recommended because current `SelectedView.vue` already contain
 ## Performance Considerations
 
 - Preserve sequential processing for v0.10.4 to avoid overwhelming static/API endpoints.
-- Use existing cache for summary payloads.
+- Use existing cache for paper details and summary payloads (`getPaperDetailCached`, `getSummaryPayloadCached`).
 - Update progress by paper count.
 - Avoid prefetching every detail just to render the page if selected count is large; only discover templates on demand or with a lightweight lazy action.
 - Respect `MAX_BATCH_SIZE` as today.
@@ -323,8 +332,8 @@ Tests should avoid asserting internal helper call order.
 2. **Template discovery requires detail fetches**
    - Mitigation: lazy discovery and fallback from existing item fields.
 
-3. **ZIP summary semantics change from markdown asset to JSON payload**
-   - Mitigation: document this and keep file-oriented markdown summaries out of v0.10.4 unless explicitly requested.
+3. **ZIP summary compatibility**
+   - Mitigation: preserve current manifest-based ZIP summary assets in v0.10.4; JSON summary payloads are limited to JSONL mode.
 
 4. **Partial failures hide data loss**
    - Mitigation: count missing/failed items and surface a warning toast.
@@ -332,7 +341,7 @@ Tests should avoid asserting internal helper call order.
 5. **Vitest/Vue async state flakiness**
    - Mitigation: tests should wait for visible conditions, not fixed timing only.
 
-## Open Decisions
+## Decisions
 
 Resolved by user:
 
@@ -340,6 +349,8 @@ Resolved by user:
 - Summary templates: individual multi-select.
 - Version target: v0.10.4.
 
-Still open for implementation review:
+Implementation decisions for v0.10.4:
 
-- Whether ZIP should additionally include existing manifest markdown summary assets. Recommended: no for v0.10.4; use JSON summaries for consistency.
+- ZIP summary output preserves existing manifest asset behavior.
+- JSONL summary output uses raw JSON payloads.
+- Full template discovery requires `getPaperDetailCached` because `SearchItem` has no `summary_urls` field.

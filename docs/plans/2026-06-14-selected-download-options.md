@@ -1,4 +1,4 @@
-# Selected Download Options Implementation Plan (v0.10.4)
+# Selected Download Options Implementation Plan (planned for v0.10.4)
 
 ## Goal
 
@@ -30,7 +30,7 @@ No backend API changes are planned for v0.10.4.
 
 **Action**
 
-Create `frontend/src/lib/selected-export.ts` unless the implementation remains very small. Define:
+Create `frontend/src/lib/selected-export.ts`; this is required so the export logic can be tested outside the large `SelectedView.vue` component. Define:
 
 - `SelectedDownloadMode`
 - `SelectedDownloadOptions`
@@ -39,8 +39,8 @@ Create `frontend/src/lib/selected-export.ts` unless the implementation remains v
 
 Suggested helpers:
 
-- `resolvePaperDetail(item)`
-- `resolveSummaryUrls(item, detail)`
+- `resolvePaperDetail(item)` using `getPaperDetailCached`
+- `resolveSummaryUrls(item, detail)` from `PaperDetail.summary_urls` plus `summary_url` fallback
 - `discoverSummaryTemplates(items)`
 - `buildJsonlRecord(item, detail, selectedTemplates, includeMetadata)`
 - `downloadSelectedJsonl(items, options, callbacks)`
@@ -64,12 +64,12 @@ Move current fixed ZIP logic into a configurable ZIP export path:
 - Preserve current folder naming behavior.
 - Add `metadata.json` when selected.
 - Add PDF/source/translated/images only when selected.
-- Add selected summaries as `summaries/<template>.json` using raw JSON payloads.
+- Add selected summaries using existing manifest assets/zip paths, preserving current ZIP markdown/file behavior.
 - Count skipped/failed assets.
 
 **Validation**
 
-- Existing default ZIP behavior can be approximated by selecting all file content options plus summary templates.
+- Existing default ZIP behavior can be approximated by selecting all file content options plus summary templates; summary files remain manifest-backed assets, not raw JSON payloads.
 - ZIP output contains only selected asset classes.
 - Missing manifest does not prevent metadata/summary export.
 
@@ -84,8 +84,8 @@ Medium.
 Add JSONL export path:
 
 - Iterate selected papers.
-- Resolve detail when needed.
-- Add `metadata` only when enabled.
+- Resolve detail with `getPaperDetailCached` when needed.
+- Add `metadata` only when enabled; metadata is the parsed `PaperDetail` object returned by `getPaperDetailCached`, not fetched summary/binary content.
 - Fetch selected template payloads via `getSummaryPayloadCached`.
 - Emit one JSON string per paper joined by `\n`, plus a final newline.
 - Save via `lazySaveAs` as `paperdb_selected_<timestamp>.jsonl`.
@@ -137,10 +137,11 @@ Medium.
 
 Add template discovery for selected papers:
 
-- Use selected item fields first if available.
-- Fetch details lazily when needed.
+- Use selected item `preferred_summary_template`/`summary_url` as an initial fallback only.
+- Fetch details with `getPaperDetailCached` to discover full `summary_urls`; `SearchItem` has no `summary_urls` field.
 - Show union of templates as checkbox list.
 - Keep selected templates stable when discovery refreshes; auto-select preferred/default on first discovery.
+- Disable Download while template discovery is running if summary export is enabled; allow non-summary exports to proceed if summary export is disabled.
 
 **Validation**
 
@@ -213,19 +214,21 @@ Medium to large.
 Run:
 
 ```bash
-cd frontend && npm audit
-cd frontend && npm test -- --run
-cd frontend && npm run build
-npm audit
+(cd frontend && npm test -- --run)
+(cd frontend && npm run build)
 make check
+
+# Security checks to run and report separately:
+(cd frontend && npm audit)
+npm audit
 ```
 
 **Validation**
 
-- Both npm audits report 0 vulnerabilities.
 - Frontend tests pass.
 - Frontend production build passes.
 - Project checks pass.
+- npm audit results are reported separately; if implementation changes dependencies or lockfiles, new audit findings introduced by this work must be fixed before release.
 
 **Estimated effort**
 
@@ -259,7 +262,7 @@ Small.
 
 1. **Design checkpoint**
    - Confirm JSONL raw summary JSON shape.
-   - Confirm ZIP summaries are JSON files, not markdown summary assets.
+   - Confirm ZIP summaries preserve current manifest markdown/file assets for compatibility.
 
 2. **UI checkpoint**
    - Confirm Selected page export panel layout is acceptable.
