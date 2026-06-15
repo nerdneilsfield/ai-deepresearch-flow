@@ -1,67 +1,73 @@
 ---- MODULE ProviderRouting ----
-EXTENDS Naturals, Sequences, FiniteSets, TLC
+EXTENDS Naturals, FiniteSets, TLC
 
 (***************************************************************************)
 (* Black-box provider routing model.  A route returned to a caller must     *)
 (* satisfy the requested capability, active window, cooldown, and quota.    *)
-(* The Python bounded checker is the gated MODEL_PROOF for this draft.      *)
+(* TLC is the local exhaustive reachable-state checker for this finite      *)
+(* model.                                                                   *)
 (***************************************************************************)
 
-CONSTANTS Candidates, Capabilities, MaxTime, Cooldown
+CONSTANTS ChatFast, EmbedSmall, ChatNight, MaxTime, Cooldown
 
 VARIABLES now, remaining, cooldownUntil, lastRoute
 
-Name(c) == c[1]
-Capability(c) == c[2]
-ActiveFrom(c) == c[3]
-ActiveUntil(c) == c[4]
-Quota(c) == c[5]
+Names == {ChatFast, EmbedSmall, ChatNight}
+Capabilities == {"chat", "embedding"}
 
-Names == {Name(c): c \in Candidates}
-CandidateByName(n) == CHOOSE c \in Candidates: Name(c) = n
-Active(c, t) == ActiveFrom(c) <= t /\ t < ActiveUntil(c)
+Capability(n) ==
+  IF n = ChatFast THEN "chat"
+  ELSE IF n = EmbedSmall THEN "embedding"
+  ELSE "chat"
+
+ActiveFrom(n) == IF n = ChatNight THEN 2 ELSE 0
+ActiveUntil(n) == 4
+Quota(n) == IF n = ChatNight THEN 1 ELSE 2
+Active(n, t) == ActiveFrom(n) <= t /\ t < ActiveUntil(n)
 
 Init ==
   /\ now = 0
-  /\ remaining = [n \in Names |-> Quota(CandidateByName(n))]
+  /\ remaining = [n \in Names |-> Quota(n)]
   /\ cooldownUntil = [n \in Names |-> 0]
   /\ lastRoute = [requestedCapability |-> "", candidate |-> "", at |-> 0, remainingAfter |-> 0]
 
-Route(cap, c) ==
+Route(cap, n) ==
   /\ cap \in Capabilities
-  /\ c \in Candidates
-  /\ Capability(c) = cap
-  /\ Active(c, now)
-  /\ cooldownUntil[Name(c)] <= now
-  /\ remaining[Name(c)] > 0
-  /\ remaining' = [remaining EXCEPT ![Name(c)] = @ - 1]
+  /\ n \in Names
+  /\ Capability(n) = cap
+  /\ Active(n, now)
+  /\ cooldownUntil[n] <= now
+  /\ remaining[n] > 0
+  /\ remaining' = [remaining EXCEPT ![n] = @ - 1]
   /\ lastRoute' = [requestedCapability |-> cap,
-                   candidate |-> Name(c),
+                   candidate |-> n,
                    at |-> now,
-                   remainingAfter |-> remaining[Name(c)] - 1]
+                   remainingAfter |-> remaining[n] - 1]
   /\ UNCHANGED <<now, cooldownUntil>>
 
 Tick ==
   /\ now < MaxTime
   /\ now' = now + 1
   /\ cooldownUntil' = [n \in Names |-> IF cooldownUntil[n] > now' THEN cooldownUntil[n] ELSE 0]
-  /\ UNCHANGED <<remaining, lastRoute>>
+  /\ lastRoute' = [requestedCapability |-> "", candidate |-> "", at |-> 0, remainingAfter |-> 0]
+  /\ UNCHANGED remaining
 
 Fail(n) ==
   /\ n \in Names
   /\ cooldownUntil' = [cooldownUntil EXCEPT ![n] = now + Cooldown]
-  /\ UNCHANGED <<now, remaining, lastRoute>>
+  /\ lastRoute' = [requestedCapability |-> "", candidate |-> "", at |-> 0, remainingAfter |-> 0]
+  /\ UNCHANGED <<now, remaining>>
 
-Next == Tick \/ (\E cap \in Capabilities, c \in Candidates: Route(cap, c)) \/ (\E n \in Names: Fail(n))
+Next == Tick \/ (\E cap \in Capabilities, n \in Names: Route(cap, n)) \/ (\E n \in Names: Fail(n))
 
 LastRouteSafe ==
   lastRoute.candidate = "" \/
-    LET c == CandidateByName(lastRoute.candidate) IN
-      /\ Capability(c) = lastRoute.requestedCapability
-      /\ Active(c, lastRoute.at)
-      /\ lastRoute.remainingAfter >= 0
+    /\ lastRoute.candidate \in Names
+    /\ Capability(lastRoute.candidate) = lastRoute.requestedCapability
+    /\ Active(lastRoute.candidate, lastRoute.at)
+    /\ lastRoute.remainingAfter >= 0
 
-QuotaSafe == \A n \in Names: remaining[n] >= 0 /\ remaining[n] <= Quota(CandidateByName(n))
+QuotaSafe == \A n \in Names: remaining[n] >= 0 /\ remaining[n] <= Quota(n)
 CooldownSafe == \A n \in Names: cooldownUntil[n] = 0 \/ cooldownUntil[n] > now
 
 Inv == LastRouteSafe /\ QuotaSafe /\ CooldownSafe

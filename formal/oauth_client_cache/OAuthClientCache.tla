@@ -2,10 +2,11 @@
 EXTENDS Naturals, FiniteSets, TLC
 
 (***************************************************************************)
-(* Black-box OAuth client cache model.  The observable contract is that a   *)
-(* returned client matches the requested principal and scope, is unexpired, *)
-(* and does not survive credential revocation.  The Python bounded checker  *)
-(* is the gated MODEL_PROOF for this draft.                                *)
+(* Black-box OAuth/MCP authorization model.  The modeled contract follows   *)
+(* the MCP authorization requirements for OAuth protected resources: a       *)
+(* current issued response is bound to the requested principal/scope, is     *)
+(* unexpired, and is not for a revoked principal.  lastReturn is modeled as  *)
+(* the current response event, not an audit log of past responses.           *)
 (***************************************************************************)
 
 CONSTANTS Principals, Scopes, MaxTime, TTL
@@ -43,7 +44,8 @@ Tick ==
                                       /\ cache[k].owner \notin revoked
                                    THEN cache[k]
                                    ELSE [owner |-> "", scope |-> "", expiresAt |-> 0]]
-  /\ UNCHANGED <<revoked, lastReturn>>
+  /\ lastReturn' = [requestedOwner |-> "", requestedScope |-> "", owner |-> "", scope |-> "", expiresAt |-> 0]
+  /\ UNCHANGED revoked
 
 Revoke(p) ==
   /\ p \notin revoked
@@ -51,7 +53,8 @@ Revoke(p) ==
   /\ cache' = [k \in CacheKeys |-> IF cache[k].owner = p
                                    THEN [owner |-> "", scope |-> "", expiresAt |-> 0]
                                    ELSE cache[k]]
-  /\ UNCHANGED <<now, lastReturn>>
+  /\ lastReturn' = [requestedOwner |-> "", requestedScope |-> "", owner |-> "", scope |-> "", expiresAt |-> 0]
+  /\ UNCHANGED now
 
 Next == Tick \/ (\E p \in Principals, s \in Scopes: Acquire(p, s)) \/ (\E p \in Principals: Revoke(p))
 

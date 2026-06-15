@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onErrorCaptured, ref, watch } from 'vue'
 import { MdPreview, config } from 'md-editor-v3'
 import 'md-editor-v3/lib/preview.css'
 import mermaid from 'mermaid'
@@ -46,6 +46,7 @@ const emit = defineEmits<{
 }>()
 
 const { themeMode } = useTheme()
+const MAX_RICH_MARKDOWN_CHARS = 500_000
 const editorTheme = computed(() => {
   if (themeMode.value === 'dark') return 'dark'
   if (themeMode.value === 'light') return 'light'
@@ -54,7 +55,22 @@ const editorTheme = computed(() => {
 })
 
 const editorId = `md-preview-${Math.random().toString(36).slice(2, 9)}`
+type RendererDiagnosticKind = 'math' | 'mermaid' | 'renderer_exception' | 'sanitizer'
+type RendererDiagnosticSeverity = 'warning' | 'error'
+type RendererDiagnostic = {
+  kind: RendererDiagnosticKind
+  severity: RendererDiagnosticSeverity
+  title: string
+  message: string
+  excerpt: string
+  details: string
+}
+
+const rendererDiagnostics = ref<RendererDiagnostic[]>([])
 const effectiveImagesBase = computed(() => props.imagesBaseUrl || STATIC_BASE || '')
+const isOversizedMarkdown = computed(() => props.markdown.length > MAX_RICH_MARKDOWN_CHARS)
+const isPlainFallbackTruncated = computed(() => props.markdown.length > MAX_RICH_MARKDOWN_CHARS)
+const plainFallbackMarkdown = computed(() => props.markdown.slice(0, MAX_RICH_MARKDOWN_CHARS))
 const safeUriPattern = /^(?:(?:https?|mailto):|data:image\/|blob:|\/|#|\.{1,2}\/|[a-z0-9+.-]+(?:[/?#]|$)|[^a-z])/i
 const forbiddenHtmlAttrs = [
   'style',
@@ -66,10 +82,129 @@ const forbiddenHtmlAttrs = [
   'onmouseenter',
   'onmouseleave',
 ]
+const rendererHtmlAttrs = [
+  'target',
+  'rel',
+  'class',
+  'aria-hidden',
+  'aria-label',
+  'data-processed',
+  'data-content',
+  'data-line',
+  'data-closed',
+  'data-mermaid-theme',
+]
+
+function truncateDiagnosticText(value: string, limit = 800) {
+  const normalized = String(value || '').replace(/\s+/g, ' ').trim()
+  if (normalized.length <= limit) return normalized
+  return `${normalized.slice(0, limit)}…`
+}
+
+function errorMessage(err: unknown) {
+  if (err instanceof Error) return `${err.name}: ${err.message}`
+  return String(err)
+}
+
+function replaceDiagnostic(nextDiagnostic: RendererDiagnostic) {
+  rendererDiagnostics.value = [
+    ...rendererDiagnostics.value.filter((item) => item.kind !== nextDiagnostic.kind),
+    nextDiagnostic,
+  ]
+}
+
+function extractMermaidBlocks(md: string) {
+  const blocks: string[] = []
+  md.replace(/```mermaid[^\n]*\n([\s\S]*?)```/gi, (_match, content: string) => {
+    blocks.push(content.trim())
+    return _match
+  })
+  return blocks
+}
+
+function extractMathSnippets(md: string) {
+  const snippets: string[] = []
+  md.replace(/\$\$([\s\S]+?)\$\$/g, (_match, content: string) => {
+    snippets.push(content.trim())
+    return _match
+  })
+  md.replace(/\\\[([\s\S]+?)\\\]/g, (_match, content: string) => {
+    snippets.push(content.trim())
+    return _match
+  })
+  md.replace(/\\\(([\s\S]+?)\\\)/g, (_match, content: string) => {
+    snippets.push(content.trim())
+    return _match
+  })
+  md.replace(/(^|[^\\$])\$([^$\n]+?)\$/g, (_match, _prefix: string, content: string) => {
+    snippets.push(content.trim())
+    return _match
+  })
+  return snippets.filter(Boolean)
+}
+
+function rendererDomDetails(root: HTMLElement) {
+  const mathRendered = root.querySelectorAll('.md-editor-katex-inline[data-processed], .md-editor-katex-block[data-processed]').length
+  const mathUnprocessed = root.querySelectorAll('.md-editor-katex-inline:not([data-processed]), .md-editor-katex-block:not([data-processed])').length
+  const katexNodes = root.querySelectorAll('.katex').length
+  const mermaidNodes = root.querySelectorAll('.md-editor-mermaid').length
+  const mermaidProcessed = root.querySelectorAll('.md-editor-mermaid[data-processed]').length
+  const mermaidSvg = root.querySelectorAll('.md-editor-mermaid[data-processed] svg').length
+  return [
+    `mathRendered=${mathRendered}`,
+    `mathUnprocessed=${mathUnprocessed}`,
+    `katexNodes=${katexNodes}`,
+    `mermaidNodes=${mermaidNodes}`,
+    `mermaidProcessed=${mermaidProcessed}`,
+    `mermaidSvg=${mermaidSvg}`,
+    `textExcerpt=${truncateDiagnosticText(root.textContent || '', 500)}`,
+  ].join('\n')
+}
+
+function auditRendererOutput(
+  root: HTMLElement,
+  currentMd: string,
+  options: { includePendingMermaid?: boolean } = {},
+) {
+  const diagnostics: RendererDiagnostic[] = []
+  const mathSnippets = extractMathSnippets(currentMd)
+  const mermaidBlocks = extractMermaidBlocks(currentMd)
+  const hasRenderedMath = root.querySelector('.md-editor-katex-inline[data-processed], .md-editor-katex-block[data-processed]')
+  const unprocessedMermaid = Array.from(root.querySelectorAll<HTMLElement>('.md-editor-mermaid')).filter(
+    (node) => !node.hasAttribute('data-processed') || !node.querySelector('svg'),
+  )
+
+  if (mathSnippets.length > 0 && !hasRenderedMath) {
+    diagnostics.push({
+      kind: 'math',
+      severity: 'error',
+      title: 'Math source was detected but no rendered KaTeX output was found.',
+      message: 'The markdown contains formula delimiters after normalization, but the preview DOM has no KaTeX output. The formula may have been dropped by the renderer, sanitizer, or extension setup.',
+      excerpt: truncateDiagnosticText(mathSnippets.slice(0, 3).join('\n\n')),
+      details: rendererDomDetails(root),
+    })
+  }
+
+  if (options.includePendingMermaid && mermaidBlocks.length > 0 && unprocessedMermaid.length > 0) {
+    diagnostics.push({
+      kind: 'mermaid',
+      severity: 'warning',
+      title: 'Mermaid source is visible but was not rendered to SVG.',
+      message: 'The markdown contains Mermaid fences, but at least one Mermaid preview node stayed unprocessed. Showing the original diagram source so the content is not silently lost.',
+      excerpt: truncateDiagnosticText(mermaidBlocks.slice(0, 3).join('\n\n')),
+      details: rendererDomDetails(root),
+    })
+  }
+
+  const persistentDiagnostics = rendererDiagnostics.value.filter(
+    (item) => item.kind !== 'math' && item.kind !== 'mermaid',
+  )
+  rendererDiagnostics.value = [...persistentDiagnostics, ...diagnostics]
+}
 
 function sanitizeHtml(html: string) {
   return DOMPurify.sanitize(String(html || ''), {
-    ADD_ATTR: ['target', 'rel', 'class'],
+    ADD_ATTR: rendererHtmlAttrs,
     FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed'],
     FORBID_ATTR: forbiddenHtmlAttrs,
     ALLOW_DATA_ATTR: false,
@@ -78,13 +213,25 @@ function sanitizeHtml(html: string) {
 }
 
 async function sanitizeMermaidSvg(svg: string) {
-  return DOMPurify.sanitize(String(svg || ''), {
-    USE_PROFILES: { svg: true, svgFilters: true },
-    FORBID_TAGS: ['script', 'foreignObject'],
-    FORBID_ATTR: forbiddenHtmlAttrs,
-    ALLOW_DATA_ATTR: false,
-    ALLOWED_URI_REGEXP: safeUriPattern,
-  })
+  try {
+    return DOMPurify.sanitize(String(svg || ''), {
+      USE_PROFILES: { svg: true, svgFilters: true },
+      FORBID_TAGS: ['script', 'foreignObject'],
+      FORBID_ATTR: forbiddenHtmlAttrs,
+      ALLOW_DATA_ATTR: false,
+      ALLOWED_URI_REGEXP: safeUriPattern,
+    })
+  } catch (err) {
+    replaceDiagnostic({
+      kind: 'sanitizer',
+      severity: 'error',
+      title: 'Mermaid SVG sanitizer failed.',
+      message: 'The rendered Mermaid SVG could not be sanitized safely, so it was not displayed.',
+      excerpt: truncateDiagnosticText(String(svg || '')),
+      details: errorMessage(err),
+    })
+    return ''
+  }
 }
 
 function sanitizeMarkmapNodeContent(html: string) {
@@ -224,9 +371,52 @@ function handleCatalog(list: HeadList[]) {
 
 let markmapDepsPromise: Promise<any> | null = null
 let transformTimer: ReturnType<typeof setTimeout> | null = null
+let diagnosticTimer: ReturnType<typeof setTimeout> | null = null
 let lastTransformedMarkdown = ''
 
+watch(
+  isOversizedMarkdown,
+  (oversized) => {
+    if (transformTimer) {
+      clearTimeout(transformTimer)
+      transformTimer = null
+    }
+    if (diagnosticTimer) {
+      clearTimeout(diagnosticTimer)
+      diagnosticTimer = null
+    }
+    lastTransformedMarkdown = ''
+    if (oversized) emit('outline', [])
+  },
+  { immediate: true },
+)
+
+watch(
+  () => props.markdown,
+  () => {
+    rendererDiagnostics.value = []
+    lastTransformedMarkdown = ''
+    if (diagnosticTimer) {
+      clearTimeout(diagnosticTimer)
+      diagnosticTimer = null
+    }
+  },
+)
+
+onErrorCaptured((err, _instance, info) => {
+  replaceDiagnostic({
+    kind: 'renderer_exception',
+    severity: 'error',
+    title: 'Markdown renderer threw an exception.',
+    message: `Vue captured an exception while rendering markdown (${info}). The raw markdown was kept available in this diagnostic panel.`,
+    excerpt: truncateDiagnosticText(processedMarkdown.value),
+    details: errorMessage(err),
+  })
+  return false
+})
+
 async function handleHtmlChanged() {
+  if (isOversizedMarkdown.value) return
   // Skip if the markdown content hasn't actually changed (e.g., resize-triggered events)
   const currentMd = processedMarkdown.value
   if (currentMd === lastTransformedMarkdown) return
@@ -238,6 +428,13 @@ async function handleHtmlChanged() {
     await nextTick()
     const root = document.getElementById(editorId)
     if (!root) return
+    auditRendererOutput(root, currentMd)
+    if (diagnosticTimer) clearTimeout(diagnosticTimer)
+    diagnosticTimer = setTimeout(() => {
+      const latestRoot = document.getElementById(editorId)
+      if (!latestRoot || processedMarkdown.value !== currentMd) return
+      auditRendererOutput(latestRoot, currentMd, { includePendingMermaid: true })
+    }, 700)
 
     // 1. Footnote Hover
     const refs = root.querySelectorAll('sup.footnote-ref a:not([title])')
@@ -293,12 +490,27 @@ async function handleHtmlChanged() {
 
 onBeforeUnmount(() => {
   if (transformTimer) clearTimeout(transformTimer)
+  if (diagnosticTimer) clearTimeout(diagnosticTimer)
 })
 </script>
 
 <template>
   <div class="md-preview-wrapper prose prose-slate max-w-none prose-headings:text-ink-900 prose-p:text-ink-700 prose-a:text-blue-600 prose-blockquote:border-l-4 prose-blockquote:border-accent-500 prose-blockquote:bg-accent-50 prose-blockquote:py-1 prose-blockquote:px-4 prose-code:text-accent-700 prose-pre:bg-ink-900 prose-pre:text-ink-50 prose-img:rounded-lg prose-img:shadow-md dark:prose-invert" :class="props.class">
+    <div
+      v-if="isOversizedMarkdown"
+      role="note"
+      class="rounded-lg border border-amber-200 bg-amber-50 p-4 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100"
+    >
+      <p class="mb-3 font-medium">
+        Markdown is too large for rich rendering; showing a plain-text preview.
+      </p>
+      <p v-if="isPlainFallbackTruncated" class="mb-3 text-sm opacity-80">
+        The plain-text preview was truncated to keep the browser responsive.
+      </p>
+      <pre class="max-h-[70vh] overflow-auto whitespace-pre-wrap rounded-md bg-white/70 p-3 text-sm text-ink-800 dark:bg-ink-950/70 dark:text-ink-100">{{ plainFallbackMarkdown }}</pre>
+    </div>
     <MdPreview
+      v-else
       :editorId="editorId"
       :modelValue="processedMarkdown"
       :noMermaid="false"
@@ -310,6 +522,41 @@ onBeforeUnmount(() => {
       @onHtmlChanged="handleHtmlChanged"
       class="bg-transparent [&_.md-editor]:bg-transparent"
     />
+    <div
+      v-if="rendererDiagnostics.length"
+      data-testid="markdown-renderer-diagnostics"
+      class="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100"
+    >
+      <p class="font-semibold">Markdown renderer diagnostics</p>
+      <p class="mt-1 text-xs opacity-80">
+        The source is still available below so formula or diagram content is not silently lost.
+      </p>
+      <ul class="mt-3 space-y-3">
+        <li
+          v-for="diagnostic in rendererDiagnostics"
+          :key="diagnostic.kind"
+          class="rounded-md border border-amber-200 bg-white/70 p-3 dark:border-amber-800 dark:bg-ink-950/50"
+          :data-renderer-diagnostic-kind="diagnostic.kind"
+          :data-renderer-diagnostic-severity="diagnostic.severity"
+        >
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="rounded bg-amber-100 px-2 py-0.5 text-xs font-semibold uppercase tracking-wide dark:bg-amber-900">
+              {{ diagnostic.severity }}
+            </span>
+            <strong>{{ diagnostic.title }}</strong>
+          </div>
+          <p class="mt-2">{{ diagnostic.message }}</p>
+          <details class="mt-2">
+            <summary class="cursor-pointer font-medium">Source excerpt</summary>
+            <pre class="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded bg-white/80 p-2 text-xs text-ink-800 dark:bg-ink-950/80 dark:text-ink-100">{{ diagnostic.excerpt }}</pre>
+          </details>
+          <details class="mt-2">
+            <summary class="cursor-pointer font-medium">Renderer details</summary>
+            <pre class="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded bg-white/80 p-2 text-xs text-ink-800 dark:bg-ink-950/80 dark:text-ink-100">{{ diagnostic.details }}</pre>
+          </details>
+        </li>
+      </ul>
+    </div>
   </div>
 </template>
 

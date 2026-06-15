@@ -14,7 +14,8 @@ try:
 except Exception:  # pragma: no cover
     yaml = None
 
-P0_REQUIRED = {"MODEL_PROOF", "IMPLEMENTATION_REFINEMENT_CHECK"}
+FORMAL_REQUIRED = {"MODEL_PROOF", "IMPLEMENTATION_REFINEMENT_CHECK"}
+NON_EXECUTABLE_COVERAGE = {"INVENTORY_MAPPING"}
 
 
 def _load_data(path: Path) -> dict[str, Any]:
@@ -187,16 +188,19 @@ def check_manifest(repo: Path, inventory: dict[str, Any], manifest: dict[str, An
                     ):
                         errors.append(f"coverage missing observable_contract: {stable_id}")
         criticality = str(manifest_item.get("criticality") or item.get("criticality") or "")
-        if criticality == "P0" and not manifest_item.get("temporary_gap"):
-            kinds = {
-                str(entry.get("kind"))
-                for entry in _coverage_entries(manifest_item)
-                if entry.get("kind")
-            }
-            if "MODEL_PROOF" not in kinds:
-                errors.append(f"P0 missing MODEL_PROOF: {path}")
-            if "IMPLEMENTATION_REFINEMENT_CHECK" not in kinds:
-                errors.append(f"P0 missing IMPLEMENTATION_REFINEMENT_CHECK: {path}")
+        if manifest_item.get("temporary_gap"):
+            errors.append(f"temporary gap remains: {path}")
+        kinds = {
+            str(entry.get("kind"))
+            for entry in _coverage_entries(manifest_item)
+            if entry.get("kind")
+        }
+        if criticality == "P0" and not (kinds - NON_EXECUTABLE_COVERAGE):
+            errors.append(f"P0 missing executable coverage: {path}")
+        if manifest_item.get("requires_formal_model"):
+            missing = FORMAL_REQUIRED - kinds
+            for kind in sorted(missing):
+                errors.append(f"formal target missing {kind}: {path}")
         if _dict(item.get("flags")).get("suspected_boundary_unclassified"):
             errors.append(f"suspected boundary unclassified: {path}")
 

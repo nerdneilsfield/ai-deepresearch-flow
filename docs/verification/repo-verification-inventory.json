@@ -45500,6 +45500,41 @@
       "selector": "version"
     },
     {
+      "config_id": "yaml:docs/verification/state-space-obligations.yml:modeling_rules",
+      "criticality": "P2",
+      "kind": "yaml_key",
+      "path": "docs/verification/state-space-obligations.yml",
+      "selector": "modeling_rules"
+    },
+    {
+      "config_id": "yaml:docs/verification/state-space-obligations.yml:purpose",
+      "criticality": "P2",
+      "kind": "yaml_key",
+      "path": "docs/verification/state-space-obligations.yml",
+      "selector": "purpose"
+    },
+    {
+      "config_id": "yaml:docs/verification/state-space-obligations.yml:sources",
+      "criticality": "P2",
+      "kind": "yaml_key",
+      "path": "docs/verification/state-space-obligations.yml",
+      "selector": "sources"
+    },
+    {
+      "config_id": "yaml:docs/verification/state-space-obligations.yml:subsystems",
+      "criticality": "P2",
+      "kind": "yaml_key",
+      "path": "docs/verification/state-space-obligations.yml",
+      "selector": "subsystems"
+    },
+    {
+      "config_id": "yaml:docs/verification/state-space-obligations.yml:version",
+      "criticality": "P1",
+      "kind": "yaml_key",
+      "path": "docs/verification/state-space-obligations.yml",
+      "selector": "version"
+    },
+    {
       "config_id": "yaml:scripts/docker/docker-compose.example.yml:services.deploy-external-static-advanced.environment.MCP_ACCESS_TOKEN",
       "criticality": "P0",
       "kind": "yaml_key",
@@ -45845,6 +45880,15 @@
       "evidence_class": "UNIT_BLACK_BOX",
       "evidence_id": "evidence:frontend/src/__tests__/api.test.ts",
       "path": "frontend/src/__tests__/api.test.ts",
+      "target_inventory_ids": []
+    },
+    {
+      "black_box_contract": "observable behavior only",
+      "command": "cd frontend && npm test -- --run frontend/src/__tests__/asyncComponent.test.ts",
+      "deterministic_mode": true,
+      "evidence_class": "UNIT_BLACK_BOX",
+      "evidence_id": "evidence:frontend/src/__tests__/asyncComponent.test.ts",
+      "path": "frontend/src/__tests__/asyncComponent.test.ts",
       "target_inventory_ids": []
     },
     {
@@ -46979,6 +47023,33 @@
       "evidence_class": "UNIT_BLACK_BOX",
       "evidence_id": "evidence:tests/verification/test_generate_inventory.py",
       "path": "tests/verification/test_generate_inventory.py",
+      "target_inventory_ids": []
+    },
+    {
+      "black_box_contract": "observable behavior only",
+      "command": "DRFLOW_RUN_LOCAL_FORMAL=1 uv run pytest tests/verification/test_smt_formal_gate.py -q",
+      "deterministic_mode": true,
+      "evidence_class": "UNIT_BLACK_BOX",
+      "evidence_id": "evidence:tests/verification/test_smt_formal_gate.py",
+      "path": "tests/verification/test_smt_formal_gate.py",
+      "target_inventory_ids": []
+    },
+    {
+      "black_box_contract": "observable behavior only",
+      "command": "uv run pytest tests/verification/test_state_gap_discovery.py -q",
+      "deterministic_mode": true,
+      "evidence_class": "UNIT_BLACK_BOX",
+      "evidence_id": "evidence:tests/verification/test_state_gap_discovery.py",
+      "path": "tests/verification/test_state_gap_discovery.py",
+      "target_inventory_ids": []
+    },
+    {
+      "black_box_contract": "observable behavior only",
+      "command": "DRFLOW_RUN_LOCAL_FORMAL=1 uv run pytest tests/verification/test_tlc_formal_gate.py -q",
+      "deterministic_mode": true,
+      "evidence_class": "UNIT_BLACK_BOX",
+      "evidence_id": "evidence:tests/verification/test_tlc_formal_gate.py",
+      "path": "tests/verification/test_tlc_formal_gate.py",
       "target_inventory_ids": []
     }
   ],
@@ -48684,6 +48755,26 @@
       "symbols": []
     },
     {
+      "classification": "config",
+      "criticality": "P2",
+      "flags": {
+        "concurrency_boundary": false,
+        "deploy_security_boundary": false,
+        "network_boundary": false,
+        "parser_boundary": false,
+        "persistence_boundary": false,
+        "release_publish_boundary": false,
+        "renderer_boundary": false,
+        "runtime_config_boundary": true,
+        "secret_boundary": false,
+        "security_boundary": false,
+        "suspected_boundary_unclassified": false
+      },
+      "kind": "config",
+      "path": "docs/verification/state-space-obligations.yml",
+      "symbols": []
+    },
+    {
       "classification": "doc",
       "criticality": "P1",
       "flags": {
@@ -48781,6 +48872,26 @@
       },
       "kind": "markdown_doc",
       "path": "docs/zh/workflow.md",
+      "symbols": []
+    },
+    {
+      "classification": "doc",
+      "criticality": "P2",
+      "flags": {
+        "concurrency_boundary": false,
+        "deploy_security_boundary": false,
+        "network_boundary": false,
+        "parser_boundary": true,
+        "persistence_boundary": false,
+        "release_publish_boundary": false,
+        "renderer_boundary": true,
+        "runtime_config_boundary": false,
+        "secret_boundary": false,
+        "security_boundary": false,
+        "suspected_boundary_unclassified": false
+      },
+      "kind": "markdown_doc",
+      "path": "formal/README.md",
       "symbols": []
     },
     {
@@ -57513,6 +57624,26 @@
       "classification": "test",
       "criticality": "P2",
       "flags": {
+        "concurrency_boundary": true,
+        "deploy_security_boundary": false,
+        "network_boundary": false,
+        "parser_boundary": false,
+        "persistence_boundary": false,
+        "release_publish_boundary": false,
+        "renderer_boundary": false,
+        "runtime_config_boundary": false,
+        "secret_boundary": false,
+        "security_boundary": false,
+        "suspected_boundary_unclassified": false
+      },
+      "kind": "test_asset",
+      "path": "frontend/src/__tests__/asyncComponent.test.ts",
+      "symbols": []
+    },
+    {
+      "classification": "test",
+      "criticality": "P2",
+      "flags": {
         "concurrency_boundary": false,
         "deploy_security_boundary": false,
         "network_boundary": true,
@@ -61715,6 +61846,35 @@
       "classification": "source",
       "criticality": "P2",
       "flags": {
+        "concurrency_boundary": true,
+        "deploy_security_boundary": false,
+        "network_boundary": false,
+        "parser_boundary": false,
+        "persistence_boundary": false,
+        "release_publish_boundary": false,
+        "renderer_boundary": false,
+        "runtime_config_boundary": false,
+        "secret_boundary": false,
+        "security_boundary": false,
+        "suspected_boundary_unclassified": false
+      },
+      "kind": "typescript_module",
+      "path": "frontend/src/lib/async-component.ts",
+      "symbols": [
+        {
+          "export_mode": "export",
+          "kind": "function",
+          "name": "defineSafeAsyncComponent<T extends Component>",
+          "signature_hash": "3abd065ffe8e",
+          "source_span": "11-11",
+          "stable_id": "fe:frontend/src/lib/async-component.ts:defineSafeAsyncComponent<T extends Component>#3abd065ffe8e"
+        }
+      ]
+    },
+    {
+      "classification": "source",
+      "criticality": "P2",
+      "flags": {
         "concurrency_boundary": false,
         "deploy_security_boundary": false,
         "network_boundary": false,
@@ -62124,7 +62284,7 @@
           "kind": "function",
           "name": "selectedExportIssueCount",
           "signature_hash": "adaa19c1ff43",
-          "source_span": "134-134",
+          "source_span": "135-135",
           "stable_id": "fe:frontend/src/lib/selected-export.ts:selectedExportIssueCount#adaa19c1ff43"
         },
         {
@@ -62132,7 +62292,7 @@
           "kind": "function",
           "name": "sanitizeSegment",
           "signature_hash": "1761dcf7f142",
-          "source_span": "138-138",
+          "source_span": "139-139",
           "stable_id": "fe:frontend/src/lib/selected-export.ts:sanitizeSegment#1761dcf7f142"
         },
         {
@@ -62140,7 +62300,7 @@
           "kind": "function",
           "name": "buildFolderName",
           "signature_hash": "4cd558ac1f62",
-          "source_span": "149-149",
+          "source_span": "150-150",
           "stable_id": "fe:frontend/src/lib/selected-export.ts:buildFolderName#4cd558ac1f62"
         },
         {
@@ -62148,7 +62308,7 @@
           "kind": "function",
           "name": "fallbackSummaryTemplate",
           "signature_hash": "3e58959ee54f",
-          "source_span": "178-178",
+          "source_span": "179-179",
           "stable_id": "fe:frontend/src/lib/selected-export.ts:fallbackSummaryTemplate#3e58959ee54f"
         },
         {
@@ -62156,7 +62316,7 @@
           "kind": "function",
           "name": "resolveSummaryUrls",
           "signature_hash": "aa9e45cb36c1",
-          "source_span": "182-182",
+          "source_span": "183-183",
           "stable_id": "fe:frontend/src/lib/selected-export.ts:resolveSummaryUrls#aa9e45cb36c1"
         }
       ]
@@ -78873,7 +79033,7 @@
           "name": "_package_version",
           "qualname": "_package_version",
           "signature_hash": "f5045e2c5e12",
-          "source_span": "40-44",
+          "source_span": "39-43",
           "stable_id": "py:deepresearch_flow.paper.snapshot.api:_package_version#f5045e2c5e12"
         },
         {
@@ -78883,7 +79043,7 @@
           "name": "_mask_value",
           "qualname": "_mask_value",
           "signature_hash": "6d97f5b1d50e",
-          "source_span": "47-53",
+          "source_span": "46-52",
           "stable_id": "py:deepresearch_flow.paper.snapshot.api:_mask_value#6d97f5b1d50e"
         },
         {
@@ -78893,7 +79053,7 @@
           "name": "_mask_url_origin",
           "qualname": "_mask_url_origin",
           "signature_hash": "e5819bff7e7e",
-          "source_span": "56-74",
+          "source_span": "55-73",
           "stable_id": "py:deepresearch_flow.paper.snapshot.api:_mask_url_origin#e5819bff7e7e"
         },
         {
@@ -78903,7 +79063,7 @@
           "name": "_McpTrailingSlashMiddleware",
           "qualname": "_McpTrailingSlashMiddleware",
           "signature_hash": "596d4ee76c3f",
-          "source_span": "77-98",
+          "source_span": "76-97",
           "stable_id": "py:deepresearch_flow.paper.snapshot.api:_McpTrailingSlashMiddleware#596d4ee76c3f"
         },
         {
@@ -78913,7 +79073,7 @@
           "name": "__init__",
           "qualname": "_McpTrailingSlashMiddleware.__init__",
           "signature_hash": "a2013f28eb64",
-          "source_span": "80-82",
+          "source_span": "79-81",
           "stable_id": "py:deepresearch_flow.paper.snapshot.api:_McpTrailingSlashMiddleware.__init__#a2013f28eb64"
         },
         {
@@ -78923,7 +79083,7 @@
           "name": "__call__",
           "qualname": "_McpTrailingSlashMiddleware.__call__",
           "signature_hash": "1f23c27e33f5",
-          "source_span": "84-98",
+          "source_span": "83-97",
           "stable_id": "py:deepresearch_flow.paper.snapshot.api:_McpTrailingSlashMiddleware.__call__#1f23c27e33f5"
         },
         {
@@ -78933,7 +79093,7 @@
           "name": "_ExactAsgiBridge",
           "qualname": "_ExactAsgiBridge",
           "signature_hash": "afa6c6cb11a5",
-          "source_span": "101-115",
+          "source_span": "100-114",
           "stable_id": "py:deepresearch_flow.paper.snapshot.api:_ExactAsgiBridge#afa6c6cb11a5"
         },
         {
@@ -78943,7 +79103,7 @@
           "name": "__init__",
           "qualname": "_ExactAsgiBridge.__init__",
           "signature_hash": "e63044cc5437",
-          "source_span": "104-106",
+          "source_span": "103-105",
           "stable_id": "py:deepresearch_flow.paper.snapshot.api:_ExactAsgiBridge.__init__#e63044cc5437"
         },
         {
@@ -78953,7 +79113,7 @@
           "name": "__call__",
           "qualname": "_ExactAsgiBridge.__call__",
           "signature_hash": "1f23c27e33f5",
-          "source_span": "108-115",
+          "source_span": "107-114",
           "stable_id": "py:deepresearch_flow.paper.snapshot.api:_ExactAsgiBridge.__call__#1f23c27e33f5"
         },
         {
@@ -78963,7 +79123,7 @@
           "name": "_OAuthAuthorizeResourceAliasBridge",
           "qualname": "_OAuthAuthorizeResourceAliasBridge",
           "signature_hash": "884d2f0e6350",
-          "source_span": "118-193",
+          "source_span": "117-158",
           "stable_id": "py:deepresearch_flow.paper.snapshot.api:_OAuthAuthorizeResourceAliasBridge#884d2f0e6350"
         },
         {
@@ -78972,9 +79132,9 @@
           "kind": "method",
           "name": "__init__",
           "qualname": "_OAuthAuthorizeResourceAliasBridge.__init__",
-          "signature_hash": "ad566e5ffd03",
-          "source_span": "121-132",
-          "stable_id": "py:deepresearch_flow.paper.snapshot.api:_OAuthAuthorizeResourceAliasBridge.__init__#ad566e5ffd03"
+          "signature_hash": "1795448e9893",
+          "source_span": "120-129",
+          "stable_id": "py:deepresearch_flow.paper.snapshot.api:_OAuthAuthorizeResourceAliasBridge.__init__#1795448e9893"
         },
         {
           "async": true,
@@ -78983,18 +79143,8 @@
           "name": "__call__",
           "qualname": "_OAuthAuthorizeResourceAliasBridge.__call__",
           "signature_hash": "1f23c27e33f5",
-          "source_span": "134-163",
+          "source_span": "131-158",
           "stable_id": "py:deepresearch_flow.paper.snapshot.api:_OAuthAuthorizeResourceAliasBridge.__call__#1f23c27e33f5"
-        },
-        {
-          "async": true,
-          "decorators": [],
-          "kind": "method",
-          "name": "_ensure_client_registered",
-          "qualname": "_OAuthAuthorizeResourceAliasBridge._ensure_client_registered",
-          "signature_hash": "ad2cf8729b06",
-          "source_span": "165-193",
-          "stable_id": "py:deepresearch_flow.paper.snapshot.api:_OAuthAuthorizeResourceAliasBridge._ensure_client_registered#ad2cf8729b06"
         },
         {
           "async": false,
@@ -79003,7 +79153,7 @@
           "name": "_OAuthTokenResourceBridge",
           "qualname": "_OAuthTokenResourceBridge",
           "signature_hash": "1abca20ad8c3",
-          "source_span": "196-288",
+          "source_span": "161-253",
           "stable_id": "py:deepresearch_flow.paper.snapshot.api:_OAuthTokenResourceBridge#1abca20ad8c3"
         },
         {
@@ -79013,7 +79163,7 @@
           "name": "__init__",
           "qualname": "_OAuthTokenResourceBridge.__init__",
           "signature_hash": "1795448e9893",
-          "source_span": "199-208",
+          "source_span": "164-173",
           "stable_id": "py:deepresearch_flow.paper.snapshot.api:_OAuthTokenResourceBridge.__init__#1795448e9893"
         },
         {
@@ -79023,7 +79173,7 @@
           "name": "__call__",
           "qualname": "_OAuthTokenResourceBridge.__call__",
           "signature_hash": "1f23c27e33f5",
-          "source_span": "210-278",
+          "source_span": "175-243",
           "stable_id": "py:deepresearch_flow.paper.snapshot.api:_OAuthTokenResourceBridge.__call__#1f23c27e33f5"
         },
         {
@@ -79033,7 +79183,7 @@
           "name": "_replay",
           "qualname": "_OAuthTokenResourceBridge._replay",
           "signature_hash": "69121401ecea",
-          "source_span": "280-288",
+          "source_span": "245-253",
           "stable_id": "py:deepresearch_flow.paper.snapshot.api:_OAuthTokenResourceBridge._replay#69121401ecea"
         },
         {
@@ -79043,7 +79193,7 @@
           "name": "replay_receive",
           "qualname": "_OAuthTokenResourceBridge._replay.replay_receive",
           "signature_hash": "67e35ae1d510",
-          "source_span": "283-286",
+          "source_span": "248-251",
           "stable_id": "py:deepresearch_flow.paper.snapshot.api:_OAuthTokenResourceBridge._replay.replay_receive#67e35ae1d510"
         },
         {
@@ -79053,7 +79203,7 @@
           "name": "_oauth_protocol_routes",
           "qualname": "_oauth_protocol_routes",
           "signature_hash": "1c479fa4083d",
-          "source_span": "291-343",
+          "source_span": "256-307",
           "stable_id": "py:deepresearch_flow.paper.snapshot.api:_oauth_protocol_routes#1c479fa4083d"
         },
         {
@@ -79063,7 +79213,7 @@
           "name": "oauth_mcp_probe_challenge",
           "qualname": "_oauth_protocol_routes.oauth_mcp_probe_challenge",
           "signature_hash": "f686aea92178",
-          "source_span": "299-303",
+          "source_span": "264-268",
           "stable_id": "py:deepresearch_flow.paper.snapshot.api:_oauth_protocol_routes.oauth_mcp_probe_challenge#f686aea92178"
         },
         {
@@ -79073,7 +79223,7 @@
           "name": "bridge",
           "qualname": "_oauth_protocol_routes.bridge",
           "signature_hash": "1197474b2744",
-          "source_span": "305-312",
+          "source_span": "270-277",
           "stable_id": "py:deepresearch_flow.paper.snapshot.api:_oauth_protocol_routes.bridge#1197474b2744"
         },
         {
@@ -79083,7 +79233,7 @@
           "name": "_normalize_facet_value",
           "qualname": "_normalize_facet_value",
           "signature_hash": "f9a93f27b0e4",
-          "source_span": "346-349",
+          "source_span": "310-313",
           "stable_id": "py:deepresearch_flow.paper.snapshot.api:_normalize_facet_value#f9a93f27b0e4"
         },
         {
@@ -79095,7 +79245,7 @@
           "name": "SnapshotApiConfig",
           "qualname": "SnapshotApiConfig",
           "signature_hash": "e11e0dbff3c3",
-          "source_span": "416-420",
+          "source_span": "380-384",
           "stable_id": "py:deepresearch_flow.paper.snapshot.api:SnapshotApiConfig#e11e0dbff3c3"
         },
         {
@@ -79105,7 +79255,7 @@
           "name": "_normalize_base_url",
           "qualname": "_normalize_base_url",
           "signature_hash": "789a30eac98d",
-          "source_span": "423-424",
+          "source_span": "387-388",
           "stable_id": "py:deepresearch_flow.paper.snapshot.api:_normalize_base_url#789a30eac98d"
         },
         {
@@ -79115,7 +79265,7 @@
           "name": "_json_error",
           "qualname": "_json_error",
           "signature_hash": "9975cdbb4dce",
-          "source_span": "427-428",
+          "source_span": "391-392",
           "stable_id": "py:deepresearch_flow.paper.snapshot.api:_json_error#9975cdbb4dce"
         },
         {
@@ -79125,7 +79275,7 @@
           "name": "_snapshot_build_id",
           "qualname": "_snapshot_build_id",
           "signature_hash": "67af6239d263",
-          "source_span": "431-435",
+          "source_span": "395-399",
           "stable_id": "py:deepresearch_flow.paper.snapshot.api:_snapshot_build_id#67af6239d263"
         },
         {
@@ -79135,7 +79285,7 @@
           "name": "_asset_urls",
           "qualname": "_asset_urls",
           "signature_hash": "e10b3411dc78",
-          "source_span": "438-464",
+          "source_span": "402-428",
           "stable_id": "py:deepresearch_flow.paper.snapshot.api:_asset_urls#e10b3411dc78"
         },
         {
@@ -79145,7 +79295,7 @@
           "name": "_summary_urls",
           "qualname": "_summary_urls",
           "signature_hash": "e8d5b324b183",
-          "source_span": "467-482",
+          "source_span": "431-446",
           "stable_id": "py:deepresearch_flow.paper.snapshot.api:_summary_urls#e8d5b324b183"
         },
         {
@@ -79155,7 +79305,7 @@
           "name": "_list_facet_values",
           "qualname": "_list_facet_values",
           "signature_hash": "172d3ce95815",
-          "source_span": "485-503",
+          "source_span": "449-467",
           "stable_id": "py:deepresearch_flow.paper.snapshot.api:_list_facet_values#172d3ce95815"
         },
         {
@@ -79165,7 +79315,7 @@
           "name": "_parse_pagination",
           "qualname": "_parse_pagination",
           "signature_hash": "804ca41e784a",
-          "source_span": "506-532",
+          "source_span": "470-496",
           "stable_id": "py:deepresearch_flow.paper.snapshot.api:_parse_pagination#804ca41e784a"
         },
         {
@@ -79175,7 +79325,7 @@
           "name": "_api_search",
           "qualname": "_api_search",
           "signature_hash": "a4306b74d8ec",
-          "source_span": "535-723",
+          "source_span": "499-687",
           "stable_id": "py:deepresearch_flow.paper.snapshot.api:_api_search#a4306b74d8ec"
         },
         {
@@ -79185,7 +79335,7 @@
           "name": "_api_paper_detail",
           "qualname": "_api_paper_detail",
           "signature_hash": "01644ebebc93",
-          "source_span": "726-823",
+          "source_span": "690-787",
           "stable_id": "py:deepresearch_flow.paper.snapshot.api:_api_paper_detail#01644ebebc93"
         },
         {
@@ -79195,7 +79345,7 @@
           "name": "_api_paper_bibtex",
           "qualname": "_api_paper_bibtex",
           "signature_hash": "b7a323e66bb2",
-          "source_span": "826-864",
+          "source_span": "790-828",
           "stable_id": "py:deepresearch_flow.paper.snapshot.api:_api_paper_bibtex#b7a323e66bb2"
         },
         {
@@ -79205,7 +79355,7 @@
           "name": "_api_match_bibtex",
           "qualname": "_api_match_bibtex",
           "signature_hash": "470779aa470d",
-          "source_span": "867-925",
+          "source_span": "831-889",
           "stable_id": "py:deepresearch_flow.paper.snapshot.api:_api_match_bibtex#470779aa470d"
         },
         {
@@ -79215,7 +79365,7 @@
           "name": "_api_facet_list",
           "qualname": "_api_facet_list",
           "signature_hash": "173de4aa8da9",
-          "source_span": "928-1045",
+          "source_span": "892-1009",
           "stable_id": "py:deepresearch_flow.paper.snapshot.api:_api_facet_list#173de4aa8da9"
         },
         {
@@ -79225,7 +79375,7 @@
           "name": "_api_facet_papers",
           "qualname": "_api_facet_papers",
           "signature_hash": "c84bbd775bcf",
-          "source_span": "1048-1177",
+          "source_span": "1012-1141",
           "stable_id": "py:deepresearch_flow.paper.snapshot.api:_api_facet_papers#c84bbd775bcf"
         },
         {
@@ -79235,7 +79385,7 @@
           "name": "_facet_node_id",
           "qualname": "_facet_node_id",
           "signature_hash": "7a5dbeb50eac",
-          "source_span": "1180-1188",
+          "source_span": "1144-1152",
           "stable_id": "py:deepresearch_flow.paper.snapshot.api:_facet_node_id#7a5dbeb50eac"
         },
         {
@@ -79245,7 +79395,7 @@
           "name": "_facet_stats_for_node",
           "qualname": "_facet_stats_for_node",
           "signature_hash": "c56657cb85de",
-          "source_span": "1191-1234",
+          "source_span": "1155-1198",
           "stable_id": "py:deepresearch_flow.paper.snapshot.api:_facet_stats_for_node#c56657cb85de"
         },
         {
@@ -79255,7 +79405,7 @@
           "name": "_api_facet_by_value_papers",
           "qualname": "_api_facet_by_value_papers",
           "signature_hash": "8356d3ddcab8",
-          "source_span": "1237-1332",
+          "source_span": "1201-1296",
           "stable_id": "py:deepresearch_flow.paper.snapshot.api:_api_facet_by_value_papers#8356d3ddcab8"
         },
         {
@@ -79265,7 +79415,7 @@
           "name": "_api_facet_by_value_stats",
           "qualname": "_api_facet_by_value_stats",
           "signature_hash": "55d86f534cdb",
-          "source_span": "1335-1347",
+          "source_span": "1299-1311",
           "stable_id": "py:deepresearch_flow.paper.snapshot.api:_api_facet_by_value_stats#55d86f534cdb"
         },
         {
@@ -79275,7 +79425,7 @@
           "name": "_api_facet_stats",
           "qualname": "_api_facet_stats",
           "signature_hash": "b213fbcad8c2",
-          "source_span": "1350-1385",
+          "source_span": "1314-1349",
           "stable_id": "py:deepresearch_flow.paper.snapshot.api:_api_facet_stats#b213fbcad8c2"
         },
         {
@@ -79285,7 +79435,7 @@
           "name": "_api_stats",
           "qualname": "_api_stats",
           "signature_hash": "bbd776739535",
-          "source_span": "1388-1446",
+          "source_span": "1352-1410",
           "stable_id": "py:deepresearch_flow.paper.snapshot.api:_api_stats#bbd776739535"
         },
         {
@@ -79295,7 +79445,7 @@
           "name": "_api_config",
           "qualname": "_api_config",
           "signature_hash": "764fd0f03a86",
-          "source_span": "1449-1451",
+          "source_span": "1413-1415",
           "stable_id": "py:deepresearch_flow.paper.snapshot.api:_api_config#764fd0f03a86"
         },
         {
@@ -79305,7 +79455,7 @@
           "name": "create_app",
           "qualname": "create_app",
           "signature_hash": "53b4924c8c39",
-          "source_span": "1454-1597",
+          "source_span": "1418-1561",
           "stable_id": "py:deepresearch_flow.paper.snapshot.api:create_app#53b4924c8c39"
         }
       ]
@@ -79333,10 +79483,20 @@
           "async": false,
           "decorators": [],
           "kind": "function",
+          "name": "_fsync_directory",
+          "qualname": "_fsync_directory",
+          "signature_hash": "a4c7190b9a48",
+          "source_span": "47-60",
+          "stable_id": "py:deepresearch_flow.paper.snapshot.auth:_fsync_directory#a4c7190b9a48"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
           "name": "is_mcp_public_unsafe_allowed",
           "qualname": "is_mcp_public_unsafe_allowed",
           "signature_hash": "ae729dd2ea0c",
-          "source_span": "41-43",
+          "source_span": "63-65",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:is_mcp_public_unsafe_allowed#ae729dd2ea0c"
         },
         {
@@ -79346,7 +79506,7 @@
           "name": "validate_mcp_static_access_token",
           "qualname": "validate_mcp_static_access_token",
           "signature_hash": "39826efece10",
-          "source_span": "46-55",
+          "source_span": "68-77",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:validate_mcp_static_access_token#39826efece10"
         },
         {
@@ -79356,7 +79516,7 @@
           "name": "BearerAuthError",
           "qualname": "BearerAuthError",
           "signature_hash": "67ef9b0c7fea",
-          "source_span": "58-63",
+          "source_span": "80-85",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:BearerAuthError#67ef9b0c7fea"
         },
         {
@@ -79366,7 +79526,7 @@
           "name": "__init__",
           "qualname": "BearerAuthError.__init__",
           "signature_hash": "f5f39b9d1ca7",
-          "source_span": "61-63",
+          "source_span": "83-85",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:BearerAuthError.__init__#f5f39b9d1ca7"
         },
         {
@@ -79376,7 +79536,7 @@
           "name": "verify_bearer",
           "qualname": "verify_bearer",
           "signature_hash": "490a11a74461",
-          "source_span": "66-74",
+          "source_span": "88-96",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:verify_bearer#490a11a74461"
         },
         {
@@ -79386,7 +79546,7 @@
           "name": "bearer_auth_app",
           "qualname": "bearer_auth_app",
           "signature_hash": "d3033a4b3a3b",
-          "source_span": "77-112",
+          "source_span": "99-134",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:bearer_auth_app#d3033a4b3a3b"
         },
         {
@@ -79396,7 +79556,7 @@
           "name": "wrapped",
           "qualname": "bearer_auth_app.wrapped",
           "signature_hash": "29ca1efd1ebf",
-          "source_span": "85-107",
+          "source_span": "107-129",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:bearer_auth_app.wrapped#29ca1efd1ebf"
         },
         {
@@ -79408,7 +79568,7 @@
           "name": "McpGitHubOAuthConfig",
           "qualname": "McpGitHubOAuthConfig",
           "signature_hash": "c83379852d46",
-          "source_span": "116-154",
+          "source_span": "138-176",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:McpGitHubOAuthConfig#c83379852d46"
         },
         {
@@ -79418,7 +79578,7 @@
           "name": "__post_init__",
           "qualname": "McpGitHubOAuthConfig.__post_init__",
           "signature_hash": "3568660c4e00",
-          "source_span": "127-154",
+          "source_span": "149-176",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:McpGitHubOAuthConfig.__post_init__#3568660c4e00"
         },
         {
@@ -79428,7 +79588,7 @@
           "name": "StaticBearerTokenVerifier",
           "qualname": "StaticBearerTokenVerifier",
           "signature_hash": "33c4da6aaa5f",
-          "source_span": "157-179",
+          "source_span": "179-201",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:StaticBearerTokenVerifier#33c4da6aaa5f"
         },
         {
@@ -79438,7 +79598,7 @@
           "name": "__init__",
           "qualname": "StaticBearerTokenVerifier.__init__",
           "signature_hash": "fa49e3ddb258",
-          "source_span": "160-168",
+          "source_span": "182-190",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:StaticBearerTokenVerifier.__init__#fa49e3ddb258"
         },
         {
@@ -79448,7 +79608,7 @@
           "name": "verify_token",
           "qualname": "StaticBearerTokenVerifier.verify_token",
           "signature_hash": "b11a8fa8beaa",
-          "source_span": "170-179",
+          "source_span": "192-201",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:StaticBearerTokenVerifier.verify_token#b11a8fa8beaa"
         },
         {
@@ -79458,7 +79618,7 @@
           "name": "_AllowedGitHubProvider",
           "qualname": "_AllowedGitHubProvider",
           "signature_hash": "e7bd6ddd0887",
-          "source_span": "182-194",
+          "source_span": "204-216",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:_AllowedGitHubProvider#e7bd6ddd0887"
         },
         {
@@ -79468,7 +79628,7 @@
           "name": "__init__",
           "qualname": "_AllowedGitHubProvider.__init__",
           "signature_hash": "f3f2a9b90fd6",
-          "source_span": "183-185",
+          "source_span": "205-207",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:_AllowedGitHubProvider.__init__#f3f2a9b90fd6"
         },
         {
@@ -79478,7 +79638,7 @@
           "name": "verify_token",
           "qualname": "_AllowedGitHubProvider.verify_token",
           "signature_hash": "b11a8fa8beaa",
-          "source_span": "187-194",
+          "source_span": "209-216",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:_AllowedGitHubProvider.verify_token#b11a8fa8beaa"
         },
         {
@@ -79488,7 +79648,7 @@
           "name": "JsonOAuthClientCache",
           "qualname": "JsonOAuthClientCache",
           "signature_hash": "4f73abfd5e30",
-          "source_span": "197-318",
+          "source_span": "219-379",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:JsonOAuthClientCache#4f73abfd5e30"
         },
         {
@@ -79498,7 +79658,7 @@
           "name": "__init__",
           "qualname": "JsonOAuthClientCache.__init__",
           "signature_hash": "120b447ce7a9",
-          "source_span": "200-204",
+          "source_span": "222-226",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:JsonOAuthClientCache.__init__#120b447ce7a9"
         },
         {
@@ -79508,8 +79668,20 @@
           "name": "_is_persistent_collection",
           "qualname": "JsonOAuthClientCache._is_persistent_collection",
           "signature_hash": "7b38dcfbbe1c",
-          "source_span": "206-207",
+          "source_span": "228-229",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:JsonOAuthClientCache._is_persistent_collection#7b38dcfbbe1c"
+        },
+        {
+          "async": false,
+          "decorators": [
+            "contextmanager"
+          ],
+          "kind": "method",
+          "name": "_persistent_file_lock_unlocked",
+          "qualname": "JsonOAuthClientCache._persistent_file_lock_unlocked",
+          "signature_hash": "0e912470d30b",
+          "source_span": "232-242",
+          "stable_id": "py:deepresearch_flow.paper.snapshot.auth:JsonOAuthClientCache._persistent_file_lock_unlocked#0e912470d30b"
         },
         {
           "async": false,
@@ -79518,7 +79690,7 @@
           "name": "_read_persistent_unlocked",
           "qualname": "JsonOAuthClientCache._read_persistent_unlocked",
           "signature_hash": "124f0a1f0aa1",
-          "source_span": "209-224",
+          "source_span": "244-263",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:JsonOAuthClientCache._read_persistent_unlocked#124f0a1f0aa1"
         },
         {
@@ -79528,7 +79700,7 @@
           "name": "_write_persistent_unlocked",
           "qualname": "JsonOAuthClientCache._write_persistent_unlocked",
           "signature_hash": "bd1df57763b6",
-          "source_span": "226-247",
+          "source_span": "265-297",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:JsonOAuthClientCache._write_persistent_unlocked#bd1df57763b6"
         },
         {
@@ -79538,7 +79710,7 @@
           "name": "get",
           "qualname": "JsonOAuthClientCache.get",
           "signature_hash": "cef1995696a6",
-          "source_span": "249-255",
+          "source_span": "299-311",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:JsonOAuthClientCache.get#cef1995696a6"
         },
         {
@@ -79548,7 +79720,7 @@
           "name": "ttl",
           "qualname": "JsonOAuthClientCache.ttl",
           "signature_hash": "0606be2f919a",
-          "source_span": "257-260",
+          "source_span": "313-316",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:JsonOAuthClientCache.ttl#0606be2f919a"
         },
         {
@@ -79558,7 +79730,7 @@
           "name": "put",
           "qualname": "JsonOAuthClientCache.put",
           "signature_hash": "73065da62796",
-          "source_span": "262-278",
+          "source_span": "318-336",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:JsonOAuthClientCache.put#73065da62796"
         },
         {
@@ -79568,7 +79740,7 @@
           "name": "delete",
           "qualname": "JsonOAuthClientCache.delete",
           "signature_hash": "83d04dc364c8",
-          "source_span": "280-290",
+          "source_span": "338-351",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:JsonOAuthClientCache.delete#83d04dc364c8"
         },
         {
@@ -79578,7 +79750,7 @@
           "name": "get_many",
           "qualname": "JsonOAuthClientCache.get_many",
           "signature_hash": "3e68b8b34314",
-          "source_span": "292-295",
+          "source_span": "353-356",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:JsonOAuthClientCache.get_many#3e68b8b34314"
         },
         {
@@ -79588,7 +79760,7 @@
           "name": "ttl_many",
           "qualname": "JsonOAuthClientCache.ttl_many",
           "signature_hash": "137eb2541445",
-          "source_span": "297-300",
+          "source_span": "358-361",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:JsonOAuthClientCache.ttl_many#137eb2541445"
         },
         {
@@ -79598,7 +79770,7 @@
           "name": "put_many",
           "qualname": "JsonOAuthClientCache.put_many",
           "signature_hash": "6b1eca017d3e",
-          "source_span": "302-311",
+          "source_span": "363-372",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:JsonOAuthClientCache.put_many#6b1eca017d3e"
         },
         {
@@ -79608,7 +79780,7 @@
           "name": "delete_many",
           "qualname": "JsonOAuthClientCache.delete_many",
           "signature_hash": "6f9f0389263b",
-          "source_span": "313-318",
+          "source_span": "374-379",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:JsonOAuthClientCache.delete_many#6f9f0389263b"
         },
         {
@@ -79618,7 +79790,7 @@
           "name": "oauth_metadata_compat_app",
           "qualname": "oauth_metadata_compat_app",
           "signature_hash": "7db82f1f3ad0",
-          "source_span": "321-394",
+          "source_span": "382-455",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:oauth_metadata_compat_app#7db82f1f3ad0"
         },
         {
@@ -79628,7 +79800,7 @@
           "name": "wrapped",
           "qualname": "oauth_metadata_compat_app.wrapped",
           "signature_hash": "29ca1efd1ebf",
-          "source_span": "324-389",
+          "source_span": "385-450",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:oauth_metadata_compat_app.wrapped#29ca1efd1ebf"
         },
         {
@@ -79638,7 +79810,7 @@
           "name": "capture_send",
           "qualname": "oauth_metadata_compat_app.wrapped.capture_send",
           "signature_hash": "70954d754b44",
-          "source_span": "336-387",
+          "source_span": "397-448",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:oauth_metadata_compat_app.wrapped.capture_send#70954d754b44"
         },
         {
@@ -79648,7 +79820,7 @@
           "name": "build_mcp_github_oauth_provider",
           "qualname": "build_mcp_github_oauth_provider",
           "signature_hash": "54f3db4fbbc9",
-          "source_span": "397-430",
+          "source_span": "458-491",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:build_mcp_github_oauth_provider#54f3db4fbbc9"
         }
       ]
@@ -85840,7 +86012,7 @@
           "name": "TestMcpGitHubOAuth",
           "qualname": "TestMcpGitHubOAuth",
           "signature_hash": "3fb9fa12bd4b",
-          "source_span": "390-955",
+          "source_span": "390-952",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpGitHubOAuth#3fb9fa12bd4b"
         },
         {
@@ -85971,11 +86143,11 @@
           "async": true,
           "decorators": [],
           "kind": "method",
-          "name": "test_authorize_recovers_unknown_client_registration_from_request",
-          "qualname": "TestMcpGitHubOAuth.test_authorize_recovers_unknown_client_registration_from_request",
-          "signature_hash": "e4b101e31658",
-          "source_span": "684-726",
-          "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpGitHubOAuth.test_authorize_recovers_unknown_client_registration_from_request#e4b101e31658"
+          "name": "test_authorize_rejects_unknown_client_registration_without_synthesis",
+          "qualname": "TestMcpGitHubOAuth.test_authorize_rejects_unknown_client_registration_without_synthesis",
+          "signature_hash": "fe7dc8988d4c",
+          "source_span": "684-723",
+          "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpGitHubOAuth.test_authorize_rejects_unknown_client_registration_without_synthesis#fe7dc8988d4c"
         },
         {
           "async": true,
@@ -85984,7 +86156,7 @@
           "name": "test_token_accepts_chatgpt_metadata_url_resource_alias",
           "qualname": "TestMcpGitHubOAuth.test_token_accepts_chatgpt_metadata_url_resource_alias",
           "signature_hash": "b670ff2bbfb6",
-          "source_span": "728-761",
+          "source_span": "725-758",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpGitHubOAuth.test_token_accepts_chatgpt_metadata_url_resource_alias#b670ff2bbfb6"
         },
         {
@@ -85994,7 +86166,7 @@
           "name": "test_token_rejects_wrong_resource_indicator",
           "qualname": "TestMcpGitHubOAuth.test_token_rejects_wrong_resource_indicator",
           "signature_hash": "9ab11c75ee6b",
-          "source_span": "763-794",
+          "source_span": "760-791",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpGitHubOAuth.test_token_rejects_wrong_resource_indicator#9ab11c75ee6b"
         },
         {
@@ -86004,7 +86176,7 @@
           "name": "test_oauth_mcp_challenges_with_resource_metadata_without_redirect",
           "qualname": "TestMcpGitHubOAuth.test_oauth_mcp_challenges_with_resource_metadata_without_redirect",
           "signature_hash": "1a4fec6fc697",
-          "source_span": "796-805",
+          "source_span": "793-802",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpGitHubOAuth.test_oauth_mcp_challenges_with_resource_metadata_without_redirect#1a4fec6fc697"
         },
         {
@@ -86014,7 +86186,7 @@
           "name": "test_oauth_mcp_probe_methods_return_oauth_challenge_without_redirect",
           "qualname": "TestMcpGitHubOAuth.test_oauth_mcp_probe_methods_return_oauth_challenge_without_redirect",
           "signature_hash": "2463ceaa8f67",
-          "source_span": "807-815",
+          "source_span": "804-812",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpGitHubOAuth.test_oauth_mcp_probe_methods_return_oauth_challenge_without_redirect#2463ceaa8f67"
         },
         {
@@ -86024,7 +86196,7 @@
           "name": "test_sse_message_post_paths_do_not_redirect_or_leak_to_root",
           "qualname": "TestMcpGitHubOAuth.test_sse_message_post_paths_do_not_redirect_or_leak_to_root",
           "signature_hash": "1c132322e9e3",
-          "source_span": "817-847",
+          "source_span": "814-844",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpGitHubOAuth.test_sse_message_post_paths_do_not_redirect_or_leak_to_root#1c132322e9e3"
         },
         {
@@ -86034,7 +86206,7 @@
           "name": "test_oauth_mode_keeps_static_bearer_without_redirect_on_both_mcp_paths",
           "qualname": "TestMcpGitHubOAuth.test_oauth_mode_keeps_static_bearer_without_redirect_on_both_mcp_paths",
           "signature_hash": "2b9bb7d51436",
-          "source_span": "849-868",
+          "source_span": "846-865",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpGitHubOAuth.test_oauth_mode_keeps_static_bearer_without_redirect_on_both_mcp_paths#2b9bb7d51436"
         },
         {
@@ -86044,7 +86216,7 @@
           "name": "test_oauth_route_rejects_static_bearer_token",
           "qualname": "TestMcpGitHubOAuth.test_oauth_route_rejects_static_bearer_token",
           "signature_hash": "f996310a2da1",
-          "source_span": "870-889",
+          "source_span": "867-886",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpGitHubOAuth.test_oauth_route_rejects_static_bearer_token#f996310a2da1"
         },
         {
@@ -86054,7 +86226,7 @@
           "name": "test_static_route_rejects_oauth_looking_token_without_github_network",
           "qualname": "TestMcpGitHubOAuth.test_static_route_rejects_oauth_looking_token_without_github_network",
           "signature_hash": "dc7e9b1dec2c",
-          "source_span": "891-909",
+          "source_span": "888-906",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpGitHubOAuth.test_static_route_rejects_oauth_looking_token_without_github_network#dc7e9b1dec2c"
         },
         {
@@ -86064,7 +86236,7 @@
           "name": "test_oauth_mode_keeps_sse_on_static_bearer_only",
           "qualname": "TestMcpGitHubOAuth.test_oauth_mode_keeps_sse_on_static_bearer_only",
           "signature_hash": "68c01d619dba",
-          "source_span": "911-936",
+          "source_span": "908-933",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpGitHubOAuth.test_oauth_mode_keeps_sse_on_static_bearer_only#68c01d619dba"
         },
         {
@@ -86074,7 +86246,7 @@
           "name": "test_oauth_sse_gate_is_explicitly_absent",
           "qualname": "TestMcpGitHubOAuth.test_oauth_sse_gate_is_explicitly_absent",
           "signature_hash": "1fbe1af4758f",
-          "source_span": "938-955",
+          "source_span": "935-952",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpGitHubOAuth.test_oauth_sse_gate_is_explicitly_absent#1fbe1af4758f"
         }
       ]
@@ -86144,7 +86316,7 @@
       "classification": "test",
       "criticality": "P0",
       "flags": {
-        "concurrency_boundary": false,
+        "concurrency_boundary": true,
         "deploy_security_boundary": false,
         "network_boundary": false,
         "parser_boundary": true,
@@ -86269,21 +86441,153 @@
             "pytest.mark.fault"
           ],
           "kind": "function",
-          "name": "test_cache_starts_empty_when_persistent_file_is_malformed",
-          "qualname": "test_cache_starts_empty_when_persistent_file_is_malformed",
-          "signature_hash": "7e76cee754f3",
+          "name": "test_cache_rejects_malformed_persistent_file",
+          "qualname": "test_cache_rejects_malformed_persistent_file",
+          "signature_hash": "ee2b4597e622",
           "source_span": "134-141",
-          "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_oauth_client_cache:test_cache_starts_empty_when_persistent_file_is_malformed#7e76cee754f3"
+          "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_oauth_client_cache:test_cache_rejects_malformed_persistent_file#ee2b4597e622"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "scenario",
+          "qualname": "test_cache_rejects_malformed_persistent_file.scenario",
+          "signature_hash": "79f812038c26",
+          "source_span": "135-138",
+          "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_oauth_client_cache:test_cache_rejects_malformed_persistent_file.scenario#79f812038c26"
+        },
+        {
+          "async": false,
+          "decorators": [
+            "pytest.mark.fault"
+          ],
+          "kind": "function",
+          "name": "test_persistent_put_failure_does_not_update_hot_cache",
+          "qualname": "test_persistent_put_failure_does_not_update_hot_cache",
+          "signature_hash": "587c11a901a5",
+          "source_span": "145-160",
+          "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_oauth_client_cache:test_persistent_put_failure_does_not_update_hot_cache#587c11a901a5"
         },
         {
           "async": true,
           "decorators": [],
           "kind": "method",
           "name": "scenario",
-          "qualname": "test_cache_starts_empty_when_persistent_file_is_malformed.scenario",
+          "qualname": "test_persistent_put_failure_does_not_update_hot_cache.scenario",
           "signature_hash": "f8981a9a7e7c",
-          "source_span": "135-138",
-          "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_oauth_client_cache:test_cache_starts_empty_when_persistent_file_is_malformed.scenario#f8981a9a7e7c"
+          "source_span": "146-157",
+          "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_oauth_client_cache:test_persistent_put_failure_does_not_update_hot_cache.scenario#f8981a9a7e7c"
+        },
+        {
+          "async": false,
+          "decorators": [
+            "pytest.mark.fault"
+          ],
+          "kind": "function",
+          "name": "test_persistent_delete_failure_does_not_update_hot_cache",
+          "qualname": "test_persistent_delete_failure_does_not_update_hot_cache",
+          "signature_hash": "50eb23a37a55",
+          "source_span": "164-186",
+          "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_oauth_client_cache:test_persistent_delete_failure_does_not_update_hot_cache#50eb23a37a55"
+        },
+        {
+          "async": true,
+          "decorators": [],
+          "kind": "method",
+          "name": "scenario",
+          "qualname": "test_persistent_delete_failure_does_not_update_hot_cache.scenario",
+          "signature_hash": "f8981a9a7e7c",
+          "source_span": "165-183",
+          "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_oauth_client_cache:test_persistent_delete_failure_does_not_update_hot_cache.scenario#f8981a9a7e7c"
+        },
+        {
+          "async": false,
+          "decorators": [
+            "pytest.mark.fault"
+          ],
+          "kind": "function",
+          "name": "test_persistent_target_replaced_by_directory_grants_no_new_client",
+          "qualname": "test_persistent_target_replaced_by_directory_grants_no_new_client",
+          "signature_hash": "2048f2cb5da6",
+          "source_span": "190-205",
+          "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_oauth_client_cache:test_persistent_target_replaced_by_directory_grants_no_new_client#2048f2cb5da6"
+        },
+        {
+          "async": true,
+          "decorators": [],
+          "kind": "method",
+          "name": "scenario",
+          "qualname": "test_persistent_target_replaced_by_directory_grants_no_new_client.scenario",
+          "signature_hash": "f8981a9a7e7c",
+          "source_span": "191-202",
+          "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_oauth_client_cache:test_persistent_target_replaced_by_directory_grants_no_new_client.scenario#f8981a9a7e7c"
+        },
+        {
+          "async": false,
+          "decorators": [
+            "pytest.mark.fault"
+          ],
+          "kind": "function",
+          "name": "test_persistent_write_failure_leaves_no_cache_temp_files",
+          "qualname": "test_persistent_write_failure_leaves_no_cache_temp_files",
+          "signature_hash": "bfe47403adba",
+          "source_span": "209-223",
+          "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_oauth_client_cache:test_persistent_write_failure_leaves_no_cache_temp_files#bfe47403adba"
+        },
+        {
+          "async": true,
+          "decorators": [],
+          "kind": "method",
+          "name": "scenario",
+          "qualname": "test_persistent_write_failure_leaves_no_cache_temp_files.scenario",
+          "signature_hash": "f8981a9a7e7c",
+          "source_span": "210-220",
+          "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_oauth_client_cache:test_persistent_write_failure_leaves_no_cache_temp_files.scenario#f8981a9a7e7c"
+        },
+        {
+          "async": false,
+          "decorators": [
+            "pytest.mark.fault"
+          ],
+          "kind": "function",
+          "name": "test_concurrent_cache_instances_merge_durable_registrations",
+          "qualname": "test_concurrent_cache_instances_merge_durable_registrations",
+          "signature_hash": "b6c25b38e126",
+          "source_span": "227-258",
+          "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_oauth_client_cache:test_concurrent_cache_instances_merge_durable_registrations#b6c25b38e126"
+        },
+        {
+          "async": true,
+          "decorators": [],
+          "kind": "method",
+          "name": "scenario",
+          "qualname": "test_concurrent_cache_instances_merge_durable_registrations.scenario",
+          "signature_hash": "f8981a9a7e7c",
+          "source_span": "228-255",
+          "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_oauth_client_cache:test_concurrent_cache_instances_merge_durable_registrations.scenario#f8981a9a7e7c"
+        },
+        {
+          "async": false,
+          "decorators": [
+            "pytest.mark.fault"
+          ],
+          "kind": "function",
+          "name": "test_duplicate_persistent_client_registration_replaces_atomically",
+          "qualname": "test_duplicate_persistent_client_registration_replaces_atomically",
+          "signature_hash": "9b5f336707c6",
+          "source_span": "262-281",
+          "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_oauth_client_cache:test_duplicate_persistent_client_registration_replaces_atomically#9b5f336707c6"
+        },
+        {
+          "async": true,
+          "decorators": [],
+          "kind": "method",
+          "name": "scenario",
+          "qualname": "test_duplicate_persistent_client_registration_replaces_atomically.scenario",
+          "signature_hash": "f8981a9a7e7c",
+          "source_span": "263-278",
+          "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_oauth_client_cache:test_duplicate_persistent_client_registration_replaces_atomically.scenario#f8981a9a7e7c"
         }
       ]
     },
@@ -88157,7 +88461,7 @@
       "classification": "test",
       "criticality": "P2",
       "flags": {
-        "concurrency_boundary": false,
+        "concurrency_boundary": true,
         "deploy_security_boundary": false,
         "network_boundary": false,
         "parser_boundary": true,
@@ -88253,6 +88557,26 @@
           "signature_hash": "0b7bf0831956",
           "source_span": "107-120",
           "stable_id": "py:deepresearch_flow.paper.tests.test_active_window:test_next_active_start_returns_expected_times#0b7bf0831956"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "test_active_window_handles_dst_fold_without_wrongly_rejecting_valid_local_time",
+          "qualname": "test_active_window_handles_dst_fold_without_wrongly_rejecting_valid_local_time",
+          "signature_hash": "dc499acc3fbf",
+          "source_span": "123-130",
+          "stable_id": "py:deepresearch_flow.paper.tests.test_active_window:test_active_window_handles_dst_fold_without_wrongly_rejecting_valid_local_time#dc499acc3fbf"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "test_next_active_start_after_forward_clock_jump_returns_future_boundary",
+          "qualname": "test_next_active_start_after_forward_clock_jump_returns_future_boundary",
+          "signature_hash": "68ffac402008",
+          "source_span": "133-141",
+          "stable_id": "py:deepresearch_flow.paper.tests.test_active_window:test_next_active_start_after_forward_clock_jump_returns_future_boundary#68ffac402008"
         }
       ]
     },
@@ -93768,6 +94092,46 @@
           "signature_hash": "6c0238ff9d73",
           "source_span": "554-556",
           "stable_id": "py:deepresearch_flow.paper.tests.test_weighted_routing:test_select_runtime_route_keeps_default_no_window_behavior._FrozenDateTime.now#6c0238ff9d73"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "test_route_pool_malformed_upstream_quota_payload_does_not_cool_down_route",
+          "qualname": "test_route_pool_malformed_upstream_quota_payload_does_not_cool_down_route",
+          "signature_hash": "7978b7fb9254",
+          "source_span": "572-630",
+          "stable_id": "py:deepresearch_flow.paper.tests.test_weighted_routing:test_route_pool_malformed_upstream_quota_payload_does_not_cool_down_route#7978b7fb9254"
+        },
+        {
+          "async": true,
+          "decorators": [],
+          "kind": "method",
+          "name": "_run",
+          "qualname": "test_route_pool_malformed_upstream_quota_payload_does_not_cool_down_route._run",
+          "signature_hash": "31fcc74b6c77",
+          "source_span": "621-625",
+          "stable_id": "py:deepresearch_flow.paper.tests.test_weighted_routing:test_route_pool_malformed_upstream_quota_payload_does_not_cool_down_route._run#31fcc74b6c77"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "test_route_pool_get_cancellation_does_not_poison_future_selection",
+          "qualname": "test_route_pool_get_cancellation_does_not_poison_future_selection",
+          "signature_hash": "712fe1678111",
+          "source_span": "633-688",
+          "stable_id": "py:deepresearch_flow.paper.tests.test_weighted_routing:test_route_pool_get_cancellation_does_not_poison_future_selection#712fe1678111"
+        },
+        {
+          "async": true,
+          "decorators": [],
+          "kind": "method",
+          "name": "_run",
+          "qualname": "test_route_pool_get_cancellation_does_not_poison_future_selection._run",
+          "signature_hash": "31fcc74b6c77",
+          "source_span": "674-685",
+          "stable_id": "py:deepresearch_flow.paper.tests.test_weighted_routing:test_route_pool_get_cancellation_does_not_poison_future_selection._run#31fcc74b6c77"
         }
       ]
     },
@@ -113800,7 +114164,7 @@
           "name": "_complete_manifest",
           "qualname": "_complete_manifest",
           "signature_hash": "6f9c42a3931a",
-          "source_span": "85-150",
+          "source_span": "85-151",
           "stable_id": "py:tests.verification.test_check_manifest_coverage:_complete_manifest#6f9c42a3931a"
         },
         {
@@ -113810,7 +114174,7 @@
           "name": "_write_case",
           "qualname": "_write_case",
           "signature_hash": "1e6e43737ccd",
-          "source_span": "153-158",
+          "source_span": "154-159",
           "stable_id": "py:tests.verification.test_check_manifest_coverage:_write_case#1e6e43737ccd"
         },
         {
@@ -113820,7 +114184,7 @@
           "name": "test_manifest_checker_accepts_complete_observable_coverage",
           "qualname": "test_manifest_checker_accepts_complete_observable_coverage",
           "signature_hash": "1eb46f5b3893",
-          "source_span": "161-179",
+          "source_span": "162-180",
           "stable_id": "py:tests.verification.test_check_manifest_coverage:test_manifest_checker_accepts_complete_observable_coverage#1eb46f5b3893"
         },
         {
@@ -113830,7 +114194,7 @@
           "name": "test_manifest_checker_rejects_missing_path_symbol_config_and_artifact",
           "qualname": "test_manifest_checker_rejects_missing_path_symbol_config_and_artifact",
           "signature_hash": "2fc3df0dd10c",
-          "source_span": "182-207",
+          "source_span": "183-208",
           "stable_id": "py:tests.verification.test_check_manifest_coverage:test_manifest_checker_rejects_missing_path_symbol_config_and_artifact#2fc3df0dd10c"
         },
         {
@@ -113840,8 +114204,28 @@
           "name": "test_manifest_checker_rejects_p0_without_model_conformance_or_gap",
           "qualname": "test_manifest_checker_rejects_p0_without_model_conformance_or_gap",
           "signature_hash": "2cee3e8f926b",
-          "source_span": "210-232",
+          "source_span": "211-233",
           "stable_id": "py:tests.verification.test_check_manifest_coverage:test_manifest_checker_rejects_p0_without_model_conformance_or_gap#2cee3e8f926b"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "test_manifest_checker_rejects_temporary_gap_records",
+          "qualname": "test_manifest_checker_rejects_temporary_gap_records",
+          "signature_hash": "171cf4f40cd1",
+          "source_span": "236-256",
+          "stable_id": "py:tests.verification.test_check_manifest_coverage:test_manifest_checker_rejects_temporary_gap_records#171cf4f40cd1"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "test_manifest_checker_rejects_p0_without_executable_coverage",
+          "qualname": "test_manifest_checker_rejects_p0_without_executable_coverage",
+          "signature_hash": "03d999b3ac06",
+          "source_span": "259-283",
+          "stable_id": "py:tests.verification.test_check_manifest_coverage:test_manifest_checker_rejects_p0_without_executable_coverage#03d999b3ac06"
         },
         {
           "async": false,
@@ -113850,7 +114234,7 @@
           "name": "test_manifest_checker_rejects_missing_evidence_path_and_duplicate_ids",
           "qualname": "test_manifest_checker_rejects_missing_evidence_path_and_duplicate_ids",
           "signature_hash": "af1f640c87ab",
-          "source_span": "235-264",
+          "source_span": "286-315",
           "stable_id": "py:tests.verification.test_check_manifest_coverage:test_manifest_checker_rejects_missing_evidence_path_and_duplicate_ids#af1f640c87ab"
         },
         {
@@ -113860,7 +114244,7 @@
           "name": "test_bootstrap_manifest_generator_emits_checker_acceptable_manifest",
           "qualname": "test_bootstrap_manifest_generator_emits_checker_acceptable_manifest",
           "signature_hash": "b3edaaad643c",
-          "source_span": "267-304",
+          "source_span": "318-360",
           "stable_id": "py:tests.verification.test_check_manifest_coverage:test_bootstrap_manifest_generator_emits_checker_acceptable_manifest#b3edaaad643c"
         }
       ]
@@ -113923,6 +114307,191 @@
           "signature_hash": "2eb80970f474",
           "source_span": "111-129",
           "stable_id": "py:tests.verification.test_generate_inventory:test_inventory_check_reports_stale_generated_file#2eb80970f474"
+        }
+      ]
+    },
+    {
+      "classification": "test",
+      "criticality": "P2",
+      "flags": {
+        "concurrency_boundary": false,
+        "deploy_security_boundary": false,
+        "network_boundary": false,
+        "parser_boundary": false,
+        "persistence_boundary": false,
+        "release_publish_boundary": false,
+        "renderer_boundary": false,
+        "runtime_config_boundary": false,
+        "secret_boundary": false,
+        "security_boundary": false,
+        "suspected_boundary_unclassified": false
+      },
+      "kind": "python_test",
+      "path": "tests/verification/test_smt_formal_gate.py",
+      "symbols": [
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "_run",
+          "qualname": "_run",
+          "signature_hash": "3e1a8cb60b76",
+          "source_span": "27-35",
+          "stable_id": "py:tests.verification.test_smt_formal_gate:_run#3e1a8cb60b76"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "test_smt_gate_exhaustively_checks_all_core_state_machines",
+          "qualname": "test_smt_gate_exhaustively_checks_all_core_state_machines",
+          "signature_hash": "11cf0e636089",
+          "source_span": "38-53",
+          "stable_id": "py:tests.verification.test_smt_formal_gate:test_smt_gate_exhaustively_checks_all_core_state_machines#11cf0e636089"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "test_smt_gate_reports_counterexamples_for_injected_bugs",
+          "qualname": "test_smt_gate_reports_counterexamples_for_injected_bugs",
+          "signature_hash": "3e0add8b310a",
+          "source_span": "56-66",
+          "stable_id": "py:tests.verification.test_smt_formal_gate:test_smt_gate_reports_counterexamples_for_injected_bugs#3e0add8b310a"
+        }
+      ]
+    },
+    {
+      "classification": "test",
+      "criticality": "P2",
+      "flags": {
+        "concurrency_boundary": false,
+        "deploy_security_boundary": false,
+        "network_boundary": false,
+        "parser_boundary": false,
+        "persistence_boundary": false,
+        "release_publish_boundary": false,
+        "renderer_boundary": false,
+        "runtime_config_boundary": false,
+        "secret_boundary": false,
+        "security_boundary": false,
+        "suspected_boundary_unclassified": false
+      },
+      "kind": "python_test",
+      "path": "tests/verification/test_state_gap_discovery.py",
+      "symbols": [
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "_run",
+          "qualname": "_run",
+          "signature_hash": "5310a3435492",
+          "source_span": "13-16",
+          "stable_id": "py:tests.verification.test_state_gap_discovery:_run#5310a3435492"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "test_state_gap_discovery_reports_uncovered_scenarios",
+          "qualname": "test_state_gap_discovery_reports_uncovered_scenarios",
+          "signature_hash": "0853008b8bc2",
+          "source_span": "19-60",
+          "stable_id": "py:tests.verification.test_state_gap_discovery:test_state_gap_discovery_reports_uncovered_scenarios#0853008b8bc2"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "test_state_gap_discovery_accepts_complete_obligation_catalog",
+          "qualname": "test_state_gap_discovery_accepts_complete_obligation_catalog",
+          "signature_hash": "c27414b43031",
+          "source_span": "63-114",
+          "stable_id": "py:tests.verification.test_state_gap_discovery:test_state_gap_discovery_accepts_complete_obligation_catalog#c27414b43031"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "test_state_gap_discovery_treats_declared_unhandled_states_as_gaps",
+          "qualname": "test_state_gap_discovery_treats_declared_unhandled_states_as_gaps",
+          "signature_hash": "5d510d77cd8d",
+          "source_span": "117-158",
+          "stable_id": "py:tests.verification.test_state_gap_discovery:test_state_gap_discovery_treats_declared_unhandled_states_as_gaps#5d510d77cd8d"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "test_state_gap_discovery_rejects_ambiguous_highest_priority_matches",
+          "qualname": "test_state_gap_discovery_rejects_ambiguous_highest_priority_matches",
+          "signature_hash": "c80f3f55d12c",
+          "source_span": "161-202",
+          "stable_id": "py:tests.verification.test_state_gap_discovery:test_state_gap_discovery_rejects_ambiguous_highest_priority_matches#c80f3f55d12c"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "test_state_gap_discovery_requires_evidence_for_implemented_obligations",
+          "qualname": "test_state_gap_discovery_requires_evidence_for_implemented_obligations",
+          "signature_hash": "d5dccf97098d",
+          "source_span": "205-235",
+          "stable_id": "py:tests.verification.test_state_gap_discovery:test_state_gap_discovery_requires_evidence_for_implemented_obligations#d5dccf97098d"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "test_state_gap_discovery_rejects_empty_subsystems",
+          "qualname": "test_state_gap_discovery_rejects_empty_subsystems",
+          "signature_hash": "e393168a3f3e",
+          "source_span": "238-250",
+          "stable_id": "py:tests.verification.test_state_gap_discovery:test_state_gap_discovery_rejects_empty_subsystems#e393168a3f3e"
+        }
+      ]
+    },
+    {
+      "classification": "test",
+      "criticality": "P2",
+      "flags": {
+        "concurrency_boundary": false,
+        "deploy_security_boundary": false,
+        "network_boundary": false,
+        "parser_boundary": true,
+        "persistence_boundary": false,
+        "release_publish_boundary": false,
+        "renderer_boundary": false,
+        "runtime_config_boundary": false,
+        "secret_boundary": false,
+        "security_boundary": false,
+        "suspected_boundary_unclassified": false
+      },
+      "kind": "python_test",
+      "path": "tests/verification/test_tlc_formal_gate.py",
+      "symbols": [
+        {
+          "async": false,
+          "decorators": [
+            "pytest.mark.skipif(os.environ.get('DRFLOW_RUN_LOCAL_FORMAL') != '1', reason='local formal TLC gate is intentionally excluded from default pytest/CI')"
+          ],
+          "kind": "function",
+          "name": "test_tlc_exhaustively_checks_reachable_states_for_core_state_machines",
+          "qualname": "test_tlc_exhaustively_checks_reachable_states_for_core_state_machines",
+          "signature_hash": "2c1de0753de5",
+          "source_span": "33-52",
+          "stable_id": "py:tests.verification.test_tlc_formal_gate:test_tlc_exhaustively_checks_reachable_states_for_core_state_machines#2c1de0753de5"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "test_tlc_parser_rejects_incomplete_state_graph",
+          "qualname": "test_tlc_parser_rejects_incomplete_state_graph",
+          "signature_hash": "86160326e023",
+          "source_span": "55-72",
+          "stable_id": "py:tests.verification.test_tlc_formal_gate:test_tlc_parser_rejects_incomplete_state_graph#86160326e023"
         }
       ]
     },
@@ -114661,6 +115230,918 @@
     },
     {
       "classification": "source",
+      "criticality": "P2",
+      "flags": {
+        "concurrency_boundary": false,
+        "deploy_security_boundary": false,
+        "network_boundary": false,
+        "parser_boundary": false,
+        "persistence_boundary": true,
+        "release_publish_boundary": false,
+        "renderer_boundary": false,
+        "runtime_config_boundary": false,
+        "secret_boundary": false,
+        "security_boundary": false,
+        "suspected_boundary_unclassified": false
+      },
+      "kind": "python_module",
+      "path": "tools/formal/discover_state_gaps.py",
+      "symbols": [
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "_load_catalog",
+          "qualname": "_load_catalog",
+          "signature_hash": "86a9b783a1d4",
+          "source_span": "25-33",
+          "stable_id": "py:tools.formal.discover_state_gaps:_load_catalog#86a9b783a1d4"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "_list",
+          "qualname": "_list",
+          "signature_hash": "77488cbbbfd7",
+          "source_span": "36-37",
+          "stable_id": "py:tools.formal.discover_state_gaps:_list#77488cbbbfd7"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "_dict",
+          "qualname": "_dict",
+          "signature_hash": "6dce83662404",
+          "source_span": "40-41",
+          "stable_id": "py:tools.formal.discover_state_gaps:_dict#6dce83662404"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "_allowed_values",
+          "qualname": "_allowed_values",
+          "signature_hash": "48d72e62e641",
+          "source_span": "44-47",
+          "stable_id": "py:tools.formal.discover_state_gaps:_allowed_values#48d72e62e641"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "_state_matches",
+          "qualname": "_state_matches",
+          "signature_hash": "a4db1ce4cf27",
+          "source_span": "50-57",
+          "stable_id": "py:tools.formal.discover_state_gaps:_state_matches#a4db1ce4cf27"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "_enumerate_states",
+          "qualname": "_enumerate_states",
+          "signature_hash": "502eecb613a8",
+          "source_span": "60-69",
+          "stable_id": "py:tools.formal.discover_state_gaps:_enumerate_states#502eecb613a8"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "_status",
+          "qualname": "_status",
+          "signature_hash": "c22814007f2d",
+          "source_span": "72-73",
+          "stable_id": "py:tools.formal.discover_state_gaps:_status#c22814007f2d"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "_priority",
+          "qualname": "_priority",
+          "signature_hash": "b8b14ec733b0",
+          "source_span": "76-83",
+          "stable_id": "py:tools.formal.discover_state_gaps:_priority#b8b14ec733b0"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "_evidence_paths",
+          "qualname": "_evidence_paths",
+          "signature_hash": "af10dd432b58",
+          "source_span": "86-92",
+          "stable_id": "py:tools.formal.discover_state_gaps:_evidence_paths#af10dd432b58"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "_check_obligation_schema",
+          "qualname": "_check_obligation_schema",
+          "signature_hash": "3e62d991093b",
+          "source_span": "95-125",
+          "stable_id": "py:tools.formal.discover_state_gaps:_check_obligation_schema#3e62d991093b"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "discover",
+          "qualname": "discover",
+          "signature_hash": "60f34e9c8db1",
+          "source_span": "128-222",
+          "stable_id": "py:tools.formal.discover_state_gaps:discover#60f34e9c8db1"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "_print_text",
+          "qualname": "_print_text",
+          "signature_hash": "e3451230632b",
+          "source_span": "225-260",
+          "stable_id": "py:tools.formal.discover_state_gaps:_print_text#e3451230632b"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "main",
+          "qualname": "main",
+          "signature_hash": "9b8e693c15ea",
+          "source_span": "263-312",
+          "stable_id": "py:tools.formal.discover_state_gaps:main#9b8e693c15ea"
+        }
+      ]
+    },
+    {
+      "classification": "source",
+      "criticality": "P2",
+      "flags": {
+        "concurrency_boundary": true,
+        "deploy_security_boundary": false,
+        "network_boundary": true,
+        "parser_boundary": false,
+        "persistence_boundary": true,
+        "release_publish_boundary": false,
+        "renderer_boundary": false,
+        "runtime_config_boundary": false,
+        "secret_boundary": false,
+        "security_boundary": true,
+        "suspected_boundary_unclassified": false
+      },
+      "kind": "python_module",
+      "path": "tools/formal/smt/check_all_smt_models.py",
+      "symbols": [
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "_bool_vars",
+          "qualname": "_bool_vars",
+          "signature_hash": "9d8ee5666ad9",
+          "source_span": "39-40",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:_bool_vars#9d8ee5666ad9"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "oauth_client_cache_model",
+          "qualname": "oauth_client_cache_model",
+          "signature_hash": "c7cf7a549ca2",
+          "source_span": "43-169",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model#c7cf7a549ca2"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "register_ok",
+          "qualname": "oauth_client_cache_model.register_ok",
+          "signature_hash": "f98340509296",
+          "source_span": "48-64",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model.register_ok#f98340509296"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "partial_register",
+          "qualname": "oauth_client_cache_model.partial_register",
+          "signature_hash": "209c28129849",
+          "source_span": "66-80",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model.partial_register#209c28129849"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "issue",
+          "qualname": "oauth_client_cache_model.issue",
+          "signature_hash": "1c76c9284c93",
+          "source_span": "82-92",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model.issue#1c76c9284c93"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "revoke",
+          "qualname": "oauth_client_cache_model.revoke",
+          "signature_hash": "8be064852e70",
+          "source_span": "94-97",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model.revoke#8be064852e70"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "expire",
+          "qualname": "oauth_client_cache_model.expire",
+          "signature_hash": "90517e952a72",
+          "source_span": "99-102",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model.expire#90517e952a72"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "resource_mismatch",
+          "qualname": "oauth_client_cache_model.resource_mismatch",
+          "signature_hash": "794fd0c428d6",
+          "source_span": "104-111",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model.resource_mismatch#794fd0c428d6"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "restart",
+          "qualname": "oauth_client_cache_model.restart",
+          "signature_hash": "a815895ecd87",
+          "source_span": "113-125",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model.restart#a815895ecd87"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "invariant",
+          "qualname": "oauth_client_cache_model.invariant",
+          "signature_hash": "80111edf3729",
+          "source_span": "127-138",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model.invariant#80111edf3729"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "recover",
+          "qualname": "oauth_client_cache_model.recover",
+          "signature_hash": "f33293fe765d",
+          "source_span": "140-152",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model.recover#f33293fe765d"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "provider_routing_model",
+          "qualname": "provider_routing_model",
+          "signature_hash": "d2a35e59d7b8",
+          "source_span": "172-311",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:provider_routing_model#d2a35e59d7b8"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "request_chat",
+          "qualname": "provider_routing_model.request_chat",
+          "signature_hash": "11cf5a994e42",
+          "source_span": "183-191",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:provider_routing_model.request_chat#11cf5a994e42"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "request_embed",
+          "qualname": "provider_routing_model.request_embed",
+          "signature_hash": "80233f6a07cf",
+          "source_span": "193-201",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:provider_routing_model.request_embed#80233f6a07cf"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "route_chat",
+          "qualname": "provider_routing_model.route_chat",
+          "signature_hash": "f78469317f4a",
+          "source_span": "203-213",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:provider_routing_model.route_chat#f78469317f4a"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "route_embed",
+          "qualname": "provider_routing_model.route_embed",
+          "signature_hash": "089fc2b8914a",
+          "source_span": "215-226",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:provider_routing_model.route_embed#089fc2b8914a"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "degrade",
+          "qualname": "provider_routing_model.degrade",
+          "signature_hash": "15907dc61ac0",
+          "source_span": "228-238",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:provider_routing_model.degrade#15907dc61ac0"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "outage",
+          "qualname": "provider_routing_model.outage",
+          "signature_hash": "c98883d0a624",
+          "source_span": "240-243",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:provider_routing_model.outage#c98883d0a624"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "reset",
+          "qualname": "provider_routing_model.reset",
+          "signature_hash": "a18908dff182",
+          "source_span": "245-257",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:provider_routing_model.reset#a18908dff182"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "invariant",
+          "qualname": "provider_routing_model.invariant",
+          "signature_hash": "80111edf3729",
+          "source_span": "259-280",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:provider_routing_model.invariant#80111edf3729"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "recover",
+          "qualname": "provider_routing_model.recover",
+          "signature_hash": "f33293fe765d",
+          "source_span": "282-294",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:provider_routing_model.recover#f33293fe765d"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "semantic_ingest_model",
+          "qualname": "semantic_ingest_model",
+          "signature_hash": "12d61ccaabc2",
+          "source_span": "314-395",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:semantic_ingest_model#12d61ccaabc2"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "set_stage",
+          "qualname": "semantic_ingest_model.set_stage",
+          "signature_hash": "3748846831b7",
+          "source_span": "319-326",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:semantic_ingest_model.set_stage#3748846831b7"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "relation",
+          "qualname": "semantic_ingest_model.set_stage.relation",
+          "signature_hash": "3ba2e1097af0",
+          "source_span": "320-324",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:semantic_ingest_model.set_stage.relation#3ba2e1097af0"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "index",
+          "qualname": "semantic_ingest_model.index",
+          "signature_hash": "87cd68a530be",
+          "source_span": "328-335",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:semantic_ingest_model.index#87cd68a530be"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "commit",
+          "qualname": "semantic_ingest_model.commit",
+          "signature_hash": "e0c381a86558",
+          "source_span": "337-344",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:semantic_ingest_model.commit#e0c381a86558"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "fail",
+          "qualname": "semantic_ingest_model.fail",
+          "signature_hash": "2f66e4e84ff2",
+          "source_span": "346-352",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:semantic_ingest_model.fail#2f66e4e84ff2"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "invariant",
+          "qualname": "semantic_ingest_model.invariant",
+          "signature_hash": "80111edf3729",
+          "source_span": "354-363",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:semantic_ingest_model.invariant#80111edf3729"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "recover",
+          "qualname": "semantic_ingest_model.recover",
+          "signature_hash": "f33293fe765d",
+          "source_span": "365-378",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:semantic_ingest_model.recover#f33293fe765d"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "translation_scheduler_model",
+          "qualname": "translation_scheduler_model",
+          "signature_hash": "e870b4e0bb48",
+          "source_span": "398-516",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:translation_scheduler_model#e870b4e0bb48"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "start_node",
+          "qualname": "translation_scheduler_model.start_node",
+          "signature_hash": "ed3dc356de95",
+          "source_span": "406-418",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:translation_scheduler_model.start_node#ed3dc356de95"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "relation",
+          "qualname": "translation_scheduler_model.start_node.relation",
+          "signature_hash": "3ba2e1097af0",
+          "source_span": "407-416",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:translation_scheduler_model.start_node.relation#3ba2e1097af0"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "complete_node",
+          "qualname": "translation_scheduler_model.complete_node",
+          "signature_hash": "83d5a4e50bc0",
+          "source_span": "420-426",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:translation_scheduler_model.complete_node#83d5a4e50bc0"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "relation",
+          "qualname": "translation_scheduler_model.complete_node.relation",
+          "signature_hash": "3ba2e1097af0",
+          "source_span": "421-424",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:translation_scheduler_model.complete_node.relation#3ba2e1097af0"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "fail_node",
+          "qualname": "translation_scheduler_model.fail_node",
+          "signature_hash": "42d816f36d09",
+          "source_span": "428-434",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:translation_scheduler_model.fail_node#42d816f36d09"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "relation",
+          "qualname": "translation_scheduler_model.fail_node.relation",
+          "signature_hash": "3ba2e1097af0",
+          "source_span": "429-432",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:translation_scheduler_model.fail_node.relation#3ba2e1097af0"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "fallback_node",
+          "qualname": "translation_scheduler_model.fallback_node",
+          "signature_hash": "e38b844c3a46",
+          "source_span": "436-447",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:translation_scheduler_model.fallback_node#e38b844c3a46"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "relation",
+          "qualname": "translation_scheduler_model.fallback_node.relation",
+          "signature_hash": "3ba2e1097af0",
+          "source_span": "437-445",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:translation_scheduler_model.fallback_node.relation#3ba2e1097af0"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "terminal_fail",
+          "qualname": "translation_scheduler_model.terminal_fail",
+          "signature_hash": "a12c9ddd7503",
+          "source_span": "449-460",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:translation_scheduler_model.terminal_fail#a12c9ddd7503"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "relation",
+          "qualname": "translation_scheduler_model.terminal_fail.relation",
+          "signature_hash": "3ba2e1097af0",
+          "source_span": "450-458",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:translation_scheduler_model.terminal_fail.relation#3ba2e1097af0"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "enable_fallback",
+          "qualname": "translation_scheduler_model.enable_fallback",
+          "signature_hash": "5f664c30d303",
+          "source_span": "462-465",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:translation_scheduler_model.enable_fallback#5f664c30d303"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "cancel",
+          "qualname": "translation_scheduler_model.cancel",
+          "signature_hash": "ac22e0eafe72",
+          "source_span": "467-476",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:translation_scheduler_model.cancel#ac22e0eafe72"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "invariant",
+          "qualname": "translation_scheduler_model.invariant",
+          "signature_hash": "80111edf3729",
+          "source_span": "478-483",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:translation_scheduler_model.invariant#80111edf3729"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "recover",
+          "qualname": "translation_scheduler_model.recover",
+          "signature_hash": "f33293fe765d",
+          "source_span": "485-494",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:translation_scheduler_model.recover#f33293fe765d"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "run_all",
+          "qualname": "run_all",
+          "signature_hash": "e8e6004dd4fd",
+          "source_span": "527-535",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:run_all#e8e6004dd4fd"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "main",
+          "qualname": "main",
+          "signature_hash": "9b8e693c15ea",
+          "source_span": "538-564",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:main#9b8e693c15ea"
+        }
+      ]
+    },
+    {
+      "classification": "source",
+      "criticality": "P2",
+      "flags": {
+        "concurrency_boundary": true,
+        "deploy_security_boundary": false,
+        "network_boundary": false,
+        "parser_boundary": false,
+        "persistence_boundary": false,
+        "release_publish_boundary": false,
+        "renderer_boundary": false,
+        "runtime_config_boundary": false,
+        "secret_boundary": false,
+        "security_boundary": false,
+        "suspected_boundary_unclassified": false
+      },
+      "kind": "python_module",
+      "path": "tools/formal/smt/common.py",
+      "symbols": [
+        {
+          "async": false,
+          "decorators": [
+            "dataclass(frozen=True)"
+          ],
+          "kind": "class",
+          "name": "Var",
+          "qualname": "Var",
+          "signature_hash": "c653fc528f18",
+          "source_span": "31-33",
+          "stable_id": "py:tools.formal.smt.common:Var#c653fc528f18"
+        },
+        {
+          "async": false,
+          "decorators": [
+            "dataclass(frozen=True)"
+          ],
+          "kind": "class",
+          "name": "Action",
+          "qualname": "Action",
+          "signature_hash": "380d78685293",
+          "source_span": "37-40",
+          "stable_id": "py:tools.formal.smt.common:Action#380d78685293"
+        },
+        {
+          "async": false,
+          "decorators": [
+            "dataclass(frozen=True)"
+          ],
+          "kind": "class",
+          "name": "ModelSpec",
+          "qualname": "ModelSpec",
+          "signature_hash": "b3871c9e71f9",
+          "source_span": "44-51",
+          "stable_id": "py:tools.formal.smt.common:ModelSpec#b3871c9e71f9"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "bool_domain",
+          "qualname": "bool_domain",
+          "signature_hash": "d842ed8fad9b",
+          "source_span": "54-55",
+          "stable_id": "py:tools.formal.smt.common:bool_domain#d842ed8fad9b"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "domain_constraints",
+          "qualname": "domain_constraints",
+          "signature_hash": "13ca2c8ffb4b",
+          "source_span": "58-59",
+          "stable_id": "py:tools.formal.smt.common:domain_constraints#13ca2c8ffb4b"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "state_vars",
+          "qualname": "state_vars",
+          "signature_hash": "b56afe0cdeb1",
+          "source_span": "62-63",
+          "stable_id": "py:tools.formal.smt.common:state_vars#b56afe0cdeb1"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "fix_state",
+          "qualname": "fix_state",
+          "signature_hash": "0ef4660228a1",
+          "source_span": "66-67",
+          "stable_id": "py:tools.formal.smt.common:fix_state#0ef4660228a1"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "eval_state",
+          "qualname": "eval_state",
+          "signature_hash": "58d434ea43d2",
+          "source_span": "70-73",
+          "stable_id": "py:tools.formal.smt.common:eval_state#58d434ea43d2"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "block_state",
+          "qualname": "block_state",
+          "signature_hash": "e9afbcd35dea",
+          "source_span": "76-79",
+          "stable_id": "py:tools.formal.smt.common:block_state#e9afbcd35dea"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "all_states",
+          "qualname": "all_states",
+          "signature_hash": "30548d4161ac",
+          "source_span": "82-83",
+          "stable_id": "py:tools.formal.smt.common:all_states#30548d4161ac"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "same_except",
+          "qualname": "same_except",
+          "signature_hash": "6ba1042685eb",
+          "source_span": "86-90",
+          "stable_id": "py:tools.formal.smt.common:same_except#6ba1042685eb"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "assign_all",
+          "qualname": "assign_all",
+          "signature_hash": "11d71ee1b8ea",
+          "source_span": "93-94",
+          "stable_id": "py:tools.formal.smt.common:assign_all#11d71ee1b8ea"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "count_equals",
+          "qualname": "count_equals",
+          "signature_hash": "c41cc950b74a",
+          "source_span": "97-98",
+          "stable_id": "py:tools.formal.smt.common:count_equals#c41cc950b74a"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "enumerate_relation_next_states",
+          "qualname": "enumerate_relation_next_states",
+          "signature_hash": "a9a88bd2eaad",
+          "source_span": "101-122",
+          "stable_id": "py:tools.formal.smt.common:enumerate_relation_next_states#a9a88bd2eaad"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "invariant_violation",
+          "qualname": "invariant_violation",
+          "signature_hash": "1065930be00e",
+          "source_span": "125-133",
+          "stable_id": "py:tools.formal.smt.common:invariant_violation#1065930be00e"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "recovery_violation",
+          "qualname": "recovery_violation",
+          "signature_hash": "69c589fbe91c",
+          "source_span": "136-164",
+          "stable_id": "py:tools.formal.smt.common:recovery_violation#69c589fbe91c"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "check_model",
+          "qualname": "check_model",
+          "signature_hash": "1e90902e4094",
+          "source_span": "167-240",
+          "stable_id": "py:tools.formal.smt.common:check_model#1e90902e4094"
+        }
+      ]
+    },
+    {
+      "classification": "source",
+      "criticality": "P2",
+      "flags": {
+        "concurrency_boundary": false,
+        "deploy_security_boundary": false,
+        "network_boundary": false,
+        "parser_boundary": true,
+        "persistence_boundary": false,
+        "release_publish_boundary": false,
+        "renderer_boundary": false,
+        "runtime_config_boundary": false,
+        "secret_boundary": false,
+        "security_boundary": false,
+        "suspected_boundary_unclassified": false
+      },
+      "kind": "python_module",
+      "path": "tools/formal/tlc/check_all_tlc_models.py",
+      "symbols": [
+        {
+          "async": false,
+          "decorators": [
+            "dataclass(frozen=True)"
+          ],
+          "kind": "class",
+          "name": "TlcModel",
+          "qualname": "TlcModel",
+          "signature_hash": "3ce125d313d3",
+          "source_span": "41-44",
+          "stable_id": "py:tools.formal.tlc.check_all_tlc_models:TlcModel#3ce125d313d3"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "resolve_jar",
+          "qualname": "resolve_jar",
+          "signature_hash": "a1f72b33e342",
+          "source_span": "47-51",
+          "stable_id": "py:tools.formal.tlc.check_all_tlc_models:resolve_jar#a1f72b33e342"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "parse_tlc_output",
+          "qualname": "parse_tlc_output",
+          "signature_hash": "404faba165fd",
+          "source_span": "54-90",
+          "stable_id": "py:tools.formal.tlc.check_all_tlc_models:parse_tlc_output#404faba165fd"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "run_model",
+          "qualname": "run_model",
+          "signature_hash": "8c247cf27b98",
+          "source_span": "93-112",
+          "stable_id": "py:tools.formal.tlc.check_all_tlc_models:run_model#8c247cf27b98"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "run_all",
+          "qualname": "run_all",
+          "signature_hash": "a87b5dc61c46",
+          "source_span": "115-134",
+          "stable_id": "py:tools.formal.tlc.check_all_tlc_models:run_all#a87b5dc61c46"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "main",
+          "qualname": "main",
+          "signature_hash": "9b8e693c15ea",
+          "source_span": "137-162",
+          "stable_id": "py:tools.formal.tlc.check_all_tlc_models:main#9b8e693c15ea"
+        }
+      ]
+    },
+    {
+      "classification": "source",
       "criticality": "P0",
       "flags": {
         "concurrency_boundary": false,
@@ -114826,7 +116307,7 @@
           "name": "_load_data",
           "qualname": "_load_data",
           "signature_hash": "be9f0060d7c1",
-          "source_span": "20-25",
+          "source_span": "21-26",
           "stable_id": "py:tools.verification.check_manifest_coverage:_load_data#be9f0060d7c1"
         },
         {
@@ -114836,7 +116317,7 @@
           "name": "_list",
           "qualname": "_list",
           "signature_hash": "77488cbbbfd7",
-          "source_span": "28-29",
+          "source_span": "29-30",
           "stable_id": "py:tools.verification.check_manifest_coverage:_list#77488cbbbfd7"
         },
         {
@@ -114846,7 +116327,7 @@
           "name": "_dict",
           "qualname": "_dict",
           "signature_hash": "6dce83662404",
-          "source_span": "32-33",
+          "source_span": "33-34",
           "stable_id": "py:tools.verification.check_manifest_coverage:_dict#6dce83662404"
         },
         {
@@ -114856,7 +116337,7 @@
           "name": "_coverage_entries",
           "qualname": "_coverage_entries",
           "signature_hash": "b8f78739d63d",
-          "source_span": "36-47",
+          "source_span": "37-48",
           "stable_id": "py:tools.verification.check_manifest_coverage:_coverage_entries#b8f78739d63d"
         },
         {
@@ -114866,7 +116347,7 @@
           "name": "_manifest_symbol_ids",
           "qualname": "_manifest_symbol_ids",
           "signature_hash": "7c2f6d983321",
-          "source_span": "50-55",
+          "source_span": "51-56",
           "stable_id": "py:tools.verification.check_manifest_coverage:_manifest_symbol_ids#7c2f6d983321"
         },
         {
@@ -114876,7 +116357,7 @@
           "name": "_manifest_symbol_by_id",
           "qualname": "_manifest_symbol_by_id",
           "signature_hash": "731baaa0b62b",
-          "source_span": "58-63",
+          "source_span": "59-64",
           "stable_id": "py:tools.verification.check_manifest_coverage:_manifest_symbol_by_id#731baaa0b62b"
         },
         {
@@ -114886,7 +116367,7 @@
           "name": "_add_duplicate_errors",
           "qualname": "_add_duplicate_errors",
           "signature_hash": "53a2e8b0885e",
-          "source_span": "66-74",
+          "source_span": "67-75",
           "stable_id": "py:tools.verification.check_manifest_coverage:_add_duplicate_errors#53a2e8b0885e"
         },
         {
@@ -114896,7 +116377,7 @@
           "name": "check_manifest",
           "qualname": "check_manifest",
           "signature_hash": "90afa92d0d7f",
-          "source_span": "77-246",
+          "source_span": "78-250",
           "stable_id": "py:tools.verification.check_manifest_coverage:check_manifest#90afa92d0d7f"
         },
         {
@@ -114906,7 +116387,7 @@
           "name": "main",
           "qualname": "main",
           "signature_hash": "9b8e693c15ea",
-          "source_span": "249-263",
+          "source_span": "253-267",
           "stable_id": "py:tools.verification.check_manifest_coverage:main#9b8e693c15ea"
         }
       ]
@@ -115139,7 +116620,7 @@
           "name": "_list",
           "qualname": "_list",
           "signature_hash": "77488cbbbfd7",
-          "source_span": "30-31",
+          "source_span": "238-239",
           "stable_id": "py:tools.verification.generate_bootstrap_manifest:_list#77488cbbbfd7"
         },
         {
@@ -115149,8 +116630,28 @@
           "name": "_release_blocking",
           "qualname": "_release_blocking",
           "signature_hash": "2f9b1ea64a85",
-          "source_span": "34-35",
+          "source_span": "242-243",
           "stable_id": "py:tools.verification.generate_bootstrap_manifest:_release_blocking#2f9b1ea64a85"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "_copy_coverage",
+          "qualname": "_copy_coverage",
+          "signature_hash": "1b85acd797f5",
+          "source_span": "246-247",
+          "stable_id": "py:tools.verification.generate_bootstrap_manifest:_copy_coverage#1b85acd797f5"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "_coverage_for_item",
+          "qualname": "_coverage_for_item",
+          "signature_hash": "01b3ca5c661b",
+          "source_span": "250-300",
+          "stable_id": "py:tools.verification.generate_bootstrap_manifest:_coverage_for_item#01b3ca5c661b"
         },
         {
           "async": false,
@@ -115159,7 +116660,7 @@
           "name": "build_manifest",
           "qualname": "build_manifest",
           "signature_hash": "192c857ef0bb",
-          "source_span": "38-108",
+          "source_span": "303-378",
           "stable_id": "py:tools.verification.generate_bootstrap_manifest:build_manifest#192c857ef0bb"
         },
         {
@@ -115169,7 +116670,7 @@
           "name": "_render",
           "qualname": "_render",
           "signature_hash": "605c73100fc5",
-          "source_span": "111-112",
+          "source_span": "381-382",
           "stable_id": "py:tools.verification.generate_bootstrap_manifest:_render#605c73100fc5"
         },
         {
@@ -115179,7 +116680,7 @@
           "name": "main",
           "qualname": "main",
           "signature_hash": "9b8e693c15ea",
-          "source_span": "115-147",
+          "source_span": "385-417",
           "stable_id": "py:tools.verification.generate_bootstrap_manifest:main#9b8e693c15ea"
         }
       ]
@@ -115400,7 +116901,7 @@
           "name": "generate_inventory",
           "qualname": "generate_inventory",
           "signature_hash": "aa824dc56b22",
-          "source_span": "500-568",
+          "source_span": "500-572",
           "stable_id": "py:tools.verification.generate_inventory:generate_inventory#aa824dc56b22"
         },
         {
@@ -115410,7 +116911,7 @@
           "name": "_canonical",
           "qualname": "_canonical",
           "signature_hash": "614ab9f659aa",
-          "source_span": "571-572",
+          "source_span": "575-576",
           "stable_id": "py:tools.verification.generate_inventory:_canonical#614ab9f659aa"
         },
         {
@@ -115420,7 +116921,7 @@
           "name": "main",
           "qualname": "main",
           "signature_hash": "9b8e693c15ea",
-          "source_span": "575-609",
+          "source_span": "579-613",
           "stable_id": "py:tools.verification.generate_inventory:main#9b8e693c15ea"
         }
       ]

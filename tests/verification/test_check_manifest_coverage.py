@@ -98,6 +98,7 @@ def _complete_manifest(tmp_path: Path) -> dict[str, object]:
                 "classification": "source",
                 "criticality": "P0",
                 "formal_status": "finite_model",
+                "requires_formal_model": True,
                 "evidence_status": ["unit", "fault", "conformance"],
                 "symbols": [
                     {
@@ -228,8 +229,58 @@ def test_manifest_checker_rejects_p0_without_model_conformance_or_gap(tmp_path: 
     )
 
     assert result.returncode != 0
-    assert "P0 missing MODEL_PROOF" in result.stderr
-    assert "P0 missing IMPLEMENTATION_REFINEMENT_CHECK" in result.stderr
+    assert "formal target missing MODEL_PROOF" in result.stderr
+    assert "formal target missing IMPLEMENTATION_REFINEMENT_CHECK" in result.stderr
+
+
+def test_manifest_checker_rejects_temporary_gap_records(tmp_path: Path) -> None:
+    manifest = _complete_manifest(tmp_path)
+    manifest["items"][0]["temporary_gap"] = {"reason": "not yet covered"}
+    inventory, manifest_path = _write_case(tmp_path, manifest)
+
+    result = _run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(tmp_path),
+            "--inventory",
+            str(inventory),
+            "--manifest",
+            str(manifest_path),
+        ],
+        tmp_path,
+    )
+
+    assert result.returncode != 0
+    assert "temporary gap remains: pkg/auth.py" in result.stderr
+
+
+def test_manifest_checker_rejects_p0_without_executable_coverage(tmp_path: Path) -> None:
+    manifest = _complete_manifest(tmp_path)
+    manifest["items"][0].pop("requires_formal_model", None)
+    manifest["items"][0]["formal_status"] = "none"
+    manifest["items"][0]["symbols"][0]["coverage"] = [
+        {"kind": "INVENTORY_MAPPING", "path": "tests/test_auth.py"}
+    ]
+    inventory, manifest_path = _write_case(tmp_path, manifest)
+
+    result = _run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(tmp_path),
+            "--inventory",
+            str(inventory),
+            "--manifest",
+            str(manifest_path),
+        ],
+        tmp_path,
+    )
+
+    assert result.returncode != 0
+    assert "P0 missing executable coverage: pkg/auth.py" in result.stderr
 
 
 def test_manifest_checker_rejects_missing_evidence_path_and_duplicate_ids(tmp_path: Path) -> None:
@@ -268,7 +319,11 @@ def test_bootstrap_manifest_generator_emits_checker_acceptable_manifest(tmp_path
     inventory_path = tmp_path / "inventory.json"
     manifest_path = tmp_path / "manifest.yml"
     _write_json(inventory_path, _inventory())
-    for path in ["tests/test_auth.py", "docs/verification/repo-verification-inventory.json"]:
+    for path in [
+        "tests/test_auth.py",
+        "docs/verification/repo-verification-inventory.json",
+        "pyproject.toml",
+    ]:
         target = tmp_path / path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("# evidence\n", encoding="utf-8")
@@ -285,6 +340,7 @@ def test_bootstrap_manifest_generator_emits_checker_acceptable_manifest(tmp_path
         tmp_path,
     )
     assert generated.returncode == 0, generated.stderr
+    assert "temporary_gap" not in manifest_path.read_text(encoding="utf-8")
 
     checked = _run(
         [

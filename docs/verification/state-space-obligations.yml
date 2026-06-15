@@ -1,0 +1,621 @@
+version: 1
+purpose: Independent adversarial state/fault catalog. This file is intentionally not
+  generated from the current implementation. It enumerates bounded protocol and environmental
+  states that must either be handled, fail closed, degrade safely, or remain visible
+  as gaps.
+modeling_rules:
+- Official protocol states must come from MCP Authorization 2025-06-18 or referenced
+  OAuth RFCs.
+- Generic storage/network/runtime states come from the repository fault model, not
+  from existing code branches.
+- Each obligation has an explicit status: implemented, known_gap, or uncovered.
+- Implemented obligations must name evidence files; missing evidence fails the local
+  gap gate.
+- If multiple obligations match a state, the highest priority obligation is the primary
+  expected behavior. Equal-priority matches are ambiguous and fail the local gap gate.
+- This catalog is local assurance input; it is intentionally not run by CI/CD default
+  gates.
+sources:
+- https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization
+- https://www.rfc-editor.org/rfc/rfc9728.html
+- https://www.rfc-editor.org/rfc/rfc8707.html
+- https://www.rfc-editor.org/rfc/rfc7591.html
+subsystems:
+- id: oauth_mcp
+  dimensions:
+    endpoint:
+    - register
+    - authorize
+    - github_callback
+    - token
+    - protected_resource_metadata
+    - mcp_call
+    client_state:
+    - registered_durable
+    - unknown
+    - cache_missing
+    - cache_corrupt
+    - partial_persist
+    - duplicate_registration
+    - stale_memory_only
+    resource_state:
+    - canonical
+    - metadata_alias
+    - missing
+    - mismatched
+    - malformed
+    pkce_state:
+    - valid
+    - missing
+    - verifier_mismatch
+    - unsupported_method
+    redirect_state:
+    - registered
+    - mismatch
+    - malformed
+    storage_fault:
+    - none
+    - read_error
+    - write_error
+    - enospc
+    - permission_denied
+    - fsync_failure
+    - rename_failure
+    replay_state:
+    - fresh
+    - code_reuse
+    - state_replay
+  obligations:
+  - id: oauth_storage_faults_fail_closed_without_hot_cache_or_temp_file
+    evidence:
+    - python/deepresearch_flow/paper/snapshot/tests/test_oauth_client_cache.py
+    when:
+      storage_fault:
+      - write_error
+      - enospc
+      - permission_denied
+      - fsync_failure
+      - rename_failure
+    expected: fail_closed_no_hot_cache_update_no_temp_file
+    status: implemented
+    priority: 90
+  - id: oauth_read_faults_fail_closed
+    when:
+      storage_fault: read_error
+    expected: fail_closed_or_re_register_without_token_issue
+    status: implemented
+    priority: 95
+    evidence: &id001
+    - python/deepresearch_flow/paper/snapshot/tests/test_mcp_transport.py
+    - python/deepresearch_flow/paper/snapshot/tests/test_oauth_client_cache.py
+    - formal/oauth_client_cache/OAuthClientCache.tla
+    - tools/formal/smt/check_all_smt_models.py
+  - id: oauth_unknown_or_bad_client_safe_error
+    when:
+      client_state:
+      - unknown
+      - cache_missing
+      - cache_corrupt
+      - partial_persist
+      - stale_memory_only
+    expected: fail_closed_or_force_new_registration_without_token_issue
+    status: implemented
+    priority: 80
+    evidence: *id001
+  - id: oauth_duplicate_registration_atomic_last_write_wins
+    evidence:
+    - python/deepresearch_flow/paper/snapshot/tests/test_oauth_client_cache.py
+    when:
+      client_state: duplicate_registration
+    expected: atomic_last_write_wins_no_partial_merge
+    status: implemented
+    priority: 20
+  - id: oauth_resource_alias_or_canonical_accepted
+    when:
+      resource_state:
+      - canonical
+      - metadata_alias
+    expected: normalize_resource_before_authorize_and_token
+    status: implemented
+    priority: 10
+    evidence: *id001
+  - id: oauth_bad_resource_fails_closed
+    when:
+      resource_state:
+      - missing
+      - mismatched
+      - malformed
+    expected: fail_closed
+    status: implemented
+    priority: 75
+    evidence: *id001
+  - id: oauth_bad_pkce_fails_closed
+    when:
+      endpoint:
+      - authorize
+      - token
+      pkce_state:
+      - missing
+      - verifier_mismatch
+      - unsupported_method
+    expected: fail_closed
+    status: implemented
+    priority: 74
+    evidence: *id001
+  - id: oauth_bad_redirect_fails_closed
+    when:
+      endpoint:
+      - authorize
+      - github_callback
+      - token
+      redirect_state:
+      - mismatch
+      - malformed
+    expected: fail_closed
+    status: implemented
+    priority: 73
+    evidence: *id001
+  - id: oauth_replay_fails_closed
+    when:
+      endpoint:
+      - github_callback
+      - token
+      replay_state:
+      - code_reuse
+      - state_replay
+    expected: fail_closed
+    status: implemented
+    priority: 72
+    evidence: *id001
+  - id: oauth_metadata_endpoint_does_not_issue_tokens
+    when:
+      endpoint: protected_resource_metadata
+    expected: metadata_only_no_token_issue
+    status: implemented
+    priority: 100
+    evidence: *id001
+  - id: oauth_mcp_requires_issued_valid_bearer
+    when:
+      endpoint: mcp_call
+    expected: valid_bearer_required
+    status: implemented
+    priority: 100
+    evidence: *id001
+  - id: oauth_happy_path
+    when:
+      endpoint:
+      - register
+      - authorize
+      - github_callback
+      - token
+      - mcp_call
+      client_state: registered_durable
+      resource_state:
+      - canonical
+      - metadata_alias
+      pkce_state: valid
+      redirect_state: registered
+      storage_fault: none
+      replay_state: fresh
+    expected: continue_or_issue_bound_token
+    status: implemented
+    priority: 110
+    evidence: *id001
+- id: provider_routing
+  dimensions:
+    request_capability:
+    - chat
+    - embedding
+    - rerank
+    - unknown
+    provider_state:
+    - available
+    - inactive_window
+    - cooldown
+    - disabled
+    - missing_config
+    quota_state:
+    - has_quota
+    - exhausted
+    - unknown_quota
+    time_state:
+    - normal
+    - clock_skew_backward
+    - clock_skew_forward
+    - dst_boundary
+    upstream_fault:
+    - none
+    - timeout
+    - connection_reset
+    - rate_limit_429
+    - server_5xx
+    - malformed_json
+    - truncated_stream
+    concurrency_state:
+    - single_request
+    - concurrent_same_provider
+    - cancellation
+  obligations:
+  - id: provider_unknown_capability_rejected
+    when:
+      request_capability: unknown
+    expected: fail_closed_structured_error
+    status: implemented
+    priority: 100
+    evidence: &id002
+    - python/deepresearch_flow/paper/tests/test_weighted_routing.py
+    - python/deepresearch_flow/paper/tests/test_active_window.py
+    - python/deepresearch_flow/paper/tests/test_routing_active_window.py
+    - formal/provider_routing/ProviderRouting.tla
+    - tools/formal/smt/check_all_smt_models.py
+  - id: provider_unavailable_not_selected
+    when:
+      provider_state:
+      - inactive_window
+      - cooldown
+      - disabled
+      - missing_config
+    expected: not_selected
+    status: implemented
+    priority: 90
+    evidence: *id002
+  - id: provider_bad_quota_not_selected
+    when:
+      quota_state:
+      - exhausted
+      - unknown_quota
+    expected: not_selected_or_safe_degraded_error
+    status: implemented
+    priority: 80
+    evidence: *id002
+  - id: provider_time_edges_fail_closed_or_preserve_active_window_semantics
+    evidence:
+    - python/deepresearch_flow/paper/tests/test_active_window.py
+    - python/deepresearch_flow/paper/tests/test_routing_active_window.py
+    - python/deepresearch_flow/paper/tests/test_weighted_routing.py
+    when:
+      time_state:
+      - clock_skew_backward
+      - clock_skew_forward
+      - dst_boundary
+    expected: no_inactive_or_cooling_route_selected
+    status: implemented
+    priority: 70
+  - id: provider_upstream_faults_degrade
+    when:
+      upstream_fault:
+      - timeout
+      - connection_reset
+      - rate_limit_429
+      - server_5xx
+    expected: retry_or_degrade_with_budget
+    status: implemented
+    priority: 60
+    evidence: *id002
+  - id: provider_malformed_upstream_does_not_poison_route_pool
+    evidence:
+    - python/deepresearch_flow/paper/tests/test_weighted_routing.py
+    when:
+      upstream_fault:
+      - malformed_json
+      - truncated_stream
+    expected: structured_non_quota_error_no_cooldown_without_match
+    status: implemented
+    priority: 65
+  - id: provider_cancellation_preserves_future_selection
+    evidence:
+    - python/deepresearch_flow/paper/tests/test_weighted_routing.py
+    when:
+      concurrency_state: cancellation
+    expected: cancellation_does_not_poison_future_selection
+    status: implemented
+    priority: 50
+  - id: provider_happy_path
+    when:
+      request_capability:
+      - chat
+      - embedding
+      - rerank
+      provider_state: available
+      quota_state: has_quota
+      time_state: normal
+      upstream_fault: none
+      concurrency_state:
+      - single_request
+      - concurrent_same_provider
+    expected: select_compatible_provider_once
+    status: implemented
+    priority: 110
+    evidence: *id002
+- id: renderer_frontend
+  dimensions:
+    input_kind:
+    - markdown
+    - latex
+    - mermaid
+    - pdf
+    formula_state:
+    - none
+    - inline_dollar
+    - display_dollar
+    - api_tex_math_tag
+    - api_inline_formula_tag
+    - invalid_latex
+    diagram_state:
+    - none
+    - fenced_mermaid_valid
+    - fenced_mermaid_invalid
+    - naked_mermaid
+    - entity_encoded_mermaid
+    payload_state:
+    - valid
+    - malformed
+    - oversize
+    - adversarial_unicode
+    - xss_like
+    dependency_state:
+    - available
+    - import_failure
+    - chunk_404
+    - worker_failure
+    browser_state:
+    - normal
+    - csp_restricted
+    - storage_unavailable
+    - low_memory
+    renderer_fault:
+    - none
+    - math_renderer_missing
+    - mermaid_unprocessed
+    - sanitizer_failure
+    - renderer_exception
+  obligations:
+  - id: renderer_exception_visible_diagnostic
+    when:
+      renderer_fault: renderer_exception
+    expected: visible_diagnostic_with_source_excerpt_no_unhandled_crash
+    status: implemented
+    priority: 160
+    evidence:
+    - frontend/src/__tests__/RenderedMarkdownDiagnostics.test.ts
+  - id: renderer_sanitizer_failure_fail_closed_diagnostic
+    when:
+      renderer_fault: sanitizer_failure
+    expected: sanitized_output_omitted_visible_diagnostic
+    status: implemented
+    priority: 155
+    evidence:
+    - frontend/src/__tests__/RenderedMarkdownDiagnostics.test.ts
+    - frontend/src/__tests__/RenderedMarkdown.test.ts
+  - id: renderer_math_renderer_missing_visible_diagnostic
+    when:
+      renderer_fault: math_renderer_missing
+    expected: visible_math_diagnostic_with_source_excerpt
+    status: implemented
+    priority: 150
+    evidence:
+    - frontend/src/__tests__/RenderedMarkdownDiagnostics.test.ts
+  - id: renderer_mermaid_unprocessed_visible_diagnostic
+    when:
+      renderer_fault: mermaid_unprocessed
+    expected: visible_mermaid_diagnostic_with_source_excerpt
+    status: implemented
+    priority: 145
+    evidence:
+    - frontend/src/__tests__/RenderedMarkdown.test.ts
+  - id: renderer_xss_payload_sanitized
+    when:
+      payload_state: xss_like
+    expected: sanitized_no_script_execution
+    status: implemented
+    priority: 140
+    evidence: &id003
+    - frontend/src/__tests__/RenderedMarkdown.test.ts
+    - frontend/src/__tests__/RenderedMarkdownDiagnostics.test.ts
+    - frontend/src/__tests__/PdfViewer.test.ts
+    - frontend/src/__tests__/asyncComponent.test.ts
+  - id: renderer_malformed_degrades
+    when:
+      payload_state:
+      - malformed
+      - adversarial_unicode
+    expected: visible_error_or_plaintext_no_crash
+    status: implemented
+    priority: 100
+    evidence: *id003
+  - id: renderer_oversize_plaintext_budget
+    evidence:
+    - frontend/src/__tests__/RenderedMarkdown.test.ts
+    when:
+      payload_state: oversize
+    expected: plaintext_preview_no_rich_renderer
+    status: implemented
+    priority: 135
+  - id: renderer_dependency_failure_visible_fallback
+    evidence:
+    - frontend/src/__tests__/asyncComponent.test.ts
+    - frontend/src/__tests__/PdfViewer.test.ts
+    when:
+      dependency_state:
+      - import_failure
+      - chunk_404
+      - worker_failure
+    expected: visible_local_fallback_no_unhandled_crash
+    status: implemented
+    priority: 130
+  - id: renderer_browser_resource_failure_degrades_or_avoids_dependency
+    evidence:
+    - frontend/src/__tests__/RenderedMarkdown.test.ts
+    - frontend/src/__tests__/RenderedMarkdownDiagnostics.test.ts
+    - frontend/src/__tests__/asyncComponent.test.ts
+    - frontend/src/__tests__/PdfViewer.test.ts
+    when:
+      browser_state:
+      - csp_restricted
+      - storage_unavailable
+      - low_memory
+    expected: no_remote_script_dependency_storage_optional_plaintext_or_local_fallback
+    status: implemented
+    priority: 125
+  - id: renderer_formula_and_diagram_render_or_diagnostic
+    when:
+      formula_state:
+      - inline_dollar
+      - display_dollar
+      - api_tex_math_tag
+      - api_inline_formula_tag
+      - invalid_latex
+      diagram_state:
+      - fenced_mermaid_valid
+      - fenced_mermaid_invalid
+      - naked_mermaid
+      - entity_encoded_mermaid
+    expected: formula_and_diagram_rendered_or_visible_diagnostics_with_source
+    status: implemented
+    priority: 120
+    evidence:
+    - frontend/src/__tests__/RenderedMarkdown.test.ts
+    - frontend/src/__tests__/RenderedMarkdownDiagnostics.test.ts
+  - id: renderer_formula_render_or_visible_diagnostic
+    when:
+      formula_state:
+      - inline_dollar
+      - display_dollar
+      - api_tex_math_tag
+      - api_inline_formula_tag
+      - invalid_latex
+    expected: formula_rendered_or_visible_diagnostic_with_source
+    status: implemented
+    priority: 115
+    evidence:
+    - frontend/src/__tests__/RenderedMarkdown.test.ts
+    - frontend/src/__tests__/RenderedMarkdownDiagnostics.test.ts
+  - id: renderer_mermaid_render_or_visible_diagnostic
+    when:
+      diagram_state:
+      - fenced_mermaid_valid
+      - fenced_mermaid_invalid
+      - naked_mermaid
+      - entity_encoded_mermaid
+    expected: mermaid_rendered_or_visible_source_plus_diagnostic
+    status: implemented
+    priority: 110
+    evidence:
+    - frontend/src/__tests__/RenderedMarkdown.test.ts
+  - id: renderer_happy_path
+    when:
+      payload_state: valid
+      dependency_state: available
+      browser_state: normal
+      formula_state: none
+      diagram_state: none
+      renderer_fault: none
+    expected: render_without_crash
+    status: implemented
+    priority: 105
+    evidence: *id003
+- id: selected_export
+  dimensions:
+    selection_state:
+    - empty
+    - one
+    - many
+    requested_content:
+    - metadata_only
+    - summary_json
+    - summary_template_set
+    - pdf_binary
+    - mixed
+    source_state:
+    - available
+    - missing_asset
+    - corrupt_asset
+    - stale_manifest
+    - network_error
+    filename_state:
+    - safe
+    - path_traversal
+    - reserved_name
+    - unicode_confusable
+    output_mode:
+    - jsonl
+    - zip
+  obligations:
+  - id: export_empty_selection_structured_error
+    when:
+      selection_state: empty
+    expected: structured_noop_error
+    status: implemented
+    priority: 100
+    evidence: &id004
+    - frontend/src/__tests__/selectedExport.test.ts
+  - id: export_bad_filename_sanitized
+    when:
+      filename_state:
+      - path_traversal
+      - reserved_name
+      - unicode_confusable
+    expected: sanitized_stable_filename
+    status: implemented
+    priority: 90
+    evidence: *id004
+  - id: export_missing_or_network_partial_success
+    when:
+      source_state:
+      - missing_asset
+      - network_error
+    expected: partial_success_with_error_record
+    status: implemented
+    priority: 80
+    evidence: *id004
+  - id: export_corrupt_asset_failed_without_bad_zip
+    evidence:
+    - frontend/src/__tests__/selectedExport.test.ts
+    when:
+      source_state: corrupt_asset
+    expected: fail_item_without_saving_corrupt_asset
+    status: implemented
+    priority: 85
+  - id: export_stale_manifest_treated_as_missing
+    evidence:
+    - frontend/src/__tests__/selectedExport.test.ts
+    when:
+      source_state: stale_manifest
+    expected: no_cross_paper_asset_export
+    status: implemented
+    priority: 85
+  - id: export_jsonl_no_binary
+    when:
+      output_mode: jsonl
+      requested_content:
+      - metadata_only
+      - summary_json
+      - summary_template_set
+    expected: one_valid_json_object_per_line
+    status: implemented
+    priority: 70
+    evidence: *id004
+  - id: export_zip_binary_allowed
+    when:
+      output_mode: zip
+      requested_content:
+      - metadata_only
+      - summary_json
+      - summary_template_set
+      - pdf_binary
+      - mixed
+    expected: zip_entries_match_requested_content
+    status: implemented
+    priority: 70
+    evidence: *id004
+  - id: export_happy_path
+    when:
+      selection_state:
+      - one
+      - many
+      source_state: available
+      filename_state: safe
+    expected: deterministic_export
+    status: implemented
+    priority: 110
+    evidence: *id004

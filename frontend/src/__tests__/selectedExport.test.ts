@@ -319,3 +319,102 @@ describe('selected export helper', () => {
   })
 
 })
+
+it('treats a stale manifest for another paper as missing instead of exporting wrong assets', async () => {
+  const saved = vi.fn()
+
+  const result = await downloadSelectedZip(
+    [makeItem({ paper_id: 'paper-1' })],
+    {
+      mode: 'zip',
+      includeMetadata: false,
+      includePdf: true,
+      includeSourceMarkdown: false,
+      includeTranslatedMarkdown: false,
+      includeImages: false,
+      includeSummaries: false,
+      summaryTemplates: [],
+    },
+    {},
+    {
+      createZip: async () => new JSZip(),
+      getPaperDetailCached: async () => makeDetail({ paper_id: 'paper-1' }),
+      fetchManifest: async () => ({ ...makeManifest(), paper_id: 'paper-2' }),
+      fetchBinary: async () => new Blob(['wrong paper']).arrayBuffer(),
+      saveAs: saved,
+    },
+  )
+
+  expect(saved).not.toHaveBeenCalled()
+  expect(result).toMatchObject({ saved: false })
+  expect(result.stats).toMatchObject({ filesAdded: 0, missingAssets: 1, failedAssets: 0 })
+})
+
+it('treats empty manifest assets as failed instead of writing corrupt files', async () => {
+  const saved = vi.fn()
+
+  const result = await downloadSelectedZip(
+    [makeItem()],
+    {
+      mode: 'zip',
+      includeMetadata: false,
+      includePdf: true,
+      includeSourceMarkdown: false,
+      includeTranslatedMarkdown: false,
+      includeImages: false,
+      includeSummaries: false,
+      summaryTemplates: [],
+    },
+    {},
+    {
+      createZip: async () => new JSZip(),
+      getPaperDetailCached: async () => makeDetail(),
+      fetchManifest: async () => makeManifest(),
+      fetchBinary: async () => new ArrayBuffer(0),
+      saveAs: saved,
+    },
+  )
+
+  expect(saved).not.toHaveBeenCalled()
+  expect(result).toMatchObject({ saved: false })
+  expect(result.stats).toMatchObject({ filesAdded: 0, failedAssets: 1 })
+})
+
+it('treats manifest asset hash mismatches as failed instead of writing corrupt files', async () => {
+  const saved = vi.fn()
+  const manifest = makeManifest()
+  manifest.assets = {
+    ...manifest.assets,
+    pdf: {
+      static_path: 'pdf/paper-1.pdf',
+      zip_path: 'paper.pdf',
+      sha256: '0'.repeat(64),
+    },
+  }
+
+  const result = await downloadSelectedZip(
+    [makeItem()],
+    {
+      mode: 'zip',
+      includeMetadata: false,
+      includePdf: true,
+      includeSourceMarkdown: false,
+      includeTranslatedMarkdown: false,
+      includeImages: false,
+      includeSummaries: false,
+      summaryTemplates: [],
+    },
+    {},
+    {
+      createZip: async () => new JSZip(),
+      getPaperDetailCached: async () => makeDetail(),
+      fetchManifest: async () => manifest,
+      fetchBinary: async () => await new Blob(['wrong non-empty payload']).arrayBuffer(),
+      saveAs: saved,
+    },
+  )
+
+  expect(saved).not.toHaveBeenCalled()
+  expect(result).toMatchObject({ saved: false })
+  expect(result.stats).toMatchObject({ filesAdded: 0, failedAssets: 1 })
+})

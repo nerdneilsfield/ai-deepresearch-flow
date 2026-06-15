@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from contextlib import contextmanager
 import inspect
 import json
 import hmac
@@ -32,10 +33,31 @@ except (ImportError, ModuleNotFoundError) as exc:  # pragma: no cover - version 
     ) from exc
 from starlette.responses import JSONResponse
 
+try:  # pragma: no cover - Windows fallback
+    import fcntl
+except ImportError:  # pragma: no cover
+    fcntl = None
+
 _BEARER_SCHEME = "bearer"
 _MCP_PUBLIC_UNSAFE_ENV = "MCP_PUBLIC_UNSAFE"
 _PLACEHOLDER_STATIC_TOKENS = {"your-mcp-token"}
 _OAUTH_CLIENT_COLLECTION = "mcp-oauth-proxy-clients"
+
+
+def _fsync_directory(path: Path) -> None:
+    """Best-effort directory fsync after atomic replace."""
+    if not hasattr(os, "O_DIRECTORY"):
+        return
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        return
+    finally:
+        os.close(fd)
 
 
 def is_mcp_public_unsafe_allowed() -> bool:
@@ -206,21 +228,38 @@ class JsonOAuthClientCache:
     def _is_persistent_collection(self, collection: str | None) -> bool:
         return collection == _OAUTH_CLIENT_COLLECTION
 
+    @contextmanager
+    def _persistent_file_lock_unlocked(self):
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = self._path.with_name(f".{self._path.name}.lock")
+        with lock_path.open("a+", encoding="utf-8") as lock_file:
+            if fcntl is not None:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                if fcntl is not None:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
     def _read_persistent_unlocked(self) -> dict[str, dict[str, Any]]:
         if not self._path.exists():
             return {}
         try:
             raw = json.loads(self._path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return {}
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"OAuth client cache is malformed JSON: {self._path}") from exc
+        except OSError:
+            raise
         if not isinstance(raw, dict):
-            return {}
+            raise ValueError(f"OAuth client cache root must be an object: {self._path}")
         collections = raw.get("collections")
         if not isinstance(collections, dict):
-            return {}
+            raise ValueError(f"OAuth client cache collections must be an object: {self._path}")
         clients = collections.get(_OAUTH_CLIENT_COLLECTION)
         if not isinstance(clients, dict):
-            return {}
+            raise ValueError(
+                f"OAuth client cache collection {_OAUTH_CLIENT_COLLECTION!r} must be an object: {self._path}"
+            )
         return {str(key): value for key, value in clients.items() if isinstance(value, dict)}
 
     def _write_persistent_unlocked(self, values: dict[str, dict[str, Any]]) -> None:
@@ -229,27 +268,44 @@ class JsonOAuthClientCache:
             "version": 1,
             "collections": {_OAUTH_CLIENT_COLLECTION: values},
         }
-        with tempfile.NamedTemporaryFile(
-            "w",
-            encoding="utf-8",
-            dir=self._path.parent,
-            prefix=f".{self._path.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as tmp:
-            json.dump(payload, tmp, ensure_ascii=False, sort_keys=True, indent=2)
-            tmp.write("\n")
-            tmp_path = Path(tmp.name)
+        tmp_path: Path | None = None
         try:
-            os.chmod(tmp_path, 0o600)
-        except OSError:
-            pass
-        os.replace(tmp_path, self._path)
+            with tempfile.NamedTemporaryFile(
+                "w",
+                encoding="utf-8",
+                dir=self._path.parent,
+                prefix=f".{self._path.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as tmp:
+                tmp_path = Path(tmp.name)
+                json.dump(payload, tmp, ensure_ascii=False, sort_keys=True, indent=2)
+                tmp.write("\n")
+                tmp.flush()
+                os.fsync(tmp.fileno())
+            try:
+                os.chmod(tmp_path, 0o600)
+            except OSError:
+                pass
+            os.replace(tmp_path, self._path)
+            _fsync_directory(self._path.parent)
+        finally:
+            if tmp_path is not None:
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
     async def get(self, key: str, *, collection: str | None = None) -> dict[str, Any] | None:
         with self._lock:
             if self._is_persistent_collection(collection):
                 value = self._persistent_clients.get(key)
+                if value is not None:
+                    return dict(value)
+                disk_values = self._read_persistent_unlocked()
+                if disk_values:
+                    self._persistent_clients = {**self._persistent_clients, **disk_values}
+                    value = self._persistent_clients.get(key)
                 return dict(value) if value is not None else None
             value = self._transient.get(collection or "", {}).get(key)
             return dict(value) if value is not None else None
@@ -271,18 +327,23 @@ class JsonOAuthClientCache:
         with self._lock:
             value_dict = dict(value)
             if self._is_persistent_collection(collection):
-                values = {**self._persistent_clients, key: value_dict}
-                self._write_persistent_unlocked(values)
-                self._persistent_clients = values
+                with self._persistent_file_lock_unlocked():
+                    disk_values = self._read_persistent_unlocked()
+                    values = {**self._persistent_clients, **disk_values, key: value_dict}
+                    self._write_persistent_unlocked(values)
+                    self._persistent_clients = values
                 return
             self._transient.setdefault(collection or "", {})[key] = value_dict
 
     async def delete(self, key: str, *, collection: str | None = None) -> bool:
         with self._lock:
             if self._is_persistent_collection(collection):
-                existed = key in self._persistent_clients
-                if existed:
-                    values = dict(self._persistent_clients)
+                with self._persistent_file_lock_unlocked():
+                    disk_values = self._read_persistent_unlocked()
+                    values = {**self._persistent_clients, **disk_values}
+                    existed = key in values
+                    if not existed:
+                        return False
                     del values[key]
                     self._write_persistent_unlocked(values)
                     self._persistent_clients = values

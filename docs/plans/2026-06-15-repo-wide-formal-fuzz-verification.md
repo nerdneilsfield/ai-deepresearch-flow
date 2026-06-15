@@ -22,6 +22,8 @@
 - Create: `tools/verification/check_doc_secrets.py`
 - Create: `tools/verification/check_supply_chain.py`
 - Create: `tools/formal/check_all_models.py`
+- Create: `tools/formal/discover_state_gaps.py`
+- Create: `docs/verification/state-space-obligations.yml`
 - Create: `tools/formal/check_provider_routing_model.py`
 - Create: `tools/formal/check_oauth_client_cache_model.py`
 - Create: `tools/formal/check_semantic_ingest_model.py`
@@ -81,9 +83,11 @@ The manifest generated from this plan is expected to be substantially larger tha
 - Config files expose config-item rows where practical.
 - Test files are evidence assets with targets and commands; they are not recursively treated as production code needing equivalent formal proof.
 - `formal_status` is separate from `evidence_status`.
-- P0/P1 stateful systems require both `MODEL_PROOF` and `IMPLEMENTATION_REFINEMENT_CHECK`, unless an explicit temporary gap is recorded.
+- P0/P1 stateful systems require both `MODEL_PROOF` and `IMPLEMENTATION_REFINEMENT_CHECK`; the strict local inventory gate rejects temporary gap records.
 - Fuzz/property/fault tests must follow `AGENTS.md` black-box rules.
 - `make verify-inventory` must fail on uncovered inventory items, missing referenced evidence files, invalid P0 gap usage, or suspected boundary items that are unclassified.
+- Independent state/fault discovery must run from `docs/verification/state-space-obligations.yml`, not from current implementation branches.
+- `make discover-state-gaps` reports generated known/uncovered gaps locally; `make verify-state-gaps` fails until those gaps are resolved. These targets are intentionally not part of CI/CD or default strict release gates.
 - Existing full-suite failures get a baseline ledger; new verification gates must be independently green, while strict release remains blocked.
 
 ## Task 0: Freeze and Baseline
@@ -278,7 +282,7 @@ Given inventory item A and manifest covering A, checker exits zero.
 Given inventory symbol S and manifest missing S, checker exits non-zero.
 Given inventory config item C and manifest missing C, checker exits non-zero.
 Given generated/artifact item without justification, checker exits non-zero.
-Given P0 item without formal model plus conformance or temporary gap, checker exits non-zero.
+Given a formal-target item without model proof plus conformance, checker exits non-zero. Given any manifest item with a temporary gap record, checker exits non-zero.
 Given manifest evidence path that does not exist, checker exits non-zero.
 Given duplicate inventory or manifest IDs, checker exits non-zero.
 Given stale manifest item absent from inventory, checker exits non-zero unless explicitly marked retired.
@@ -310,13 +314,13 @@ Required first pass:
 
 ```text
 Every current source/config/doc path appears.
-P0/P1 items include real planned coverage entries.
+P0/P1 items include real executable coverage entries.
 Non-critical docs/configs include static/build/doc checks.
-Any gap has reason + follow_up.
+Temporary gap records are not accepted by the strict local manifest checker.
 formal_status and evidence_status are separate.
 Every PROPERTY_TEST/FUZZ_TEST/FAULT_INJECTION has observable_contract.
 Every FORMAL_MODEL has checker_command and counterexample format.
-Every P0 stateful FORMAL_MODEL has IMPLEMENTATION_REFINEMENT_CHECK or temporary_gap.
+Every P0/P1 stateful FORMAL_MODEL has IMPLEMENTATION_REFINEMENT_CHECK; temporary_gap is rejected by the checker.
 Config items are covered separately from file-level config coverage.
 Evidence assets name target inventory IDs and command.
 Artifact groups include upstream/source/license/file-count/checksum/validation metadata.
@@ -428,6 +432,57 @@ TLA+ files count as gated formal evidence only if TLC/Apalache command is config
 If no TLA runner is available, the Python finite-state checker is the gated MODEL_PROOF and the TLA file is supporting documentation.
 Negative controls must emit invariant name and counterexample trace, not just exit non-zero.
 P0 deep profile must use documented finite domains and bound rationale.
+```
+
+
+## Task 3A: Independent State/Fault Discovery
+
+- [ ] Write failing tests for `tools/formal/discover_state_gaps.py`.
+
+Required behavior:
+
+```text
+A catalog with an uncovered state exits non-zero with --fail-on-gap and reports the exact state.
+A complete catalog exits zero and reports total/covered state counts.
+A catalog entry marked gap_requires_implementation is reported as a known gap, not as success.
+```
+
+- [ ] Implement `tools/formal/discover_state_gaps.py`.
+
+Required CLI:
+
+```bash
+uv run python tools/formal/discover_state_gaps.py --catalog docs/verification/state-space-obligations.yml
+uv run python tools/formal/discover_state_gaps.py --catalog docs/verification/state-space-obligations.yml --fail-on-gap
+```
+
+Required semantics:
+
+```text
+Enumerate the finite cross-product of declared dimensions for each subsystem.
+Treat obligations whose expected behavior starts with gap/known_gap/unhandled as unresolved gaps.
+Group discovered gaps by subsystem and obligation ID so they are actionable.
+Do not infer dimensions from source code; the catalog is independent input.
+Do not include this in CI/CD default gates.
+```
+
+- [ ] Create `docs/verification/state-space-obligations.yml`.
+
+Minimum dimensions:
+
+```text
+OAuth/MCP: endpoint, client state, resource state, PKCE, redirect URI, storage fault, replay/time state.
+Provider routing: capability, provider availability, quota, time skew, upstream fault, concurrency/cancellation.
+Frontend renderer: input kind, payload shape, dynamic dependency state, browser/storage/CSP state.
+Selected export: selection count, requested content, source asset state, filename state, output mode.
+```
+
+Acceptance:
+
+```text
+make discover-state-gaps prints a finite generated state count and grouped gap counts.
+make verify-state-gaps intentionally fails while known gaps remain.
+No CI/default gate calls verify-state-gaps.
 ```
 
 ## Task 4: P0 Formal Model - OAuth Client Cache / MCP Auth
@@ -847,11 +902,11 @@ Rules:
 ```text
 Every path has at least one coverage class.
 Every production symbol has coverage or explicit ignore reason.
-Every config item has validation or explicit gap.
+Every config item has validation evidence.
 Every evidence asset names target IDs and command.
-Every generated/vendor asset group has source/license/checksum/file-count/validation or explicit gap.
-Every P0 item has formal/fuzz/fault coverage or explicit temporary gap.
-Every gap has reason, risk, and follow-up.
+Every generated/vendor asset group has source/license/checksum/file-count/validation metadata.
+Every P0 item has executable evidence; declared formal targets additionally have model proof and conformance evidence.
+The checked manifest has no temporary gap records; missing evidence is a failing check.
 ```
 
 - [ ] Run:
@@ -900,7 +955,7 @@ This plan is complete only when:
 2. generated inventory includes production symbols, config items, evidence assets, and artifact groups,
 3. manifest coverage checker fails on any uncovered path/symbol/config item/evidence asset/artifact group,
 4. at least four P0/P1 formal models exist and are executable,
-5. each formal model has a negative-control failure mode and conformance path or explicit temporary gap,
+5. each formal model has a negative-control failure mode and conformance path,
 6. Python fuzz/fault tests exist for critical parsers/protocol/persistence paths,
 7. frontend fast-check/component fault tests cover renderer/export/persistence boundaries,
 8. documentation/version/secret/supply-chain gates exist,

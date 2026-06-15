@@ -74,6 +74,7 @@ export type SelectedExportCallbacks = {
 type ManifestAsset = {
   static_path?: string | null
   zip_path?: string | null
+  sha256?: string | null
   template_tag?: string
   lang?: string
   status?: string
@@ -364,6 +365,29 @@ function joinUrl(base: string, path: string): string {
   return `${base.replace(/\/$/, '')}/${path}`
 }
 
+function usableAssetData(data: unknown): data is ArrayBuffer {
+  return data instanceof ArrayBuffer && data.byteLength > 0
+}
+
+function bytesToHex(buffer: ArrayBuffer): string {
+  return [...new Uint8Array(buffer)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
+async function sha256Hex(buffer: ArrayBuffer): Promise<string | null> {
+  const subtle = globalThis.crypto?.subtle
+  if (!subtle) return null
+  const digest = await subtle.digest('SHA-256', buffer)
+  return bytesToHex(digest)
+}
+
+async function matchesManifestHash(asset: ManifestAsset, data: ArrayBuffer): Promise<boolean> {
+  const expected = asset.sha256?.trim().toLowerCase()
+  if (!expected) return true
+  if (!/^[a-f0-9]{64}$/.test(expected)) return false
+  const actual = await sha256Hex(data)
+  return actual === expected
+}
+
 async function addManifestAsset(
   folder: JSZip,
   base: string,
@@ -395,6 +419,16 @@ async function addManifestAsset(
   if (addedPaths.has(zipPath)) return 0
   try {
     const data = await deps.fetchBinary(joinUrl(base, staticPath))
+    if (!usableAssetData(data)) {
+      if (kind === 'summary') stats.failedSummaries += 1
+      else stats.failedAssets += 1
+      return 0
+    }
+    if (!(await matchesManifestHash(asset, data))) {
+      if (kind === 'summary') stats.failedSummaries += 1
+      else stats.failedAssets += 1
+      return 0
+    }
     folder.file(zipPath, data)
     addedPaths.add(zipPath)
     stats.filesAdded += 1
@@ -430,7 +464,9 @@ async function resolveManifest(
   const manifestUrl = detail?.manifest_url || item.manifest_url || null
   if (!manifestUrl) return { manifest: null, manifestUrl: null }
   try {
-    return { manifest: await deps.fetchManifest(manifestUrl), manifestUrl }
+    const manifest = await deps.fetchManifest(manifestUrl)
+    if (manifest.paper_id && manifest.paper_id !== item.paper_id) return { manifest: null, manifestUrl }
+    return { manifest, manifestUrl }
   } catch {
     return { manifest: null, manifestUrl }
   }

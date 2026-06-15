@@ -525,11 +525,15 @@ def generate_inventory(
         items.append(item)
         config_items.extend(_config_items(repo, path))
         if classification == "test":
-            command = (
-                f"uv run pytest {path} -q"
-                if path.endswith(".py")
-                else f"cd frontend && npm test -- --run {path}"
-            )
+            if path in {
+                "tests/verification/test_smt_formal_gate.py",
+                "tests/verification/test_tlc_formal_gate.py",
+            }:
+                command = f"DRFLOW_RUN_LOCAL_FORMAL=1 uv run pytest {path} -q"
+            elif path.endswith(".py"):
+                command = f"uv run pytest {path} -q"
+            else:
+                command = f"cd frontend && npm test -- --run {path}"
             evidence_assets.append(
                 {
                     "evidence_id": f"evidence:{path}",

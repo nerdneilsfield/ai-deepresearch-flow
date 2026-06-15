@@ -131,11 +131,151 @@ def test_persistent_cache_matches_public_put_delete_reopen_model(
 
 
 @pytest.mark.fault
-def test_cache_starts_empty_when_persistent_file_is_malformed() -> None:
-    async def scenario(path: Path) -> None:
+def test_cache_rejects_malformed_persistent_file() -> None:
+    def scenario(path: Path) -> None:
         path.write_text("{not-json", encoding="utf-8")
+        with pytest.raises(ValueError):
+            JsonOAuthClientCache(path)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        scenario(Path(tmpdir) / "mcp-oauth-clients.json")
+
+
+@pytest.mark.fault
+def test_persistent_put_failure_does_not_update_hot_cache() -> None:
+    async def scenario(path: Path) -> None:
         cache = JsonOAuthClientCache(path)
-        assert await cache.get("missing-client", collection=COLLECTION) is None
+        path.parent.write_text("not-a-directory", encoding="utf-8")
+
+        with pytest.raises(OSError):
+            await cache.put(
+                "client-b",
+                {"client_id": "client-b", "redirect_uris": ["https://example.test/b"]},
+                collection=COLLECTION,
+            )
+
+        assert await cache.get("client-b", collection=COLLECTION) is None
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        asyncio.run(scenario(Path(tmpdir) / "blocked" / "mcp-oauth-clients.json"))
+
+
+@pytest.mark.fault
+def test_persistent_delete_failure_does_not_update_hot_cache() -> None:
+    async def scenario(path: Path) -> None:
+        cache = JsonOAuthClientCache(path)
+        await cache.put(
+            "client-a",
+            {"client_id": "client-a", "redirect_uris": ["https://example.test/a"]},
+            collection=COLLECTION,
+        )
+        path.unlink()
+        for child in path.parent.iterdir():
+            child.unlink()
+        path.parent.rmdir()
+        path.parent.write_text("not-a-directory", encoding="utf-8")
+        with pytest.raises(OSError):
+            await cache.delete("client-a", collection=COLLECTION)
+
+        assert await cache.get("client-a", collection=COLLECTION) == {
+            "client_id": "client-a",
+            "redirect_uris": ["https://example.test/a"],
+        }
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        asyncio.run(scenario(Path(tmpdir) / "cache" / "mcp-oauth-clients.json"))
+
+
+@pytest.mark.fault
+def test_persistent_target_replaced_by_directory_grants_no_new_client() -> None:
+    async def scenario(path: Path) -> None:
+        cache = JsonOAuthClientCache(path)
+        path.mkdir()
+        with pytest.raises(OSError):
+            await cache.put(
+                "client-a",
+                {"client_id": "client-a", "redirect_uris": ["https://example.test/a"]},
+                collection=COLLECTION,
+            )
+
+        with pytest.raises(OSError):
+            await cache.get("client-a", collection=COLLECTION)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        asyncio.run(scenario(Path(tmpdir) / "mcp-oauth-clients.json"))
+
+
+@pytest.mark.fault
+def test_persistent_write_failure_leaves_no_cache_temp_files() -> None:
+    async def scenario(path: Path) -> None:
+        cache = JsonOAuthClientCache(path)
+        path.mkdir()
+        with pytest.raises(OSError):
+            await cache.put(
+                "client-a",
+                {"client_id": "client-a", "redirect_uris": ["https://example.test/a"]},
+                collection=COLLECTION,
+            )
+
+        assert list(path.parent.glob(f".{path.name}.*.tmp")) == []
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        asyncio.run(scenario(Path(tmpdir) / "mcp-oauth-clients.json"))
+
+
+@pytest.mark.fault
+def test_concurrent_cache_instances_merge_durable_registrations() -> None:
+    async def scenario(path: Path) -> None:
+        first = JsonOAuthClientCache(path)
+        second = JsonOAuthClientCache(path)
+
+        await first.put(
+            "client-a",
+            {"client_id": "client-a", "redirect_uris": ["https://example.test/a"]},
+            collection=COLLECTION,
+        )
+        await second.put(
+            "client-b",
+            {"client_id": "client-b", "redirect_uris": ["https://example.test/b"]},
+            collection=COLLECTION,
+        )
+
+        reopened = JsonOAuthClientCache(path)
+        assert await reopened.get("client-a", collection=COLLECTION) == {
+            "client_id": "client-a",
+            "redirect_uris": ["https://example.test/a"],
+        }
+        assert await reopened.get("client-b", collection=COLLECTION) == {
+            "client_id": "client-b",
+            "redirect_uris": ["https://example.test/b"],
+        }
+        assert await first.get("client-b", collection=COLLECTION) == {
+            "client_id": "client-b",
+            "redirect_uris": ["https://example.test/b"],
+        }
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        asyncio.run(scenario(Path(tmpdir) / "mcp-oauth-clients.json"))
+
+
+@pytest.mark.fault
+def test_duplicate_persistent_client_registration_replaces_atomically() -> None:
+    async def scenario(path: Path) -> None:
+        cache = JsonOAuthClientCache(path)
+        await cache.put(
+            "client-a",
+            {"client_id": "client-a", "redirect_uris": ["https://example.test/old"]},
+            collection=COLLECTION,
+        )
+        await cache.put(
+            "client-a",
+            {"client_id": "client-a", "redirect_uris": ["https://example.test/new"]},
+            collection=COLLECTION,
+        )
+
+        expected = {"client_id": "client-a", "redirect_uris": ["https://example.test/new"]}
+        assert await cache.get("client-a", collection=COLLECTION) == expected
+        assert await JsonOAuthClientCache(path).get("client-a", collection=COLLECTION) == expected
 
     with tempfile.TemporaryDirectory() as tmpdir:
         asyncio.run(scenario(Path(tmpdir) / "mcp-oauth-clients.json"))

@@ -97,6 +97,18 @@ Required evidence:
 
 ### P0: MCP/OAuth Protocol State Machine
 
+Normative sources:
+
+- MCP Authorization specification 2025-06-18.
+- OAuth 2.0 Protected Resource Metadata, RFC 9728.
+- OAuth 2.0 Resource Indicators, RFC 8707.
+- OAuth 2.0 Dynamic Client Registration, RFC 7591.
+
+Modeling rule: OAuth/MCP model invariants must be derived from those protocol
+requirements or from documented project policy. Historical model variables such
+as `lastReturn` must not be treated as live authorization state unless the model
+explicitly defines them as the current response event.
+
 Machine-checkable properties:
 
 - DCR registration produces a client usable by `/authorize`.
@@ -108,16 +120,45 @@ Machine-checkable properties:
 Required evidence:
 
 - HTTP integration tests.
-- State-machine model checking for registry/cache transitions.
+- Local TLC state-space checking for finite TLA+ models.
+- Local Z3 finite-universe checks as a secondary SMT sanity gate.
 - Fault-injection tests for missing cache, stale cache, corrupted cache, and duplicate registration.
+
+Local formal checks are intentionally excluded from CI/CD and default release
+gates. They are run explicitly by maintainers when changing these state
+machines.
+
+
+### P0: Independent State/Fault Discovery
+
+Before a P0/P1 state machine is treated as robust, the project maintains an
+independent finite catalog of protocol and environmental states. This catalog is
+not generated from current code branches. It exists to expose omitted states such
+as storage ENOSPC/fsync/rename failures, duplicate registration, replay, clock
+skew, dynamic import failure, malformed upstream responses, cancellation, stale
+manifests, and corrupted export assets.
+
+Local commands:
+
+```bash
+make discover-state-gaps   # report generated gaps without failing
+make verify-state-gaps     # fail while known/uncovered gaps remain
+```
+
+These commands are local-only and are not part of CI/CD or default release
+gates. A passing TLC/Z3 model without this discovery layer only proves the
+current model; it does not prove the model considered externally relevant fault
+states.
 
 ### P1: Renderer Robustness
 
 Machine-checkable properties:
 
 - Markdown rendering never crashes on malformed markdown.
-- LaTeX warnings do not break page render.
-- Mermaid rendering failure degrades to a visible error block, not app crash.
+- LaTeX/formula source is either rendered or shown in a visible diagnostic with
+  the source excerpt; it must not silently disappear from the DOM.
+- Mermaid rendering failure or delayed processing degrades to a visible
+  diagnostic with the diagram source, not app crash or silent content loss.
 - PDF viewer dependency failure degrades to fallback UI.
 
 Required evidence:
@@ -167,22 +208,48 @@ Required evidence:
 | Frontend audit | npm advisory scan | `cd frontend && npm audit --audit-level=high` |
 | Dependency lock drift | git + lockfiles | `git diff --exit-code -- pyproject.toml uv.lock requirements.txt package.json frontend/package.json frontend/package-lock.json` |
 | Secret leakage | grep/static scan | project-defined scanner, must mask real hosts/tokens in docs/examples |
-| OAuth registry model | model checker | TLA+/Alloy spec to be added for cache/registry transitions |
+| State/fault discovery | finite obligation catalog | local only: `make discover-state-gaps` / `make verify-state-gaps` |
+| OAuth/MCP finite models | TLC model checker | local only: `make verify-formal-tlc` |
+| OAuth/MCP SMT sanity | Z3 finite-universe checker | local only: `make verify-formal-smt` |
 | Fault injection | pytest/Hypothesis | corrupt cache, partial write, missing client, concurrent write |
 | Fuzz | pytest/Hypothesis/fast-check | markdown, JSONL, URL/path, MCP request payloads |
 
+## Local Formal Toolchain
+
+These checks are deliberately not part of CI/CD:
+
+- `make verify-formal-tlc` runs TLC over the checked-in finite TLA+ models and
+  requires every reachable queue to be exhausted (`states_left_on_queue = 0`).
+- `make verify-formal-smt` runs a Z3-backed finite-universe sanity checker over
+  the same core state-machine families. This is not the primary state-space
+  enumerator.
+- `make verify-formal-local` runs both local formal gates and their focused
+  pytest wrappers.
+- `make verify-state-gaps` enumerates the bounded adversarial obligation
+  catalog. The catalog must have explicit `status`, unique highest-priority
+  matches for every state, and evidence files for every implemented obligation.
+
+TLC is the primary tool for exhaustive reachable-state enumeration of the finite
+models. Z3 is used for SAT/UNSAT checks over explicitly declared finite
+universes; it is not described as a standalone exhaustive state enumerator.
+
 ## Current Evidence Snapshot
 
-Last observed local state on 2026-06-15:
+Last observed local state on 2026-06-15 after removing temporary gap records:
 
-- `rtk make check`: passed.
-- `uv run python -m compileall -q python tests`: passed.
-- `cd frontend && npm test -- --run`: 26 files passed, 104 tests passed.
-- `cd frontend && npm audit --audit-level=high`: 0 vulnerabilities.
-- `cd frontend && npm run build`: passed.
-- `uv run pytest`: failed, 241 failed and 2042 passed.
+- `make check`: passed; ruff had 0 errors, format check passed, `ty` exited 0 with warnings.
+- `uv run python -m compileall -q python tests tools`: passed.
+- `make verify-inventory`: passed; manifest coverage reported `coverage ok`.
+- Manifest temporary-gap scan: passed; `docs/verification/repo-verification-manifest.yml` contains no `temporary_gap` records.
+- `make verify-state-gaps`: passed; `STATE_GAP COVERED total=106560 covered=106560 uncovered=0 known_gaps=0 ambiguous=0 missing_evidence=0`.
+- `make verify-formal-local`: passed; TLC checked 4 models with exhausted queues, SMT/Z3 checked 4 finite universes, and the formal gate pytest wrappers passed.
+- `make verify-new-tests`: passed; verification tests reported 16 passed / 3 skipped, fuzz-fast passed, docs/version/secret gates passed, and local supply-chain gate had no failing findings. Optional vulnerability scanners (`pip-audit`, `osv-scanner`, `safety`) remain explicitly reported as unavailable local-only scanner gaps.
+- `uv run pytest -q`: passed; 2313 passed, 3 skipped, 1 warning.
+- `cd frontend && npm test -- --run`: passed; 29 files passed, 120 tests passed.
+- `cd frontend && npm run build`: passed with existing dependency/chunk-size warnings.
+- `cd frontend && npm audit --audit-level=high`: passed; 0 vulnerabilities.
 
-Therefore release is blocked until the full Python test suite failure set is explained and resolved or explicitly quarantined with a documented reason.
+Therefore the previous full Python test-suite release blocker is resolved in this local run. A future release tag still requires a fresh release-environment run of the mandatory gates.
 
 ## Release Gate
 

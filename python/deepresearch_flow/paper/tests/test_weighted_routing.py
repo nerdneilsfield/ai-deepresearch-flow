@@ -567,3 +567,122 @@ def test_select_runtime_route_keeps_default_no_window_behavior(
     )
 
     assert route.provider.name == "openai"
+
+
+def test_route_pool_malformed_upstream_quota_payload_does_not_cool_down_route() -> None:
+    from deepresearch_flow.paper.routing import RoutePool, parse_model_selector
+
+    provider = ProviderConfig(
+        name="openai",
+        type="openai_compatible",
+        base=[
+            BaseConfig(
+                url="https://api.example.com/v1",
+                weight=1,
+                key=[
+                    KeyConfig(
+                        value="key-a",
+                        weight=1,
+                        quota_error_tokens=["rate limit"],
+                        reset_time="2026-01-01T00:00:00Z",
+                        quota_duration=3600,
+                    )
+                ],
+            )
+        ],
+        models=[
+            ModelCapability(
+                model_name="gpt-4.1",
+                is_stream=True,
+                is_support_json_schema=True,
+                is_support_json_object=True,
+            )
+        ],
+        api_version=None,
+        deployment=None,
+        project_id=None,
+        location=None,
+        credentials_path=None,
+        anthropic_version=None,
+        max_tokens=None,
+        extra_headers={},
+        system_prompt=None,
+        user_prompt=None,
+    )
+    config = PaperConfig(
+        extract=DEFAULT_EXTRACT,
+        render=DEFAULT_RENDER,
+        providers=[provider],
+        main_model=[MainModelConfig(model="openai/gpt-4.1", weight=1)],
+    )
+    selector = parse_model_selector("openai/gpt-4.1", config)
+    pool = RoutePool.from_selector(config, selector, cooldown_seconds=60.0, rng=Random(1))
+
+    async def _run() -> tuple[bool, str]:
+        route = await pool.get()
+        flagged = await pool.mark_quota_exceeded(route, "{not-json", 502)
+        next_route = await pool.get()
+        return flagged, next_route.route_id
+
+    flagged, next_route_id = asyncio.run(_run())
+
+    assert flagged is False
+    assert next_route_id.endswith("|key-a")
+
+
+def test_route_pool_get_cancellation_does_not_poison_future_selection() -> None:
+    from deepresearch_flow.paper.routing import RoutePool, parse_model_selector
+
+    provider = ProviderConfig(
+        name="openai",
+        type="openai_compatible",
+        base=[
+            BaseConfig(
+                url="https://api.example.com/v1",
+                weight=1,
+                key=[KeyConfig(value="key-a", weight=1)],
+            )
+        ],
+        models=[
+            ModelCapability(
+                model_name="gpt-4.1",
+                is_stream=True,
+                is_support_json_schema=True,
+                is_support_json_object=True,
+            )
+        ],
+        api_version=None,
+        deployment=None,
+        project_id=None,
+        location=None,
+        credentials_path=None,
+        anthropic_version=None,
+        max_tokens=None,
+        extra_headers={},
+        system_prompt=None,
+        user_prompt=None,
+    )
+    config = PaperConfig(
+        extract=DEFAULT_EXTRACT,
+        render=DEFAULT_RENDER,
+        providers=[provider],
+        main_model=[MainModelConfig(model="openai/gpt-4.1", weight=1)],
+    )
+    selector = parse_model_selector("openai/gpt-4.1", config)
+    pool = RoutePool.from_selector(config, selector, cooldown_seconds=0.05, rng=Random(1))
+
+    async def _run() -> tuple[str, str]:
+        route = await pool.get()
+        await pool.mark_error(route)
+
+        pending = asyncio.create_task(pool.get())
+        await asyncio.sleep(0)
+        pending.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await pending
+
+        recovered = await pool.get()
+        return route.route_id, recovered.route_id
+
+    route_id, recovered_id = asyncio.run(_run())
+    assert recovered_id == route_id

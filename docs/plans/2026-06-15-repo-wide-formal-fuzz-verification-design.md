@@ -30,7 +30,7 @@ The adversarial review found that implementation must not begin from a weak inve
 4. Every production Python function/method uses a stable symbol ID, not a bare name.
 5. Every frontend exported symbol/component/store/composable uses a stable symbol ID, not a bare file path.
 6. Formal coverage and ordinary verification coverage are separate fields and are not mixed in coverage percentages.
-7. P0/P1 stateful systems require both a model proof/check and an implementation conformance check, unless a temporary gap is explicitly recorded.
+7. P0/P1 stateful systems require both a model proof/check and an implementation conformance check; the strict local inventory gate rejects temporary gap records.
 8. Boundary/criticality classification is conservative: suspected auth/token/cache/db/network/path/rendering code is promoted to review rather than silently downgraded.
 9. Tests for fuzz/property/fault coverage must obey `AGENTS.md` black-box rules.
 10. Existing full-suite failures are tracked in a baseline ledger so new verification gates can go green without hiding the release blocker.
@@ -70,6 +70,54 @@ Therefore the required deliverable is not a static plan with several thousand li
 ```
 
 The generated manifest may be much larger than this design. That is expected. Manual prose is only the architecture; the generated inventory/manifest is the coverage source of truth.
+
+
+## Adversarial State/Fault Discovery Layer
+
+Formal models must not be written only from the current implementation. Before a
+state machine is treated as meaningful, the repository must maintain an
+independent finite state/fault obligation catalog derived from:
+
+1. official protocol specifications for protocol states,
+2. generic storage/network/runtime/browser fault taxonomies,
+3. production incident classes already seen by the project, and
+4. deliberately adversarial edge cases that are not represented by current code branches.
+
+The catalog lives at:
+
+```text
+docs/verification/state-space-obligations.yml
+```
+
+The discovery tool lives at:
+
+```text
+tools/formal/discover_state_gaps.py
+```
+
+It enumerates the bounded cross-product of each subsystem's declared dimensions
+and classifies every generated state as one of:
+
+```text
+handled / fail_closed / degrade_safely / retry_or_recover / known_gap / uncovered
+```
+
+States marked `known_gap` are not success. They are machine-discovered work
+items. `make discover-state-gaps` reports them without failing so maintainers can
+inspect the search space. `make verify-state-gaps` fails until known/uncovered
+gaps are removed or converted into executable handling evidence. Neither target
+is part of CI/CD or default `make check`; it is a local robustness tool.
+
+This layer is intentionally different from model checking:
+
+- TLC exhausts reachable states of a finite model.
+- Z3 checks finite-universe logical obligations and negative controls.
+- State/fault discovery asks whether the model itself omitted externally relevant
+  states before the model is trusted.
+
+Acceptance rule: a P0/P1 state machine cannot be called robust merely because its
+current TLA+/SMT model passes. It must also have no untriaged discovery gaps for
+the finite state/fault catalog that applies to that subsystem.
 
 ## Definitions
 
@@ -113,7 +161,7 @@ MODEL_PROOF
 IMPLEMENTATION_REFINEMENT_CHECK
 ```
 
-P0 stateful items cannot count as formally covered unless both are present or a temporary gap is explicitly recorded.
+P0 stateful items cannot count as formally covered unless both are present. A temporary gap is a blocker, not coverage.
 
 ### Fuzz/property artifact
 
@@ -153,7 +201,7 @@ DOC_LINK_CHECK
 MANUAL_GAP_EXPLAINED
 ```
 
-`MANUAL_GAP_EXPLAINED` is allowed only with a reason, owner, and follow-up target. It cannot be the only coverage class for security-critical code.
+`MANUAL_GAP_EXPLAINED` is allowed only in design notes and non-release exploratory reports. The checked repository manifest must not contain temporary gap records.
 
 ### Formal status and evidence status
 
@@ -174,7 +222,7 @@ total inventory items
 items with any machine evidence
 items with formal_status != none
 P0 items with model + conformance
-P0 items with temporary gaps
+P0 items with missing executable evidence
 uncovered items
 ```
 
@@ -993,19 +1041,13 @@ Generated inventory compares actual files/symbols with this manifest. New files/
 
 ## Current Known Blocker
 
-The last observed full Python suite result was:
-
-```text
-241 failed, 2042 passed
-```
-
-This must remain a release blocker. Repo-wide formal/fuzz work cannot hide this.
+Earlier work recorded a historical full-suite blocker. The current evidence snapshot is maintained in `docs/verification/machine-verifiable-model.md`; any future full-suite failure becomes release-blocking again. Repo-wide formal/fuzz work must not hide it.
 
 ## Acceptance Criteria
 
 1. Every tracked source/config/doc file appears in the verification inventory.
 2. Every Python production function and frontend exported symbol/component appears in the generated inventory or is explicitly ignored with reason.
-3. P0 subsystems have formal models or an explicit temporary gap plus fuzz/fault coverage.
+3. P0/P1 modeled subsystems have executable formal models plus implementation conformance evidence; temporary gap records fail the strict local gate.
 4. Fuzz/fault tests are deterministic in fast mode.
 5. At least one negative-control formal check exists per formal model.
 6. Strict gate blocks release on missing inventory, failing model, failing fuzz/fault, build failure, audit failure, or full-test failure.

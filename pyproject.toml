@@ -74,6 +74,7 @@ dev = [
     "pytest-cov>=4.1.0",
     "ruff>=0.13.1",
     "ty>=0.0.27",
+    "z3-solver>=4.16.0.0",
 ]
 
 [tool.ruff]

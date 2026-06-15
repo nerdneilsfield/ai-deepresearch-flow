@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help install lint format format-check typecheck test test-guardrails check quality verify-inventory verify-formal verify-fuzz-fast verify-docs verify-supply-chain verify-new-tests verify-known-baseline verify-repo-strict
+.PHONY: help install lint format format-check typecheck test test-guardrails check quality verify-inventory verify-formal verify-formal-tlc verify-formal-smt verify-formal-local discover-state-gaps verify-state-gaps verify-fuzz-fast verify-docs verify-supply-chain verify-new-tests verify-known-baseline verify-repo-strict
 
 help:
 	@printf "Available targets:\n"
@@ -15,6 +15,11 @@ help:
 	@printf "  quality        Run check plus tests\n"
 	@printf "  verify-inventory Run repo-wide verification inventory coverage gate\n"
 	@printf "  verify-formal Run dependency-free formal model checkers\n"
+	@printf "  verify-formal-tlc Run local TLC exhaustive state-space checks (not CI)\n"
+	@printf "  verify-formal-smt Run local Z3 finite-universe checks (not CI)\n"
+	@printf "  verify-formal-local Run TLC plus Z3 local formal checks (not CI)\n"
+	@printf "  discover-state-gaps Enumerate adversarial state/fault gaps (not CI)\n"
+	@printf "  verify-state-gaps Fail if adversarial state/fault gaps remain (not CI)\n"
 	@printf "  verify-fuzz-fast Run bounded Python/frontend fuzz and fault gates\n"
 	@printf "  verify-docs Run version and secret/documentation gates\n"
 	@printf "  verify-supply-chain Run local supply-chain gates\n"
@@ -74,6 +79,27 @@ verify-inventory:
 
 verify-formal:
 	uv run python tools/formal/check_all_models.py
+
+verify-formal-tlc:
+	DRFLOW_RUN_LOCAL_FORMAL=1 uv run python tools/formal/tlc/check_all_tlc_models.py
+
+verify-formal-smt:
+	DRFLOW_RUN_LOCAL_FORMAL=1 uv run python tools/formal/smt/check_all_smt_models.py
+
+verify-formal-local: verify-formal-tlc verify-formal-smt
+	DRFLOW_RUN_LOCAL_FORMAL=1 uv run pytest \
+		tests/verification/test_tlc_formal_gate.py \
+		tests/verification/test_smt_formal_gate.py \
+		-q
+
+discover-state-gaps:
+	uv run python tools/formal/discover_state_gaps.py \
+		--catalog docs/verification/state-space-obligations.yml
+
+verify-state-gaps:
+	uv run python tools/formal/discover_state_gaps.py \
+		--catalog docs/verification/state-space-obligations.yml \
+		--fail-on-gap
 
 verify-fuzz-fast:
 	HYPOTHESIS_PROFILE=ci-fast uv run pytest \

@@ -681,7 +681,7 @@ class TestMcpGitHubOAuth(unittest.IsolatedAsyncioTestCase):
             response.headers["location"].startswith("https://papers.example.com/consent?")
         )
 
-    async def test_authorize_recovers_unknown_client_registration_from_request(self) -> None:
+    async def test_authorize_rejects_unknown_client_registration_without_synthesis(self) -> None:
         cache_path = Path(self.tmpdir.name) / "missing-oauth-clients.json"
         with suppress(FileNotFoundError):
             cache_path.unlink()
@@ -719,11 +719,8 @@ class TestMcpGitHubOAuth(unittest.IsolatedAsyncioTestCase):
                     },
                 )
 
-        self.assertEqual(response.status_code, 302)
-        self.assertTrue(
-            response.headers["location"].startswith("https://papers.example.com/consent?")
-        )
-        self.assertTrue(cache_path.exists())
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(cache_path.exists())
 
     async def test_token_accepts_chatgpt_metadata_url_resource_alias(self) -> None:
         app = self._app()

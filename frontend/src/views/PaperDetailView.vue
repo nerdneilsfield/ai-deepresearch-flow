@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { defineAsyncComponent, onUnmounted, ref, computed, watch } from 'vue'
+import { onUnmounted, ref, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { getSummaryPayloadCached, type PaperDetail } from '@/lib/api'
@@ -15,12 +15,13 @@ import { useElementBounding, useMediaQuery, useWindowSize, refDebounced } from '
 import { usePaperDetail } from '@/composables/usePaperDetail'
 import { useSplitView, type ViewMode } from '@/composables/useSplitView'
 import { resolveStaticBaseUrl } from '@/lib/static-base'
+import { defineSafeAsyncComponent } from '@/lib/async-component'
 import { ChevronLeft, ChevronRight } from 'lucide-vue-next'
 
-const SummaryPanel = defineAsyncComponent(() => import('@/components/SummaryPanel.vue'))
-const MarkdownPanel = defineAsyncComponent(() => import('@/components/MarkdownPanel.vue'))
-const PdfViewer = defineAsyncComponent(() => import('@/components/PdfViewer.vue'))
-const MetadataPanel = defineAsyncComponent(() => import('@/components/paper-detail/MetadataPanel.vue'))
+const SummaryPanel = defineSafeAsyncComponent('Summary panel', () => import('@/components/SummaryPanel.vue'))
+const MarkdownPanel = defineSafeAsyncComponent('Markdown panel', () => import('@/components/MarkdownPanel.vue'))
+const PdfViewer = defineSafeAsyncComponent('PDF viewer', () => import('@/components/PdfViewer.vue'))
+const MetadataPanel = defineSafeAsyncComponent('Metadata panel', () => import('@/components/paper-detail/MetadataPanel.vue'))
 
 const route = useRoute()
 const router = useRouter()

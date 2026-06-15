@@ -9,7 +9,6 @@ import re
 from typing import Any
 from urllib.parse import parse_qsl, quote, urlencode
 
-from mcp.shared.auth import OAuthClientInformationFull
 from starlette.applications import Starlette
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
@@ -124,12 +123,10 @@ class _OAuthAuthorizeResourceAliasBridge:
         *,
         resource_metadata_url: str,
         canonical_resource_url: str,
-        oauth_provider: Any | None = None,
     ) -> None:
         self.app = app
         self.resource_metadata_url = resource_metadata_url.rstrip("/")
         self.canonical_resource_url = canonical_resource_url.rstrip("/")
-        self.oauth_provider = oauth_provider
 
     async def __call__(self, scope, receive, send) -> None:
         if scope.get("type") != "http":
@@ -152,8 +149,6 @@ class _OAuthAuthorizeResourceAliasBridge:
             else:
                 rewritten_items.append((key, value))
 
-        await self._ensure_client_registered(rewritten_items)
-
         if not changed:
             await self.app(scope, receive, send)
             return
@@ -161,36 +156,6 @@ class _OAuthAuthorizeResourceAliasBridge:
         rewritten = dict(scope)
         rewritten["query_string"] = urlencode(rewritten_items).encode("latin-1")
         await self.app(rewritten, receive, send)
-
-    async def _ensure_client_registered(self, query_items: list[tuple[str, str]]) -> None:
-        if self.oauth_provider is None:
-            return
-        params = {key: value for key, value in query_items}
-        client_id = str(params.get("client_id") or "").strip()
-        redirect_uri = str(params.get("redirect_uri") or "").strip()
-        if not client_id or not redirect_uri:
-            return
-        get_client = getattr(self.oauth_provider, "get_client", None)
-        register_client = getattr(self.oauth_provider, "register_client", None)
-        if get_client is None or register_client is None:
-            return
-        if await get_client(client_id) is not None:
-            return
-        _LOGGER.info(
-            "OAuth client_id=%s missing from registry; synthesizing DCR client from authorize request",
-            _mask_value(client_id),
-        )
-        client_info = OAuthClientInformationFull(
-            client_id=client_id,
-            client_secret=None,
-            redirect_uris=[redirect_uri],
-            token_endpoint_auth_method="none",
-            grant_types=["authorization_code", "refresh_token"],
-            response_types=["code"],
-            scope=params.get("scope") or "user",
-            client_name="Recovered MCP OAuth Client",
-        )
-        await register_client(client_info)
 
 
 class _OAuthTokenResourceBridge:
@@ -325,7 +290,6 @@ def _oauth_protocol_routes(oauth_app, *, public_base_url: str) -> list[Route]:
                 oauth_app,
                 resource_metadata_url=resource_metadata_url,
                 canonical_resource_url=canonical_resource_url,
-                oauth_provider=getattr(oauth_app, "_drflow_oauth_provider", None),
             ),
             methods=["GET", "POST"],
         ),

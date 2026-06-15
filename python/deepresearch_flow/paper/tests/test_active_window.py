@@ -118,3 +118,24 @@ def test_next_active_start_returns_expected_times() -> None:
         2026, 4, 22, 8, 0, tzinfo=timezone.utc
     )
     assert next_active_start(active_now, [], timezone.utc) is None
+
+
+def test_active_window_handles_dst_fold_without_wrongly_rejecting_valid_local_time() -> None:
+    tz = ZoneInfo("America/New_York")
+    windows = parse_windows(["01:00-02:00"])
+    first_fold = datetime(2026, 11, 1, 1, 30, tzinfo=tz, fold=0)
+    second_fold = datetime(2026, 11, 1, 1, 30, tzinfo=tz, fold=1)
+
+    assert is_active(first_fold, windows, tz) is True
+    assert is_active(second_fold, windows, tz) is True
+
+
+def test_next_active_start_after_forward_clock_jump_returns_future_boundary() -> None:
+    tz = ZoneInfo("America/New_York")
+    windows = parse_windows(["09:00-10:00"])
+    skewed_now = datetime(2026, 4, 21, 23, 30, tzinfo=timezone.utc)
+
+    next_start = next_active_start(skewed_now, windows, tz)
+
+    assert next_start is not None
+    assert next_start > skewed_now.astimezone(tz)
