@@ -117,6 +117,34 @@ describe('RenderedMarkdown', () => {
     wrapper.unmount()
   })
 
+  it('renders formulas without relying on sanitizer-preserved inline layout styles', async () => {
+    const { default: RenderedMarkdown } = await import('@/components/RenderedMarkdown.vue')
+    const wrapper = mount(RenderedMarkdown, {
+      attachTo: document.body,
+      props: {
+        markdown: String.raw`Display math: $$L_{\mu}=M\odot L_o+\lambda\cdot L_p$$`,
+      },
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 900))
+    await wrapper.vm.$nextTick()
+
+    const katexRoot = wrapper.find('.katex')
+    const diagnostics = [
+      `text=${wrapper.text()}`,
+      `html=${wrapper.html()}`,
+    ].join('\n')
+
+    expect(katexRoot.exists(), diagnostics).toBe(true)
+    expect(katexRoot.find('math').exists(), diagnostics).toBe(true)
+    expect(katexRoot.find('.katex-html').exists(), diagnostics).toBe(false)
+    expect(katexRoot.attributes('style'), diagnostics).toBeUndefined()
+    expect(wrapper.text(), diagnostics).not.toContain(String.raw`L_{\mu}`)
+    expect(wrapper.find('[data-testid="markdown-renderer-diagnostics"]').exists(), diagnostics).toBe(false)
+
+    wrapper.unmount()
+  })
+
   it('shows detailed diagnostics when Mermaid input remains unrendered', async () => {
     const { default: RenderedMarkdown } = await import('@/components/RenderedMarkdown.vue')
     const source = [

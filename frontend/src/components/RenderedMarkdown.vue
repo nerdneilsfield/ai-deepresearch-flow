@@ -14,6 +14,7 @@ import { STATIC_BASE } from '@/lib/config'
 import { useTheme } from '@/composables/useTheme'
 import { resolveMarkdownItPlugin } from '@/lib/module-interop'
 import { normalizeMathLayout, normalizeMermaidLineBreaks, sanitizeMermaidSvgContent } from '@/lib/markdown-rendering'
+import { renderMermaidCodeBlocks } from '@/lib/mermaid-renderer'
 
 // Global configuration for md-editor-v3
 mermaid.initialize({ startOnLoad: false })
@@ -28,7 +29,12 @@ config({
     },
   },
   katexConfig(baseConfig) {
-    return { ...baseConfig, throwOnError: false, strict: false }
+    return {
+      ...baseConfig,
+      throwOnError: false,
+      strict: false,
+      output: 'mathml',
+    }
   },
   mermaidConfig(baseConfig) {
     const isDark = baseConfig?.theme === 'dark'
@@ -138,6 +144,9 @@ const rendererHtmlAttrs = [
   'target',
   'rel',
   'class',
+  'display',
+  'encoding',
+  'xmlns',
   'aria-hidden',
   'aria-label',
   'data-processed',
@@ -255,13 +264,15 @@ function auditRendererOutput(
 }
 
 function sanitizeHtml(html: string) {
-  return DOMPurify.sanitize(String(html || ''), {
+  const sanitized = DOMPurify.sanitize(String(html || ''), {
+    ADD_TAGS: ['semantics', 'annotation'],
     ADD_ATTR: rendererHtmlAttrs,
     FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed'],
     FORBID_ATTR: forbiddenHtmlAttrs,
     ALLOW_DATA_ATTR: false,
     ALLOWED_URI_REGEXP: safeUriPattern,
   })
+  return String(sanitized).replace(/<annotation\b[^>]*>[\s\S]*?<\/annotation>/gi, '')
 }
 
 async function sanitizeMermaidSvg(svg: string) {
@@ -417,7 +428,7 @@ function handleCatalog(list: HeadList[]) {
 let markmapDepsPromise: Promise<any> | null = null
 let transformTimer: ReturnType<typeof setTimeout> | null = null
 let diagnosticTimer: ReturnType<typeof setTimeout> | null = null
-let lastTransformedMarkdown = ''
+let lastTransformKey = ''
 
 watch(
   isOversizedMarkdown,
@@ -430,7 +441,7 @@ watch(
       clearTimeout(diagnosticTimer)
       diagnosticTimer = null
     }
-    lastTransformedMarkdown = ''
+    lastTransformKey = ''
     if (oversized) emit('outline', [])
   },
   { immediate: true },
@@ -440,7 +451,7 @@ watch(
   () => props.markdown,
   () => {
     rendererDiagnostics.value = []
-    lastTransformedMarkdown = ''
+    lastTransformKey = ''
     if (diagnosticTimer) {
       clearTimeout(diagnosticTimer)
       diagnosticTimer = null
@@ -464,8 +475,9 @@ async function handleHtmlChanged() {
   if (isOversizedMarkdown.value) return
   // Skip if the markdown content hasn't actually changed (e.g., resize-triggered events)
   const currentMd = processedMarkdown.value
-  if (currentMd === lastTransformedMarkdown) return
-  lastTransformedMarkdown = currentMd
+  const currentTransformKey = `${editorTheme.value}\u0000${currentMd}`
+  if (currentTransformKey === lastTransformKey) return
+  lastTransformKey = currentTransformKey
 
   if (transformTimer) clearTimeout(transformTimer)
 
@@ -473,7 +485,25 @@ async function handleHtmlChanged() {
     await nextTick()
     const root = document.getElementById(editorId)
     if (!root) return
+    const mermaidFailures: RendererDiagnostic[] = []
+    await renderMermaidCodeBlocks(root, {
+      idPrefix: `${editorId}-mermaid`,
+      theme: editorTheme.value,
+      renderer: mermaid,
+      sanitizeSvg: sanitizeMermaidSvg,
+      onError(error, source) {
+        mermaidFailures.push({
+          kind: 'mermaid',
+          severity: 'error',
+          title: 'Mermaid rendering failed.',
+          message: 'The markdown contains Mermaid source, but Mermaid could not produce a usable SVG. Showing the original diagram source so the content is not silently lost.',
+          excerpt: truncateDiagnosticText(source),
+          details: errorMessage(error),
+        })
+      },
+    })
     auditRendererOutput(root, currentMd)
+    mermaidFailures.forEach(replaceDiagnostic)
     if (diagnosticTimer) clearTimeout(diagnosticTimer)
     diagnosticTimer = setTimeout(() => {
       const latestRoot = document.getElementById(editorId)
@@ -558,7 +588,7 @@ onBeforeUnmount(() => {
       v-else
       :editorId="editorId"
       :modelValue="processedMarkdown"
-      :noMermaid="false"
+      :noMermaid="true"
       :noEcharts="true"
       :noHighlight="true"
       :sanitize="sanitizeHtml"
@@ -682,6 +712,18 @@ onBeforeUnmount(() => {
 :deep(.katex-display) {
   overflow-x: auto;
   overflow-y: hidden;
+}
+:deep(.md-editor-katex-block) {
+  overflow-x: auto;
+  overflow-y: hidden;
+  text-align: center;
+}
+:deep(.md-editor-katex-block .katex) {
+  display: inline-block;
+  max-width: 100%;
+}
+:deep(.katex math[display="block"]) {
+  display: block;
 }
 :deep(.katex),
 :deep(.katex-display) {
