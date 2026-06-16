@@ -46,7 +46,7 @@ FORMAL_TARGETS = {
                 "kind": "IMPLEMENTATION_REFINEMENT_CHECK",
                 "path": "python/deepresearch_flow/paper/snapshot/tests/test_mcp_transport.py",
                 "checker_command": "uv run pytest python/deepresearch_flow/paper/snapshot/tests/test_mcp_transport.py -q",
-                "observable_contract": "MCP OAuth HTTP endpoints reject unknown clients and expose registered clients through observable HTTP behavior.",
+                "observable_contract": "MCP OAuth HTTP endpoints recover syntactically valid missing dynamic clients for reauth, reject malformed clients, and never issue tokens before the full auth chain.",
             },
         ],
     },

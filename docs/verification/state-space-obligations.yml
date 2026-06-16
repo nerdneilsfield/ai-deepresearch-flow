@@ -32,12 +32,15 @@ subsystems:
     - mcp_call
     client_state:
     - registered_durable
-    - unknown
+    - missing_recoverable
+    - missing_malformed
     - cache_missing
     - cache_corrupt
     - partial_persist
     - duplicate_registration
     - stale_memory_only
+    - recovered_persisted
+    - recovered_memory_only
     resource_state:
     - canonical
     - metadata_alias
@@ -90,10 +93,51 @@ subsystems:
     - python/deepresearch_flow/paper/snapshot/tests/test_oauth_client_cache.py
     - formal/oauth_client_cache/OAuthClientCache.tla
     - tools/formal/smt/check_all_smt_models.py
+  - id: oauth_recoverable_missing_client_starts_reauth_without_token
+    when:
+      endpoint: authorize
+      client_state:
+      - missing_recoverable
+      - cache_missing
+      - stale_memory_only
+      resource_state:
+      - canonical
+      - metadata_alias
+      redirect_state: registered
+      storage_fault: none
+      replay_state: fresh
+    expected: recover_client_registration_then_restart_authorization_without_token_issue
+    status: implemented
+    priority: 111
+    evidence: *id001
+  - id: oauth_recovered_client_token_requires_completed_auth_chain
+    when:
+      endpoint: token
+      client_state:
+      - recovered_persisted
+      - recovered_memory_only
+      resource_state:
+      - canonical
+      - metadata_alias
+      pkce_state: valid
+      redirect_state: registered
+      storage_fault: none
+      replay_state: fresh
+    expected: issue_token_only_after_reauth_github_pkce_resource_redirect_valid
+    status: implemented
+    priority: 111
+    evidence: *id001
+  - id: oauth_malformed_missing_client_fails_closed
+    when:
+      client_state: missing_malformed
+    expected: fail_closed
+    status: implemented
+    priority: 85
+    evidence: *id001
   - id: oauth_unknown_or_bad_client_safe_error
     when:
       client_state:
-      - unknown
+      - missing_recoverable
       - cache_missing
       - cache_corrupt
       - partial_persist
@@ -101,6 +145,15 @@ subsystems:
     expected: fail_closed_or_force_new_registration_without_token_issue
     status: implemented
     priority: 80
+    evidence: *id001
+  - id: oauth_recovered_client_safe_default
+    when:
+      client_state:
+      - recovered_persisted
+      - recovered_memory_only
+    expected: continue_only_through_valid_reauth_or_fail_closed
+    status: implemented
+    priority: 60
     evidence: *id001
   - id: oauth_duplicate_registration_atomic_last_write_wins
     evidence:

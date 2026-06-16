@@ -221,6 +221,8 @@ def check_model(spec: ModelSpec, *, inject_bug: bool = False) -> dict[str, Any]:
             else universe.index(state) + 1,
             "transitions_checked": transitions_checked,
             "actions": len(spec.actions),
+            "variables": [var.name for var in spec.variables],
+            "action_names": [action.name for action in spec.actions],
             "fault_actions": sum(1 for action in spec.actions if action.fault),
             "closure": "fixed_point" if not queue else "stopped_on_counterexample",
         },

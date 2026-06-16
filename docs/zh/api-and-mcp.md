@@ -220,7 +220,7 @@ uv run deepresearch-flow paper db api serve \
 
 推荐再设置：
 
-- `MCP_OAUTH_CLIENT_CACHE=/path/to/mcp-oauth-clients.json`：持久化 Dynamic Client Registration 的 client registry。否则容器重启、HOME 变化或缓存目录变化后，ChatGPT/Claude 可能继续拿旧 `client_id` 调 `/authorize`，服务端会报 `The client ID ... was not found in the server's client registry`；此时客户端需要重新 Scan/Reconnect。固定这个 JSON 文件路径可以让已注册的 OAuth client 在重启后继续可用。
+- `MCP_OAUTH_CLIENT_CACHE=/path/to/mcp-oauth-clients.json`：持久化 Dynamic Client Registration 的 client registry。固定这个 JSON 文件路径可以让已注册的 OAuth client 在重启后继续可用。如果缓存仍然丢失，而 ChatGPT/Claude 用旧的、格式合法的动态 `client_id` 调 `/authorize`，drflow 会尝试进入 reauth recovery 流程，而不是直接签发 token；格式异常的 client ID 仍然 fail closed。反复出现 recovery 日志通常说明这个缓存路径没有挂到持久化 volume。
 
 OAuth 客户端配置摘要：
 

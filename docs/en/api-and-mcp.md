@@ -220,7 +220,7 @@ Required environment variables:
 
 Recommended additional setting:
 
-- `MCP_OAUTH_CLIENT_CACHE=/path/to/mcp-oauth-clients.json`: persists the Dynamic Client Registration client registry. Without a stable file path, a container restart, HOME change, or cache-directory change can make ChatGPT/Claude keep using an old `client_id` for `/authorize`, and the server will report `The client ID ... was not found in the server's client registry`; the client then has to Scan/Reconnect. Pinning this JSON file path keeps registered OAuth clients usable across restarts.
+- `MCP_OAUTH_CLIENT_CACHE=/path/to/mcp-oauth-clients.json`: persists the Dynamic Client Registration client registry. Pinning this JSON file path keeps registered OAuth clients usable across restarts. If the cache is still lost and ChatGPT/Claude sends an old but syntactically valid dynamic `client_id` to `/authorize`, drflow attempts a reauth recovery flow instead of issuing a token directly; malformed client IDs still fail closed. Treat repeated recovery logs as a signal that this cache path is not mounted persistently.
 
 OAuth client setup summary:
 

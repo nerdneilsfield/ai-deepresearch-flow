@@ -42,68 +42,182 @@ def _bool_vars(*names: str) -> tuple[Var, ...]:
 
 def oauth_client_cache_model() -> ModelSpec:
     variables = _bool_vars(
-        "registered", "durable", "revoked", "expired", "resource_ok", "issued", "corrupt"
+        "registered",
+        "durable",
+        "missing_recoverable",
+        "missing_malformed",
+        "resource_ok",
+        "pkce_ok",
+        "redirect_ok",
+        "github_auth_ok",
+        "reauth_pending",
+        "issued",
     )
+
+    def safe_state(
+        *,
+        registered: int | z3.ArithRef = 0,
+        durable: int | z3.ArithRef = 0,
+        missing_recoverable: int | z3.ArithRef = 0,
+        missing_malformed: int | z3.ArithRef = 0,
+        resource_ok: int | z3.ArithRef = 1,
+        pkce_ok: int | z3.ArithRef = 1,
+        redirect_ok: int | z3.ArithRef = 1,
+        github_auth_ok: int | z3.ArithRef = 0,
+        reauth_pending: int | z3.ArithRef = 0,
+        issued: int | z3.ArithRef = 0,
+    ) -> dict[str, int | z3.ArithRef]:
+        return {
+            "registered": registered,
+            "durable": durable,
+            "missing_recoverable": missing_recoverable,
+            "missing_malformed": missing_malformed,
+            "resource_ok": resource_ok,
+            "pkce_ok": pkce_ok,
+            "redirect_ok": redirect_ok,
+            "github_auth_ok": github_auth_ok,
+            "reauth_pending": reauth_pending,
+            "issued": issued,
+        }
 
     def register_ok(
         cur: dict[str, z3.ArithRef], nxt: dict[str, z3.ArithRef], bug: bool
     ) -> z3.BoolRef:
-        return z3.And(
-            assign_all(
-                nxt,
-                {
-                    "registered": 1,
-                    "durable": 1,
-                    "revoked": 0,
-                    "expired": 0,
-                    "resource_ok": 1,
-                    "issued": 0,
-                    "corrupt": 0,
-                },
-            )
-        )
+        del cur, bug
+        return assign_all(nxt, safe_state(registered=1, durable=1))
 
-    def partial_register(
+    def lose_client_cache_to_recoverable(
         cur: dict[str, z3.ArithRef], nxt: dict[str, z3.ArithRef], bug: bool
     ) -> z3.BoolRef:
+        del bug
         return assign_all(
             nxt,
-            {
-                "registered": 1,
-                "durable": 0,
-                "revoked": 0,
-                "expired": 0,
-                "resource_ok": cur["resource_ok"],
-                "issued": 0,
-                "corrupt": 1,
-            },
+            safe_state(
+                missing_recoverable=1,
+                resource_ok=cur["resource_ok"],
+                pkce_ok=cur["pkce_ok"],
+                redirect_ok=cur["redirect_ok"],
+            ),
         )
 
-    def issue(cur: dict[str, z3.ArithRef], nxt: dict[str, z3.ArithRef], bug: bool) -> z3.BoolRef:
-        preconditions = [cur["registered"] == 1, cur["revoked"] == 0, cur["expired"] == 0]
+    def malformed_client_request(
+        cur: dict[str, z3.ArithRef], nxt: dict[str, z3.ArithRef], bug: bool
+    ) -> z3.BoolRef:
+        del bug
+        return assign_all(
+            nxt,
+            safe_state(
+                missing_malformed=1,
+                resource_ok=cur["resource_ok"],
+                pkce_ok=cur["pkce_ok"],
+                redirect_ok=cur["redirect_ok"],
+            ),
+        )
+
+    def recover_missing_client_for_reauth(
+        cur: dict[str, z3.ArithRef], nxt: dict[str, z3.ArithRef], bug: bool
+    ) -> z3.BoolRef:
+        return z3.And(
+            cur["missing_recoverable"] == 1,
+            cur["missing_malformed"] == 0,
+            cur["resource_ok"] == 1,
+            cur["redirect_ok"] == 1,
+            assign_all(
+                nxt,
+                safe_state(
+                    registered=1,
+                    durable=1,
+                    resource_ok=cur["resource_ok"],
+                    pkce_ok=cur["pkce_ok"],
+                    redirect_ok=cur["redirect_ok"],
+                    reauth_pending=0 if bug else 1,
+                    issued=1 if bug else 0,
+                ),
+            ),
+        )
+
+    def recover_missing_client_memory_only(
+        cur: dict[str, z3.ArithRef], nxt: dict[str, z3.ArithRef], bug: bool
+    ) -> z3.BoolRef:
+        del bug
+        return z3.And(
+            cur["missing_recoverable"] == 1,
+            cur["missing_malformed"] == 0,
+            cur["resource_ok"] == 1,
+            cur["redirect_ok"] == 1,
+            assign_all(
+                nxt,
+                safe_state(
+                    registered=1,
+                    durable=0,
+                    resource_ok=cur["resource_ok"],
+                    pkce_ok=cur["pkce_ok"],
+                    redirect_ok=cur["redirect_ok"],
+                    reauth_pending=1,
+                ),
+            ),
+        )
+
+    def github_callback_ok(
+        cur: dict[str, z3.ArithRef], nxt: dict[str, z3.ArithRef], bug: bool
+    ) -> z3.BoolRef:
+        del bug
+        return z3.And(
+            cur["registered"] == 1,
+            cur["missing_recoverable"] == 0,
+            cur["missing_malformed"] == 0,
+            cur["resource_ok"] == 1,
+            cur["redirect_ok"] == 1,
+            same_except(cur, nxt, "github_auth_ok", "reauth_pending", "issued"),
+            nxt["github_auth_ok"] == 1,
+            nxt["reauth_pending"] == 0,
+            nxt["issued"] == 0,
+        )
+
+    def token_after_reauth(
+        cur: dict[str, z3.ArithRef], nxt: dict[str, z3.ArithRef], bug: bool
+    ) -> z3.BoolRef:
+        preconditions = [
+            cur["registered"] == 1,
+            cur["missing_recoverable"] == 0,
+            cur["missing_malformed"] == 0,
+        ]
         if not bug:
             preconditions.extend(
-                [cur["durable"] == 1, cur["resource_ok"] == 1, cur["corrupt"] == 0]
+                [
+                    cur["resource_ok"] == 1,
+                    cur["pkce_ok"] == 1,
+                    cur["redirect_ok"] == 1,
+                    cur["github_auth_ok"] == 1,
+                    cur["reauth_pending"] == 0,
+                ]
             )
+        return z3.And(*preconditions, same_except(cur, nxt, "issued"), nxt["issued"] == 1)
+
+    def pkce_mismatch(
+        cur: dict[str, z3.ArithRef], nxt: dict[str, z3.ArithRef], bug: bool
+    ) -> z3.BoolRef:
+        del bug
         return z3.And(
-            *preconditions,
-            same_except(cur, nxt, "issued"),
-            nxt["issued"] == 1,
+            same_except(cur, nxt, "pkce_ok", "issued"),
+            nxt["pkce_ok"] == 0,
+            nxt["issued"] == 0,
         )
 
-    def revoke(cur: dict[str, z3.ArithRef], nxt: dict[str, z3.ArithRef], bug: bool) -> z3.BoolRef:
+    def redirect_mismatch(
+        cur: dict[str, z3.ArithRef], nxt: dict[str, z3.ArithRef], bug: bool
+    ) -> z3.BoolRef:
+        del bug
         return z3.And(
-            same_except(cur, nxt, "revoked", "issued"), nxt["revoked"] == 1, nxt["issued"] == 0
-        )
-
-    def expire(cur: dict[str, z3.ArithRef], nxt: dict[str, z3.ArithRef], bug: bool) -> z3.BoolRef:
-        return z3.And(
-            same_except(cur, nxt, "expired", "issued"), nxt["expired"] == 1, nxt["issued"] == 0
+            same_except(cur, nxt, "redirect_ok", "issued"),
+            nxt["redirect_ok"] == 0,
+            nxt["issued"] == 0,
         )
 
     def resource_mismatch(
         cur: dict[str, z3.ArithRef], nxt: dict[str, z3.ArithRef], bug: bool
     ) -> z3.BoolRef:
+        del bug
         return z3.And(
             same_except(cur, nxt, "resource_ok", "issued"),
             nxt["resource_ok"] == 0,
@@ -111,56 +225,72 @@ def oauth_client_cache_model() -> ModelSpec:
         )
 
     def restart(cur: dict[str, z3.ArithRef], nxt: dict[str, z3.ArithRef], bug: bool) -> z3.BoolRef:
+        del bug
         return assign_all(
             nxt,
-            {
-                "registered": z3.If(cur["durable"] == 1, 1, 0),
-                "durable": z3.If(cur["durable"] == 1, 1, 0),
-                "revoked": cur["revoked"],
-                "expired": cur["expired"],
-                "resource_ok": cur["resource_ok"],
-                "issued": 0,
-                "corrupt": 0,
-            },
+            safe_state(
+                registered=z3.If(cur["durable"] == 1, 1, 0),
+                durable=z3.If(cur["durable"] == 1, 1, 0),
+                missing_recoverable=z3.If(
+                    z3.And(cur["registered"] == 1, cur["durable"] == 0), 1, 0
+                ),
+                missing_malformed=cur["missing_malformed"],
+                resource_ok=cur["resource_ok"],
+                pkce_ok=cur["pkce_ok"],
+                redirect_ok=cur["redirect_ok"],
+            ),
         )
 
     def invariant(st: dict[str, z3.ArithRef]) -> z3.BoolRef:
-        return z3.Implies(
-            st["issued"] == 1,
-            z3.And(
-                st["registered"] == 1,
-                st["durable"] == 1,
-                st["revoked"] == 0,
-                st["expired"] == 0,
-                st["resource_ok"] == 1,
-                st["corrupt"] == 0,
+        return z3.And(
+            z3.Implies(
+                st["issued"] == 1,
+                z3.And(
+                    st["registered"] == 1,
+                    st["missing_recoverable"] == 0,
+                    st["missing_malformed"] == 0,
+                    st["resource_ok"] == 1,
+                    st["pkce_ok"] == 1,
+                    st["redirect_ok"] == 1,
+                    st["github_auth_ok"] == 1,
+                    st["reauth_pending"] == 0,
+                ),
+            ),
+            z3.Implies(
+                z3.Or(st["missing_recoverable"] == 1, st["missing_malformed"] == 1),
+                z3.And(st["registered"] == 0, st["reauth_pending"] == 0, st["issued"] == 0),
             ),
         )
 
     def recover(cur: dict[str, z3.ArithRef], nxt: dict[str, z3.ArithRef], bug: bool) -> z3.BoolRef:
+        del bug
         return assign_all(
             nxt,
-            {
-                "registered": 0,
-                "durable": 0,
-                "revoked": cur["revoked"],
-                "expired": cur["expired"],
-                "resource_ok": cur["resource_ok"],
-                "issued": 0,
-                "corrupt": 0,
-            },
+            safe_state(
+                resource_ok=cur["resource_ok"],
+                pkce_ok=cur["pkce_ok"],
+                redirect_ok=cur["redirect_ok"],
+            ),
         )
 
     return ModelSpec(
         name="oauth_client_cache",
         variables=variables,
-        initial_states=((0, 0, 0, 0, 1, 0, 0),),
+        initial_states=((0, 0, 0, 0, 1, 1, 1, 0, 0, 0),),
         actions=(
             Action("register_ok", register_ok),
-            Action("partial_register_write", partial_register, fault=True),
-            Action("issue", issue),
-            Action("revoke", revoke, fault=True),
-            Action("expire", expire, fault=True),
+            Action(
+                "lose_client_cache_to_recoverable", lose_client_cache_to_recoverable, fault=True
+            ),
+            Action("malformed_client_request", malformed_client_request, fault=True),
+            Action("recover_missing_client_for_reauth", recover_missing_client_for_reauth),
+            Action(
+                "recover_missing_client_memory_only", recover_missing_client_memory_only, fault=True
+            ),
+            Action("github_callback_ok", github_callback_ok),
+            Action("token_after_reauth", token_after_reauth),
+            Action("pkce_mismatch", pkce_mismatch, fault=True),
+            Action("redirect_mismatch", redirect_mismatch, fault=True),
             Action("resource_mismatch", resource_mismatch, fault=True),
             Action("restart", restart, fault=True),
         ),

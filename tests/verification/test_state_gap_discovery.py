@@ -248,3 +248,26 @@ def test_state_gap_discovery_rejects_empty_subsystems(tmp_path: Path) -> None:
     payload = json.loads(result.stdout)
     assert payload["status"] == "schema_error"
     assert payload["total_states"] == 0
+
+
+def test_repo_oauth_catalog_models_reauth_recovery_explicitly() -> None:
+    import yaml
+
+    catalog = yaml.safe_load(
+        (REPO_ROOT / "docs/verification/state-space-obligations.yml").read_text()
+    )
+    oauth = next(item for item in catalog["subsystems"] if item["id"] == "oauth_mcp")
+
+    assert "missing_recoverable" in oauth["dimensions"]["client_state"]
+    assert "missing_malformed" in oauth["dimensions"]["client_state"]
+
+    obligations = {item["id"]: item for item in oauth["obligations"]}
+    assert (
+        obligations["oauth_recoverable_missing_client_starts_reauth_without_token"]["expected"]
+        == "recover_client_registration_then_restart_authorization_without_token_issue"
+    )
+    assert (
+        obligations["oauth_recovered_client_token_requires_completed_auth_chain"]["expected"]
+        == "issue_token_only_after_reauth_github_pkce_resource_redirect_valid"
+    )
+    assert obligations["oauth_malformed_missing_client_fails_closed"]["expected"] == "fail_closed"

@@ -1853,6 +1853,38 @@ items:
     observable_contract: Documentation and example deploy surfaces do not expose configured
       secret/private-host patterns.
   symbols: []
+- path: docs/plans/2026-06-16-oauth-reauth-formal-model.md
+  classification: doc
+  kind: markdown_doc
+  criticality: P0
+  release_blocking: true
+  formal_status: none
+  evidence_status:
+  - doc_secret_scan
+  - inventory
+  flags:
+    concurrency_boundary: false
+    deploy_security_boundary: false
+    network_boundary: false
+    parser_boundary: true
+    persistence_boundary: false
+    release_publish_boundary: false
+    renderer_boundary: true
+    runtime_config_boundary: false
+    secret_boundary: false
+    security_boundary: true
+    suspected_boundary_unclassified: false
+  coverage:
+  - kind: INVENTORY_MAPPING
+    path: docs/verification/repo-verification-inventory.json
+    observable_contract: Tracked repository surface is present in the generated verification
+      inventory.
+  - kind: DOC_SECRET_SCAN
+    path: tools/verification/check_doc_secrets.py
+    checker_command: uv run python tools/verification/check_doc_secrets.py
+    observable_contract: Documentation and example deploy surfaces do not expose configured
+      secret/private-host patterns.
+  symbols: []
 - path: docs/superpowers/plans/2026-03-27-ocr-module.md
   classification: doc
   kind: markdown_doc
@@ -8499,6 +8531,58 @@ items:
       rendered or visible in the public markdown preview DOM.
   symbols:
   - stable_id: fe:frontend/src/lib/markdown-normalize.ts:normalizeMarkdown#5662620de368
+    observable_contract: inventory-mapped; behavior evidence to be assigned by targeted
+      manifest refinement
+    coverage:
+    - kind: INVENTORY_MAPPING
+      path: docs/verification/repo-verification-inventory.json
+      observable_contract: Symbol is present in the generated verification inventory
+        and inherits file-level evidence.
+- path: frontend/src/lib/markdown-rendering.ts
+  classification: source
+  kind: typescript_module
+  criticality: P2
+  release_blocking: false
+  formal_status: none
+  evidence_status:
+  - build
+  - frontend_test
+  - inventory
+  flags:
+    concurrency_boundary: false
+    deploy_security_boundary: false
+    network_boundary: false
+    parser_boundary: true
+    persistence_boundary: false
+    release_publish_boundary: false
+    renderer_boundary: true
+    runtime_config_boundary: false
+    secret_boundary: false
+    security_boundary: false
+    suspected_boundary_unclassified: false
+  coverage:
+  - kind: INVENTORY_MAPPING
+    path: docs/verification/repo-verification-inventory.json
+    observable_contract: Tracked repository surface is present in the generated verification
+      inventory.
+  - kind: FRONTEND_TEST
+    path: frontend/package.json
+    checker_command: cd frontend && npm test -- --run
+    observable_contract: Frontend source is accepted by black-box component/unit tests.
+  - kind: BUILD_CHECK
+    path: frontend/package.json
+    checker_command: cd frontend && npm run build
+    observable_contract: Frontend source compiles into production assets.
+  symbols:
+  - stable_id: fe:frontend/src/lib/markdown-rendering.ts:normalizeMermaidLineBreaks#629a3c0a8a30
+    observable_contract: inventory-mapped; behavior evidence to be assigned by targeted
+      manifest refinement
+    coverage:
+    - kind: INVENTORY_MAPPING
+      path: docs/verification/repo-verification-inventory.json
+      observable_contract: Symbol is present in the generated verification inventory
+        and inherits file-level evidence.
+  - stable_id: fe:frontend/src/lib/markdown-rendering.ts:sanitizeMermaidSvgContent#e0d79a7fb75c
     observable_contract: inventory-mapped; behavior evidence to be assigned by targeted
       manifest refinement
     coverage:
@@ -25060,8 +25144,9 @@ items:
     path: python/deepresearch_flow/paper/snapshot/tests/test_mcp_transport.py
     checker_command: uv run pytest python/deepresearch_flow/paper/snapshot/tests/test_mcp_transport.py
       -q
-    observable_contract: MCP OAuth HTTP endpoints reject unknown clients and expose
-      registered clients through observable HTTP behavior.
+    observable_contract: MCP OAuth HTTP endpoints recover syntactically valid missing
+      dynamic clients for reauth, reject malformed clients, and never issue tokens
+      before the full auth chain.
   - kind: STATIC_CHECK
     path: pyproject.toml
     checker_command: uv run ruff check python tests tools
@@ -36292,7 +36377,7 @@ items:
     release_publish_boundary: false
     renderer_boundary: false
     runtime_config_boundary: false
-    secret_boundary: false
+    secret_boundary: true
     security_boundary: true
     suspected_boundary_unclassified: false
   coverage:
@@ -36325,6 +36410,14 @@ items:
       path: docs/verification/repo-verification-inventory.json
       observable_contract: Symbol is present in the generated verification inventory
         and inherits file-level evidence.
+  - stable_id: py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model.safe_state#ef7393180c08
+    observable_contract: inventory-mapped; behavior evidence to be assigned by targeted
+      manifest refinement
+    coverage:
+    - kind: INVENTORY_MAPPING
+      path: docs/verification/repo-verification-inventory.json
+      observable_contract: Symbol is present in the generated verification inventory
+        and inherits file-level evidence.
   - stable_id: py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model.register_ok#f98340509296
     observable_contract: inventory-mapped; behavior evidence to be assigned by targeted
       manifest refinement
@@ -36333,7 +36426,7 @@ items:
       path: docs/verification/repo-verification-inventory.json
       observable_contract: Symbol is present in the generated verification inventory
         and inherits file-level evidence.
-  - stable_id: py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model.partial_register#209c28129849
+  - stable_id: py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model.lose_client_cache_to_recoverable#57ffdd858b39
     observable_contract: inventory-mapped; behavior evidence to be assigned by targeted
       manifest refinement
     coverage:
@@ -36341,7 +36434,7 @@ items:
       path: docs/verification/repo-verification-inventory.json
       observable_contract: Symbol is present in the generated verification inventory
         and inherits file-level evidence.
-  - stable_id: py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model.issue#1c76c9284c93
+  - stable_id: py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model.malformed_client_request#abac8ff53bc9
     observable_contract: inventory-mapped; behavior evidence to be assigned by targeted
       manifest refinement
     coverage:
@@ -36349,7 +36442,7 @@ items:
       path: docs/verification/repo-verification-inventory.json
       observable_contract: Symbol is present in the generated verification inventory
         and inherits file-level evidence.
-  - stable_id: py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model.revoke#8be064852e70
+  - stable_id: py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model.recover_missing_client_for_reauth#5e8206acc30d
     observable_contract: inventory-mapped; behavior evidence to be assigned by targeted
       manifest refinement
     coverage:
@@ -36357,7 +36450,39 @@ items:
       path: docs/verification/repo-verification-inventory.json
       observable_contract: Symbol is present in the generated verification inventory
         and inherits file-level evidence.
-  - stable_id: py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model.expire#90517e952a72
+  - stable_id: py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model.recover_missing_client_memory_only#af52a6645932
+    observable_contract: inventory-mapped; behavior evidence to be assigned by targeted
+      manifest refinement
+    coverage:
+    - kind: INVENTORY_MAPPING
+      path: docs/verification/repo-verification-inventory.json
+      observable_contract: Symbol is present in the generated verification inventory
+        and inherits file-level evidence.
+  - stable_id: py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model.github_callback_ok#accbd4d64f98
+    observable_contract: inventory-mapped; behavior evidence to be assigned by targeted
+      manifest refinement
+    coverage:
+    - kind: INVENTORY_MAPPING
+      path: docs/verification/repo-verification-inventory.json
+      observable_contract: Symbol is present in the generated verification inventory
+        and inherits file-level evidence.
+  - stable_id: py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model.token_after_reauth#a4019ab6db24
+    observable_contract: inventory-mapped; behavior evidence to be assigned by targeted
+      manifest refinement
+    coverage:
+    - kind: INVENTORY_MAPPING
+      path: docs/verification/repo-verification-inventory.json
+      observable_contract: Symbol is present in the generated verification inventory
+        and inherits file-level evidence.
+  - stable_id: py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model.pkce_mismatch#4804fd1a2286
+    observable_contract: inventory-mapped; behavior evidence to be assigned by targeted
+      manifest refinement
+    coverage:
+    - kind: INVENTORY_MAPPING
+      path: docs/verification/repo-verification-inventory.json
+      observable_contract: Symbol is present in the generated verification inventory
+        and inherits file-level evidence.
+  - stable_id: py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model.redirect_mismatch#2e9210a57400
     observable_contract: inventory-mapped; behavior evidence to be assigned by targeted
       manifest refinement
     coverage:
@@ -57451,6 +57576,13 @@ evidence_assets:
   evidence_class: UNIT_BLACK_BOX
   evidence_id: evidence:frontend/src/__tests__/markdownRender.test.ts
   path: frontend/src/__tests__/markdownRender.test.ts
+  target_inventory_ids: []
+- black_box_contract: observable behavior only
+  command: cd frontend && npm test -- --run src/__tests__/markdownRendering.test.ts
+  deterministic_mode: true
+  evidence_class: UNIT_BLACK_BOX
+  evidence_id: evidence:frontend/src/__tests__/markdownRendering.test.ts
+  path: frontend/src/__tests__/markdownRendering.test.ts
   target_inventory_ids: []
 - black_box_contract: observable behavior only
   command: cd frontend && npm test -- --run src/__tests__/moduleInterop.test.ts

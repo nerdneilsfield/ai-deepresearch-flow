@@ -45929,6 +45929,15 @@
     },
     {
       "black_box_contract": "observable behavior only",
+      "command": "cd frontend && npm test -- --run src/__tests__/markdownRendering.test.ts",
+      "deterministic_mode": true,
+      "evidence_class": "UNIT_BLACK_BOX",
+      "evidence_id": "evidence:frontend/src/__tests__/markdownRendering.test.ts",
+      "path": "frontend/src/__tests__/markdownRendering.test.ts",
+      "target_inventory_ids": []
+    },
+    {
+      "black_box_contract": "observable behavior only",
       "command": "cd frontend && npm test -- --run src/__tests__/moduleInterop.test.ts",
       "deterministic_mode": true,
       "evidence_class": "UNIT_BLACK_BOX",
@@ -48198,6 +48207,26 @@
       },
       "kind": "markdown_doc",
       "path": "docs/plans/2026-06-15-repo-wide-formal-fuzz-verification.md",
+      "symbols": []
+    },
+    {
+      "classification": "doc",
+      "criticality": "P0",
+      "flags": {
+        "concurrency_boundary": false,
+        "deploy_security_boundary": false,
+        "network_boundary": false,
+        "parser_boundary": true,
+        "persistence_boundary": false,
+        "release_publish_boundary": false,
+        "renderer_boundary": true,
+        "runtime_config_boundary": false,
+        "secret_boundary": false,
+        "security_boundary": true,
+        "suspected_boundary_unclassified": false
+      },
+      "kind": "markdown_doc",
+      "path": "docs/plans/2026-06-16-oauth-reauth-formal-model.md",
       "symbols": []
     },
     {
@@ -57673,6 +57702,26 @@
         "concurrency_boundary": false,
         "deploy_security_boundary": false,
         "network_boundary": false,
+        "parser_boundary": true,
+        "persistence_boundary": false,
+        "release_publish_boundary": false,
+        "renderer_boundary": true,
+        "runtime_config_boundary": false,
+        "secret_boundary": false,
+        "security_boundary": false,
+        "suspected_boundary_unclassified": false
+      },
+      "kind": "test_asset",
+      "path": "frontend/src/__tests__/markdownRendering.test.ts",
+      "symbols": []
+    },
+    {
+      "classification": "test",
+      "criticality": "P2",
+      "flags": {
+        "concurrency_boundary": false,
+        "deploy_security_boundary": false,
+        "network_boundary": false,
         "parser_boundary": false,
         "persistence_boundary": false,
         "release_publish_boundary": false,
@@ -62038,6 +62087,43 @@
           "signature_hash": "5662620de368",
           "source_span": "1-1",
           "stable_id": "fe:frontend/src/lib/markdown-normalize.ts:normalizeMarkdown#5662620de368"
+        }
+      ]
+    },
+    {
+      "classification": "source",
+      "criticality": "P2",
+      "flags": {
+        "concurrency_boundary": false,
+        "deploy_security_boundary": false,
+        "network_boundary": false,
+        "parser_boundary": true,
+        "persistence_boundary": false,
+        "release_publish_boundary": false,
+        "renderer_boundary": true,
+        "runtime_config_boundary": false,
+        "secret_boundary": false,
+        "security_boundary": false,
+        "suspected_boundary_unclassified": false
+      },
+      "kind": "typescript_module",
+      "path": "frontend/src/lib/markdown-rendering.ts",
+      "symbols": [
+        {
+          "export_mode": "export",
+          "kind": "function",
+          "name": "normalizeMermaidLineBreaks",
+          "signature_hash": "629a3c0a8a30",
+          "source_span": "15-15",
+          "stable_id": "fe:frontend/src/lib/markdown-rendering.ts:normalizeMermaidLineBreaks#629a3c0a8a30"
+        },
+        {
+          "export_mode": "export",
+          "kind": "function",
+          "name": "sanitizeMermaidSvgContent",
+          "signature_hash": "e0d79a7fb75c",
+          "source_span": "78-78",
+          "stable_id": "fe:frontend/src/lib/markdown-rendering.ts:sanitizeMermaidSvgContent#e0d79a7fb75c"
         }
       ]
     },
@@ -114036,7 +114122,7 @@
         "renderer_boundary": false,
         "runtime_config_boundary": false,
         "secret_boundary": false,
-        "security_boundary": false,
+        "security_boundary": true,
         "suspected_boundary_unclassified": false
       },
       "kind": "python_test",
@@ -114071,6 +114157,16 @@
           "signature_hash": "3e0add8b310a",
           "source_span": "56-66",
           "stable_id": "py:tests.verification.test_smt_formal_gate:test_smt_gate_reports_counterexamples_for_injected_bugs#3e0add8b310a"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "test_oauth_smt_model_exposes_reauth_recovery_contract",
+          "qualname": "test_oauth_smt_model_exposes_reauth_recovery_contract",
+          "signature_hash": "009ecebb01c3",
+          "source_span": "69-83",
+          "stable_id": "py:tests.verification.test_smt_formal_gate:test_oauth_smt_model_exposes_reauth_recovery_contract#009ecebb01c3"
         }
       ]
     },
@@ -114087,7 +114183,7 @@
         "renderer_boundary": false,
         "runtime_config_boundary": false,
         "secret_boundary": false,
-        "security_boundary": false,
+        "security_boundary": true,
         "suspected_boundary_unclassified": false
       },
       "kind": "python_test",
@@ -114162,6 +114258,16 @@
           "signature_hash": "e393168a3f3e",
           "source_span": "238-250",
           "stable_id": "py:tests.verification.test_state_gap_discovery:test_state_gap_discovery_rejects_empty_subsystems#e393168a3f3e"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "test_repo_oauth_catalog_models_reauth_recovery_explicitly",
+          "qualname": "test_repo_oauth_catalog_models_reauth_recovery_explicitly",
+          "signature_hash": "5f1e7d20d848",
+          "source_span": "253-273",
+          "stable_id": "py:tests.verification.test_state_gap_discovery:test_repo_oauth_catalog_models_reauth_recovery_explicitly#5f1e7d20d848"
         }
       ]
     },
@@ -115104,7 +115210,7 @@
         "release_publish_boundary": false,
         "renderer_boundary": false,
         "runtime_config_boundary": false,
-        "secret_boundary": false,
+        "secret_boundary": true,
         "security_boundary": true,
         "suspected_boundary_unclassified": false
       },
@@ -115128,8 +115234,18 @@
           "name": "oauth_client_cache_model",
           "qualname": "oauth_client_cache_model",
           "signature_hash": "c7cf7a549ca2",
-          "source_span": "43-169",
+          "source_span": "43-299",
           "stable_id": "py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model#c7cf7a549ca2"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "safe_state",
+          "qualname": "oauth_client_cache_model.safe_state",
+          "signature_hash": "ef7393180c08",
+          "source_span": "57-81",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model.safe_state#ef7393180c08"
         },
         {
           "async": false,
@@ -115138,48 +115254,88 @@
           "name": "register_ok",
           "qualname": "oauth_client_cache_model.register_ok",
           "signature_hash": "f98340509296",
-          "source_span": "48-64",
+          "source_span": "83-87",
           "stable_id": "py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model.register_ok#f98340509296"
         },
         {
           "async": false,
           "decorators": [],
           "kind": "method",
-          "name": "partial_register",
-          "qualname": "oauth_client_cache_model.partial_register",
-          "signature_hash": "209c28129849",
-          "source_span": "66-80",
-          "stable_id": "py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model.partial_register#209c28129849"
+          "name": "lose_client_cache_to_recoverable",
+          "qualname": "oauth_client_cache_model.lose_client_cache_to_recoverable",
+          "signature_hash": "57ffdd858b39",
+          "source_span": "89-101",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model.lose_client_cache_to_recoverable#57ffdd858b39"
         },
         {
           "async": false,
           "decorators": [],
           "kind": "method",
-          "name": "issue",
-          "qualname": "oauth_client_cache_model.issue",
-          "signature_hash": "1c76c9284c93",
-          "source_span": "82-92",
-          "stable_id": "py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model.issue#1c76c9284c93"
+          "name": "malformed_client_request",
+          "qualname": "oauth_client_cache_model.malformed_client_request",
+          "signature_hash": "abac8ff53bc9",
+          "source_span": "103-115",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model.malformed_client_request#abac8ff53bc9"
         },
         {
           "async": false,
           "decorators": [],
           "kind": "method",
-          "name": "revoke",
-          "qualname": "oauth_client_cache_model.revoke",
-          "signature_hash": "8be064852e70",
-          "source_span": "94-97",
-          "stable_id": "py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model.revoke#8be064852e70"
+          "name": "recover_missing_client_for_reauth",
+          "qualname": "oauth_client_cache_model.recover_missing_client_for_reauth",
+          "signature_hash": "5e8206acc30d",
+          "source_span": "117-137",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model.recover_missing_client_for_reauth#5e8206acc30d"
         },
         {
           "async": false,
           "decorators": [],
           "kind": "method",
-          "name": "expire",
-          "qualname": "oauth_client_cache_model.expire",
-          "signature_hash": "90517e952a72",
-          "source_span": "99-102",
-          "stable_id": "py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model.expire#90517e952a72"
+          "name": "recover_missing_client_memory_only",
+          "qualname": "oauth_client_cache_model.recover_missing_client_memory_only",
+          "signature_hash": "af52a6645932",
+          "source_span": "139-159",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model.recover_missing_client_memory_only#af52a6645932"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "github_callback_ok",
+          "qualname": "oauth_client_cache_model.github_callback_ok",
+          "signature_hash": "accbd4d64f98",
+          "source_span": "161-175",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model.github_callback_ok#accbd4d64f98"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "token_after_reauth",
+          "qualname": "oauth_client_cache_model.token_after_reauth",
+          "signature_hash": "a4019ab6db24",
+          "source_span": "177-195",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model.token_after_reauth#a4019ab6db24"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "pkce_mismatch",
+          "qualname": "oauth_client_cache_model.pkce_mismatch",
+          "signature_hash": "4804fd1a2286",
+          "source_span": "197-205",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model.pkce_mismatch#4804fd1a2286"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "method",
+          "name": "redirect_mismatch",
+          "qualname": "oauth_client_cache_model.redirect_mismatch",
+          "signature_hash": "2e9210a57400",
+          "source_span": "207-215",
+          "stable_id": "py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model.redirect_mismatch#2e9210a57400"
         },
         {
           "async": false,
@@ -115188,7 +115344,7 @@
           "name": "resource_mismatch",
           "qualname": "oauth_client_cache_model.resource_mismatch",
           "signature_hash": "794fd0c428d6",
-          "source_span": "104-111",
+          "source_span": "217-225",
           "stable_id": "py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model.resource_mismatch#794fd0c428d6"
         },
         {
@@ -115198,7 +115354,7 @@
           "name": "restart",
           "qualname": "oauth_client_cache_model.restart",
           "signature_hash": "a815895ecd87",
-          "source_span": "113-125",
+          "source_span": "227-242",
           "stable_id": "py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model.restart#a815895ecd87"
         },
         {
@@ -115208,7 +115364,7 @@
           "name": "invariant",
           "qualname": "oauth_client_cache_model.invariant",
           "signature_hash": "80111edf3729",
-          "source_span": "127-138",
+          "source_span": "244-263",
           "stable_id": "py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model.invariant#80111edf3729"
         },
         {
@@ -115218,7 +115374,7 @@
           "name": "recover",
           "qualname": "oauth_client_cache_model.recover",
           "signature_hash": "f33293fe765d",
-          "source_span": "140-152",
+          "source_span": "265-274",
           "stable_id": "py:tools.formal.smt.check_all_smt_models:oauth_client_cache_model.recover#f33293fe765d"
         },
         {
@@ -115228,7 +115384,7 @@
           "name": "provider_routing_model",
           "qualname": "provider_routing_model",
           "signature_hash": "d2a35e59d7b8",
-          "source_span": "172-311",
+          "source_span": "302-441",
           "stable_id": "py:tools.formal.smt.check_all_smt_models:provider_routing_model#d2a35e59d7b8"
         },
         {
@@ -115238,7 +115394,7 @@
           "name": "request_chat",
           "qualname": "provider_routing_model.request_chat",
           "signature_hash": "11cf5a994e42",
-          "source_span": "183-191",
+          "source_span": "313-321",
           "stable_id": "py:tools.formal.smt.check_all_smt_models:provider_routing_model.request_chat#11cf5a994e42"
         },
         {
@@ -115248,7 +115404,7 @@
           "name": "request_embed",
           "qualname": "provider_routing_model.request_embed",
           "signature_hash": "80233f6a07cf",
-          "source_span": "193-201",
+          "source_span": "323-331",
           "stable_id": "py:tools.formal.smt.check_all_smt_models:provider_routing_model.request_embed#80233f6a07cf"
         },
         {
@@ -115258,7 +115414,7 @@
           "name": "route_chat",
           "qualname": "provider_routing_model.route_chat",
           "signature_hash": "f78469317f4a",
-          "source_span": "203-213",
+          "source_span": "333-343",
           "stable_id": "py:tools.formal.smt.check_all_smt_models:provider_routing_model.route_chat#f78469317f4a"
         },
         {
@@ -115268,7 +115424,7 @@
           "name": "route_embed",
           "qualname": "provider_routing_model.route_embed",
           "signature_hash": "089fc2b8914a",
-          "source_span": "215-226",
+          "source_span": "345-356",
           "stable_id": "py:tools.formal.smt.check_all_smt_models:provider_routing_model.route_embed#089fc2b8914a"
         },
         {
@@ -115278,7 +115434,7 @@
           "name": "degrade",
           "qualname": "provider_routing_model.degrade",
           "signature_hash": "15907dc61ac0",
-          "source_span": "228-238",
+          "source_span": "358-368",
           "stable_id": "py:tools.formal.smt.check_all_smt_models:provider_routing_model.degrade#15907dc61ac0"
         },
         {
@@ -115288,7 +115444,7 @@
           "name": "outage",
           "qualname": "provider_routing_model.outage",
           "signature_hash": "c98883d0a624",
-          "source_span": "240-243",
+          "source_span": "370-373",
           "stable_id": "py:tools.formal.smt.check_all_smt_models:provider_routing_model.outage#c98883d0a624"
         },
         {
@@ -115298,7 +115454,7 @@
           "name": "reset",
           "qualname": "provider_routing_model.reset",
           "signature_hash": "a18908dff182",
-          "source_span": "245-257",
+          "source_span": "375-387",
           "stable_id": "py:tools.formal.smt.check_all_smt_models:provider_routing_model.reset#a18908dff182"
         },
         {
@@ -115308,7 +115464,7 @@
           "name": "invariant",
           "qualname": "provider_routing_model.invariant",
           "signature_hash": "80111edf3729",
-          "source_span": "259-280",
+          "source_span": "389-410",
           "stable_id": "py:tools.formal.smt.check_all_smt_models:provider_routing_model.invariant#80111edf3729"
         },
         {
@@ -115318,7 +115474,7 @@
           "name": "recover",
           "qualname": "provider_routing_model.recover",
           "signature_hash": "f33293fe765d",
-          "source_span": "282-294",
+          "source_span": "412-424",
           "stable_id": "py:tools.formal.smt.check_all_smt_models:provider_routing_model.recover#f33293fe765d"
         },
         {
@@ -115328,7 +115484,7 @@
           "name": "semantic_ingest_model",
           "qualname": "semantic_ingest_model",
           "signature_hash": "12d61ccaabc2",
-          "source_span": "314-395",
+          "source_span": "444-525",
           "stable_id": "py:tools.formal.smt.check_all_smt_models:semantic_ingest_model#12d61ccaabc2"
         },
         {
@@ -115338,7 +115494,7 @@
           "name": "set_stage",
           "qualname": "semantic_ingest_model.set_stage",
           "signature_hash": "3748846831b7",
-          "source_span": "319-326",
+          "source_span": "449-456",
           "stable_id": "py:tools.formal.smt.check_all_smt_models:semantic_ingest_model.set_stage#3748846831b7"
         },
         {
@@ -115348,7 +115504,7 @@
           "name": "relation",
           "qualname": "semantic_ingest_model.set_stage.relation",
           "signature_hash": "3ba2e1097af0",
-          "source_span": "320-324",
+          "source_span": "450-454",
           "stable_id": "py:tools.formal.smt.check_all_smt_models:semantic_ingest_model.set_stage.relation#3ba2e1097af0"
         },
         {
@@ -115358,7 +115514,7 @@
           "name": "index",
           "qualname": "semantic_ingest_model.index",
           "signature_hash": "87cd68a530be",
-          "source_span": "328-335",
+          "source_span": "458-465",
           "stable_id": "py:tools.formal.smt.check_all_smt_models:semantic_ingest_model.index#87cd68a530be"
         },
         {
@@ -115368,7 +115524,7 @@
           "name": "commit",
           "qualname": "semantic_ingest_model.commit",
           "signature_hash": "e0c381a86558",
-          "source_span": "337-344",
+          "source_span": "467-474",
           "stable_id": "py:tools.formal.smt.check_all_smt_models:semantic_ingest_model.commit#e0c381a86558"
         },
         {
@@ -115378,7 +115534,7 @@
           "name": "fail",
           "qualname": "semantic_ingest_model.fail",
           "signature_hash": "2f66e4e84ff2",
-          "source_span": "346-352",
+          "source_span": "476-482",
           "stable_id": "py:tools.formal.smt.check_all_smt_models:semantic_ingest_model.fail#2f66e4e84ff2"
         },
         {
@@ -115388,7 +115544,7 @@
           "name": "invariant",
           "qualname": "semantic_ingest_model.invariant",
           "signature_hash": "80111edf3729",
-          "source_span": "354-363",
+          "source_span": "484-493",
           "stable_id": "py:tools.formal.smt.check_all_smt_models:semantic_ingest_model.invariant#80111edf3729"
         },
         {
@@ -115398,7 +115554,7 @@
           "name": "recover",
           "qualname": "semantic_ingest_model.recover",
           "signature_hash": "f33293fe765d",
-          "source_span": "365-378",
+          "source_span": "495-508",
           "stable_id": "py:tools.formal.smt.check_all_smt_models:semantic_ingest_model.recover#f33293fe765d"
         },
         {
@@ -115408,7 +115564,7 @@
           "name": "translation_scheduler_model",
           "qualname": "translation_scheduler_model",
           "signature_hash": "e870b4e0bb48",
-          "source_span": "398-516",
+          "source_span": "528-646",
           "stable_id": "py:tools.formal.smt.check_all_smt_models:translation_scheduler_model#e870b4e0bb48"
         },
         {
@@ -115418,7 +115574,7 @@
           "name": "start_node",
           "qualname": "translation_scheduler_model.start_node",
           "signature_hash": "ed3dc356de95",
-          "source_span": "406-418",
+          "source_span": "536-548",
           "stable_id": "py:tools.formal.smt.check_all_smt_models:translation_scheduler_model.start_node#ed3dc356de95"
         },
         {
@@ -115428,7 +115584,7 @@
           "name": "relation",
           "qualname": "translation_scheduler_model.start_node.relation",
           "signature_hash": "3ba2e1097af0",
-          "source_span": "407-416",
+          "source_span": "537-546",
           "stable_id": "py:tools.formal.smt.check_all_smt_models:translation_scheduler_model.start_node.relation#3ba2e1097af0"
         },
         {
@@ -115438,7 +115594,7 @@
           "name": "complete_node",
           "qualname": "translation_scheduler_model.complete_node",
           "signature_hash": "83d5a4e50bc0",
-          "source_span": "420-426",
+          "source_span": "550-556",
           "stable_id": "py:tools.formal.smt.check_all_smt_models:translation_scheduler_model.complete_node#83d5a4e50bc0"
         },
         {
@@ -115448,7 +115604,7 @@
           "name": "relation",
           "qualname": "translation_scheduler_model.complete_node.relation",
           "signature_hash": "3ba2e1097af0",
-          "source_span": "421-424",
+          "source_span": "551-554",
           "stable_id": "py:tools.formal.smt.check_all_smt_models:translation_scheduler_model.complete_node.relation#3ba2e1097af0"
         },
         {
@@ -115458,7 +115614,7 @@
           "name": "fail_node",
           "qualname": "translation_scheduler_model.fail_node",
           "signature_hash": "42d816f36d09",
-          "source_span": "428-434",
+          "source_span": "558-564",
           "stable_id": "py:tools.formal.smt.check_all_smt_models:translation_scheduler_model.fail_node#42d816f36d09"
         },
         {
@@ -115468,7 +115624,7 @@
           "name": "relation",
           "qualname": "translation_scheduler_model.fail_node.relation",
           "signature_hash": "3ba2e1097af0",
-          "source_span": "429-432",
+          "source_span": "559-562",
           "stable_id": "py:tools.formal.smt.check_all_smt_models:translation_scheduler_model.fail_node.relation#3ba2e1097af0"
         },
         {
@@ -115478,7 +115634,7 @@
           "name": "fallback_node",
           "qualname": "translation_scheduler_model.fallback_node",
           "signature_hash": "e38b844c3a46",
-          "source_span": "436-447",
+          "source_span": "566-577",
           "stable_id": "py:tools.formal.smt.check_all_smt_models:translation_scheduler_model.fallback_node#e38b844c3a46"
         },
         {
@@ -115488,7 +115644,7 @@
           "name": "relation",
           "qualname": "translation_scheduler_model.fallback_node.relation",
           "signature_hash": "3ba2e1097af0",
-          "source_span": "437-445",
+          "source_span": "567-575",
           "stable_id": "py:tools.formal.smt.check_all_smt_models:translation_scheduler_model.fallback_node.relation#3ba2e1097af0"
         },
         {
@@ -115498,7 +115654,7 @@
           "name": "terminal_fail",
           "qualname": "translation_scheduler_model.terminal_fail",
           "signature_hash": "a12c9ddd7503",
-          "source_span": "449-460",
+          "source_span": "579-590",
           "stable_id": "py:tools.formal.smt.check_all_smt_models:translation_scheduler_model.terminal_fail#a12c9ddd7503"
         },
         {
@@ -115508,7 +115664,7 @@
           "name": "relation",
           "qualname": "translation_scheduler_model.terminal_fail.relation",
           "signature_hash": "3ba2e1097af0",
-          "source_span": "450-458",
+          "source_span": "580-588",
           "stable_id": "py:tools.formal.smt.check_all_smt_models:translation_scheduler_model.terminal_fail.relation#3ba2e1097af0"
         },
         {
@@ -115518,7 +115674,7 @@
           "name": "enable_fallback",
           "qualname": "translation_scheduler_model.enable_fallback",
           "signature_hash": "5f664c30d303",
-          "source_span": "462-465",
+          "source_span": "592-595",
           "stable_id": "py:tools.formal.smt.check_all_smt_models:translation_scheduler_model.enable_fallback#5f664c30d303"
         },
         {
@@ -115528,7 +115684,7 @@
           "name": "cancel",
           "qualname": "translation_scheduler_model.cancel",
           "signature_hash": "ac22e0eafe72",
-          "source_span": "467-476",
+          "source_span": "597-606",
           "stable_id": "py:tools.formal.smt.check_all_smt_models:translation_scheduler_model.cancel#ac22e0eafe72"
         },
         {
@@ -115538,7 +115694,7 @@
           "name": "invariant",
           "qualname": "translation_scheduler_model.invariant",
           "signature_hash": "80111edf3729",
-          "source_span": "478-483",
+          "source_span": "608-613",
           "stable_id": "py:tools.formal.smt.check_all_smt_models:translation_scheduler_model.invariant#80111edf3729"
         },
         {
@@ -115548,7 +115704,7 @@
           "name": "recover",
           "qualname": "translation_scheduler_model.recover",
           "signature_hash": "f33293fe765d",
-          "source_span": "485-494",
+          "source_span": "615-624",
           "stable_id": "py:tools.formal.smt.check_all_smt_models:translation_scheduler_model.recover#f33293fe765d"
         },
         {
@@ -115558,7 +115714,7 @@
           "name": "run_all",
           "qualname": "run_all",
           "signature_hash": "e8e6004dd4fd",
-          "source_span": "527-535",
+          "source_span": "657-665",
           "stable_id": "py:tools.formal.smt.check_all_smt_models:run_all#e8e6004dd4fd"
         },
         {
@@ -115568,7 +115724,7 @@
           "name": "main",
           "qualname": "main",
           "signature_hash": "9b8e693c15ea",
-          "source_span": "538-564",
+          "source_span": "668-694",
           "stable_id": "py:tools.formal.smt.check_all_smt_models:main#9b8e693c15ea"
         }
       ]
@@ -115765,7 +115921,7 @@
           "name": "check_model",
           "qualname": "check_model",
           "signature_hash": "1e90902e4094",
-          "source_span": "167-240",
+          "source_span": "167-242",
           "stable_id": "py:tools.formal.smt.common:check_model#1e90902e4094"
         }
       ]

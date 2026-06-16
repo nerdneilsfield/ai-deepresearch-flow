@@ -64,3 +64,20 @@ def test_smt_gate_reports_counterexamples_for_injected_bugs() -> None:
     assert {model["model"] for model in failing} == EXPECTED_MODELS
     for model in failing:
         assert model["counterexample"]
+
+
+def test_oauth_smt_model_exposes_reauth_recovery_contract() -> None:
+    result = _run(["--json"])
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    payload = json.loads(result.stdout)
+    oauth = next(model for model in payload["models"] if model["model"] == "oauth_client_cache")
+
+    assert "missing_recoverable" in oauth["state_space"]["variables"]
+    assert "missing_malformed" in oauth["state_space"]["variables"]
+    assert "reauth_pending" in oauth["state_space"]["variables"]
+    assert "github_auth_ok" in oauth["state_space"]["variables"]
+    assert "recover_missing_client_for_reauth" in oauth["state_space"]["action_names"]
+    assert "token_after_reauth" in oauth["state_space"]["action_names"]
+    assert oauth["queries"]["reachable_invariant_violation"] == "unsat"
+    assert oauth["queries"]["universe_recovery_violation"] == "unsat"
