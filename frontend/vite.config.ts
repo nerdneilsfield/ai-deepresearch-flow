@@ -22,7 +22,20 @@ export default defineConfig({
     fileParallelism: false,
   },
   build: {
+    // The largest chunks are lazy-loaded renderer/PDF vendor bundles. Their raw
+    // size is expected and not useful as a per-build warning signal.
+    chunkSizeWarningLimit: 8_000,
     rollupOptions: {
+      onwarn(warning, warn) {
+        if (
+          warning.code === 'INVALID_ANNOTATION' &&
+          typeof warning.id === 'string' &&
+          warning.id.includes('/node_modules/@vueuse/core/')
+        ) {
+          return
+        }
+        warn(warning)
+      },
       output: {
         manualChunks(id) {
           if (!id.includes('node_modules')) return undefined
