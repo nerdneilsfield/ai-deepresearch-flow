@@ -64,10 +64,13 @@ function toggle() {
 </script>
 
 <template>
-  <div class="advanced-panel rounded-xl border border-ink-100 bg-white">
+  <div
+    class="advanced-panel rounded-xl border border-border/60 bg-card text-card-foreground shadow-card dark:border-ink-700 dark:bg-ink-900/80"
+    data-testid="advanced-panel"
+  >
     <button
       type="button"
-      class="flex w-full items-center justify-between px-4 py-3 text-left text-sm font-medium text-ink-900"
+      class="flex w-full items-center justify-between px-4 py-3 text-left text-sm font-medium text-foreground hover:bg-muted/60 dark:text-ink-100 dark:hover:bg-ink-800/70"
       data-testid="advanced-panel-toggle"
       @click="toggle"
     >
@@ -76,7 +79,7 @@ function toggle() {
 
     <div
       v-if="expanded"
-      class="space-y-3 border-t border-ink-100 p-4"
+      class="space-y-3 border-t border-border/60 p-4 dark:border-ink-700"
       data-testid="advanced-panel-body"
     >
       <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -84,12 +87,12 @@ function toggle() {
           v-model="tokenInput"
           type="password"
           placeholder="Access token"
-          class="min-w-0 flex-1 rounded-md border border-ink-200 px-3 py-2 text-sm"
+          class="min-w-0 flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:bg-muted disabled:text-muted-foreground dark:border-ink-700 dark:bg-ink-950/60 dark:text-ink-100 dark:placeholder:text-ink-500 dark:disabled:bg-ink-800/70"
           data-testid="advanced-token-input"
         />
         <button
           type="button"
-          class="rounded-md border border-ink-200 px-3 py-2 text-sm"
+          class="rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-sm hover:bg-accent hover:text-accent-foreground disabled:cursor-not-allowed disabled:opacity-50 dark:border-ink-700 dark:bg-ink-900 dark:text-ink-100 dark:hover:bg-ink-800"
           data-testid="advanced-verify-button"
           :disabled="isVerifying || !tokenInput.trim()"
           @click="onVerify"
@@ -113,13 +116,13 @@ function toggle() {
           v-model="queryInput"
           type="text"
           placeholder="Advanced query"
-          class="min-w-0 flex-1 rounded-md border border-ink-200 px-3 py-2 text-sm"
+          class="min-w-0 flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:bg-muted disabled:text-muted-foreground dark:border-ink-700 dark:bg-ink-950/60 dark:text-ink-100 dark:placeholder:text-ink-500 dark:disabled:bg-ink-800/70"
           :disabled="!isVerified"
           data-testid="advanced-query-input"
         />
         <button
           type="button"
-          class="rounded-md border border-ink-200 px-3 py-2 text-sm"
+          class="rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-sm hover:bg-accent hover:text-accent-foreground disabled:cursor-not-allowed disabled:opacity-50 dark:border-ink-700 dark:bg-ink-900 dark:text-ink-100 dark:hover:bg-ink-800"
           data-testid="advanced-search-button"
           :disabled="!isVerified || !!props.searching"
           @click="onSearch"

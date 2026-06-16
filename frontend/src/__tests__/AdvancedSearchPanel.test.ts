@@ -56,6 +56,17 @@ describe('AdvancedSearchPanel', () => {
     expect(wrapper.find('[data-testid="advanced-panel-body"]').exists()).toBe(true)
   })
 
+  it('renders expanded controls with dark-theme compatible surfaces', async () => {
+    const { default: AdvancedSearchPanel } = await import('@/components/AdvancedSearchPanel.vue')
+    const wrapper = mount(AdvancedSearchPanel)
+    await wrapper.find('[data-testid="advanced-panel-toggle"]').trigger('click')
+
+    expect(wrapper.find('[data-testid="advanced-panel"]').classes().some((name) => name.startsWith('dark:bg-'))).toBe(true)
+    expect(wrapper.find('[data-testid="advanced-panel-toggle"]').classes().some((name) => name.startsWith('dark:text-'))).toBe(true)
+    expect(wrapper.find('[data-testid="advanced-token-input"]').classes().some((name) => name.startsWith('dark:bg-'))).toBe(true)
+    expect(wrapper.find('[data-testid="advanced-query-input"]').classes().some((name) => name.startsWith('dark:bg-'))).toBe(true)
+  })
+
   it('search button disabled when not verified', async () => {
     const { default: AdvancedSearchPanel } = await import('@/components/AdvancedSearchPanel.vue')
     const wrapper = mount(AdvancedSearchPanel)

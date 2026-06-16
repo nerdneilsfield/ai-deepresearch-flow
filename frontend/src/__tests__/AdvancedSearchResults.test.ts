@@ -81,6 +81,14 @@ describe('AdvancedSearchResults', () => {
     expect(wrapper.find('[data-testid="advanced-results-empty"]').exists()).toBe(true)
   })
 
+  it('renders empty and result surfaces with dark-theme compatible classes', () => {
+    const empty = mount(AdvancedSearchResults, { props: { results: [] } })
+    expect(empty.find('[data-testid="advanced-results-empty"]').classes().some((name) => name.startsWith('dark:bg-'))).toBe(true)
+
+    const withResult = mount(AdvancedSearchResults, { props: { results: [sample()] } })
+    expect(withResult.find('[data-testid="advanced-result-card"]').classes().some((name) => name.startsWith('dark:bg-'))).toBe(true)
+  })
+
   it('navigates to paper detail with matched chunk context', async () => {
     const wrapper = mount(AdvancedSearchResults, { props: { results: [sample()] } })
 

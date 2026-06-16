@@ -46,6 +46,8 @@ describe('RenderedMarkdown', () => {
     expect(document.querySelector('script[src*="unpkg.com/mermaid"]')).toBeNull()
     expect(document.querySelector('script[src*="unpkg.com/katex"]')).toBeNull()
     expect(document.querySelector('link[href*="unpkg.com/katex"]')).toBeNull()
+    expect(document.querySelector('script[src*="unpkg.com/@highlightjs"]')).toBeNull()
+    expect(document.querySelector('link[href*="unpkg.com/@highlightjs"]')).toBeNull()
 
     wrapper.unmount()
   })
@@ -142,16 +144,121 @@ describe('RenderedMarkdown', () => {
       `mermaidNodes=${wrapper.findAll('.md-editor-mermaid').length}`,
       `processedMermaid=${wrapper.findAll('.md-editor-mermaid[data-processed]').length}`,
     ].join('\n')
-    const mermaidNode = wrapper.find('.md-editor-mermaid')
 
     expect(wrapper.text(), diagnostics).toContain('Diagram before.')
     expect(wrapper.text(), diagnostics).toContain('Diagram after.')
-    expect(mermaidNode.exists(), diagnostics).toBe(true)
-    expect(mermaidNode.attributes('data-closed'), diagnostics).toBe('true')
-    expect(mermaidNode.attributes('data-line'), diagnostics).toBeTruthy()
-    expect(mermaidNode.attributes('data-mermaid-theme'), diagnostics).toBeTruthy()
     expect(diagnosticPanel.exists(), diagnostics).toBe(true)
     expect(diagnosticPanel.text(), diagnostics).toContain('Mermaid')
+    expect(diagnosticPanel.text(), diagnostics).toContain('api_source')
+    expect(diagnosticPanel.text(), diagnostics).toContain('api_target')
+
+    wrapper.unmount()
+  })
+
+  it('preserves Mermaid HTML line breaks inside node labels for rendering', async () => {
+    const { default: RenderedMarkdown } = await import('@/components/RenderedMarkdown.vue')
+    const source = [
+      'Diagram before.',
+      '',
+      '```mermaid',
+      'flowchart TD',
+      '  A["alpha<br/>beta"] --> B["gamma<br/>delta"]',
+      '```',
+      '',
+      'Diagram after.',
+    ].join('\n')
+    const wrapper = mount(RenderedMarkdown, {
+      attachTo: document.body,
+      props: { markdown: source },
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 1200))
+    await wrapper.vm.$nextTick()
+
+    const html = wrapper.html()
+    const text = wrapper.text()
+    const diagnosticPanel = wrapper.find('[data-testid="markdown-renderer-diagnostics"]')
+    const diagnostics = [
+      `text=${text.slice(0, 1000)}`,
+      `html=${html.slice(0, 2000)}`,
+      `diagnostics=${diagnosticPanel.exists() ? diagnosticPanel.text() : '<none>'}`,
+    ].join('\n')
+
+    expect(text, diagnostics).toContain('Diagram before.')
+    expect(text, diagnostics).toContain('Diagram after.')
+    expect(html, diagnostics).toContain('alpha&lt;br/&gt;beta')
+    expect(html, diagnostics).toContain('gamma&lt;br/&gt;delta')
+
+    wrapper.unmount()
+  })
+
+  it('converts Mermaid HTML line breaks outside labels into real line breaks', async () => {
+    const { default: RenderedMarkdown } = await import('@/components/RenderedMarkdown.vue')
+    const source = [
+      'Diagram before.',
+      '',
+      '```mermaid',
+      'flowchart TD<br/>  A --> B',
+      '```',
+      '',
+      'Diagram after.',
+    ].join('\n')
+    const wrapper = mount(RenderedMarkdown, {
+      attachTo: document.body,
+      props: { markdown: source },
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 1200))
+    await wrapper.vm.$nextTick()
+
+    const html = wrapper.html()
+    const text = wrapper.text()
+    const diagnosticPanel = wrapper.find('[data-testid="markdown-renderer-diagnostics"]')
+    const diagnostics = [
+      `text=${text.slice(0, 1000)}`,
+      `html=${html.slice(0, 2000)}`,
+      `diagnostics=${diagnosticPanel.exists() ? diagnosticPanel.text() : '<none>'}`,
+    ].join('\n')
+
+    expect(text, diagnostics).toContain('Diagram before.')
+    expect(text, diagnostics).toContain('Diagram after.')
+    expect(html, diagnostics).toContain('flowchart TD')
+    expect(html, diagnostics).toContain('A --&gt; B')
+    expect(html, diagnostics).not.toContain('TD&lt;br/&gt;')
+
+    wrapper.unmount()
+  })
+
+  it('treats naked flowchart source as a Mermaid diagram', async () => {
+    const { default: RenderedMarkdown } = await import('@/components/RenderedMarkdown.vue')
+    const source = [
+      'Diagram before.',
+      '',
+      'flowchart TD',
+      '  api_source --> api_target',
+      '',
+      'Diagram after.',
+    ].join('\n')
+    const wrapper = mount(RenderedMarkdown, {
+      attachTo: document.body,
+      props: { markdown: source },
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 1200))
+    await wrapper.vm.$nextTick()
+
+    const diagnosticPanel = wrapper.find('[data-testid="markdown-renderer-diagnostics"]')
+    const diagnostics = [
+      `text=${wrapper.text().slice(0, 1000)}`,
+      `html=${wrapper.html().slice(0, 2000)}`,
+      `diagnostics=${diagnosticPanel.exists() ? diagnosticPanel.text() : '<none>'}`,
+    ].join('\n')
+
+    expect(wrapper.text(), diagnostics).toContain('Diagram before.')
+    expect(wrapper.text(), diagnostics).toContain('Diagram after.')
+    expect(diagnosticPanel.exists(), diagnostics).toBe(true)
+    expect(diagnosticPanel.text(), diagnostics).toContain('Mermaid')
+    expect(diagnosticPanel.text(), diagnostics).toContain('flowchart TD')
     expect(diagnosticPanel.text(), diagnostics).toContain('api_source')
     expect(diagnosticPanel.text(), diagnostics).toContain('api_target')
 

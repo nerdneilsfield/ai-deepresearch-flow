@@ -7,6 +7,7 @@ from contextlib import contextmanager
 import inspect
 import json
 import hmac
+import logging
 import os
 from pathlib import Path
 import tempfile
@@ -18,7 +19,9 @@ from urllib.parse import urlparse
 
 try:
     from fastmcp.server.auth import AccessToken, MultiAuth, TokenVerifier
+    from fastmcp.server.auth.oauth_proxy.models import ProxyDCRClient
     from fastmcp.server.auth.providers.github import GitHubProvider
+    from pydantic import AnyUrl
 except (ImportError, ModuleNotFoundError) as exc:  # pragma: no cover - version guard
     try:
         from importlib.metadata import version
@@ -42,6 +45,7 @@ _BEARER_SCHEME = "bearer"
 _MCP_PUBLIC_UNSAFE_ENV = "MCP_PUBLIC_UNSAFE"
 _PLACEHOLDER_STATIC_TOKENS = {"your-mcp-token"}
 _OAUTH_CLIENT_COLLECTION = "mcp-oauth-proxy-clients"
+_LOGGER = logging.getLogger(__name__)
 
 
 def _fsync_directory(path: Path) -> None:
@@ -94,6 +98,18 @@ def verify_bearer(header_value: str | None, expected: str) -> None:
         raise BearerAuthError("missing")
     if not hmac.compare_digest(candidate, expected):
         raise BearerAuthError("invalid")
+
+
+def _safe_client_log_id(client_id: str) -> str:
+    if len(client_id) <= 12:
+        return "<set>"
+    return f"{client_id[:8]}…{client_id[-4:]}"
+
+
+def _is_recoverable_dynamic_client_id(client_id: str) -> bool:
+    if not client_id or len(client_id) > 128:
+        return False
+    return all(ch.isalnum() or ch in {"-", "_", ".", "~", ":"} for ch in client_id)
 
 
 def bearer_auth_app(app, access_token: str | None):
@@ -205,6 +221,40 @@ class _AllowedGitHubProvider(GitHubProvider):
     def __init__(self, *, allowed_github_user_ids: tuple[str, ...], **kwargs) -> None:
         super().__init__(**kwargs)
         self._allowed_github_user_ids = set(allowed_github_user_ids)
+
+    async def get_client(self, client_id: str):
+        client = await super().get_client(client_id)
+        if client is not None:
+            return client
+
+        normalized = str(client_id or "").strip()
+        if not _is_recoverable_dynamic_client_id(normalized):
+            return None
+
+        recovered = ProxyDCRClient(
+            client_id=normalized,
+            client_secret=None,
+            redirect_uris=[AnyUrl("http://localhost")],
+            grant_types=["authorization_code", "refresh_token"],
+            scope=getattr(self, "_default_scope_str", "user") or "user",
+            token_endpoint_auth_method="none",
+            allowed_redirect_uri_patterns=getattr(self, "_allowed_client_redirect_uris", None),
+            client_name="Recovered dynamic MCP OAuth client",
+        )
+        _LOGGER.warning(
+            "Recovering missing dynamic OAuth client registration client_id=%s; "
+            "check that MCP_OAUTH_CLIENT_CACHE is mounted persistently",
+            _safe_client_log_id(normalized),
+        )
+        try:
+            await self._client_store.put(key=normalized, value=recovered)
+        except Exception:
+            _LOGGER.exception(
+                "Failed to persist recovered dynamic OAuth client client_id=%s; "
+                "continuing for this authorization attempt",
+                _safe_client_log_id(normalized),
+            )
+        return recovered
 
     async def verify_token(self, token: str) -> AccessToken | None:
         access_token = await super().verify_token(token)

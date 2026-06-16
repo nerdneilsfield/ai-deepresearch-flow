@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import httpx
+import json
 import os
 import tempfile
 from pathlib import Path
@@ -681,7 +682,7 @@ class TestMcpGitHubOAuth(unittest.IsolatedAsyncioTestCase):
             response.headers["location"].startswith("https://papers.example.com/consent?")
         )
 
-    async def test_authorize_rejects_unknown_client_registration_without_synthesis(self) -> None:
+    async def test_authorize_recovers_unknown_dynamic_client_after_cache_loss(self) -> None:
         cache_path = Path(self.tmpdir.name) / "missing-oauth-clients.json"
         with suppress(FileNotFoundError):
             cache_path.unlink()
@@ -719,8 +720,14 @@ class TestMcpGitHubOAuth(unittest.IsolatedAsyncioTestCase):
                     },
                 )
 
-        self.assertEqual(response.status_code, 400)
-        self.assertFalse(cache_path.exists())
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(
+            response.headers["location"].startswith("https://papers.example.com/consent?")
+        )
+        self.assertTrue(cache_path.exists())
+        cache_payload = json.loads(cache_path.read_text(encoding="utf-8"))
+        clients = cache_payload["collections"]["mcp-oauth-proxy-clients"]
+        self.assertIn("5cf03dde-0390-4757-a8c9-338a1351cc49", clients)
 
     async def test_token_accepts_chatgpt_metadata_url_resource_alias(self) -> None:
         app = self._app()

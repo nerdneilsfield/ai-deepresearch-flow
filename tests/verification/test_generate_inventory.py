@@ -29,6 +29,8 @@ def test_inventory_cli_emits_tracked_repo_surfaces_and_stable_ids(tmp_path: Path
     )
     _write(tmp_path / "constants.py", "def root_helper(value: int) -> int:\n    return value\n")
     _write(tmp_path / "tests" / "test_mod.py", "def test_public_behavior():\n    assert True\n")
+    _write(tmp_path / "tests" / "conftest.py", "# shared fixtures\n")
+    _write(tmp_path / "tests" / "_helper.py", "def helper():\n    return 1\n")
     _write(
         tmp_path / "frontend" / "src" / "lib" / "api.ts",
         "export function fetchPaper(id: string): string { return id }\n",
@@ -37,6 +39,7 @@ def test_inventory_cli_emits_tracked_repo_surfaces_and_stable_ids(tmp_path: Path
         tmp_path / "frontend" / "src" / "__tests__" / "api.test.ts",
         "import { fetchPaper } from '../lib/api'\n",
     )
+    _write(tmp_path / "frontend" / "src" / "__tests__" / "fixtures.ts", "export const x = 1\n")
     _write(
         tmp_path / "frontend" / "src" / "views" / "PaperView.vue",
         '<script setup lang="ts">\nconst props = defineProps<{ id: string }>()\nconst emit = defineEmits<{ done: [] }>()\n</script>\n',
@@ -77,7 +80,10 @@ def test_inventory_cli_emits_tracked_repo_surfaces_and_stable_ids(tmp_path: Path
     assert "scripts/docker/nginx.conf.http.template" in paths
     assert "openspec/changes/demo.md" in paths
     assert paths["tests/test_mod.py"]["classification"] == "test"
+    assert paths["tests/conftest.py"]["classification"] == "test_support"
+    assert paths["tests/_helper.py"]["classification"] == "test_support"
     assert paths["frontend/src/__tests__/api.test.ts"]["classification"] == "test"
+    assert paths["frontend/src/__tests__/fixtures.ts"]["classification"] == "test_support"
     assert paths[".github/workflows/push-to-pypi.yml"]["kind"] == "release_publish_workflow"
     assert paths["scripts/docker/Dockerfile.deploy"]["kind"] == "container_build"
     assert paths["scripts/docker/nginx.conf.http.template"]["kind"] == "reverse_proxy_config"
@@ -104,6 +110,14 @@ def test_inventory_cli_emits_tracked_repo_surfaces_and_stable_ids(tmp_path: Path
     evidence_paths = {entry["path"] for entry in payload["evidence_assets"]}
     assert "tests/test_mod.py" in evidence_paths
     assert "frontend/src/__tests__/api.test.ts" in evidence_paths
+    assert "tests/conftest.py" not in evidence_paths
+    assert "tests/_helper.py" not in evidence_paths
+    assert "frontend/src/__tests__/fixtures.ts" not in evidence_paths
+    evidence_commands = {entry["path"]: entry["command"] for entry in payload["evidence_assets"]}
+    assert (
+        evidence_commands["frontend/src/__tests__/api.test.ts"]
+        == "cd frontend && npm test -- --run src/__tests__/api.test.ts"
+    )
     groups = {entry["artifact_group_id"]: entry for entry in payload["artifact_groups"]}
     assert groups["vendor:frontend-public-pdfjs"]["file_count"] == 1
 

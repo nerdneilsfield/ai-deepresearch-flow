@@ -204,7 +204,7 @@ PATH_EVIDENCE = {
         {
             "kind": "UNIT_BLACK_BOX",
             "path": "frontend/src/__tests__/tokenDb.test.ts",
-            "checker_command": "cd frontend && npm test -- --run frontend/src/__tests__/tokenDb.test.ts",
+            "checker_command": "cd frontend && npm test -- --run src/__tests__/tokenDb.test.ts",
             "observable_contract": "Token storage public API persists, loads, and clears tokens through observable IndexedDB behavior.",
         }
     ],
@@ -212,7 +212,7 @@ PATH_EVIDENCE = {
         {
             "kind": "UNIT_BLACK_BOX",
             "path": "frontend/src/__tests__/useAdvancedSearchToken.test.ts",
-            "checker_command": "cd frontend && npm test -- --run frontend/src/__tests__/useAdvancedSearchToken.test.ts",
+            "checker_command": "cd frontend && npm test -- --run src/__tests__/useAdvancedSearchToken.test.ts",
             "observable_contract": "Advanced-search token composable exposes observable load/set/clear/error state behavior.",
         }
     ],

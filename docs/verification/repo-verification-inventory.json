@@ -45776,7 +45776,7 @@
   "evidence_assets": [
     {
       "black_box_contract": "observable behavior only",
-      "command": "cd frontend && npm test -- --run frontend/src/__tests__/AdvancedSearchPanel.test.ts",
+      "command": "cd frontend && npm test -- --run src/__tests__/AdvancedSearchPanel.test.ts",
       "deterministic_mode": true,
       "evidence_class": "UNIT_BLACK_BOX",
       "evidence_id": "evidence:frontend/src/__tests__/AdvancedSearchPanel.test.ts",
@@ -45785,7 +45785,7 @@
     },
     {
       "black_box_contract": "observable behavior only",
-      "command": "cd frontend && npm test -- --run frontend/src/__tests__/AdvancedSearchResults.test.ts",
+      "command": "cd frontend && npm test -- --run src/__tests__/AdvancedSearchResults.test.ts",
       "deterministic_mode": true,
       "evidence_class": "UNIT_BLACK_BOX",
       "evidence_id": "evidence:frontend/src/__tests__/AdvancedSearchResults.test.ts",
@@ -45794,7 +45794,7 @@
     },
     {
       "black_box_contract": "observable behavior only",
-      "command": "cd frontend && npm test -- --run frontend/src/__tests__/HelpView.test.ts",
+      "command": "cd frontend && npm test -- --run src/__tests__/HelpView.test.ts",
       "deterministic_mode": true,
       "evidence_class": "UNIT_BLACK_BOX",
       "evidence_id": "evidence:frontend/src/__tests__/HelpView.test.ts",
@@ -45803,7 +45803,7 @@
     },
     {
       "black_box_contract": "observable behavior only",
-      "command": "cd frontend && npm test -- --run frontend/src/__tests__/MarkdownPanel.test.ts",
+      "command": "cd frontend && npm test -- --run src/__tests__/MarkdownPanel.test.ts",
       "deterministic_mode": true,
       "evidence_class": "UNIT_BLACK_BOX",
       "evidence_id": "evidence:frontend/src/__tests__/MarkdownPanel.test.ts",
@@ -45812,7 +45812,7 @@
     },
     {
       "black_box_contract": "observable behavior only",
-      "command": "cd frontend && npm test -- --run frontend/src/__tests__/PaperDetailViewAdvancedContext.test.ts",
+      "command": "cd frontend && npm test -- --run src/__tests__/PaperDetailViewAdvancedContext.test.ts",
       "deterministic_mode": true,
       "evidence_class": "UNIT_BLACK_BOX",
       "evidence_id": "evidence:frontend/src/__tests__/PaperDetailViewAdvancedContext.test.ts",
@@ -45821,7 +45821,7 @@
     },
     {
       "black_box_contract": "observable behavior only",
-      "command": "cd frontend && npm test -- --run frontend/src/__tests__/PdfViewer.test.ts",
+      "command": "cd frontend && npm test -- --run src/__tests__/PdfViewer.test.ts",
       "deterministic_mode": true,
       "evidence_class": "UNIT_BLACK_BOX",
       "evidence_id": "evidence:frontend/src/__tests__/PdfViewer.test.ts",
@@ -45830,7 +45830,7 @@
     },
     {
       "black_box_contract": "observable behavior only",
-      "command": "cd frontend && npm test -- --run frontend/src/__tests__/RenderedMarkdown.test.ts",
+      "command": "cd frontend && npm test -- --run src/__tests__/RenderedMarkdown.test.ts",
       "deterministic_mode": true,
       "evidence_class": "UNIT_BLACK_BOX",
       "evidence_id": "evidence:frontend/src/__tests__/RenderedMarkdown.test.ts",
@@ -45839,7 +45839,16 @@
     },
     {
       "black_box_contract": "observable behavior only",
-      "command": "cd frontend && npm test -- --run frontend/src/__tests__/SelectedViewExport.test.ts",
+      "command": "cd frontend && npm test -- --run src/__tests__/RenderedMarkdownDiagnostics.test.ts",
+      "deterministic_mode": true,
+      "evidence_class": "UNIT_BLACK_BOX",
+      "evidence_id": "evidence:frontend/src/__tests__/RenderedMarkdownDiagnostics.test.ts",
+      "path": "frontend/src/__tests__/RenderedMarkdownDiagnostics.test.ts",
+      "target_inventory_ids": []
+    },
+    {
+      "black_box_contract": "observable behavior only",
+      "command": "cd frontend && npm test -- --run src/__tests__/SelectedViewExport.test.ts",
       "deterministic_mode": true,
       "evidence_class": "UNIT_BLACK_BOX",
       "evidence_id": "evidence:frontend/src/__tests__/SelectedViewExport.test.ts",
@@ -45848,7 +45857,7 @@
     },
     {
       "black_box_contract": "observable behavior only",
-      "command": "cd frontend && npm test -- --run frontend/src/__tests__/advancedSearch.test.ts",
+      "command": "cd frontend && npm test -- --run src/__tests__/advancedSearch.test.ts",
       "deterministic_mode": true,
       "evidence_class": "UNIT_BLACK_BOX",
       "evidence_id": "evidence:frontend/src/__tests__/advancedSearch.test.ts",
@@ -45857,7 +45866,7 @@
     },
     {
       "black_box_contract": "observable behavior only",
-      "command": "cd frontend && npm test -- --run frontend/src/__tests__/advancedSearchFlow.test.ts",
+      "command": "cd frontend && npm test -- --run src/__tests__/advancedSearchFlow.test.ts",
       "deterministic_mode": true,
       "evidence_class": "UNIT_BLACK_BOX",
       "evidence_id": "evidence:frontend/src/__tests__/advancedSearchFlow.test.ts",
@@ -45866,7 +45875,7 @@
     },
     {
       "black_box_contract": "observable behavior only",
-      "command": "cd frontend && npm test -- --run frontend/src/__tests__/advancedSearchTimeout.test.ts",
+      "command": "cd frontend && npm test -- --run src/__tests__/advancedSearchTimeout.test.ts",
       "deterministic_mode": true,
       "evidence_class": "UNIT_BLACK_BOX",
       "evidence_id": "evidence:frontend/src/__tests__/advancedSearchTimeout.test.ts",
@@ -45875,7 +45884,7 @@
     },
     {
       "black_box_contract": "observable behavior only",
-      "command": "cd frontend && npm test -- --run frontend/src/__tests__/api.test.ts",
+      "command": "cd frontend && npm test -- --run src/__tests__/api.test.ts",
       "deterministic_mode": true,
       "evidence_class": "UNIT_BLACK_BOX",
       "evidence_id": "evidence:frontend/src/__tests__/api.test.ts",
@@ -45884,7 +45893,7 @@
     },
     {
       "black_box_contract": "observable behavior only",
-      "command": "cd frontend && npm test -- --run frontend/src/__tests__/asyncComponent.test.ts",
+      "command": "cd frontend && npm test -- --run src/__tests__/asyncComponent.test.ts",
       "deterministic_mode": true,
       "evidence_class": "UNIT_BLACK_BOX",
       "evidence_id": "evidence:frontend/src/__tests__/asyncComponent.test.ts",
@@ -45893,7 +45902,7 @@
     },
     {
       "black_box_contract": "observable behavior only",
-      "command": "cd frontend && npm test -- --run frontend/src/__tests__/http.test.ts",
+      "command": "cd frontend && npm test -- --run src/__tests__/http.test.ts",
       "deterministic_mode": true,
       "evidence_class": "UNIT_BLACK_BOX",
       "evidence_id": "evidence:frontend/src/__tests__/http.test.ts",
@@ -45902,7 +45911,7 @@
     },
     {
       "black_box_contract": "observable behavior only",
-      "command": "cd frontend && npm test -- --run frontend/src/__tests__/lazy.test.ts",
+      "command": "cd frontend && npm test -- --run src/__tests__/lazy.test.ts",
       "deterministic_mode": true,
       "evidence_class": "UNIT_BLACK_BOX",
       "evidence_id": "evidence:frontend/src/__tests__/lazy.test.ts",
@@ -45911,7 +45920,7 @@
     },
     {
       "black_box_contract": "observable behavior only",
-      "command": "cd frontend && npm test -- --run frontend/src/__tests__/markdownRender.test.ts",
+      "command": "cd frontend && npm test -- --run src/__tests__/markdownRender.test.ts",
       "deterministic_mode": true,
       "evidence_class": "UNIT_BLACK_BOX",
       "evidence_id": "evidence:frontend/src/__tests__/markdownRender.test.ts",
@@ -45920,7 +45929,7 @@
     },
     {
       "black_box_contract": "observable behavior only",
-      "command": "cd frontend && npm test -- --run frontend/src/__tests__/moduleInterop.test.ts",
+      "command": "cd frontend && npm test -- --run src/__tests__/moduleInterop.test.ts",
       "deterministic_mode": true,
       "evidence_class": "UNIT_BLACK_BOX",
       "evidence_id": "evidence:frontend/src/__tests__/moduleInterop.test.ts",
@@ -45929,7 +45938,7 @@
     },
     {
       "black_box_contract": "observable behavior only",
-      "command": "cd frontend && npm test -- --run frontend/src/__tests__/paperContentCache.test.ts",
+      "command": "cd frontend && npm test -- --run src/__tests__/paperContentCache.test.ts",
       "deterministic_mode": true,
       "evidence_class": "UNIT_BLACK_BOX",
       "evidence_id": "evidence:frontend/src/__tests__/paperContentCache.test.ts",
@@ -45938,7 +45947,7 @@
     },
     {
       "black_box_contract": "observable behavior only",
-      "command": "cd frontend && npm test -- --run frontend/src/__tests__/selectedExport.fuzz.test.ts",
+      "command": "cd frontend && npm test -- --run src/__tests__/selectedExport.fuzz.test.ts",
       "deterministic_mode": true,
       "evidence_class": "UNIT_BLACK_BOX",
       "evidence_id": "evidence:frontend/src/__tests__/selectedExport.fuzz.test.ts",
@@ -45947,7 +45956,7 @@
     },
     {
       "black_box_contract": "observable behavior only",
-      "command": "cd frontend && npm test -- --run frontend/src/__tests__/selectedExport.test.ts",
+      "command": "cd frontend && npm test -- --run src/__tests__/selectedExport.test.ts",
       "deterministic_mode": true,
       "evidence_class": "UNIT_BLACK_BOX",
       "evidence_id": "evidence:frontend/src/__tests__/selectedExport.test.ts",
@@ -45956,7 +45965,7 @@
     },
     {
       "black_box_contract": "observable behavior only",
-      "command": "cd frontend && npm test -- --run frontend/src/__tests__/snippet.test.ts",
+      "command": "cd frontend && npm test -- --run src/__tests__/snippet.test.ts",
       "deterministic_mode": true,
       "evidence_class": "UNIT_BLACK_BOX",
       "evidence_id": "evidence:frontend/src/__tests__/snippet.test.ts",
@@ -45965,7 +45974,7 @@
     },
     {
       "black_box_contract": "observable behavior only",
-      "command": "cd frontend && npm test -- --run frontend/src/__tests__/tokenDb.test.ts",
+      "command": "cd frontend && npm test -- --run src/__tests__/tokenDb.test.ts",
       "deterministic_mode": true,
       "evidence_class": "UNIT_BLACK_BOX",
       "evidence_id": "evidence:frontend/src/__tests__/tokenDb.test.ts",
@@ -45974,7 +45983,7 @@
     },
     {
       "black_box_contract": "observable behavior only",
-      "command": "cd frontend && npm test -- --run frontend/src/__tests__/useAdvancedSearchToken.test.ts",
+      "command": "cd frontend && npm test -- --run src/__tests__/useAdvancedSearchToken.test.ts",
       "deterministic_mode": true,
       "evidence_class": "UNIT_BLACK_BOX",
       "evidence_id": "evidence:frontend/src/__tests__/useAdvancedSearchToken.test.ts",
@@ -45983,7 +45992,7 @@
     },
     {
       "black_box_contract": "observable behavior only",
-      "command": "cd frontend && npm test -- --run frontend/src/__tests__/useExpandableSummary.test.ts",
+      "command": "cd frontend && npm test -- --run src/__tests__/useExpandableSummary.test.ts",
       "deterministic_mode": true,
       "evidence_class": "UNIT_BLACK_BOX",
       "evidence_id": "evidence:frontend/src/__tests__/useExpandableSummary.test.ts",
@@ -45992,7 +46001,7 @@
     },
     {
       "black_box_contract": "observable behavior only",
-      "command": "cd frontend && npm test -- --run frontend/src/__tests__/useFacetStats.test.ts",
+      "command": "cd frontend && npm test -- --run src/__tests__/useFacetStats.test.ts",
       "deterministic_mode": true,
       "evidence_class": "UNIT_BLACK_BOX",
       "evidence_id": "evidence:frontend/src/__tests__/useFacetStats.test.ts",
@@ -46001,7 +46010,7 @@
     },
     {
       "black_box_contract": "observable behavior only",
-      "command": "cd frontend && npm test -- --run frontend/src/__tests__/usePaperDetail.test.ts",
+      "command": "cd frontend && npm test -- --run src/__tests__/usePaperDetail.test.ts",
       "deterministic_mode": true,
       "evidence_class": "UNIT_BLACK_BOX",
       "evidence_id": "evidence:frontend/src/__tests__/usePaperDetail.test.ts",
@@ -46010,7 +46019,7 @@
     },
     {
       "black_box_contract": "observable behavior only",
-      "command": "cd frontend && npm test -- --run frontend/src/__tests__/useSearchState.test.ts",
+      "command": "cd frontend && npm test -- --run src/__tests__/useSearchState.test.ts",
       "deterministic_mode": true,
       "evidence_class": "UNIT_BLACK_BOX",
       "evidence_id": "evidence:frontend/src/__tests__/useSearchState.test.ts",
@@ -46019,20 +46028,11 @@
     },
     {
       "black_box_contract": "observable behavior only",
-      "command": "cd frontend && npm test -- --run frontend/src/__tests__/useSplitView.test.ts",
+      "command": "cd frontend && npm test -- --run src/__tests__/useSplitView.test.ts",
       "deterministic_mode": true,
       "evidence_class": "UNIT_BLACK_BOX",
       "evidence_id": "evidence:frontend/src/__tests__/useSplitView.test.ts",
       "path": "frontend/src/__tests__/useSplitView.test.ts",
-      "target_inventory_ids": []
-    },
-    {
-      "black_box_contract": "observable behavior only",
-      "command": "uv run pytest python/deepresearch_flow/ocr/tests/__init__.py -q",
-      "deterministic_mode": true,
-      "evidence_class": "UNIT_BLACK_BOX",
-      "evidence_id": "evidence:python/deepresearch_flow/ocr/tests/__init__.py",
-      "path": "python/deepresearch_flow/ocr/tests/__init__.py",
       "target_inventory_ids": []
     },
     {
@@ -46087,15 +46087,6 @@
       "evidence_class": "UNIT_BLACK_BOX",
       "evidence_id": "evidence:python/deepresearch_flow/ocr/tests/test_runner.py",
       "path": "python/deepresearch_flow/ocr/tests/test_runner.py",
-      "target_inventory_ids": []
-    },
-    {
-      "black_box_contract": "observable behavior only",
-      "command": "uv run pytest python/deepresearch_flow/paper/snapshot/advanced/tests/__init__.py -q",
-      "deterministic_mode": true,
-      "evidence_class": "UNIT_BLACK_BOX",
-      "evidence_id": "evidence:python/deepresearch_flow/paper/snapshot/advanced/tests/__init__.py",
-      "path": "python/deepresearch_flow/paper/snapshot/advanced/tests/__init__.py",
       "target_inventory_ids": []
     },
     {
@@ -46231,15 +46222,6 @@
       "evidence_class": "UNIT_BLACK_BOX",
       "evidence_id": "evidence:python/deepresearch_flow/paper/snapshot/advanced/tests/test_retrieve_sparse.py",
       "path": "python/deepresearch_flow/paper/snapshot/advanced/tests/test_retrieve_sparse.py",
-      "target_inventory_ids": []
-    },
-    {
-      "black_box_contract": "observable behavior only",
-      "command": "uv run pytest python/deepresearch_flow/paper/snapshot/tests/__init__.py -q",
-      "deterministic_mode": true,
-      "evidence_class": "UNIT_BLACK_BOX",
-      "evidence_id": "evidence:python/deepresearch_flow/paper/snapshot/tests/__init__.py",
-      "path": "python/deepresearch_flow/paper/snapshot/tests/__init__.py",
       "target_inventory_ids": []
     },
     {
@@ -46811,15 +46793,6 @@
     },
     {
       "black_box_contract": "observable behavior only",
-      "command": "uv run pytest python/deepresearch_flow/storage/tests/__init__.py -q",
-      "deterministic_mode": true,
-      "evidence_class": "UNIT_BLACK_BOX",
-      "evidence_id": "evidence:python/deepresearch_flow/storage/tests/__init__.py",
-      "path": "python/deepresearch_flow/storage/tests/__init__.py",
-      "target_inventory_ids": []
-    },
-    {
-      "black_box_contract": "observable behavior only",
       "command": "uv run pytest python/deepresearch_flow/storage/tests/test_factory.py -q",
       "deterministic_mode": true,
       "evidence_class": "UNIT_BLACK_BOX",
@@ -46834,24 +46807,6 @@
       "evidence_class": "UNIT_BLACK_BOX",
       "evidence_id": "evidence:python/deepresearch_flow/storage/tests/test_webdav.py",
       "path": "python/deepresearch_flow/storage/tests/test_webdav.py",
-      "target_inventory_ids": []
-    },
-    {
-      "black_box_contract": "observable behavior only",
-      "command": "uv run pytest python/deepresearch_flow/translator/tests/__init__.py -q",
-      "deterministic_mode": true,
-      "evidence_class": "UNIT_BLACK_BOX",
-      "evidence_id": "evidence:python/deepresearch_flow/translator/tests/__init__.py",
-      "path": "python/deepresearch_flow/translator/tests/__init__.py",
-      "target_inventory_ids": []
-    },
-    {
-      "black_box_contract": "observable behavior only",
-      "command": "uv run pytest python/deepresearch_flow/translator/tests/_fuzz_markdown_cases.py -q",
-      "deterministic_mode": true,
-      "evidence_class": "UNIT_BLACK_BOX",
-      "evidence_id": "evidence:python/deepresearch_flow/translator/tests/_fuzz_markdown_cases.py",
-      "path": "python/deepresearch_flow/translator/tests/_fuzz_markdown_cases.py",
       "target_inventory_ids": []
     },
     {
@@ -46924,15 +46879,6 @@
       "evidence_class": "UNIT_BLACK_BOX",
       "evidence_id": "evidence:python/deepresearch_flow/translator/tests/test_segment_contracts.py",
       "path": "python/deepresearch_flow/translator/tests/test_segment_contracts.py",
-      "target_inventory_ids": []
-    },
-    {
-      "black_box_contract": "observable behavior only",
-      "command": "uv run pytest tests/conftest.py -q",
-      "deterministic_mode": true,
-      "evidence_class": "UNIT_BLACK_BOX",
-      "evidence_id": "evidence:tests/conftest.py",
-      "path": "tests/conftest.py",
       "target_inventory_ids": []
     },
     {
@@ -57518,6 +57464,26 @@
       },
       "kind": "test_asset",
       "path": "frontend/src/__tests__/RenderedMarkdown.test.ts",
+      "symbols": []
+    },
+    {
+      "classification": "test",
+      "criticality": "P2",
+      "flags": {
+        "concurrency_boundary": false,
+        "deploy_security_boundary": false,
+        "network_boundary": false,
+        "parser_boundary": true,
+        "persistence_boundary": false,
+        "release_publish_boundary": false,
+        "renderer_boundary": true,
+        "runtime_config_boundary": false,
+        "secret_boundary": false,
+        "security_boundary": false,
+        "suspected_boundary_unclassified": false
+      },
+      "kind": "test_asset",
+      "path": "frontend/src/__tests__/RenderedMarkdownDiagnostics.test.ts",
       "symbols": []
     },
     {
@@ -68495,7 +68461,7 @@
       ]
     },
     {
-      "classification": "test",
+      "classification": "test_support",
       "criticality": "P2",
       "flags": {
         "concurrency_boundary": false,
@@ -68510,7 +68476,7 @@
         "security_boundary": false,
         "suspected_boundary_unclassified": false
       },
-      "kind": "python_test",
+      "kind": "test_support",
       "path": "python/deepresearch_flow/ocr/tests/__init__.py",
       "symbols": []
     },
@@ -76597,7 +76563,7 @@
       ]
     },
     {
-      "classification": "test",
+      "classification": "test_support",
       "criticality": "P2",
       "flags": {
         "concurrency_boundary": false,
@@ -76612,7 +76578,7 @@
         "security_boundary": false,
         "suspected_boundary_unclassified": false
       },
-      "kind": "python_test",
+      "kind": "test_support",
       "path": "python/deepresearch_flow/paper/snapshot/advanced/tests/__init__.py",
       "symbols": []
     },
@@ -79486,7 +79452,7 @@
           "name": "_fsync_directory",
           "qualname": "_fsync_directory",
           "signature_hash": "a4c7190b9a48",
-          "source_span": "47-60",
+          "source_span": "51-64",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:_fsync_directory#a4c7190b9a48"
         },
         {
@@ -79496,7 +79462,7 @@
           "name": "is_mcp_public_unsafe_allowed",
           "qualname": "is_mcp_public_unsafe_allowed",
           "signature_hash": "ae729dd2ea0c",
-          "source_span": "63-65",
+          "source_span": "67-69",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:is_mcp_public_unsafe_allowed#ae729dd2ea0c"
         },
         {
@@ -79506,7 +79472,7 @@
           "name": "validate_mcp_static_access_token",
           "qualname": "validate_mcp_static_access_token",
           "signature_hash": "39826efece10",
-          "source_span": "68-77",
+          "source_span": "72-81",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:validate_mcp_static_access_token#39826efece10"
         },
         {
@@ -79516,7 +79482,7 @@
           "name": "BearerAuthError",
           "qualname": "BearerAuthError",
           "signature_hash": "67ef9b0c7fea",
-          "source_span": "80-85",
+          "source_span": "84-89",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:BearerAuthError#67ef9b0c7fea"
         },
         {
@@ -79526,7 +79492,7 @@
           "name": "__init__",
           "qualname": "BearerAuthError.__init__",
           "signature_hash": "f5f39b9d1ca7",
-          "source_span": "83-85",
+          "source_span": "87-89",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:BearerAuthError.__init__#f5f39b9d1ca7"
         },
         {
@@ -79536,8 +79502,28 @@
           "name": "verify_bearer",
           "qualname": "verify_bearer",
           "signature_hash": "490a11a74461",
-          "source_span": "88-96",
+          "source_span": "92-100",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:verify_bearer#490a11a74461"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "_safe_client_log_id",
+          "qualname": "_safe_client_log_id",
+          "signature_hash": "e35dc701e4ee",
+          "source_span": "103-106",
+          "stable_id": "py:deepresearch_flow.paper.snapshot.auth:_safe_client_log_id#e35dc701e4ee"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
+          "name": "_is_recoverable_dynamic_client_id",
+          "qualname": "_is_recoverable_dynamic_client_id",
+          "signature_hash": "55a44cb5f8fa",
+          "source_span": "109-112",
+          "stable_id": "py:deepresearch_flow.paper.snapshot.auth:_is_recoverable_dynamic_client_id#55a44cb5f8fa"
         },
         {
           "async": false,
@@ -79546,7 +79532,7 @@
           "name": "bearer_auth_app",
           "qualname": "bearer_auth_app",
           "signature_hash": "d3033a4b3a3b",
-          "source_span": "99-134",
+          "source_span": "115-150",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:bearer_auth_app#d3033a4b3a3b"
         },
         {
@@ -79556,7 +79542,7 @@
           "name": "wrapped",
           "qualname": "bearer_auth_app.wrapped",
           "signature_hash": "29ca1efd1ebf",
-          "source_span": "107-129",
+          "source_span": "123-145",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:bearer_auth_app.wrapped#29ca1efd1ebf"
         },
         {
@@ -79568,7 +79554,7 @@
           "name": "McpGitHubOAuthConfig",
           "qualname": "McpGitHubOAuthConfig",
           "signature_hash": "c83379852d46",
-          "source_span": "138-176",
+          "source_span": "154-192",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:McpGitHubOAuthConfig#c83379852d46"
         },
         {
@@ -79578,7 +79564,7 @@
           "name": "__post_init__",
           "qualname": "McpGitHubOAuthConfig.__post_init__",
           "signature_hash": "3568660c4e00",
-          "source_span": "149-176",
+          "source_span": "165-192",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:McpGitHubOAuthConfig.__post_init__#3568660c4e00"
         },
         {
@@ -79588,7 +79574,7 @@
           "name": "StaticBearerTokenVerifier",
           "qualname": "StaticBearerTokenVerifier",
           "signature_hash": "33c4da6aaa5f",
-          "source_span": "179-201",
+          "source_span": "195-217",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:StaticBearerTokenVerifier#33c4da6aaa5f"
         },
         {
@@ -79598,7 +79584,7 @@
           "name": "__init__",
           "qualname": "StaticBearerTokenVerifier.__init__",
           "signature_hash": "fa49e3ddb258",
-          "source_span": "182-190",
+          "source_span": "198-206",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:StaticBearerTokenVerifier.__init__#fa49e3ddb258"
         },
         {
@@ -79608,7 +79594,7 @@
           "name": "verify_token",
           "qualname": "StaticBearerTokenVerifier.verify_token",
           "signature_hash": "b11a8fa8beaa",
-          "source_span": "192-201",
+          "source_span": "208-217",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:StaticBearerTokenVerifier.verify_token#b11a8fa8beaa"
         },
         {
@@ -79618,7 +79604,7 @@
           "name": "_AllowedGitHubProvider",
           "qualname": "_AllowedGitHubProvider",
           "signature_hash": "e7bd6ddd0887",
-          "source_span": "204-216",
+          "source_span": "220-266",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:_AllowedGitHubProvider#e7bd6ddd0887"
         },
         {
@@ -79628,8 +79614,18 @@
           "name": "__init__",
           "qualname": "_AllowedGitHubProvider.__init__",
           "signature_hash": "f3f2a9b90fd6",
-          "source_span": "205-207",
+          "source_span": "221-223",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:_AllowedGitHubProvider.__init__#f3f2a9b90fd6"
+        },
+        {
+          "async": true,
+          "decorators": [],
+          "kind": "method",
+          "name": "get_client",
+          "qualname": "_AllowedGitHubProvider.get_client",
+          "signature_hash": "005358d48434",
+          "source_span": "225-257",
+          "stable_id": "py:deepresearch_flow.paper.snapshot.auth:_AllowedGitHubProvider.get_client#005358d48434"
         },
         {
           "async": true,
@@ -79638,7 +79634,7 @@
           "name": "verify_token",
           "qualname": "_AllowedGitHubProvider.verify_token",
           "signature_hash": "b11a8fa8beaa",
-          "source_span": "209-216",
+          "source_span": "259-266",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:_AllowedGitHubProvider.verify_token#b11a8fa8beaa"
         },
         {
@@ -79648,7 +79644,7 @@
           "name": "JsonOAuthClientCache",
           "qualname": "JsonOAuthClientCache",
           "signature_hash": "4f73abfd5e30",
-          "source_span": "219-379",
+          "source_span": "269-429",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:JsonOAuthClientCache#4f73abfd5e30"
         },
         {
@@ -79658,7 +79654,7 @@
           "name": "__init__",
           "qualname": "JsonOAuthClientCache.__init__",
           "signature_hash": "120b447ce7a9",
-          "source_span": "222-226",
+          "source_span": "272-276",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:JsonOAuthClientCache.__init__#120b447ce7a9"
         },
         {
@@ -79668,7 +79664,7 @@
           "name": "_is_persistent_collection",
           "qualname": "JsonOAuthClientCache._is_persistent_collection",
           "signature_hash": "7b38dcfbbe1c",
-          "source_span": "228-229",
+          "source_span": "278-279",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:JsonOAuthClientCache._is_persistent_collection#7b38dcfbbe1c"
         },
         {
@@ -79680,7 +79676,7 @@
           "name": "_persistent_file_lock_unlocked",
           "qualname": "JsonOAuthClientCache._persistent_file_lock_unlocked",
           "signature_hash": "0e912470d30b",
-          "source_span": "232-242",
+          "source_span": "282-292",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:JsonOAuthClientCache._persistent_file_lock_unlocked#0e912470d30b"
         },
         {
@@ -79690,7 +79686,7 @@
           "name": "_read_persistent_unlocked",
           "qualname": "JsonOAuthClientCache._read_persistent_unlocked",
           "signature_hash": "124f0a1f0aa1",
-          "source_span": "244-263",
+          "source_span": "294-313",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:JsonOAuthClientCache._read_persistent_unlocked#124f0a1f0aa1"
         },
         {
@@ -79700,7 +79696,7 @@
           "name": "_write_persistent_unlocked",
           "qualname": "JsonOAuthClientCache._write_persistent_unlocked",
           "signature_hash": "bd1df57763b6",
-          "source_span": "265-297",
+          "source_span": "315-347",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:JsonOAuthClientCache._write_persistent_unlocked#bd1df57763b6"
         },
         {
@@ -79710,7 +79706,7 @@
           "name": "get",
           "qualname": "JsonOAuthClientCache.get",
           "signature_hash": "cef1995696a6",
-          "source_span": "299-311",
+          "source_span": "349-361",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:JsonOAuthClientCache.get#cef1995696a6"
         },
         {
@@ -79720,7 +79716,7 @@
           "name": "ttl",
           "qualname": "JsonOAuthClientCache.ttl",
           "signature_hash": "0606be2f919a",
-          "source_span": "313-316",
+          "source_span": "363-366",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:JsonOAuthClientCache.ttl#0606be2f919a"
         },
         {
@@ -79730,7 +79726,7 @@
           "name": "put",
           "qualname": "JsonOAuthClientCache.put",
           "signature_hash": "73065da62796",
-          "source_span": "318-336",
+          "source_span": "368-386",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:JsonOAuthClientCache.put#73065da62796"
         },
         {
@@ -79740,7 +79736,7 @@
           "name": "delete",
           "qualname": "JsonOAuthClientCache.delete",
           "signature_hash": "83d04dc364c8",
-          "source_span": "338-351",
+          "source_span": "388-401",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:JsonOAuthClientCache.delete#83d04dc364c8"
         },
         {
@@ -79750,7 +79746,7 @@
           "name": "get_many",
           "qualname": "JsonOAuthClientCache.get_many",
           "signature_hash": "3e68b8b34314",
-          "source_span": "353-356",
+          "source_span": "403-406",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:JsonOAuthClientCache.get_many#3e68b8b34314"
         },
         {
@@ -79760,7 +79756,7 @@
           "name": "ttl_many",
           "qualname": "JsonOAuthClientCache.ttl_many",
           "signature_hash": "137eb2541445",
-          "source_span": "358-361",
+          "source_span": "408-411",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:JsonOAuthClientCache.ttl_many#137eb2541445"
         },
         {
@@ -79770,7 +79766,7 @@
           "name": "put_many",
           "qualname": "JsonOAuthClientCache.put_many",
           "signature_hash": "6b1eca017d3e",
-          "source_span": "363-372",
+          "source_span": "413-422",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:JsonOAuthClientCache.put_many#6b1eca017d3e"
         },
         {
@@ -79780,7 +79776,7 @@
           "name": "delete_many",
           "qualname": "JsonOAuthClientCache.delete_many",
           "signature_hash": "6f9f0389263b",
-          "source_span": "374-379",
+          "source_span": "424-429",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:JsonOAuthClientCache.delete_many#6f9f0389263b"
         },
         {
@@ -79790,7 +79786,7 @@
           "name": "oauth_metadata_compat_app",
           "qualname": "oauth_metadata_compat_app",
           "signature_hash": "7db82f1f3ad0",
-          "source_span": "382-455",
+          "source_span": "432-505",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:oauth_metadata_compat_app#7db82f1f3ad0"
         },
         {
@@ -79800,7 +79796,7 @@
           "name": "wrapped",
           "qualname": "oauth_metadata_compat_app.wrapped",
           "signature_hash": "29ca1efd1ebf",
-          "source_span": "385-450",
+          "source_span": "435-500",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:oauth_metadata_compat_app.wrapped#29ca1efd1ebf"
         },
         {
@@ -79810,7 +79806,7 @@
           "name": "capture_send",
           "qualname": "oauth_metadata_compat_app.wrapped.capture_send",
           "signature_hash": "70954d754b44",
-          "source_span": "397-448",
+          "source_span": "447-498",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:oauth_metadata_compat_app.wrapped.capture_send#70954d754b44"
         },
         {
@@ -79820,7 +79816,7 @@
           "name": "build_mcp_github_oauth_provider",
           "qualname": "build_mcp_github_oauth_provider",
           "signature_hash": "54f3db4fbbc9",
-          "source_span": "458-491",
+          "source_span": "508-541",
           "stable_id": "py:deepresearch_flow.paper.snapshot.auth:build_mcp_github_oauth_provider#54f3db4fbbc9"
         }
       ]
@@ -82873,7 +82869,7 @@
       ]
     },
     {
-      "classification": "test",
+      "classification": "test_support",
       "criticality": "P2",
       "flags": {
         "concurrency_boundary": false,
@@ -82888,7 +82884,7 @@
         "security_boundary": false,
         "suspected_boundary_unclassified": false
       },
-      "kind": "python_test",
+      "kind": "test_support",
       "path": "python/deepresearch_flow/paper/snapshot/tests/__init__.py",
       "symbols": []
     },
@@ -85814,7 +85810,7 @@
           "name": "_capture_response_start",
           "qualname": "_capture_response_start",
           "signature_hash": "57bcb89fbf0c",
-          "source_span": "79-133",
+          "source_span": "80-134",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:_capture_response_start#57bcb89fbf0c"
         },
         {
@@ -85824,7 +85820,7 @@
           "name": "receive",
           "qualname": "_capture_response_start.receive",
           "signature_hash": "b2613c11274d",
-          "source_span": "109-114",
+          "source_span": "110-115",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:_capture_response_start.receive#b2613c11274d"
         },
         {
@@ -85834,7 +85830,7 @@
           "name": "send",
           "qualname": "_capture_response_start.send",
           "signature_hash": "78de418f23ab",
-          "source_span": "116-124",
+          "source_span": "117-125",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:_capture_response_start.send#78de418f23ab"
         },
         {
@@ -85844,7 +85840,7 @@
           "name": "TestMcpTransport",
           "qualname": "TestMcpTransport",
           "signature_hash": "bf8f9122b15b",
-          "source_span": "136-215",
+          "source_span": "137-216",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpTransport#bf8f9122b15b"
         },
         {
@@ -85856,7 +85852,7 @@
           "name": "setUpClass",
           "qualname": "TestMcpTransport.setUpClass",
           "signature_hash": "1f6483432fe2",
-          "source_span": "138-149",
+          "source_span": "139-150",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpTransport.setUpClass#1f6483432fe2"
         },
         {
@@ -85868,7 +85864,7 @@
           "name": "tearDownClass",
           "qualname": "TestMcpTransport.tearDownClass",
           "signature_hash": "0f81ba450db4",
-          "source_span": "152-153",
+          "source_span": "153-154",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpTransport.tearDownClass#0f81ba450db4"
         },
         {
@@ -85878,7 +85874,7 @@
           "name": "test_streamable_transport_rejects_get",
           "qualname": "TestMcpTransport.test_streamable_transport_rejects_get",
           "signature_hash": "e51565be78dc",
-          "source_span": "155-156",
+          "source_span": "156-157",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpTransport.test_streamable_transport_rejects_get#e51565be78dc"
         },
         {
@@ -85888,7 +85884,7 @@
           "name": "test_sse_transport_allows_get",
           "qualname": "TestMcpTransport.test_sse_transport_allows_get",
           "signature_hash": "e53f33c6b6bf",
-          "source_span": "158-159",
+          "source_span": "159-160",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpTransport.test_sse_transport_allows_get#e53f33c6b6bf"
         },
         {
@@ -85898,7 +85894,7 @@
           "name": "test_api_mounts_streamable_and_sse_endpoints",
           "qualname": "TestMcpTransport.test_api_mounts_streamable_and_sse_endpoints",
           "signature_hash": "c810ebeb8574",
-          "source_span": "161-171",
+          "source_span": "162-172",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpTransport.test_api_mounts_streamable_and_sse_endpoints#c810ebeb8574"
         },
         {
@@ -85908,7 +85904,7 @@
           "name": "test_api_rejects_public_mcp_without_explicit_unsafe_override",
           "qualname": "TestMcpTransport.test_api_rejects_public_mcp_without_explicit_unsafe_override",
           "signature_hash": "f3fe8aa0a7a8",
-          "source_span": "173-195",
+          "source_span": "174-196",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpTransport.test_api_rejects_public_mcp_without_explicit_unsafe_override#f3fe8aa0a7a8"
         },
         {
@@ -85918,7 +85914,7 @@
           "name": "test_api_allows_public_mcp_only_with_explicit_unsafe_override",
           "qualname": "TestMcpTransport.test_api_allows_public_mcp_only_with_explicit_unsafe_override",
           "signature_hash": "8db13d01c4db",
-          "source_span": "197-215",
+          "source_span": "198-216",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpTransport.test_api_allows_public_mcp_only_with_explicit_unsafe_override#8db13d01c4db"
         },
         {
@@ -85928,7 +85924,7 @@
           "name": "TestMcpTransportAuth",
           "qualname": "TestMcpTransportAuth",
           "signature_hash": "f792973545d0",
-          "source_span": "218-387",
+          "source_span": "219-388",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpTransportAuth#f792973545d0"
         },
         {
@@ -85940,7 +85936,7 @@
           "name": "setUpClass",
           "qualname": "TestMcpTransportAuth.setUpClass",
           "signature_hash": "1f6483432fe2",
-          "source_span": "220-224",
+          "source_span": "221-225",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpTransportAuth.setUpClass#1f6483432fe2"
         },
         {
@@ -85952,7 +85948,7 @@
           "name": "tearDownClass",
           "qualname": "TestMcpTransportAuth.tearDownClass",
           "signature_hash": "0f81ba450db4",
-          "source_span": "227-228",
+          "source_span": "228-229",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpTransportAuth.tearDownClass#0f81ba450db4"
         },
         {
@@ -85962,7 +85958,7 @@
           "name": "_initialize_payload",
           "qualname": "TestMcpTransportAuth._initialize_payload",
           "signature_hash": "47c06b98f563",
-          "source_span": "230-240",
+          "source_span": "231-241",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpTransportAuth._initialize_payload#47c06b98f563"
         },
         {
@@ -85972,7 +85968,7 @@
           "name": "test_mcp_mounts_require_bearer_before_transport_semantics",
           "qualname": "TestMcpTransportAuth.test_mcp_mounts_require_bearer_before_transport_semantics",
           "signature_hash": "dbb943fe58bc",
-          "source_span": "242-304",
+          "source_span": "243-305",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpTransportAuth.test_mcp_mounts_require_bearer_before_transport_semantics#dbb943fe58bc"
         },
         {
@@ -85982,7 +85978,7 @@
           "name": "test_streamable_mcp_accepts_authorized_initialize_without_trailing_slash",
           "qualname": "TestMcpTransportAuth.test_streamable_mcp_accepts_authorized_initialize_without_trailing_slash",
           "signature_hash": "35846960ef84",
-          "source_span": "306-334",
+          "source_span": "307-335",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpTransportAuth.test_streamable_mcp_accepts_authorized_initialize_without_trailing_slash#35846960ef84"
         },
         {
@@ -85992,7 +85988,7 @@
           "name": "test_streamable_mcp_accepts_case_insensitive_bearer_scheme",
           "qualname": "TestMcpTransportAuth.test_streamable_mcp_accepts_case_insensitive_bearer_scheme",
           "signature_hash": "4c80aa328030",
-          "source_span": "336-360",
+          "source_span": "337-361",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpTransportAuth.test_streamable_mcp_accepts_case_insensitive_bearer_scheme#4c80aa328030"
         },
         {
@@ -86002,7 +85998,7 @@
           "name": "test_static_mode_does_not_expose_oauth_routes",
           "qualname": "TestMcpTransportAuth.test_static_mode_does_not_expose_oauth_routes",
           "signature_hash": "bbee0873d883",
-          "source_span": "362-387",
+          "source_span": "363-388",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpTransportAuth.test_static_mode_does_not_expose_oauth_routes#bbee0873d883"
         },
         {
@@ -86012,7 +86008,7 @@
           "name": "TestMcpGitHubOAuth",
           "qualname": "TestMcpGitHubOAuth",
           "signature_hash": "3fb9fa12bd4b",
-          "source_span": "390-952",
+          "source_span": "391-959",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpGitHubOAuth#3fb9fa12bd4b"
         },
         {
@@ -86024,7 +86020,7 @@
           "name": "setUpClass",
           "qualname": "TestMcpGitHubOAuth.setUpClass",
           "signature_hash": "1f6483432fe2",
-          "source_span": "392-395",
+          "source_span": "393-396",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpGitHubOAuth.setUpClass#1f6483432fe2"
         },
         {
@@ -86036,7 +86032,7 @@
           "name": "tearDownClass",
           "qualname": "TestMcpGitHubOAuth.tearDownClass",
           "signature_hash": "0f81ba450db4",
-          "source_span": "398-399",
+          "source_span": "399-400",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpGitHubOAuth.tearDownClass#0f81ba450db4"
         },
         {
@@ -86046,7 +86042,7 @@
           "name": "_app",
           "qualname": "TestMcpGitHubOAuth._app",
           "signature_hash": "10125030302a",
-          "source_span": "401-413",
+          "source_span": "402-414",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpGitHubOAuth._app#10125030302a"
         },
         {
@@ -86056,7 +86052,7 @@
           "name": "_initialize_payload",
           "qualname": "TestMcpGitHubOAuth._initialize_payload",
           "signature_hash": "47c06b98f563",
-          "source_span": "415-425",
+          "source_span": "416-426",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpGitHubOAuth._initialize_payload#47c06b98f563"
         },
         {
@@ -86066,7 +86062,7 @@
           "name": "test_github_oauth_rejects_incomplete_or_unsafe_configuration",
           "qualname": "TestMcpGitHubOAuth.test_github_oauth_rejects_incomplete_or_unsafe_configuration",
           "signature_hash": "d9184be1cc10",
-          "source_span": "427-456",
+          "source_span": "428-457",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpGitHubOAuth.test_github_oauth_rejects_incomplete_or_unsafe_configuration#d9184be1cc10"
         },
         {
@@ -86076,7 +86072,7 @@
           "name": "test_mcp_apps_reject_oauth_without_static_token_for_sse",
           "qualname": "TestMcpGitHubOAuth.test_mcp_apps_reject_oauth_without_static_token_for_sse",
           "signature_hash": "a08b31eeec77",
-          "source_span": "458-475",
+          "source_span": "459-476",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpGitHubOAuth.test_mcp_apps_reject_oauth_without_static_token_for_sse#a08b31eeec77"
         },
         {
@@ -86086,7 +86082,7 @@
           "name": "test_create_mcp_apps_uses_explicit_split_app_keys",
           "qualname": "TestMcpGitHubOAuth.test_create_mcp_apps_uses_explicit_split_app_keys",
           "signature_hash": "4ef376b17bd1",
-          "source_span": "477-508",
+          "source_span": "478-509",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpGitHubOAuth.test_create_mcp_apps_uses_explicit_split_app_keys#4ef376b17bd1"
         },
         {
@@ -86096,7 +86092,7 @@
           "name": "test_single_transport_helper_rejects_github_oauth_config",
           "qualname": "TestMcpGitHubOAuth.test_single_transport_helper_rejects_github_oauth_config",
           "signature_hash": "cf6a4a5f9858",
-          "source_span": "510-521",
+          "source_span": "511-522",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpGitHubOAuth.test_single_transport_helper_rejects_github_oauth_config#cf6a4a5f9858"
         },
         {
@@ -86106,7 +86102,7 @@
           "name": "test_oauth_mode_preserves_api_routes_before_mcp_catch_all",
           "qualname": "TestMcpGitHubOAuth.test_oauth_mode_preserves_api_routes_before_mcp_catch_all",
           "signature_hash": "bc7103e253c2",
-          "source_span": "523-535",
+          "source_span": "524-536",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpGitHubOAuth.test_oauth_mode_preserves_api_routes_before_mcp_catch_all#bc7103e253c2"
         },
         {
@@ -86116,7 +86112,7 @@
           "name": "test_oauth_discovery_is_root_level_for_oauth_mcp_resource",
           "qualname": "TestMcpGitHubOAuth.test_oauth_discovery_is_root_level_for_oauth_mcp_resource",
           "signature_hash": "bbd645b52b97",
-          "source_span": "537-571",
+          "source_span": "538-572",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpGitHubOAuth.test_oauth_discovery_is_root_level_for_oauth_mcp_resource#bbd645b52b97"
         },
         {
@@ -86126,7 +86122,7 @@
           "name": "test_authorize_accepts_chatgpt_metadata_url_resource_alias",
           "qualname": "TestMcpGitHubOAuth.test_authorize_accepts_chatgpt_metadata_url_resource_alias",
           "signature_hash": "467beb4517d0",
-          "source_span": "573-611",
+          "source_span": "574-612",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpGitHubOAuth.test_authorize_accepts_chatgpt_metadata_url_resource_alias#467beb4517d0"
         },
         {
@@ -86136,18 +86132,18 @@
           "name": "test_oauth_client_registration_survives_app_restart_with_json_cache",
           "qualname": "TestMcpGitHubOAuth.test_oauth_client_registration_survives_app_restart_with_json_cache",
           "signature_hash": "0a03ac6e6610",
-          "source_span": "613-682",
+          "source_span": "614-683",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpGitHubOAuth.test_oauth_client_registration_survives_app_restart_with_json_cache#0a03ac6e6610"
         },
         {
           "async": true,
           "decorators": [],
           "kind": "method",
-          "name": "test_authorize_rejects_unknown_client_registration_without_synthesis",
-          "qualname": "TestMcpGitHubOAuth.test_authorize_rejects_unknown_client_registration_without_synthesis",
-          "signature_hash": "fe7dc8988d4c",
-          "source_span": "684-723",
-          "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpGitHubOAuth.test_authorize_rejects_unknown_client_registration_without_synthesis#fe7dc8988d4c"
+          "name": "test_authorize_recovers_unknown_dynamic_client_after_cache_loss",
+          "qualname": "TestMcpGitHubOAuth.test_authorize_recovers_unknown_dynamic_client_after_cache_loss",
+          "signature_hash": "fa4448e9f1df",
+          "source_span": "685-730",
+          "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpGitHubOAuth.test_authorize_recovers_unknown_dynamic_client_after_cache_loss#fa4448e9f1df"
         },
         {
           "async": true,
@@ -86156,7 +86152,7 @@
           "name": "test_token_accepts_chatgpt_metadata_url_resource_alias",
           "qualname": "TestMcpGitHubOAuth.test_token_accepts_chatgpt_metadata_url_resource_alias",
           "signature_hash": "b670ff2bbfb6",
-          "source_span": "725-758",
+          "source_span": "732-765",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpGitHubOAuth.test_token_accepts_chatgpt_metadata_url_resource_alias#b670ff2bbfb6"
         },
         {
@@ -86166,7 +86162,7 @@
           "name": "test_token_rejects_wrong_resource_indicator",
           "qualname": "TestMcpGitHubOAuth.test_token_rejects_wrong_resource_indicator",
           "signature_hash": "9ab11c75ee6b",
-          "source_span": "760-791",
+          "source_span": "767-798",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpGitHubOAuth.test_token_rejects_wrong_resource_indicator#9ab11c75ee6b"
         },
         {
@@ -86176,7 +86172,7 @@
           "name": "test_oauth_mcp_challenges_with_resource_metadata_without_redirect",
           "qualname": "TestMcpGitHubOAuth.test_oauth_mcp_challenges_with_resource_metadata_without_redirect",
           "signature_hash": "1a4fec6fc697",
-          "source_span": "793-802",
+          "source_span": "800-809",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpGitHubOAuth.test_oauth_mcp_challenges_with_resource_metadata_without_redirect#1a4fec6fc697"
         },
         {
@@ -86186,7 +86182,7 @@
           "name": "test_oauth_mcp_probe_methods_return_oauth_challenge_without_redirect",
           "qualname": "TestMcpGitHubOAuth.test_oauth_mcp_probe_methods_return_oauth_challenge_without_redirect",
           "signature_hash": "2463ceaa8f67",
-          "source_span": "804-812",
+          "source_span": "811-819",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpGitHubOAuth.test_oauth_mcp_probe_methods_return_oauth_challenge_without_redirect#2463ceaa8f67"
         },
         {
@@ -86196,7 +86192,7 @@
           "name": "test_sse_message_post_paths_do_not_redirect_or_leak_to_root",
           "qualname": "TestMcpGitHubOAuth.test_sse_message_post_paths_do_not_redirect_or_leak_to_root",
           "signature_hash": "1c132322e9e3",
-          "source_span": "814-844",
+          "source_span": "821-851",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpGitHubOAuth.test_sse_message_post_paths_do_not_redirect_or_leak_to_root#1c132322e9e3"
         },
         {
@@ -86206,7 +86202,7 @@
           "name": "test_oauth_mode_keeps_static_bearer_without_redirect_on_both_mcp_paths",
           "qualname": "TestMcpGitHubOAuth.test_oauth_mode_keeps_static_bearer_without_redirect_on_both_mcp_paths",
           "signature_hash": "2b9bb7d51436",
-          "source_span": "846-865",
+          "source_span": "853-872",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpGitHubOAuth.test_oauth_mode_keeps_static_bearer_without_redirect_on_both_mcp_paths#2b9bb7d51436"
         },
         {
@@ -86216,7 +86212,7 @@
           "name": "test_oauth_route_rejects_static_bearer_token",
           "qualname": "TestMcpGitHubOAuth.test_oauth_route_rejects_static_bearer_token",
           "signature_hash": "f996310a2da1",
-          "source_span": "867-886",
+          "source_span": "874-893",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpGitHubOAuth.test_oauth_route_rejects_static_bearer_token#f996310a2da1"
         },
         {
@@ -86226,7 +86222,7 @@
           "name": "test_static_route_rejects_oauth_looking_token_without_github_network",
           "qualname": "TestMcpGitHubOAuth.test_static_route_rejects_oauth_looking_token_without_github_network",
           "signature_hash": "dc7e9b1dec2c",
-          "source_span": "888-906",
+          "source_span": "895-913",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpGitHubOAuth.test_static_route_rejects_oauth_looking_token_without_github_network#dc7e9b1dec2c"
         },
         {
@@ -86236,7 +86232,7 @@
           "name": "test_oauth_mode_keeps_sse_on_static_bearer_only",
           "qualname": "TestMcpGitHubOAuth.test_oauth_mode_keeps_sse_on_static_bearer_only",
           "signature_hash": "68c01d619dba",
-          "source_span": "908-933",
+          "source_span": "915-940",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpGitHubOAuth.test_oauth_mode_keeps_sse_on_static_bearer_only#68c01d619dba"
         },
         {
@@ -86246,7 +86242,7 @@
           "name": "test_oauth_sse_gate_is_explicitly_absent",
           "qualname": "TestMcpGitHubOAuth.test_oauth_sse_gate_is_explicitly_absent",
           "signature_hash": "1fbe1af4758f",
-          "source_span": "935-952",
+          "source_span": "942-959",
           "stable_id": "py:deepresearch_flow.paper.snapshot.tests.test_mcp_transport:TestMcpGitHubOAuth.test_oauth_sse_gate_is_explicitly_absent#1fbe1af4758f"
         }
       ]
@@ -106343,7 +106339,7 @@
       ]
     },
     {
-      "classification": "test",
+      "classification": "test_support",
       "criticality": "P2",
       "flags": {
         "concurrency_boundary": false,
@@ -106358,7 +106354,7 @@
         "security_boundary": false,
         "suspected_boundary_unclassified": false
       },
-      "kind": "python_test",
+      "kind": "test_support",
       "path": "python/deepresearch_flow/storage/tests/__init__.py",
       "symbols": []
     },
@@ -109222,7 +109218,7 @@
       ]
     },
     {
-      "classification": "test",
+      "classification": "test_support",
       "criticality": "P2",
       "flags": {
         "concurrency_boundary": false,
@@ -109237,12 +109233,12 @@
         "security_boundary": false,
         "suspected_boundary_unclassified": false
       },
-      "kind": "python_test",
+      "kind": "test_support",
       "path": "python/deepresearch_flow/translator/tests/__init__.py",
       "symbols": []
     },
     {
-      "classification": "test",
+      "classification": "test_support",
       "criticality": "P2",
       "flags": {
         "concurrency_boundary": false,
@@ -109257,302 +109253,9 @@
         "security_boundary": false,
         "suspected_boundary_unclassified": false
       },
-      "kind": "python_test",
+      "kind": "test_support",
       "path": "python/deepresearch_flow/translator/tests/_fuzz_markdown_cases.py",
-      "symbols": [
-        {
-          "async": false,
-          "decorators": [
-            "dataclass(frozen=True)"
-          ],
-          "kind": "class",
-          "name": "FuzzCase",
-          "qualname": "FuzzCase",
-          "signature_hash": "6cde60e2ca4c",
-          "source_span": "9-17",
-          "stable_id": "py:deepresearch_flow.translator.tests._fuzz_markdown_cases:FuzzCase#6cde60e2ca4c"
-        },
-        {
-          "async": false,
-          "decorators": [],
-          "kind": "function",
-          "name": "_rng",
-          "qualname": "_rng",
-          "signature_hash": "2b0fa2c96be0",
-          "source_span": "69-70",
-          "stable_id": "py:deepresearch_flow.translator.tests._fuzz_markdown_cases:_rng#2b0fa2c96be0"
-        },
-        {
-          "async": false,
-          "decorators": [],
-          "kind": "function",
-          "name": "_pick",
-          "qualname": "_pick",
-          "signature_hash": "42a066cbb3f2",
-          "source_span": "73-74",
-          "stable_id": "py:deepresearch_flow.translator.tests._fuzz_markdown_cases:_pick#42a066cbb3f2"
-        },
-        {
-          "async": false,
-          "decorators": [],
-          "kind": "function",
-          "name": "_word",
-          "qualname": "_word",
-          "signature_hash": "7054c0cc6064",
-          "source_span": "77-80",
-          "stable_id": "py:deepresearch_flow.translator.tests._fuzz_markdown_cases:_word#7054c0cc6064"
-        },
-        {
-          "async": false,
-          "decorators": [],
-          "kind": "function",
-          "name": "_plain_word",
-          "qualname": "_plain_word",
-          "signature_hash": "c4f7dd928e07",
-          "source_span": "83-84",
-          "stable_id": "py:deepresearch_flow.translator.tests._fuzz_markdown_cases:_plain_word#c4f7dd928e07"
-        },
-        {
-          "async": false,
-          "decorators": [],
-          "kind": "function",
-          "name": "_phrase",
-          "qualname": "_phrase",
-          "signature_hash": "b9a1d016920a",
-          "source_span": "87-89",
-          "stable_id": "py:deepresearch_flow.translator.tests._fuzz_markdown_cases:_phrase#b9a1d016920a"
-        },
-        {
-          "async": false,
-          "decorators": [],
-          "kind": "function",
-          "name": "_plain_phrase",
-          "qualname": "_plain_phrase",
-          "signature_hash": "cae859be8e93",
-          "source_span": "92-94",
-          "stable_id": "py:deepresearch_flow.translator.tests._fuzz_markdown_cases:_plain_phrase#cae859be8e93"
-        },
-        {
-          "async": false,
-          "decorators": [],
-          "kind": "function",
-          "name": "_email",
-          "qualname": "_email",
-          "signature_hash": "a27789e2073b",
-          "source_span": "97-98",
-          "stable_id": "py:deepresearch_flow.translator.tests._fuzz_markdown_cases:_email#a27789e2073b"
-        },
-        {
-          "async": false,
-          "decorators": [],
-          "kind": "function",
-          "name": "_url",
-          "qualname": "_url",
-          "signature_hash": "daf4cbc79ae6",
-          "source_span": "101-102",
-          "stable_id": "py:deepresearch_flow.translator.tests._fuzz_markdown_cases:_url#daf4cbc79ae6"
-        },
-        {
-          "async": false,
-          "decorators": [],
-          "kind": "function",
-          "name": "_phone",
-          "qualname": "_phone",
-          "signature_hash": "42e0984378d4",
-          "source_span": "105-106",
-          "stable_id": "py:deepresearch_flow.translator.tests._fuzz_markdown_cases:_phone#42e0984378d4"
-        },
-        {
-          "async": false,
-          "decorators": [],
-          "kind": "function",
-          "name": "_ref_range",
-          "qualname": "_ref_range",
-          "signature_hash": "fc9f3ce32a46",
-          "source_span": "109-112",
-          "stable_id": "py:deepresearch_flow.translator.tests._fuzz_markdown_cases:_ref_range#fc9f3ce32a46"
-        },
-        {
-          "async": false,
-          "decorators": [],
-          "kind": "function",
-          "name": "_ref_list",
-          "qualname": "_ref_list",
-          "signature_hash": "04af289239ad",
-          "source_span": "115-117",
-          "stable_id": "py:deepresearch_flow.translator.tests._fuzz_markdown_cases:_ref_list#04af289239ad"
-        },
-        {
-          "async": false,
-          "decorators": [],
-          "kind": "function",
-          "name": "_nested_mailto",
-          "qualname": "_nested_mailto",
-          "signature_hash": "383681702a1b",
-          "source_span": "120-121",
-          "stable_id": "py:deepresearch_flow.translator.tests._fuzz_markdown_cases:_nested_mailto#383681702a1b"
-        },
-        {
-          "async": false,
-          "decorators": [],
-          "kind": "function",
-          "name": "_inline_code",
-          "qualname": "_inline_code",
-          "signature_hash": "9124a1326b80",
-          "source_span": "124-125",
-          "stable_id": "py:deepresearch_flow.translator.tests._fuzz_markdown_cases:_inline_code#9124a1326b80"
-        },
-        {
-          "async": false,
-          "decorators": [],
-          "kind": "function",
-          "name": "_fenced_code",
-          "qualname": "_fenced_code",
-          "signature_hash": "7428b7d1370c",
-          "source_span": "128-129",
-          "stable_id": "py:deepresearch_flow.translator.tests._fuzz_markdown_cases:_fenced_code#7428b7d1370c"
-        },
-        {
-          "async": false,
-          "decorators": [],
-          "kind": "function",
-          "name": "_math_inline",
-          "qualname": "_math_inline",
-          "signature_hash": "8301b7af9ee5",
-          "source_span": "132-135",
-          "stable_id": "py:deepresearch_flow.translator.tests._fuzz_markdown_cases:_math_inline#8301b7af9ee5"
-        },
-        {
-          "async": false,
-          "decorators": [],
-          "kind": "function",
-          "name": "_math_paren",
-          "qualname": "_math_paren",
-          "signature_hash": "f1f637a24e33",
-          "source_span": "138-139",
-          "stable_id": "py:deepresearch_flow.translator.tests._fuzz_markdown_cases:_math_paren#f1f637a24e33"
-        },
-        {
-          "async": false,
-          "decorators": [],
-          "kind": "function",
-          "name": "_math_bracket",
-          "qualname": "_math_bracket",
-          "signature_hash": "0a95bfabe193",
-          "source_span": "142-143",
-          "stable_id": "py:deepresearch_flow.translator.tests._fuzz_markdown_cases:_math_bracket#0a95bfabe193"
-        },
-        {
-          "async": false,
-          "decorators": [],
-          "kind": "function",
-          "name": "_table_cell",
-          "qualname": "_table_cell",
-          "signature_hash": "f3cd8a4c112d",
-          "source_span": "146-149",
-          "stable_id": "py:deepresearch_flow.translator.tests._fuzz_markdown_cases:_table_cell#f3cd8a4c112d"
-        },
-        {
-          "async": false,
-          "decorators": [],
-          "kind": "function",
-          "name": "_table",
-          "qualname": "_table",
-          "signature_hash": "2af4ad4c661c",
-          "source_span": "152-153",
-          "stable_id": "py:deepresearch_flow.translator.tests._fuzz_markdown_cases:_table#2af4ad4c661c"
-        },
-        {
-          "async": false,
-          "decorators": [],
-          "kind": "function",
-          "name": "_normalize_nonmath_dollar",
-          "qualname": "_normalize_nonmath_dollar",
-          "signature_hash": "592124ec93f8",
-          "source_span": "156-158",
-          "stable_id": "py:deepresearch_flow.translator.tests._fuzz_markdown_cases:_normalize_nonmath_dollar#592124ec93f8"
-        },
-        {
-          "async": false,
-          "decorators": [],
-          "kind": "function",
-          "name": "_normalize_math_spaces",
-          "qualname": "_normalize_math_spaces",
-          "signature_hash": "9018f8524d8e",
-          "source_span": "161-164",
-          "stable_id": "py:deepresearch_flow.translator.tests._fuzz_markdown_cases:_normalize_math_spaces#9018f8524d8e"
-        },
-        {
-          "async": false,
-          "decorators": [],
-          "kind": "function",
-          "name": "_normalize_table_content",
-          "qualname": "_normalize_table_content",
-          "signature_hash": "54f9c9670a25",
-          "source_span": "167-172",
-          "stable_id": "py:deepresearch_flow.translator.tests._fuzz_markdown_cases:_normalize_table_content#54f9c9670a25"
-        },
-        {
-          "async": false,
-          "decorators": [],
-          "kind": "function",
-          "name": "nested_mailto_cases",
-          "qualname": "nested_mailto_cases",
-          "signature_hash": "5d40772867f1",
-          "source_span": "175-199",
-          "stable_id": "py:deepresearch_flow.translator.tests._fuzz_markdown_cases:nested_mailto_cases#5d40772867f1"
-        },
-        {
-          "async": false,
-          "decorators": [],
-          "kind": "function",
-          "name": "non_math_delimiter_cases",
-          "qualname": "non_math_delimiter_cases",
-          "signature_hash": "fb8038321f53",
-          "source_span": "202-227",
-          "stable_id": "py:deepresearch_flow.translator.tests._fuzz_markdown_cases:non_math_delimiter_cases#fb8038321f53"
-        },
-        {
-          "async": false,
-          "decorators": [],
-          "kind": "function",
-          "name": "math_delimiter_space_cases",
-          "qualname": "math_delimiter_space_cases",
-          "signature_hash": "7ead178e513a",
-          "source_span": "230-256",
-          "stable_id": "py:deepresearch_flow.translator.tests._fuzz_markdown_cases:math_delimiter_space_cases#7ead178e513a"
-        },
-        {
-          "async": false,
-          "decorators": [],
-          "kind": "function",
-          "name": "html_table_math_space_cases",
-          "qualname": "html_table_math_space_cases",
-          "signature_hash": "5cbaa7dd403c",
-          "source_span": "259-289",
-          "stable_id": "py:deepresearch_flow.translator.tests._fuzz_markdown_cases:html_table_math_space_cases#5cbaa7dd403c"
-        },
-        {
-          "async": false,
-          "decorators": [],
-          "kind": "function",
-          "name": "markdown_fix_cases",
-          "qualname": "markdown_fix_cases",
-          "signature_hash": "5cf86a846145",
-          "source_span": "292-364",
-          "stable_id": "py:deepresearch_flow.translator.tests._fuzz_markdown_cases:markdown_fix_cases#5cf86a846145"
-        },
-        {
-          "async": false,
-          "decorators": [],
-          "kind": "function",
-          "name": "markdown_text_fix_cases",
-          "qualname": "markdown_text_fix_cases",
-          "signature_hash": "5225166dc071",
-          "source_span": "367-420",
-          "stable_id": "py:deepresearch_flow.translator.tests._fuzz_markdown_cases:markdown_text_fix_cases#5225166dc071"
-        }
-      ]
+      "symbols": []
     },
     {
       "classification": "test",
@@ -112711,7 +112414,7 @@
       "symbols": []
     },
     {
-      "classification": "test",
+      "classification": "test_support",
       "criticality": "P2",
       "flags": {
         "concurrency_boundary": false,
@@ -112726,7 +112429,7 @@
         "security_boundary": false,
         "suspected_boundary_unclassified": false
       },
-      "kind": "python_test",
+      "kind": "test_support",
       "path": "tests/conftest.py",
       "symbols": []
     },
@@ -114241,10 +113944,20 @@
           "async": false,
           "decorators": [],
           "kind": "function",
+          "name": "test_manifest_checker_rejects_helper_files_as_test_evidence",
+          "qualname": "test_manifest_checker_rejects_helper_files_as_test_evidence",
+          "signature_hash": "e047a7c04a4f",
+          "source_span": "318-365",
+          "stable_id": "py:tests.verification.test_check_manifest_coverage:test_manifest_checker_rejects_helper_files_as_test_evidence#e047a7c04a4f"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
           "name": "test_bootstrap_manifest_generator_emits_checker_acceptable_manifest",
           "qualname": "test_bootstrap_manifest_generator_emits_checker_acceptable_manifest",
           "signature_hash": "b3edaaad643c",
-          "source_span": "318-360",
+          "source_span": "368-410",
           "stable_id": "py:tests.verification.test_check_manifest_coverage:test_bootstrap_manifest_generator_emits_checker_acceptable_manifest#b3edaaad643c"
         }
       ]
@@ -114295,7 +114008,7 @@
           "name": "test_inventory_cli_emits_tracked_repo_surfaces_and_stable_ids",
           "qualname": "test_inventory_cli_emits_tracked_repo_surfaces_and_stable_ids",
           "signature_hash": "a2d89580b4cd",
-          "source_span": "24-108",
+          "source_span": "24-122",
           "stable_id": "py:tests.verification.test_generate_inventory:test_inventory_cli_emits_tracked_repo_surfaces_and_stable_ids#a2d89580b4cd"
         },
         {
@@ -114305,7 +114018,7 @@
           "name": "test_inventory_check_reports_stale_generated_file",
           "qualname": "test_inventory_check_reports_stale_generated_file",
           "signature_hash": "2eb80970f474",
-          "source_span": "111-129",
+          "source_span": "125-143",
           "stable_id": "py:tests.verification.test_generate_inventory:test_inventory_check_reports_stale_generated_file#2eb80970f474"
         }
       ]
@@ -116374,10 +116087,20 @@
           "async": false,
           "decorators": [],
           "kind": "function",
+          "name": "_is_collectable_test_path",
+          "qualname": "_is_collectable_test_path",
+          "signature_hash": "55bd462ebda2",
+          "source_span": "78-82",
+          "stable_id": "py:tools.verification.check_manifest_coverage:_is_collectable_test_path#55bd462ebda2"
+        },
+        {
+          "async": false,
+          "decorators": [],
+          "kind": "function",
           "name": "check_manifest",
           "qualname": "check_manifest",
           "signature_hash": "90afa92d0d7f",
-          "source_span": "78-250",
+          "source_span": "85-263",
           "stable_id": "py:tools.verification.check_manifest_coverage:check_manifest#90afa92d0d7f"
         },
         {
@@ -116387,7 +116110,7 @@
           "name": "main",
           "qualname": "main",
           "signature_hash": "9b8e693c15ea",
-          "source_span": "253-267",
+          "source_span": "266-280",
           "stable_id": "py:tools.verification.check_manifest_coverage:main#9b8e693c15ea"
         }
       ]
@@ -116861,7 +116584,7 @@
           "name": "_classify",
           "qualname": "_classify",
           "signature_hash": "ad7c8ace2bf2",
-          "source_span": "412-456",
+          "source_span": "412-459",
           "stable_id": "py:tools.verification.generate_inventory:_classify#ad7c8ace2bf2"
         },
         {
@@ -116871,7 +116594,7 @@
           "name": "_artifact_group_id",
           "qualname": "_artifact_group_id",
           "signature_hash": "8caa2cdf3163",
-          "source_span": "459-463",
+          "source_span": "462-466",
           "stable_id": "py:tools.verification.generate_inventory:_artifact_group_id#8caa2cdf3163"
         },
         {
@@ -116881,7 +116604,7 @@
           "name": "_flags",
           "qualname": "_flags",
           "signature_hash": "3db43cb05374",
-          "source_span": "466-487",
+          "source_span": "469-490",
           "stable_id": "py:tools.verification.generate_inventory:_flags#3db43cb05374"
         },
         {
@@ -116891,7 +116614,7 @@
           "name": "_symbols",
           "qualname": "_symbols",
           "signature_hash": "1fdac6b04933",
-          "source_span": "490-497",
+          "source_span": "493-500",
           "stable_id": "py:tools.verification.generate_inventory:_symbols#1fdac6b04933"
         },
         {
@@ -116901,7 +116624,7 @@
           "name": "generate_inventory",
           "qualname": "generate_inventory",
           "signature_hash": "aa824dc56b22",
-          "source_span": "500-572",
+          "source_span": "503-579",
           "stable_id": "py:tools.verification.generate_inventory:generate_inventory#aa824dc56b22"
         },
         {
@@ -116911,7 +116634,7 @@
           "name": "_canonical",
           "qualname": "_canonical",
           "signature_hash": "614ab9f659aa",
-          "source_span": "575-576",
+          "source_span": "582-583",
           "stable_id": "py:tools.verification.generate_inventory:_canonical#614ab9f659aa"
         },
         {
@@ -116921,7 +116644,7 @@
           "name": "main",
           "qualname": "main",
           "signature_hash": "9b8e693c15ea",
-          "source_span": "579-613",
+          "source_span": "586-620",
           "stable_id": "py:tools.verification.generate_inventory:main#9b8e693c15ea"
         }
       ]

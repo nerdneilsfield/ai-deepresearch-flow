@@ -472,8 +472,8 @@ async function handleBibFileLoad(event: Event) {
   <div class="space-y-6">
     <div class="flex flex-wrap items-center justify-between gap-4">
       <div>
-        <h1 class="text-2xl font-bold text-ink-900">{{ t('selectedTitle') }}</h1>
-        <p class="text-sm text-ink-500">
+        <h1 class="text-2xl font-bold text-foreground dark:text-ink-100">{{ t('selectedTitle') }}</h1>
+        <p class="text-sm text-muted-foreground dark:text-ink-400">
           {{ t('readingQueue') }} ({{ selection.count }} / {{ MAX_BATCH_SIZE }})
         </p>
       </div>
@@ -504,16 +504,16 @@ async function handleBibFileLoad(event: Event) {
           </Button>
           <div
             v-if="bibShowModePopover"
-            class="absolute right-0 top-full z-10 mt-1 w-40 rounded-md border border-ink-200 bg-white p-1 shadow-lg"
+            class="absolute right-0 top-full z-10 mt-1 w-40 rounded-md border border-border/60 bg-popover p-1 text-popover-foreground shadow-lg dark:border-ink-700 dark:bg-ink-900"
           >
             <button
-              class="w-full rounded px-3 py-1.5 text-left text-sm hover:bg-ink-100"
+              class="w-full rounded px-3 py-1.5 text-left text-sm hover:bg-muted dark:hover:bg-ink-800"
               @click="triggerBibImport('append')"
             >
               Append
             </button>
             <button
-              class="w-full rounded px-3 py-1.5 text-left text-sm hover:bg-ink-100"
+              class="w-full rounded px-3 py-1.5 text-left text-sm hover:bg-muted dark:hover:bg-ink-800"
               @click="triggerBibImport('replace')"
             >
               Replace
@@ -530,15 +530,19 @@ async function handleBibFileLoad(event: Event) {
       </div>
     </div>
 
-    <div v-if="selection.count > 0" class="rounded-xl border border-ink-200 bg-white p-4 shadow-sm">
+    <div
+      v-if="selection.count > 0"
+      class="rounded-xl border border-border/60 bg-card p-4 text-card-foreground shadow-sm dark:border-ink-700 dark:bg-ink-900/80"
+      data-testid="selected-export-options"
+    >
       <div class="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
         <div class="space-y-2">
-          <div class="text-sm font-semibold text-ink-800">{{ t('selectedExportFormat') }}</div>
+          <div class="text-sm font-semibold text-foreground dark:text-ink-100">{{ t('selectedExportFormat') }}</div>
           <div class="flex gap-2">
             <button
               type="button"
               class="rounded-md border px-3 py-1.5 text-sm"
-              :class="exportMode === 'zip' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-ink-200 text-ink-600 hover:bg-ink-50'"
+              :class="exportMode === 'zip' ? 'border-blue-500 bg-blue-50 text-blue-700 dark:border-blue-400 dark:bg-blue-500/15 dark:text-blue-200' : 'border-border text-muted-foreground hover:bg-muted dark:border-ink-700 dark:text-ink-300 dark:hover:bg-ink-800'"
               @click="setExportMode('zip')"
             >
               {{ t('selectedExportZip') }}
@@ -546,7 +550,7 @@ async function handleBibFileLoad(event: Event) {
             <button
               type="button"
               class="rounded-md border px-3 py-1.5 text-sm"
-              :class="exportMode === 'jsonl' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-ink-200 text-ink-600 hover:bg-ink-50'"
+              :class="exportMode === 'jsonl' ? 'border-blue-500 bg-blue-50 text-blue-700 dark:border-blue-400 dark:bg-blue-500/15 dark:text-blue-200' : 'border-border text-muted-foreground hover:bg-muted dark:border-ink-700 dark:text-ink-300 dark:hover:bg-ink-800'"
               @click="setExportMode('jsonl')"
             >
               {{ t('selectedExportJsonl') }}
@@ -555,39 +559,39 @@ async function handleBibFileLoad(event: Event) {
         </div>
 
         <div class="space-y-3">
-          <div class="text-sm font-semibold text-ink-800">{{ t('selectedExportIncludeContent') }}</div>
-          <div class="flex flex-wrap gap-x-4 gap-y-2 text-sm text-ink-700">
+          <div class="text-sm font-semibold text-foreground dark:text-ink-100">{{ t('selectedExportIncludeContent') }}</div>
+          <div class="flex flex-wrap gap-x-4 gap-y-2 text-sm text-foreground/80 dark:text-ink-300">
             <label class="inline-flex items-center gap-2">
-              <input v-model="includeMetadata" type="checkbox" class="rounded border-ink-300" />
+              <input v-model="includeMetadata" type="checkbox" class="rounded border-ink-300 accent-blue-500 dark:border-ink-600" />
               {{ t('selectedExportMetadata') }}
             </label>
             <template v-if="exportMode === 'zip'">
               <label class="inline-flex items-center gap-2">
-                <input v-model="includePdf" type="checkbox" class="rounded border-ink-300" />
+                <input v-model="includePdf" type="checkbox" class="rounded border-ink-300 accent-blue-500 dark:border-ink-600" />
                 {{ t('selectedExportPdf') }}
               </label>
               <label class="inline-flex items-center gap-2">
-                <input v-model="includeSourceMarkdown" type="checkbox" class="rounded border-ink-300" />
+                <input v-model="includeSourceMarkdown" type="checkbox" class="rounded border-ink-300 accent-blue-500 dark:border-ink-600" />
                 {{ t('selectedExportSourceMarkdown') }}
               </label>
               <label class="inline-flex items-center gap-2">
-                <input v-model="includeTranslatedMarkdown" type="checkbox" class="rounded border-ink-300" />
+                <input v-model="includeTranslatedMarkdown" type="checkbox" class="rounded border-ink-300 accent-blue-500 dark:border-ink-600" />
                 {{ t('selectedExportTranslatedMarkdown') }}
               </label>
               <label class="inline-flex items-center gap-2">
-                <input v-model="includeImages" type="checkbox" class="rounded border-ink-300" />
+                <input v-model="includeImages" type="checkbox" class="rounded border-ink-300 accent-blue-500 dark:border-ink-600" />
                 {{ t('selectedExportImages') }}
               </label>
             </template>
           </div>
 
           <div class="space-y-2">
-            <label class="inline-flex items-center gap-2 text-sm font-semibold text-ink-800">
-              <input v-model="includeSummaries" type="checkbox" class="rounded border-ink-300" />
+            <label class="inline-flex items-center gap-2 text-sm font-semibold text-foreground dark:text-ink-100">
+              <input v-model="includeSummaries" type="checkbox" class="rounded border-ink-300 accent-blue-500 dark:border-ink-600" />
               <span>{{ t('selectedExportSummaryTemplates') }}</span>
-              <span v-if="summaryTemplatesLoading" class="text-xs font-normal text-ink-500">{{ t('selectedExportLoadingTemplates') }}</span>
+              <span v-if="summaryTemplatesLoading" class="text-xs font-normal text-muted-foreground dark:text-ink-400">{{ t('selectedExportLoadingTemplates') }}</span>
             </label>
-            <div v-if="includeSummaries && availableSummaryTemplates.length > 0" class="flex flex-wrap gap-x-4 gap-y-2 text-sm text-ink-700">
+            <div v-if="includeSummaries && availableSummaryTemplates.length > 0" class="flex flex-wrap gap-x-4 gap-y-2 text-sm text-foreground/80 dark:text-ink-300">
               <label
                 v-for="template in availableSummaryTemplates"
                 :key="template"
@@ -595,14 +599,14 @@ async function handleBibFileLoad(event: Event) {
               >
                 <input
                   type="checkbox"
-                  class="rounded border-ink-300"
+                  class="rounded border-ink-300 accent-blue-500 dark:border-ink-600"
                   :checked="selectedSummaryTemplates.includes(template)"
                   @change="toggleSummaryTemplate(template)"
                 />
                 <span class="font-mono text-xs">{{ template }}</span>
               </label>
             </div>
-            <div v-else-if="includeSummaries" class="text-sm text-ink-500">
+            <div v-else-if="includeSummaries" class="text-sm text-muted-foreground dark:text-ink-400">
               {{ summaryTemplatesLoading ? t('selectedExportLoadingTemplates') : t('selectedExportNoSummaryTemplates') }}
             </div>
           </div>

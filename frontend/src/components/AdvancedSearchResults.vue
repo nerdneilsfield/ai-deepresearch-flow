@@ -43,7 +43,7 @@ function onToggleSelect(event: Event, result: AdvancedSearchResult) {
   <section class="space-y-3">
     <div
       v-if="degraded"
-      class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"
+      class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-500/40 dark:bg-amber-950/40 dark:text-amber-200"
       data-testid="advanced-degraded-banner"
     >
       Results are degraded: {{ degradationMessage ?? degradationReason ?? 'unknown' }}
@@ -51,7 +51,7 @@ function onToggleSelect(event: Event, result: AdvancedSearchResult) {
 
     <div
       v-if="results.length === 0"
-      class="rounded-lg border border-ink-100 bg-white px-4 py-6 text-sm text-ink-500"
+      class="rounded-lg border border-border/60 bg-card px-4 py-6 text-sm text-muted-foreground dark:border-ink-700 dark:bg-ink-900/80 dark:text-ink-300"
       data-testid="advanced-results-empty"
     >
       No results.
@@ -60,7 +60,7 @@ function onToggleSelect(event: Event, result: AdvancedSearchResult) {
     <article
       v-for="result in results"
       :key="result.chunk_id"
-      class="cursor-pointer rounded-xl border border-ink-100 bg-white p-4 transition-all hover:border-ink-200 hover:shadow-card-hover"
+      class="cursor-pointer rounded-xl border border-border/60 bg-card p-4 text-card-foreground transition-all hover:border-border hover:shadow-card-hover dark:border-ink-700 dark:bg-ink-900/80 dark:hover:border-ink-600"
       data-testid="advanced-result-card"
       role="link"
       tabindex="0"
@@ -68,12 +68,12 @@ function onToggleSelect(event: Event, result: AdvancedSearchResult) {
       @keydown.enter.prevent="openPaper(result)"
       @keydown.space.prevent="openPaper(result)"
     >
-      <h3 class="text-base font-semibold text-ink-900">{{ result.paper.title }}</h3>
-      <p class="mt-1 text-sm text-ink-500">
+      <h3 class="text-base font-semibold text-foreground dark:text-ink-100">{{ result.paper.title }}</h3>
+      <p class="mt-1 text-sm text-muted-foreground dark:text-ink-400">
         {{ result.paper.authors.join(', ') }} · {{ result.paper.year }} · {{ result.paper.venue }}
       </p>
       <div class="mt-3 flex items-center justify-between gap-2">
-        <div class="text-xs text-ink-500">{{ result.chunk.field_name }}</div>
+        <div class="text-xs text-muted-foreground dark:text-ink-400">{{ result.chunk.field_name }}</div>
         <TooltipProvider>
           <Tooltip v-if="selectionFull && !selectedIds?.has(result.paper_id)">
             <TooltipTrigger as-child>
@@ -99,8 +99,8 @@ function onToggleSelect(event: Event, result: AdvancedSearchResult) {
           </Button>
         </TooltipProvider>
       </div>
-      <p class="mt-3 text-sm text-ink-700">{{ result.chunk.text }}</p>
-      <dl class="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-ink-500 sm:grid-cols-5">
+      <p class="mt-3 text-sm text-foreground/80 dark:text-ink-200">{{ result.chunk.text }}</p>
+      <dl class="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground dark:text-ink-400 sm:grid-cols-5">
         <template v-if="result.scores.dense !== undefined">
           <dt>dense</dt>
           <dd>{{ result.scores.dense.toFixed(4) }}</dd>

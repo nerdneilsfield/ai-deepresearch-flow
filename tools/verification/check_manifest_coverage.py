@@ -75,6 +75,13 @@ def _add_duplicate_errors(values: list[str], label: str, errors: list[str]) -> N
         errors.append(f"duplicate {label}: {value}")
 
 
+def _is_collectable_test_path(path: str) -> bool:
+    name = Path(path).name
+    return (name.startswith("test_") and name.endswith(".py")) or name.endswith(
+        (".test.ts", ".spec.ts", ".test.tsx", ".spec.tsx")
+    )
+
+
 def check_manifest(repo: Path, inventory: dict[str, Any], manifest: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     manifest_items = [item for item in _list(manifest.get("items")) if isinstance(item, dict)]
@@ -218,6 +225,8 @@ def check_manifest(repo: Path, inventory: dict[str, Any], manifest: dict[str, An
         path = str(evidence.get("path", ""))
         if evidence_id not in manifest_evidence_ids and path not in manifest_evidence_paths:
             errors.append(f"uncovered evidence asset: {path or evidence_id}")
+        if path and not _is_collectable_test_path(path):
+            errors.append(f"evidence path is not a collectable test file: {path}")
 
     referenced_paths: list[str] = []
     for item in manifest_items:
@@ -227,6 +236,10 @@ def check_manifest(repo: Path, inventory: dict[str, Any], manifest: dict[str, An
     for evidence in _list(manifest.get("evidence_assets")):
         if isinstance(evidence, dict) and evidence.get("path"):
             referenced_paths.append(str(evidence["path"]))
+            if not _is_collectable_test_path(str(evidence["path"])):
+                errors.append(
+                    f"manifest evidence path is not a collectable test file: {evidence['path']}"
+                )
     for path in sorted(set(referenced_paths)):
         if path and not (repo / path).exists():
             errors.append(f"missing evidence path: {path}")

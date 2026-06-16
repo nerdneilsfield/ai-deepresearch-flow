@@ -108,6 +108,11 @@ jobs:
           cd frontend
           npm ci
 
+      - name: Test frontend
+        run: |
+          cd frontend
+          npm test -- --run
+
       - name: Build frontend
         run: |
           cd frontend

@@ -315,6 +315,56 @@ def test_manifest_checker_rejects_missing_evidence_path_and_duplicate_ids(tmp_pa
     assert "duplicate manifest path: pkg/auth.py" in result.stderr
 
 
+def test_manifest_checker_rejects_helper_files_as_test_evidence(tmp_path: Path) -> None:
+    manifest = _complete_manifest(tmp_path)
+    helper = tmp_path / "tests" / "conftest.py"
+    helper.write_text("# helper\n", encoding="utf-8")
+    inventory = _inventory()
+    inventory["evidence_assets"].append(
+        {
+            "evidence_id": "evidence:tests/conftest.py",
+            "path": "tests/conftest.py",
+            "target_inventory_ids": [],
+            "evidence_class": "UNIT_BLACK_BOX",
+            "command": "pytest tests/conftest.py -q",
+            "black_box_contract": "observable behavior only",
+            "deterministic_mode": True,
+        }
+    )
+    manifest["evidence_assets"].append(
+        {
+            "evidence_id": "evidence:tests/conftest.py",
+            "path": "tests/conftest.py",
+            "evidence_class": "UNIT_BLACK_BOX",
+            "command": "pytest tests/conftest.py -q",
+        }
+    )
+    inventory_path = tmp_path / "inventory.json"
+    manifest_path = tmp_path / "manifest.yml"
+    _write_json(inventory_path, inventory)
+    _write_json(manifest_path, manifest)
+
+    result = _run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(tmp_path),
+            "--inventory",
+            str(inventory_path),
+            "--manifest",
+            str(manifest_path),
+        ],
+        tmp_path,
+    )
+
+    assert result.returncode != 0
+    assert "evidence path is not a collectable test file: tests/conftest.py" in result.stderr
+    assert (
+        "manifest evidence path is not a collectable test file: tests/conftest.py" in result.stderr
+    )
+
+
 def test_bootstrap_manifest_generator_emits_checker_acceptable_manifest(tmp_path: Path) -> None:
     inventory_path = tmp_path / "inventory.json"
     manifest_path = tmp_path / "manifest.yml"

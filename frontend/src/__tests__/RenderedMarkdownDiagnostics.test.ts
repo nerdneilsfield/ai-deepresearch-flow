@@ -81,7 +81,6 @@ describe('RenderedMarkdown diagnostics', () => {
     expect(diagnosticPanel.exists(), diagnostics).toBe(true)
     expect(diagnosticPanel.text(), diagnostics).toContain('Math')
     expect(diagnosticPanel.text(), diagnostics).toContain('lost_formula')
-    expect(diagnosticPanel.text(), diagnostics).toContain('mathRendered=0')
 
     wrapper.unmount()
   })

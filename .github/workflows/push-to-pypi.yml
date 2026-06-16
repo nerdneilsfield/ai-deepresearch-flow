@@ -110,12 +110,23 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install dist/*.whl
-          # Install test dependencies if you have them
-          # python -m pip install pytest pytest-cov
+          python -m pip install pytest pyyaml
 
-      # Uncomment if you have tests
-      # - name: Run tests
-      #   run: pytest tests/ -v --cov=deepresearch_flow
+      - name: Run verification tests
+        run: python -m pytest tests/verification -q
+
+      - name: Check verification inventory
+        run: |
+          python tools/verification/generate_inventory.py \
+            --output docs/verification/repo-verification-inventory.json \
+            --check
+          python tools/verification/generate_bootstrap_manifest.py \
+            --inventory docs/verification/repo-verification-inventory.json \
+            --output docs/verification/repo-verification-manifest.yml \
+            --check
+          python tools/verification/check_manifest_coverage.py \
+            --inventory docs/verification/repo-verification-inventory.json \
+            --manifest docs/verification/repo-verification-manifest.yml
 
   publish_pypi:
     name: Publish to PyPI

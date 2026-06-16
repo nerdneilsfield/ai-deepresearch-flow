@@ -15,7 +15,7 @@ from typing import Any
 
 try:
     import yaml
-except Exception:  # pragma: no cover - optional for inventory richness only
+except Exception:  # pragma: no cover - reported when YAML files are inventoried
     yaml = None
 
 _BOUNDARY_KEYWORDS = {
@@ -413,6 +413,11 @@ def _classify(path: str) -> tuple[str, str]:
     p = Path(path)
     name = p.name
     lower = path.lower()
+    is_test_area = (
+        "/tests/" in f"/{path}" or "/__tests__/" in f"/{path}" or path.startswith("tests/")
+    )
+    is_python_test = name.startswith("test_") and name.endswith(".py")
+    is_frontend_test = name.endswith((".test.ts", ".spec.ts", ".test.tsx", ".spec.tsx"))
     if path == ".dockerignore":
         return "docker_ignore", "build"
     if path.startswith(".github/workflows/") and name.endswith((".yml", ".yaml")):
@@ -431,14 +436,12 @@ def _classify(path: str) -> tuple[str, str]:
         return "process_supervisor_config", "config"
     if _artifact_group_id(path):
         return "vendored_asset", "asset"
-    if (
-        "/tests/" in f"/{path}"
-        or "/__tests__/" in f"/{path}"
-        or path.startswith("tests/")
-        or name.startswith("test_")
-        or name.endswith((".test.ts", ".spec.ts", ".test.tsx", ".spec.tsx"))
-    ):
-        return ("python_test" if name.endswith(".py") else "test_asset"), "test"
+    if is_test_area or is_python_test or is_frontend_test:
+        if is_python_test:
+            return "python_test", "test"
+        if is_frontend_test:
+            return "test_asset", "test"
+        return "test_support", "test_support"
     if name.endswith(".py"):
         return "python_module", "source"
     if name.endswith(".vue"):
@@ -502,6 +505,8 @@ def generate_inventory(
 ) -> dict[str, Any]:
     repo = repo.resolve()
     paths = [path for path in _tracked_paths(repo, dev=dev) if path not in (exclude_paths or set())]
+    if yaml is None and any(path.endswith((".yml", ".yaml")) for path in paths):
+        raise RuntimeError("PyYAML is required to inventory YAML configuration files")
     items: list[dict[str, Any]] = []
     config_items: list[dict[str, Any]] = []
     evidence_assets: list[dict[str, Any]] = []
@@ -532,8 +537,10 @@ def generate_inventory(
                 command = f"DRFLOW_RUN_LOCAL_FORMAL=1 uv run pytest {path} -q"
             elif path.endswith(".py"):
                 command = f"uv run pytest {path} -q"
+            elif path.startswith("frontend/"):
+                command = f"cd frontend && npm test -- --run {path.removeprefix('frontend/')}"
             else:
-                command = f"cd frontend && npm test -- --run {path}"
+                command = f"npm test -- --run {path}"
             evidence_assets.append(
                 {
                     "evidence_id": f"evidence:{path}",

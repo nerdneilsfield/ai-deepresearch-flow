@@ -13,6 +13,7 @@ import type { OutlineItem } from '@/lib/outline'
 import { STATIC_BASE } from '@/lib/config'
 import { useTheme } from '@/composables/useTheme'
 import { resolveMarkdownItPlugin } from '@/lib/module-interop'
+import { normalizeMermaidLineBreaks, sanitizeMermaidSvgContent } from '@/lib/markdown-rendering'
 
 // Global configuration for md-editor-v3
 mermaid.initialize({ startOnLoad: false })
@@ -28,6 +29,57 @@ config({
   },
   katexConfig(baseConfig) {
     return { ...baseConfig, throwOnError: false, strict: false }
+  },
+  mermaidConfig(baseConfig) {
+    const isDark = baseConfig?.theme === 'dark'
+    const flowchart = typeof baseConfig?.flowchart === 'object' && baseConfig.flowchart
+      ? baseConfig.flowchart
+      : {}
+    return {
+      ...baseConfig,
+      startOnLoad: false,
+      securityLevel: 'strict',
+      theme: 'base',
+      htmlLabels: false,
+      flowchart: {
+        ...flowchart,
+        htmlLabels: false,
+        useMaxWidth: true,
+      },
+      themeVariables: isDark
+        ? {
+            background: '#0f172a',
+            mainBkg: '#1e293b',
+            primaryColor: '#1e293b',
+            primaryTextColor: '#e5e7eb',
+            primaryBorderColor: '#64748b',
+            secondaryColor: '#111827',
+            secondaryTextColor: '#e5e7eb',
+            tertiaryColor: '#0f172a',
+            lineColor: '#94a3b8',
+            textColor: '#e5e7eb',
+            nodeTextColor: '#e5e7eb',
+            edgeLabelBackground: '#0f172a',
+            clusterBkg: '#111827',
+            clusterBorder: '#475569',
+          }
+        : {
+            ...(baseConfig?.themeVariables || {}),
+            background: '#ffffff',
+            mainBkg: '#ffffff',
+            primaryColor: '#ffffff',
+            primaryTextColor: '#1f2937',
+            primaryBorderColor: '#94a3b8',
+            secondaryColor: '#f8fafc',
+            tertiaryColor: '#f8fafc',
+            lineColor: '#475569',
+            textColor: '#1f2937',
+            nodeTextColor: '#1f2937',
+            edgeLabelBackground: '#ffffff',
+            clusterBkg: '#f8fafc',
+            clusterBorder: '#cbd5e1',
+          },
+    }
   },
   markdownItConfig(md) {
     md.use(resolveMarkdownItPlugin(footnote))
@@ -214,13 +266,7 @@ function sanitizeHtml(html: string) {
 
 async function sanitizeMermaidSvg(svg: string) {
   try {
-    return DOMPurify.sanitize(String(svg || ''), {
-      USE_PROFILES: { svg: true, svgFilters: true },
-      FORBID_TAGS: ['script', 'foreignObject'],
-      FORBID_ATTR: forbiddenHtmlAttrs,
-      ALLOW_DATA_ATTR: false,
-      ALLOWED_URI_REGEXP: safeUriPattern,
-    })
+    return sanitizeMermaidSvgContent(svg)
   } catch (err) {
     replaceDiagnostic({
       kind: 'sanitizer',
@@ -266,7 +312,7 @@ const processedMarkdown = computed(() => {
   let inFence = false
   let inMermaidAuto = false
 
-  const mermaidStart = /^\s*(graph [A-Z]{2}|sequenceDiagram|classDiagram|stateDiagram|stateDiagram-v2|gantt|pie|gitGraph|erDiagram|journey|requirementDiagram|c4Context)/
+  const mermaidStart = /^\s*(graph [A-Z]{2}|flowchart\s+[A-Z]{2}|sequenceDiagram|classDiagram|stateDiagram|stateDiagram-v2|gantt|pie|gitGraph|erDiagram|journey|requirementDiagram|c4Context)/
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
@@ -310,14 +356,13 @@ const processedMarkdown = computed(() => {
 
   md = newLines.join('\n')
 
-  // 1. Fix Mermaid blocks if they contain <br> or HTML entities
+  // 1. Normalize Mermaid blocks while preserving label-local <br/> markers.
   md = md.replace(/```mermaid\s*([\s\S]*?)```/g, (_match: string, content: string) => {
-    let cleanContent = content.replace(/<br\s*\/?>/gi, '\n')
-    cleanContent = cleanContent
+    const cleanContent = normalizeMermaidLineBreaks(content
       .replace(/&gt;/g, '>')
       .replace(/&lt;/g, '<')
       .replace(/&amp;/g, '&')
-      .replace(/&quot;/g, '"')
+      .replace(/&quot;/g, '"'))
     return '```mermaid\n' + cleanContent + '\n```'
   })
 
@@ -495,7 +540,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="md-preview-wrapper prose prose-slate max-w-none prose-headings:text-ink-900 prose-p:text-ink-700 prose-a:text-blue-600 prose-blockquote:border-l-4 prose-blockquote:border-accent-500 prose-blockquote:bg-accent-50 prose-blockquote:py-1 prose-blockquote:px-4 prose-code:text-accent-700 prose-pre:bg-ink-900 prose-pre:text-ink-50 prose-img:rounded-lg prose-img:shadow-md dark:prose-invert" :class="props.class">
+  <div class="md-preview-wrapper prose prose-slate max-w-none text-foreground prose-a:text-blue-600 prose-blockquote:border-l-4 prose-blockquote:border-accent-500 prose-blockquote:bg-accent-50 prose-blockquote:py-1 prose-blockquote:px-4 prose-code:text-accent-700 prose-pre:bg-ink-900 prose-pre:text-ink-50 prose-img:rounded-lg prose-img:shadow-md dark:prose-invert dark:prose-a:text-blue-300 dark:prose-blockquote:bg-primary/10 dark:prose-code:text-blue-200" :class="props.class">
     <div
       v-if="isOversizedMarkdown"
       role="note"
@@ -515,6 +560,7 @@ onBeforeUnmount(() => {
       :modelValue="processedMarkdown"
       :noMermaid="false"
       :noEcharts="true"
+      :noHighlight="true"
       :sanitize="sanitizeHtml"
       :sanitizeMermaid="sanitizeMermaidSvg"
       :theme="editorTheme"
@@ -567,10 +613,124 @@ onBeforeUnmount(() => {
 :deep(.md-editor-preview) {
   color: inherit;
   font-family: inherit;
+  --md-theme-color: hsl(var(--foreground) / 0.9);
+  --md-theme-bg-color: transparent;
+  --md-theme-border-color: hsl(var(--border));
+  --md-theme-code-block-bg-color: hsl(var(--card));
+  --md-theme-code-inline-bg-color: hsl(var(--muted));
+  --md-theme-link-color: hsl(var(--primary));
+}
+:deep(.md-editor),
+:deep(.md-editor-preview-wrapper),
+:deep(.md-editor-preview),
+:deep(.md-editor-preview.default-theme) {
+  background: transparent;
+}
+:deep(.md-editor-preview p),
+:deep(.md-editor-preview li),
+:deep(.md-editor-preview td),
+:deep(.md-editor-preview th),
+:deep(.md-editor-preview blockquote) {
+  color: hsl(var(--foreground) / 0.86);
+}
+:deep(.md-editor-preview h1),
+:deep(.md-editor-preview h2),
+:deep(.md-editor-preview h3),
+:deep(.md-editor-preview h4),
+:deep(.md-editor-preview h5),
+:deep(.md-editor-preview h6),
+:deep(.md-editor-preview strong) {
+  color: hsl(var(--foreground) / 0.96);
+}
+:deep(.md-editor-preview em),
+:deep(.md-editor-preview del),
+:deep(.md-editor-preview figcaption) {
+  color: hsl(var(--foreground) / 0.78);
+}
+:deep(.md-editor-preview mark) {
+  color: hsl(var(--foreground));
+  background: hsl(var(--primary) / 0.16);
+}
+:deep(.md-editor-preview hr) {
+  border-color: hsl(var(--border));
+}
+:deep(.md-editor-preview a) {
+  color: hsl(var(--primary));
+}
+:deep(.md-editor-preview blockquote) {
+  border-left-color: hsl(var(--primary) / 0.5);
+  background: hsl(var(--primary) / 0.06);
+}
+:deep(.md-editor-preview code:not(pre code)) {
+  color: hsl(var(--primary));
+  background: hsl(var(--muted));
+  border-radius: 0.25rem;
+  padding: 0.1rem 0.25rem;
+}
+:deep(.md-editor-preview pre),
+:deep(.md-editor-preview pre code) {
+  color: hsl(var(--foreground));
+  background: hsl(var(--card));
+}
+:deep(.md-editor-preview table) {
+  color: hsl(var(--foreground) / 0.86);
+}
+:deep(.md-editor-preview th),
+:deep(.md-editor-preview td) {
+  border-color: hsl(var(--border));
 }
 :deep(.katex-display) {
   overflow-x: auto;
   overflow-y: hidden;
+}
+:deep(.katex),
+:deep(.katex-display) {
+  color: hsl(var(--foreground) / 0.95);
+}
+:deep(.md-editor-mermaid) {
+  color: hsl(var(--foreground) / 0.9);
+  background: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.75rem;
+  margin: 1rem 0;
+  overflow: auto;
+  padding: 0.75rem;
+}
+:deep(.md-editor-mermaid svg) {
+  max-width: 100%;
+  height: auto;
+}
+:deep(.md-editor-mermaid .node rect),
+:deep(.md-editor-mermaid .node circle),
+:deep(.md-editor-mermaid .node ellipse),
+:deep(.md-editor-mermaid .node polygon),
+:deep(.md-editor-mermaid .node path) {
+  fill: hsl(var(--card));
+  stroke: hsl(var(--border));
+}
+:deep(.md-editor-mermaid .cluster rect) {
+  fill: hsl(var(--muted));
+  stroke: hsl(var(--border));
+}
+:deep(.md-editor-mermaid .edgePath path),
+:deep(.md-editor-mermaid path.flowchart-link),
+:deep(.md-editor-mermaid .messageLine0),
+:deep(.md-editor-mermaid .messageLine1) {
+  stroke: hsl(var(--foreground) / 0.62);
+}
+:deep(.md-editor-mermaid .arrowheadPath),
+:deep(.md-editor-mermaid marker path) {
+  fill: hsl(var(--foreground) / 0.62);
+  stroke: hsl(var(--foreground) / 0.62);
+}
+:deep(.md-editor-mermaid .edgeLabel),
+:deep(.md-editor-mermaid .labelBkg) {
+  background: hsl(var(--card));
+  fill: hsl(var(--card));
+}
+:global(.dark) :deep(.md-editor-mermaid text),
+:global(.dark) :deep(.md-editor-mermaid tspan) {
+  fill: currentColor;
 }
 /* Center images - force override */
 :deep(.md-editor-preview img),

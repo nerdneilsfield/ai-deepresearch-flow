@@ -136,6 +136,16 @@ describe('SelectedView export options', () => {
     expect(wrapper.text()).not.toContain('selectedExportImages')
   })
 
+  it('renders export options with dark-theme compatible surfaces', async () => {
+    const wrapper = await mountView()
+    await settle(wrapper)
+
+    const options = wrapper.find('[data-testid="selected-export-options"]')
+    expect(options.exists()).toBe(true)
+    expect(options.classes().some((name) => name.startsWith('dark:bg-'))).toBe(true)
+    expect(options.classes().some((name) => name.startsWith('dark:border-'))).toBe(true)
+  })
+
   it('passes selected JSONL options to the export helper', async () => {
     const wrapper = await mountView()
     await settle(wrapper)

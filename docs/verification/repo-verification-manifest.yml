@@ -7698,7 +7698,7 @@ items:
     observable_contract: Frontend source compiles into production assets.
   - kind: UNIT_BLACK_BOX
     path: frontend/src/__tests__/useAdvancedSearchToken.test.ts
-    checker_command: cd frontend && npm test -- --run frontend/src/__tests__/useAdvancedSearchToken.test.ts
+    checker_command: cd frontend && npm test -- --run src/__tests__/useAdvancedSearchToken.test.ts
     observable_contract: Advanced-search token composable exposes observable load/set/clear/error
       state behavior.
   symbols:
@@ -9012,7 +9012,7 @@ items:
     observable_contract: Frontend source compiles into production assets.
   - kind: UNIT_BLACK_BOX
     path: frontend/src/__tests__/tokenDb.test.ts
-    checker_command: cd frontend && npm test -- --run frontend/src/__tests__/tokenDb.test.ts
+    checker_command: cd frontend && npm test -- --run src/__tests__/tokenDb.test.ts
     observable_contract: Token storage public API persists, loads, and clears tokens
       through observable IndexedDB behavior.
   symbols: []
@@ -18228,6 +18228,32 @@ items:
       path: docs/verification/repo-verification-inventory.json
       observable_contract: Symbol is present in the generated verification inventory
         and inherits file-level evidence.
+- path: python/deepresearch_flow/ocr/tests/__init__.py
+  classification: test_support
+  kind: test_support
+  criticality: P2
+  release_blocking: false
+  formal_status: none
+  evidence_status:
+  - inventory
+  flags:
+    concurrency_boundary: false
+    deploy_security_boundary: false
+    network_boundary: false
+    parser_boundary: false
+    persistence_boundary: false
+    release_publish_boundary: false
+    renderer_boundary: false
+    runtime_config_boundary: false
+    secret_boundary: false
+    security_boundary: false
+    suspected_boundary_unclassified: false
+  coverage:
+  - kind: INVENTORY_MAPPING
+    path: docs/verification/repo-verification-inventory.json
+    observable_contract: Tracked repository surface is present in the generated verification
+      inventory.
+  symbols: []
 - path: python/deepresearch_flow/paper/__init__.py
   classification: source
   kind: python_module
@@ -24579,6 +24605,32 @@ items:
       path: docs/verification/repo-verification-inventory.json
       observable_contract: Symbol is present in the generated verification inventory
         and inherits file-level evidence.
+- path: python/deepresearch_flow/paper/snapshot/advanced/tests/__init__.py
+  classification: test_support
+  kind: test_support
+  criticality: P2
+  release_blocking: false
+  formal_status: none
+  evidence_status:
+  - inventory
+  flags:
+    concurrency_boundary: false
+    deploy_security_boundary: false
+    network_boundary: false
+    parser_boundary: false
+    persistence_boundary: false
+    release_publish_boundary: false
+    renderer_boundary: false
+    runtime_config_boundary: false
+    secret_boundary: false
+    security_boundary: false
+    suspected_boundary_unclassified: false
+  coverage:
+  - kind: INVENTORY_MAPPING
+    path: docs/verification/repo-verification-inventory.json
+    observable_contract: Tracked repository surface is present in the generated verification
+      inventory.
+  symbols: []
 - path: python/deepresearch_flow/paper/snapshot/api.py
   classification: source
   kind: python_module
@@ -25067,6 +25119,22 @@ items:
       path: docs/verification/repo-verification-inventory.json
       observable_contract: Symbol is present in the generated verification inventory
         and inherits file-level evidence.
+  - stable_id: py:deepresearch_flow.paper.snapshot.auth:_safe_client_log_id#e35dc701e4ee
+    observable_contract: inventory-mapped; behavior evidence to be assigned by targeted
+      manifest refinement
+    coverage:
+    - kind: INVENTORY_MAPPING
+      path: docs/verification/repo-verification-inventory.json
+      observable_contract: Symbol is present in the generated verification inventory
+        and inherits file-level evidence.
+  - stable_id: py:deepresearch_flow.paper.snapshot.auth:_is_recoverable_dynamic_client_id#55a44cb5f8fa
+    observable_contract: inventory-mapped; behavior evidence to be assigned by targeted
+      manifest refinement
+    coverage:
+    - kind: INVENTORY_MAPPING
+      path: docs/verification/repo-verification-inventory.json
+      observable_contract: Symbol is present in the generated verification inventory
+        and inherits file-level evidence.
   - stable_id: py:deepresearch_flow.paper.snapshot.auth:bearer_auth_app#d3033a4b3a3b
     observable_contract: inventory-mapped; behavior evidence to be assigned by targeted
       manifest refinement
@@ -25132,6 +25200,14 @@ items:
       observable_contract: Symbol is present in the generated verification inventory
         and inherits file-level evidence.
   - stable_id: py:deepresearch_flow.paper.snapshot.auth:_AllowedGitHubProvider.__init__#f3f2a9b90fd6
+    observable_contract: inventory-mapped; behavior evidence to be assigned by targeted
+      manifest refinement
+    coverage:
+    - kind: INVENTORY_MAPPING
+      path: docs/verification/repo-verification-inventory.json
+      observable_contract: Symbol is present in the generated verification inventory
+        and inherits file-level evidence.
+  - stable_id: py:deepresearch_flow.paper.snapshot.auth:_AllowedGitHubProvider.get_client#005358d48434
     observable_contract: inventory-mapped; behavior evidence to be assigned by targeted
       manifest refinement
     coverage:
@@ -27960,6 +28036,32 @@ items:
       path: docs/verification/repo-verification-inventory.json
       observable_contract: Symbol is present in the generated verification inventory
         and inherits file-level evidence.
+- path: python/deepresearch_flow/paper/snapshot/tests/__init__.py
+  classification: test_support
+  kind: test_support
+  criticality: P2
+  release_blocking: false
+  formal_status: none
+  evidence_status:
+  - inventory
+  flags:
+    concurrency_boundary: false
+    deploy_security_boundary: false
+    network_boundary: false
+    parser_boundary: false
+    persistence_boundary: false
+    release_publish_boundary: false
+    renderer_boundary: false
+    runtime_config_boundary: false
+    secret_boundary: false
+    security_boundary: false
+    suspected_boundary_unclassified: false
+  coverage:
+  - kind: INVENTORY_MAPPING
+    path: docs/verification/repo-verification-inventory.json
+    observable_contract: Tracked repository surface is present in the generated verification
+      inventory.
+  symbols: []
 - path: python/deepresearch_flow/paper/snapshot/text.py
   classification: source
   kind: python_module
@@ -32474,6 +32576,32 @@ items:
       path: docs/verification/repo-verification-inventory.json
       observable_contract: Symbol is present in the generated verification inventory
         and inherits file-level evidence.
+- path: python/deepresearch_flow/storage/tests/__init__.py
+  classification: test_support
+  kind: test_support
+  criticality: P2
+  release_blocking: false
+  formal_status: none
+  evidence_status:
+  - inventory
+  flags:
+    concurrency_boundary: false
+    deploy_security_boundary: false
+    network_boundary: false
+    parser_boundary: false
+    persistence_boundary: false
+    release_publish_boundary: false
+    renderer_boundary: false
+    runtime_config_boundary: false
+    secret_boundary: false
+    security_boundary: false
+    suspected_boundary_unclassified: false
+  coverage:
+  - kind: INVENTORY_MAPPING
+    path: docs/verification/repo-verification-inventory.json
+    observable_contract: Tracked repository surface is present in the generated verification
+      inventory.
+  symbols: []
 - path: python/deepresearch_flow/storage/webdav.py
   classification: source
   kind: python_module
@@ -34618,6 +34746,58 @@ items:
       path: docs/verification/repo-verification-inventory.json
       observable_contract: Symbol is present in the generated verification inventory
         and inherits file-level evidence.
+- path: python/deepresearch_flow/translator/tests/__init__.py
+  classification: test_support
+  kind: test_support
+  criticality: P2
+  release_blocking: false
+  formal_status: none
+  evidence_status:
+  - inventory
+  flags:
+    concurrency_boundary: false
+    deploy_security_boundary: false
+    network_boundary: false
+    parser_boundary: false
+    persistence_boundary: false
+    release_publish_boundary: false
+    renderer_boundary: false
+    runtime_config_boundary: false
+    secret_boundary: false
+    security_boundary: false
+    suspected_boundary_unclassified: false
+  coverage:
+  - kind: INVENTORY_MAPPING
+    path: docs/verification/repo-verification-inventory.json
+    observable_contract: Tracked repository surface is present in the generated verification
+      inventory.
+  symbols: []
+- path: python/deepresearch_flow/translator/tests/_fuzz_markdown_cases.py
+  classification: test_support
+  kind: test_support
+  criticality: P2
+  release_blocking: false
+  formal_status: none
+  evidence_status:
+  - inventory
+  flags:
+    concurrency_boundary: false
+    deploy_security_boundary: false
+    network_boundary: false
+    parser_boundary: true
+    persistence_boundary: false
+    release_publish_boundary: false
+    renderer_boundary: true
+    runtime_config_boundary: false
+    secret_boundary: false
+    security_boundary: false
+    suspected_boundary_unclassified: false
+  coverage:
+  - kind: INVENTORY_MAPPING
+    path: docs/verification/repo-verification-inventory.json
+    observable_contract: Tracked repository surface is present in the generated verification
+      inventory.
+  symbols: []
 - path: python/deepresearch_flow/utils/__init__.py
   classification: source
   kind: python_module
@@ -35243,6 +35423,32 @@ items:
       -q
     observable_contract: Startup scripts expose fail-closed and configured startup
       behavior through their public shell interface.
+  symbols: []
+- path: tests/conftest.py
+  classification: test_support
+  kind: test_support
+  criticality: P2
+  release_blocking: false
+  formal_status: none
+  evidence_status:
+  - inventory
+  flags:
+    concurrency_boundary: false
+    deploy_security_boundary: false
+    network_boundary: false
+    parser_boundary: false
+    persistence_boundary: false
+    release_publish_boundary: false
+    renderer_boundary: false
+    runtime_config_boundary: false
+    secret_boundary: false
+    security_boundary: false
+    suspected_boundary_unclassified: false
+  coverage:
+  - kind: INVENTORY_MAPPING
+    path: docs/verification/repo-verification-inventory.json
+    observable_contract: Tracked repository surface is present in the generated verification
+      inventory.
   symbols: []
 - path: tools/formal/check_all_models.py
   classification: source
@@ -36950,6 +37156,14 @@ items:
       observable_contract: Symbol is present in the generated verification inventory
         and inherits file-level evidence.
   - stable_id: py:tools.verification.check_manifest_coverage:_add_duplicate_errors#53a2e8b0885e
+    observable_contract: inventory-mapped; behavior evidence to be assigned by targeted
+      manifest refinement
+    coverage:
+    - kind: INVENTORY_MAPPING
+      path: docs/verification/repo-verification-inventory.json
+      observable_contract: Symbol is present in the generated verification inventory
+        and inherits file-level evidence.
+  - stable_id: py:tools.verification.check_manifest_coverage:_is_collectable_test_path#55bd462ebda2
     observable_contract: inventory-mapped; behavior evidence to be assigned by targeted
       manifest refinement
     coverage:
@@ -57120,207 +57334,207 @@ config_items:
     command: uv run python tools/verification/check_manifest_coverage.py --help
 evidence_assets:
 - black_box_contract: observable behavior only
-  command: cd frontend && npm test -- --run frontend/src/__tests__/AdvancedSearchPanel.test.ts
+  command: cd frontend && npm test -- --run src/__tests__/AdvancedSearchPanel.test.ts
   deterministic_mode: true
   evidence_class: UNIT_BLACK_BOX
   evidence_id: evidence:frontend/src/__tests__/AdvancedSearchPanel.test.ts
   path: frontend/src/__tests__/AdvancedSearchPanel.test.ts
   target_inventory_ids: []
 - black_box_contract: observable behavior only
-  command: cd frontend && npm test -- --run frontend/src/__tests__/AdvancedSearchResults.test.ts
+  command: cd frontend && npm test -- --run src/__tests__/AdvancedSearchResults.test.ts
   deterministic_mode: true
   evidence_class: UNIT_BLACK_BOX
   evidence_id: evidence:frontend/src/__tests__/AdvancedSearchResults.test.ts
   path: frontend/src/__tests__/AdvancedSearchResults.test.ts
   target_inventory_ids: []
 - black_box_contract: observable behavior only
-  command: cd frontend && npm test -- --run frontend/src/__tests__/HelpView.test.ts
+  command: cd frontend && npm test -- --run src/__tests__/HelpView.test.ts
   deterministic_mode: true
   evidence_class: UNIT_BLACK_BOX
   evidence_id: evidence:frontend/src/__tests__/HelpView.test.ts
   path: frontend/src/__tests__/HelpView.test.ts
   target_inventory_ids: []
 - black_box_contract: observable behavior only
-  command: cd frontend && npm test -- --run frontend/src/__tests__/MarkdownPanel.test.ts
+  command: cd frontend && npm test -- --run src/__tests__/MarkdownPanel.test.ts
   deterministic_mode: true
   evidence_class: UNIT_BLACK_BOX
   evidence_id: evidence:frontend/src/__tests__/MarkdownPanel.test.ts
   path: frontend/src/__tests__/MarkdownPanel.test.ts
   target_inventory_ids: []
 - black_box_contract: observable behavior only
-  command: cd frontend && npm test -- --run frontend/src/__tests__/PaperDetailViewAdvancedContext.test.ts
+  command: cd frontend && npm test -- --run src/__tests__/PaperDetailViewAdvancedContext.test.ts
   deterministic_mode: true
   evidence_class: UNIT_BLACK_BOX
   evidence_id: evidence:frontend/src/__tests__/PaperDetailViewAdvancedContext.test.ts
   path: frontend/src/__tests__/PaperDetailViewAdvancedContext.test.ts
   target_inventory_ids: []
 - black_box_contract: observable behavior only
-  command: cd frontend && npm test -- --run frontend/src/__tests__/PdfViewer.test.ts
+  command: cd frontend && npm test -- --run src/__tests__/PdfViewer.test.ts
   deterministic_mode: true
   evidence_class: UNIT_BLACK_BOX
   evidence_id: evidence:frontend/src/__tests__/PdfViewer.test.ts
   path: frontend/src/__tests__/PdfViewer.test.ts
   target_inventory_ids: []
 - black_box_contract: observable behavior only
-  command: cd frontend && npm test -- --run frontend/src/__tests__/RenderedMarkdown.test.ts
+  command: cd frontend && npm test -- --run src/__tests__/RenderedMarkdown.test.ts
   deterministic_mode: true
   evidence_class: UNIT_BLACK_BOX
   evidence_id: evidence:frontend/src/__tests__/RenderedMarkdown.test.ts
   path: frontend/src/__tests__/RenderedMarkdown.test.ts
   target_inventory_ids: []
 - black_box_contract: observable behavior only
-  command: cd frontend && npm test -- --run frontend/src/__tests__/SelectedViewExport.test.ts
+  command: cd frontend && npm test -- --run src/__tests__/RenderedMarkdownDiagnostics.test.ts
+  deterministic_mode: true
+  evidence_class: UNIT_BLACK_BOX
+  evidence_id: evidence:frontend/src/__tests__/RenderedMarkdownDiagnostics.test.ts
+  path: frontend/src/__tests__/RenderedMarkdownDiagnostics.test.ts
+  target_inventory_ids: []
+- black_box_contract: observable behavior only
+  command: cd frontend && npm test -- --run src/__tests__/SelectedViewExport.test.ts
   deterministic_mode: true
   evidence_class: UNIT_BLACK_BOX
   evidence_id: evidence:frontend/src/__tests__/SelectedViewExport.test.ts
   path: frontend/src/__tests__/SelectedViewExport.test.ts
   target_inventory_ids: []
 - black_box_contract: observable behavior only
-  command: cd frontend && npm test -- --run frontend/src/__tests__/advancedSearch.test.ts
+  command: cd frontend && npm test -- --run src/__tests__/advancedSearch.test.ts
   deterministic_mode: true
   evidence_class: UNIT_BLACK_BOX
   evidence_id: evidence:frontend/src/__tests__/advancedSearch.test.ts
   path: frontend/src/__tests__/advancedSearch.test.ts
   target_inventory_ids: []
 - black_box_contract: observable behavior only
-  command: cd frontend && npm test -- --run frontend/src/__tests__/advancedSearchFlow.test.ts
+  command: cd frontend && npm test -- --run src/__tests__/advancedSearchFlow.test.ts
   deterministic_mode: true
   evidence_class: UNIT_BLACK_BOX
   evidence_id: evidence:frontend/src/__tests__/advancedSearchFlow.test.ts
   path: frontend/src/__tests__/advancedSearchFlow.test.ts
   target_inventory_ids: []
 - black_box_contract: observable behavior only
-  command: cd frontend && npm test -- --run frontend/src/__tests__/advancedSearchTimeout.test.ts
+  command: cd frontend && npm test -- --run src/__tests__/advancedSearchTimeout.test.ts
   deterministic_mode: true
   evidence_class: UNIT_BLACK_BOX
   evidence_id: evidence:frontend/src/__tests__/advancedSearchTimeout.test.ts
   path: frontend/src/__tests__/advancedSearchTimeout.test.ts
   target_inventory_ids: []
 - black_box_contract: observable behavior only
-  command: cd frontend && npm test -- --run frontend/src/__tests__/api.test.ts
+  command: cd frontend && npm test -- --run src/__tests__/api.test.ts
   deterministic_mode: true
   evidence_class: UNIT_BLACK_BOX
   evidence_id: evidence:frontend/src/__tests__/api.test.ts
   path: frontend/src/__tests__/api.test.ts
   target_inventory_ids: []
 - black_box_contract: observable behavior only
-  command: cd frontend && npm test -- --run frontend/src/__tests__/asyncComponent.test.ts
+  command: cd frontend && npm test -- --run src/__tests__/asyncComponent.test.ts
   deterministic_mode: true
   evidence_class: UNIT_BLACK_BOX
   evidence_id: evidence:frontend/src/__tests__/asyncComponent.test.ts
   path: frontend/src/__tests__/asyncComponent.test.ts
   target_inventory_ids: []
 - black_box_contract: observable behavior only
-  command: cd frontend && npm test -- --run frontend/src/__tests__/http.test.ts
+  command: cd frontend && npm test -- --run src/__tests__/http.test.ts
   deterministic_mode: true
   evidence_class: UNIT_BLACK_BOX
   evidence_id: evidence:frontend/src/__tests__/http.test.ts
   path: frontend/src/__tests__/http.test.ts
   target_inventory_ids: []
 - black_box_contract: observable behavior only
-  command: cd frontend && npm test -- --run frontend/src/__tests__/lazy.test.ts
+  command: cd frontend && npm test -- --run src/__tests__/lazy.test.ts
   deterministic_mode: true
   evidence_class: UNIT_BLACK_BOX
   evidence_id: evidence:frontend/src/__tests__/lazy.test.ts
   path: frontend/src/__tests__/lazy.test.ts
   target_inventory_ids: []
 - black_box_contract: observable behavior only
-  command: cd frontend && npm test -- --run frontend/src/__tests__/markdownRender.test.ts
+  command: cd frontend && npm test -- --run src/__tests__/markdownRender.test.ts
   deterministic_mode: true
   evidence_class: UNIT_BLACK_BOX
   evidence_id: evidence:frontend/src/__tests__/markdownRender.test.ts
   path: frontend/src/__tests__/markdownRender.test.ts
   target_inventory_ids: []
 - black_box_contract: observable behavior only
-  command: cd frontend && npm test -- --run frontend/src/__tests__/moduleInterop.test.ts
+  command: cd frontend && npm test -- --run src/__tests__/moduleInterop.test.ts
   deterministic_mode: true
   evidence_class: UNIT_BLACK_BOX
   evidence_id: evidence:frontend/src/__tests__/moduleInterop.test.ts
   path: frontend/src/__tests__/moduleInterop.test.ts
   target_inventory_ids: []
 - black_box_contract: observable behavior only
-  command: cd frontend && npm test -- --run frontend/src/__tests__/paperContentCache.test.ts
+  command: cd frontend && npm test -- --run src/__tests__/paperContentCache.test.ts
   deterministic_mode: true
   evidence_class: UNIT_BLACK_BOX
   evidence_id: evidence:frontend/src/__tests__/paperContentCache.test.ts
   path: frontend/src/__tests__/paperContentCache.test.ts
   target_inventory_ids: []
 - black_box_contract: observable behavior only
-  command: cd frontend && npm test -- --run frontend/src/__tests__/selectedExport.fuzz.test.ts
+  command: cd frontend && npm test -- --run src/__tests__/selectedExport.fuzz.test.ts
   deterministic_mode: true
   evidence_class: UNIT_BLACK_BOX
   evidence_id: evidence:frontend/src/__tests__/selectedExport.fuzz.test.ts
   path: frontend/src/__tests__/selectedExport.fuzz.test.ts
   target_inventory_ids: []
 - black_box_contract: observable behavior only
-  command: cd frontend && npm test -- --run frontend/src/__tests__/selectedExport.test.ts
+  command: cd frontend && npm test -- --run src/__tests__/selectedExport.test.ts
   deterministic_mode: true
   evidence_class: UNIT_BLACK_BOX
   evidence_id: evidence:frontend/src/__tests__/selectedExport.test.ts
   path: frontend/src/__tests__/selectedExport.test.ts
   target_inventory_ids: []
 - black_box_contract: observable behavior only
-  command: cd frontend && npm test -- --run frontend/src/__tests__/snippet.test.ts
+  command: cd frontend && npm test -- --run src/__tests__/snippet.test.ts
   deterministic_mode: true
   evidence_class: UNIT_BLACK_BOX
   evidence_id: evidence:frontend/src/__tests__/snippet.test.ts
   path: frontend/src/__tests__/snippet.test.ts
   target_inventory_ids: []
 - black_box_contract: observable behavior only
-  command: cd frontend && npm test -- --run frontend/src/__tests__/tokenDb.test.ts
+  command: cd frontend && npm test -- --run src/__tests__/tokenDb.test.ts
   deterministic_mode: true
   evidence_class: UNIT_BLACK_BOX
   evidence_id: evidence:frontend/src/__tests__/tokenDb.test.ts
   path: frontend/src/__tests__/tokenDb.test.ts
   target_inventory_ids: []
 - black_box_contract: observable behavior only
-  command: cd frontend && npm test -- --run frontend/src/__tests__/useAdvancedSearchToken.test.ts
+  command: cd frontend && npm test -- --run src/__tests__/useAdvancedSearchToken.test.ts
   deterministic_mode: true
   evidence_class: UNIT_BLACK_BOX
   evidence_id: evidence:frontend/src/__tests__/useAdvancedSearchToken.test.ts
   path: frontend/src/__tests__/useAdvancedSearchToken.test.ts
   target_inventory_ids: []
 - black_box_contract: observable behavior only
-  command: cd frontend && npm test -- --run frontend/src/__tests__/useExpandableSummary.test.ts
+  command: cd frontend && npm test -- --run src/__tests__/useExpandableSummary.test.ts
   deterministic_mode: true
   evidence_class: UNIT_BLACK_BOX
   evidence_id: evidence:frontend/src/__tests__/useExpandableSummary.test.ts
   path: frontend/src/__tests__/useExpandableSummary.test.ts
   target_inventory_ids: []
 - black_box_contract: observable behavior only
-  command: cd frontend && npm test -- --run frontend/src/__tests__/useFacetStats.test.ts
+  command: cd frontend && npm test -- --run src/__tests__/useFacetStats.test.ts
   deterministic_mode: true
   evidence_class: UNIT_BLACK_BOX
   evidence_id: evidence:frontend/src/__tests__/useFacetStats.test.ts
   path: frontend/src/__tests__/useFacetStats.test.ts
   target_inventory_ids: []
 - black_box_contract: observable behavior only
-  command: cd frontend && npm test -- --run frontend/src/__tests__/usePaperDetail.test.ts
+  command: cd frontend && npm test -- --run src/__tests__/usePaperDetail.test.ts
   deterministic_mode: true
   evidence_class: UNIT_BLACK_BOX
   evidence_id: evidence:frontend/src/__tests__/usePaperDetail.test.ts
   path: frontend/src/__tests__/usePaperDetail.test.ts
   target_inventory_ids: []
 - black_box_contract: observable behavior only
-  command: cd frontend && npm test -- --run frontend/src/__tests__/useSearchState.test.ts
+  command: cd frontend && npm test -- --run src/__tests__/useSearchState.test.ts
   deterministic_mode: true
   evidence_class: UNIT_BLACK_BOX
   evidence_id: evidence:frontend/src/__tests__/useSearchState.test.ts
   path: frontend/src/__tests__/useSearchState.test.ts
   target_inventory_ids: []
 - black_box_contract: observable behavior only
-  command: cd frontend && npm test -- --run frontend/src/__tests__/useSplitView.test.ts
+  command: cd frontend && npm test -- --run src/__tests__/useSplitView.test.ts
   deterministic_mode: true
   evidence_class: UNIT_BLACK_BOX
   evidence_id: evidence:frontend/src/__tests__/useSplitView.test.ts
   path: frontend/src/__tests__/useSplitView.test.ts
-  target_inventory_ids: []
-- black_box_contract: observable behavior only
-  command: uv run pytest python/deepresearch_flow/ocr/tests/__init__.py -q
-  deterministic_mode: true
-  evidence_class: UNIT_BLACK_BOX
-  evidence_id: evidence:python/deepresearch_flow/ocr/tests/__init__.py
-  path: python/deepresearch_flow/ocr/tests/__init__.py
   target_inventory_ids: []
 - black_box_contract: observable behavior only
   command: uv run pytest python/deepresearch_flow/ocr/tests/test_base.py -q
@@ -57363,14 +57577,6 @@ evidence_assets:
   evidence_class: UNIT_BLACK_BOX
   evidence_id: evidence:python/deepresearch_flow/ocr/tests/test_runner.py
   path: python/deepresearch_flow/ocr/tests/test_runner.py
-  target_inventory_ids: []
-- black_box_contract: observable behavior only
-  command: uv run pytest python/deepresearch_flow/paper/snapshot/advanced/tests/__init__.py
-    -q
-  deterministic_mode: true
-  evidence_class: UNIT_BLACK_BOX
-  evidence_id: evidence:python/deepresearch_flow/paper/snapshot/advanced/tests/__init__.py
-  path: python/deepresearch_flow/paper/snapshot/advanced/tests/__init__.py
   target_inventory_ids: []
 - black_box_contract: observable behavior only
   command: uv run pytest python/deepresearch_flow/paper/snapshot/advanced/tests/test_advanced_api.py
@@ -57491,14 +57697,6 @@ evidence_assets:
   evidence_class: UNIT_BLACK_BOX
   evidence_id: evidence:python/deepresearch_flow/paper/snapshot/advanced/tests/test_retrieve_sparse.py
   path: python/deepresearch_flow/paper/snapshot/advanced/tests/test_retrieve_sparse.py
-  target_inventory_ids: []
-- black_box_contract: observable behavior only
-  command: uv run pytest python/deepresearch_flow/paper/snapshot/tests/__init__.py
-    -q
-  deterministic_mode: true
-  evidence_class: UNIT_BLACK_BOX
-  evidence_id: evidence:python/deepresearch_flow/paper/snapshot/tests/__init__.py
-  path: python/deepresearch_flow/paper/snapshot/tests/__init__.py
   target_inventory_ids: []
 - black_box_contract: observable behavior only
   command: uv run pytest python/deepresearch_flow/paper/snapshot/tests/test_admin.py
@@ -57997,13 +58195,6 @@ evidence_assets:
   path: python/deepresearch_flow/paper/tests/test_weighted_routing.py
   target_inventory_ids: []
 - black_box_contract: observable behavior only
-  command: uv run pytest python/deepresearch_flow/storage/tests/__init__.py -q
-  deterministic_mode: true
-  evidence_class: UNIT_BLACK_BOX
-  evidence_id: evidence:python/deepresearch_flow/storage/tests/__init__.py
-  path: python/deepresearch_flow/storage/tests/__init__.py
-  target_inventory_ids: []
-- black_box_contract: observable behavior only
   command: uv run pytest python/deepresearch_flow/storage/tests/test_factory.py -q
   deterministic_mode: true
   evidence_class: UNIT_BLACK_BOX
@@ -58016,21 +58207,6 @@ evidence_assets:
   evidence_class: UNIT_BLACK_BOX
   evidence_id: evidence:python/deepresearch_flow/storage/tests/test_webdav.py
   path: python/deepresearch_flow/storage/tests/test_webdav.py
-  target_inventory_ids: []
-- black_box_contract: observable behavior only
-  command: uv run pytest python/deepresearch_flow/translator/tests/__init__.py -q
-  deterministic_mode: true
-  evidence_class: UNIT_BLACK_BOX
-  evidence_id: evidence:python/deepresearch_flow/translator/tests/__init__.py
-  path: python/deepresearch_flow/translator/tests/__init__.py
-  target_inventory_ids: []
-- black_box_contract: observable behavior only
-  command: uv run pytest python/deepresearch_flow/translator/tests/_fuzz_markdown_cases.py
-    -q
-  deterministic_mode: true
-  evidence_class: UNIT_BLACK_BOX
-  evidence_id: evidence:python/deepresearch_flow/translator/tests/_fuzz_markdown_cases.py
-  path: python/deepresearch_flow/translator/tests/_fuzz_markdown_cases.py
   target_inventory_ids: []
 - black_box_contract: observable behavior only
   command: uv run pytest python/deepresearch_flow/translator/tests/test_cli_translate.py
@@ -58095,13 +58271,6 @@ evidence_assets:
   evidence_class: UNIT_BLACK_BOX
   evidence_id: evidence:python/deepresearch_flow/translator/tests/test_segment_contracts.py
   path: python/deepresearch_flow/translator/tests/test_segment_contracts.py
-  target_inventory_ids: []
-- black_box_contract: observable behavior only
-  command: uv run pytest tests/conftest.py -q
-  deterministic_mode: true
-  evidence_class: UNIT_BLACK_BOX
-  evidence_id: evidence:tests/conftest.py
-  path: tests/conftest.py
   target_inventory_ids: []
 - black_box_contract: observable behavior only
   command: uv run pytest tests/test_entrypoints.py -q
