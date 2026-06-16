@@ -1,6 +1,23 @@
 import DOMPurify from 'dompurify'
 
 const safeMermaidSvgUriPattern = /^(?:(?:https?):|\/(?!\/)|#|\.{1,2}\/|[^a-z])/i
+const fencedMarkdownBlockPattern = /(^|\n)(```|~~~)[^\n]*(?:\n[\s\S]*?)?(?:\n\2[^\n]*(?=\n|$)|$)/g
+const complexInlineMathMinLength = 28
+const complexMathCommands = [
+  '\\begin',
+  '\\cdot',
+  '\\frac',
+  '\\int',
+  '\\left',
+  '\\log',
+  '\\max',
+  '\\min',
+  '\\odot',
+  '\\prod',
+  '\\rightarrow',
+  '\\right',
+  '\\sum',
+]
 const forbiddenRendererAttrs = [
   'style',
   'onerror',
@@ -11,6 +28,151 @@ const forbiddenRendererAttrs = [
   'onmouseenter',
   'onmouseleave',
 ]
+
+function isEscapedAt(content: string, index: number) {
+  let slashCount = 0
+  for (let cursor = index - 1; cursor >= 0 && content[cursor] === '\\'; cursor -= 1) {
+    slashCount += 1
+  }
+  return slashCount % 2 === 1
+}
+
+function findUnescapedToken(content: string, token: string, fromIndex: number) {
+  let index = content.indexOf(token, fromIndex)
+  while (index !== -1) {
+    if (!isEscapedAt(content, index)) return index
+    index = content.indexOf(token, index + token.length)
+  }
+  return -1
+}
+
+function findInlineDollar(content: string, fromIndex: number) {
+  let index = content.indexOf('$', fromIndex)
+  while (index !== -1) {
+    const previous = index > 0 ? content[index - 1] : ''
+    const next = content[index + 1] || ''
+    if (!isEscapedAt(content, index) && previous !== '$' && next !== '$') return index
+    index = content.indexOf('$', index + 1)
+  }
+  return -1
+}
+
+function findClosingInlineDollar(content: string, fromIndex: number) {
+  let index = findInlineDollar(content, fromIndex)
+  while (index !== -1) {
+    if (!content.slice(fromIndex, index).includes('\n')) return index
+    index = findInlineDollar(content, index + 1)
+  }
+  return -1
+}
+
+function shouldLiftInlineMath(content: string) {
+  const compact = content.replace(/\s+/g, '')
+  if (compact.length >= complexInlineMathMinLength) return true
+  if (compact.length < 18) return false
+  return complexMathCommands.some((command) => compact.includes(command))
+}
+
+function appendMathBlock(output: string, content: string) {
+  const math = content.trim()
+  if (!math) return output
+  let nextOutput = output.replace(/[ \t]+$/g, '')
+  if (nextOutput && !nextOutput.endsWith('\n\n')) {
+    nextOutput += nextOutput.endsWith('\n') ? '\n' : '\n\n'
+  }
+  return `${nextOutput}$$\n${math}\n$$`
+}
+
+function skipLayoutWhitespaceAfterBlock(content: string, fromIndex: number) {
+  let index = fromIndex
+  while (content[index] === ' ' || content[index] === '\t') index += 1
+  while (content[index] === '\n' || content[index] === '\r') index += 1
+  return index
+}
+
+function normalizeMathLayoutSegment(content: string) {
+  let output = ''
+  let index = 0
+
+  while (index < content.length) {
+    const displayDollar = findUnescapedToken(content, '$$', index)
+    const displayBracket = findUnescapedToken(content, '\\[', index)
+    const inlineDollar = findInlineDollar(content, index)
+    const candidates = [
+      displayDollar === -1 ? Number.POSITIVE_INFINITY : displayDollar,
+      displayBracket === -1 ? Number.POSITIVE_INFINITY : displayBracket,
+      inlineDollar === -1 ? Number.POSITIVE_INFINITY : inlineDollar,
+    ]
+    const nextIndex = Math.min(...candidates)
+    if (!Number.isFinite(nextIndex)) {
+      output += content.slice(index)
+      break
+    }
+
+    if (nextIndex === displayDollar) {
+      const closeIndex = findUnescapedToken(content, '$$', nextIndex + 2)
+      if (closeIndex === -1) {
+        output += content.slice(index)
+        break
+      }
+      output += content.slice(index, nextIndex)
+      output = appendMathBlock(output, content.slice(nextIndex + 2, closeIndex))
+      index = skipLayoutWhitespaceAfterBlock(content, closeIndex + 2)
+      if (index < content.length) output += '\n\n'
+      continue
+    }
+
+    if (nextIndex === displayBracket) {
+      const closeIndex = findUnescapedToken(content, '\\]', nextIndex + 2)
+      if (closeIndex === -1) {
+        output += content.slice(index)
+        break
+      }
+      output += content.slice(index, nextIndex)
+      output = appendMathBlock(output, content.slice(nextIndex + 2, closeIndex))
+      index = skipLayoutWhitespaceAfterBlock(content, closeIndex + 2)
+      if (index < content.length) output += '\n\n'
+      continue
+    }
+
+    const closeIndex = findClosingInlineDollar(content, nextIndex + 1)
+    if (closeIndex === -1) {
+      output += content.slice(index)
+      break
+    }
+    const math = content.slice(nextIndex + 1, closeIndex)
+    if (shouldLiftInlineMath(math)) {
+      output += content.slice(index, nextIndex)
+      output = appendMathBlock(output, math)
+      index = skipLayoutWhitespaceAfterBlock(content, closeIndex + 1)
+      if (index < content.length) output += '\n\n'
+      continue
+    }
+
+    output += content.slice(index, closeIndex + 1)
+    index = closeIndex + 1
+  }
+
+  return output
+}
+
+export function normalizeMathLayout(markdown: string) {
+  const protectedBlocks: string[] = []
+  const protectedMarkdown = String(markdown || '').replace(
+    fencedMarkdownBlockPattern,
+    (match: string, leading: string) => {
+      const block = leading ? match.slice(leading.length) : match
+      const placeholder = `\u0000DRFLOW_FENCE_${protectedBlocks.length}\u0000`
+      protectedBlocks.push(block)
+      return `${leading || ''}${placeholder}`
+    },
+  )
+  const normalized = normalizeMathLayoutSegment(protectedMarkdown)
+  return protectedBlocks.reduce(
+    (current, block, blockIndex) => current.replace(`\u0000DRFLOW_FENCE_${blockIndex}\u0000`, block),
+    normalized,
+  )
+}
 
 export function normalizeMermaidLineBreaks(content: string) {
   const labelClosers: Record<string, string> = {

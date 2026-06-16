@@ -13,7 +13,7 @@ import type { OutlineItem } from '@/lib/outline'
 import { STATIC_BASE } from '@/lib/config'
 import { useTheme } from '@/composables/useTheme'
 import { resolveMarkdownItPlugin } from '@/lib/module-interop'
-import { normalizeMermaidLineBreaks, sanitizeMermaidSvgContent } from '@/lib/markdown-rendering'
+import { normalizeMathLayout, normalizeMermaidLineBreaks, sanitizeMermaidSvgContent } from '@/lib/markdown-rendering'
 
 // Global configuration for md-editor-v3
 mermaid.initialize({ startOnLoad: false })
@@ -301,7 +301,7 @@ function sanitizeMarkmapTree(node: any) {
 
 // Image URL rewriting
 const processedMarkdown = computed(() => {
-  let md = normalizeMarkdown(props.markdown)
+  let md = normalizeMathLayout(normalizeMarkdown(props.markdown))
   
   const rawBase = effectiveImagesBase.value
   const baseUrl = rawBase.replace(/\/+$/, '')

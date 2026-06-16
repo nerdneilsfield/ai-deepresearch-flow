@@ -1,10 +1,61 @@
 import { describe, expect, it } from 'vitest'
 import {
+  normalizeMathLayout,
   normalizeMermaidLineBreaks,
   sanitizeMermaidSvgContent,
 } from '@/lib/markdown-rendering'
 
 describe('markdown rendering helpers', () => {
+  it('lifts complex inline formulas out of prose so they can render as readable blocks', () => {
+    const source = [
+      '核心公式为位置初始化$\\mu_i=K^{-1}\\dot{p}D_t(p)+\\Delta(p)$和深度合成$\\hat{D}_s(p)=\\sum_{j\\in N_s(p)}\\mu_j^z\\alpha_j\\prod_{k=1}^{j-1}(1-\\alpha_k)$；学生模型继续训练。',
+    ].join('\n')
+
+    expect(normalizeMathLayout(source)).toBe([
+      '核心公式为位置初始化',
+      '',
+      '$$',
+      '\\mu_i=K^{-1}\\dot{p}D_t(p)+\\Delta(p)',
+      '$$',
+      '',
+      '和深度合成',
+      '',
+      '$$',
+      '\\hat{D}_s(p)=\\sum_{j\\in N_s(p)}\\mu_j^z\\alpha_j\\prod_{k=1}^{j-1}(1-\\alpha_k)',
+      '$$',
+      '',
+      '；学生模型继续训练。',
+    ].join('\n'))
+  })
+
+  it('keeps short inline formulas inline', () => {
+    expect(normalizeMathLayout('深度图 $D_t$ 和掩码 $M_o$ 保持行内。')).toBe(
+      '深度图 $D_t$ 和掩码 $M_o$ 保持行内。',
+    )
+  })
+
+  it('does not rewrite formulas inside fenced code blocks', () => {
+    const source = [
+      '正文 $\\mu_i=K^{-1}\\dot{p}D_t(p)+\\Delta(p)$',
+      '',
+      '```markdown',
+      '代码 $\\mu_i=K^{-1}\\dot{p}D_t(p)+\\Delta(p)$',
+      '```',
+    ].join('\n')
+
+    expect(normalizeMathLayout(source)).toBe([
+      '正文',
+      '',
+      '$$',
+      '\\mu_i=K^{-1}\\dot{p}D_t(p)+\\Delta(p)',
+      '$$',
+      '',
+      '```markdown',
+      '代码 $\\mu_i=K^{-1}\\dot{p}D_t(p)+\\Delta(p)$',
+      '```',
+    ].join('\n'))
+  })
+
   it('keeps Mermaid line breaks inside quoted labels', () => {
     expect(
       normalizeMermaidLineBreaks('flowchart TD\nA["alpha<br/>beta"] --> B["gamma<br>delta"]'),
