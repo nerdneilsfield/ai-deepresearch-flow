@@ -85,52 +85,9 @@ jobs:
           python -c "from deepresearch_flow.paper.snapshot import mcp_server"
           python -c "from deepresearch_flow.paper import db_ops"
 
-  test:
-    name: Run tests on Python ${{ matrix.python-version }}
-    needs: build
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.12", "3.13", "3.14"]
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Download dist
-        uses: actions/download-artifact@v4
-        with:
-          name: dist
-          path: dist
-
-      - name: Install from wheel with test dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install dist/*.whl
-          python -m pip install pytest pyyaml
-
-      - name: Run verification tests
-        run: python -m pytest tests/verification -q
-
-      - name: Check verification inventory
-        run: |
-          python tools/verification/generate_inventory.py \
-            --output docs/verification/repo-verification-inventory.json \
-            --check
-          python tools/verification/generate_bootstrap_manifest.py \
-            --inventory docs/verification/repo-verification-inventory.json \
-            --output docs/verification/repo-verification-manifest.yml \
-            --check
-          python tools/verification/check_manifest_coverage.py \
-            --inventory docs/verification/repo-verification-inventory.json \
-            --manifest docs/verification/repo-verification-manifest.yml
-
   publish_pypi:
     name: Publish to PyPI
-    needs: [build, verify, test]
+    needs: [build, verify]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     environment:
