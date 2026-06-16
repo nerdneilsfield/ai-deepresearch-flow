@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto'
-import { flushPromises, mount } from '@vue/test-utils'
+import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import * as tokenDb from '@/lib/token-db'
@@ -21,6 +21,8 @@ vi.mock('@/stores/ui', () => ({
     pushToast: pushToastMock,
   }),
 }))
+
+enableAutoUnmount(afterEach)
 
 async function settle(wrapper: ReturnType<typeof mount>) {
   await flushPromises()
@@ -120,8 +122,10 @@ describe('AdvancedSearchPanel', () => {
     const wrapper = mount(AdvancedSearchPanel)
     await settle(wrapper)
     await wrapper.find('[data-testid="advanced-panel-toggle"]').trigger('click')
-    expect((wrapper.find('[data-testid="advanced-token-input"]').element as HTMLInputElement).value).toBe('stored-good')
-    expect((wrapper.find('[data-testid="advanced-query-input"]').element as HTMLInputElement).disabled).toBe(false)
+    await vi.waitFor(() => {
+      expect((wrapper.find('[data-testid="advanced-token-input"]').element as HTMLInputElement).value).toBe('stored-good')
+      expect((wrapper.find('[data-testid="advanced-query-input"]').element as HTMLInputElement).disabled).toBe(false)
+    })
   })
 
   it('searching prop puts button in loading state and disables it', async () => {

@@ -26,13 +26,17 @@ onMounted(async () => {
   }
 })
 
-watch(token, (value, previous) => {
-  if (value) {
-    tokenInput.value = value
-  } else if (previous) {
-    tokenInput.value = ''
-  }
-})
+watch(
+  token,
+  (value, previous) => {
+    if (value) {
+      tokenInput.value = value
+    } else if (previous) {
+      tokenInput.value = ''
+    }
+  },
+  { immediate: true },
+)
 
 watch(failureReason, (value) => {
   lastVerifyInvalid.value = value === 'invalid'
