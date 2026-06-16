@@ -29,6 +29,25 @@ const forbiddenRendererAttrs = [
   'onmouseleave',
 ]
 
+const unsafeCssRulePattern = /@import\b[^;]*(?:;|$)|[^{};]*\burl\s*\([^)]*\)[^{};]*(?:;|$)|[^{};]*\bexpression\s*\([^)]*\)[^{};]*(?:;|$)|[^{};]*(?:javascript|vbscript|data):[^{};]*(?:;|$)/gi
+
+function sanitizeSvgStyleText(styleText: string) {
+  return String(styleText || '')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(unsafeCssRulePattern, '')
+    .trim()
+}
+
+function sanitizeSvgStyleBlocks(svg: string) {
+  return String(svg || '').replace(
+    /<style\b([^>]*)>([\s\S]*?)<\/style>/gi,
+    (_match, attrs: string, content: string) => {
+      const sanitized = sanitizeSvgStyleText(content)
+      return sanitized ? `<style${attrs || ''}>${sanitized}</style>` : ''
+    },
+  )
+}
+
 function isEscapedAt(content: string, index: number) {
   let slashCount = 0
   for (let cursor = index - 1; cursor >= 0 && content[cursor] === '\\'; cursor -= 1) {
@@ -238,9 +257,10 @@ export function normalizeMermaidLineBreaks(content: string) {
 }
 
 export function sanitizeMermaidSvgContent(svg: string) {
-  const sanitized = DOMPurify.sanitize(String(svg || ''), {
+  const sanitized = DOMPurify.sanitize(sanitizeSvgStyleBlocks(svg), {
     USE_PROFILES: { svg: true, svgFilters: true },
-    FORBID_TAGS: ['script', 'foreignObject', 'style'],
+    ADD_TAGS: ['style'],
+    FORBID_TAGS: ['script', 'foreignObject'],
     FORBID_ATTR: forbiddenRendererAttrs,
     ALLOW_DATA_ATTR: false,
     ALLOWED_URI_REGEXP: safeMermaidSvgUriPattern,
@@ -249,6 +269,14 @@ export function sanitizeMermaidSvgContent(svg: string) {
 
   const template = document.createElement('template')
   template.innerHTML = sanitized
+  template.content.querySelectorAll('style').forEach((node) => {
+    const sanitizedStyle = sanitizeSvgStyleText(node.textContent || '')
+    if (sanitizedStyle) {
+      node.textContent = sanitizedStyle
+    } else {
+      node.remove()
+    }
+  })
   template.content.querySelectorAll('[href], [xlink\\:href], [src]').forEach((node) => {
     for (const attr of ['href', 'xlink:href', 'src']) {
       const value = node.getAttribute(attr)

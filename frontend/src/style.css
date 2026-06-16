@@ -1,4 +1,5 @@
 @import "katex/dist/katex.min.css";
+@import "highlight.js/styles/github.css";
 
 @tailwind base;
 @tailwind components;
@@ -165,6 +166,15 @@ body {
 
   .mermaid {
     @apply my-4;
+  }
+
+  .katex,
+  .katex * {
+    font-family: "KaTeX_Main", "KaTeX_Math", "KaTeX_AMS", "Times New Roman", serif !important;
+    font-style: normal !important;
+    font-weight: 400 !important;
+    letter-spacing: normal !important;
+    font-variant-east-asian: normal !important;
   }
 
   .katex-display {

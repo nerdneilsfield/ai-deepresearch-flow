@@ -74,7 +74,7 @@ describe('markdown rendering helpers', () => {
     )
   })
 
-  it('removes active content and remote inline styling from Mermaid SVG', () => {
+  it('removes active content and remote CSS from Mermaid SVG', () => {
     const sanitized = sanitizeMermaidSvgContent(`
       <svg xmlns="http://www.w3.org/2000/svg">
         <style>@import url("https://attacker.invalid/x.css"); text { fill: red; }</style>
@@ -87,12 +87,35 @@ describe('markdown rendering helpers', () => {
     `)
 
     expect(sanitized).toContain('safe label')
-    expect(sanitized).not.toContain('<style')
+    expect(sanitized).toContain('text { fill: red; }')
     expect(sanitized).not.toContain('@import')
     expect(sanitized).not.toContain('<script')
     expect(sanitized).not.toContain('foreignObject')
     expect(sanitized).not.toContain('javascript:')
     expect(sanitized).not.toContain('onclick')
     expect(sanitized).not.toContain('data:image')
+  })
+
+  it('preserves safe Mermaid SVG styles while removing active CSS', () => {
+    const sanitized = sanitizeMermaidSvgContent(`
+      <svg xmlns="http://www.w3.org/2000/svg">
+        <style>
+          @import url("https://attacker.invalid/x.css");
+          .node rect { fill: #ffffff; stroke: #475569; }
+          .edgePath path { stroke: #94a3b8; }
+          text { font-family: sans-serif; }
+          .bad { background-image: url("javascript:alert(1)"); }
+        </style>
+        <g class="node"><rect /><text>safe label</text></g>
+      </svg>
+    `)
+
+    expect(sanitized).toContain('safe label')
+    expect(sanitized).toContain('.node rect')
+    expect(sanitized).toContain('fill: #ffffff')
+    expect(sanitized).not.toContain('@import')
+    expect(sanitized).not.toContain('attacker.invalid')
+    expect(sanitized).not.toContain('javascript:')
+    expect(sanitized).not.toContain('background-image')
   })
 })

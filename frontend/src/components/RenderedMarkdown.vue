@@ -4,6 +4,7 @@ import { MdPreview, config } from 'md-editor-v3'
 import 'md-editor-v3/lib/preview.css'
 import mermaid from 'mermaid'
 import katex from 'katex'
+import hljs from 'highlight.js'
 import DOMPurify from 'dompurify'
 import footnote from 'markdown-it-footnote'
 import taskLists from 'markdown-it-task-lists'
@@ -20,6 +21,9 @@ import { renderMermaidCodeBlocks } from '@/lib/mermaid-renderer'
 mermaid.initialize({ startOnLoad: false })
 config({
   editorExtensions: {
+    highlight: {
+      instance: hljs,
+    },
     mermaid: {
       instance: mermaid,
       enableZoom: true,
@@ -33,7 +37,7 @@ config({
       ...baseConfig,
       throwOnError: false,
       strict: false,
-      output: 'mathml',
+      output: 'htmlAndMathml',
     }
   },
   mermaidConfig(baseConfig) {
@@ -131,7 +135,6 @@ const isPlainFallbackTruncated = computed(() => props.markdown.length > MAX_RICH
 const plainFallbackMarkdown = computed(() => props.markdown.slice(0, MAX_RICH_MARKDOWN_CHARS))
 const safeUriPattern = /^(?:(?:https?|mailto):|data:image\/|blob:|\/|#|\.{1,2}\/|[a-z0-9+.-]+(?:[/?#]|$)|[^a-z])/i
 const forbiddenHtmlAttrs = [
-  'style',
   'onerror',
   'onload',
   'onclick',
@@ -155,6 +158,25 @@ const rendererHtmlAttrs = [
   'data-closed',
   'data-mermaid-theme',
 ]
+const unsafeInlineStylePattern = /(?:@import\b|\burl\s*\(|\bexpression\s*\(|(?:javascript|vbscript|data):)/i
+const katexContainerSelector = '.md-editor-katex-inline[data-processed], .md-editor-katex-block[data-processed]'
+
+function isTrustedKatexStyleNode(node: Element) {
+  return Boolean(node.closest(katexContainerSelector) && node.closest('.katex'))
+}
+
+function pruneInlineStyles(html: string) {
+  if (typeof document === 'undefined') return html
+  const template = document.createElement('template')
+  template.innerHTML = html
+  template.content.querySelectorAll<HTMLElement>('[style]').forEach((node) => {
+    const style = node.getAttribute('style') || ''
+    if (!isTrustedKatexStyleNode(node) || unsafeInlineStylePattern.test(style)) {
+      node.removeAttribute('style')
+    }
+  })
+  return template.innerHTML
+}
 
 function truncateDiagnosticText(value: string, limit = 800) {
   const normalized = String(value || '').replace(/\s+/g, ' ').trim()
@@ -272,7 +294,7 @@ function sanitizeHtml(html: string) {
     ALLOW_DATA_ATTR: false,
     ALLOWED_URI_REGEXP: safeUriPattern,
   })
-  return String(sanitized).replace(/<annotation\b[^>]*>[\s\S]*?<\/annotation>/gi, '')
+  return pruneInlineStyles(String(sanitized)).replace(/<annotation\b[^>]*>[\s\S]*?<\/annotation>/gi, '')
 }
 
 async function sanitizeMermaidSvg(svg: string) {
@@ -590,7 +612,6 @@ onBeforeUnmount(() => {
       :modelValue="processedMarkdown"
       :noMermaid="true"
       :noEcharts="true"
-      :noHighlight="true"
       :sanitize="sanitizeHtml"
       :sanitizeMermaid="sanitizeMermaidSvg"
       :theme="editorTheme"

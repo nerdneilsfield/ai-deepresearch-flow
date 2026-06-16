@@ -117,7 +117,7 @@ describe('RenderedMarkdown', () => {
     wrapper.unmount()
   })
 
-  it('renders formulas without relying on sanitizer-preserved inline layout styles', async () => {
+  it('renders formulas with KaTeX HTML layout and MathML accessibility output', async () => {
     const { default: RenderedMarkdown } = await import('@/components/RenderedMarkdown.vue')
     const wrapper = mount(RenderedMarkdown, {
       attachTo: document.body,
@@ -137,10 +137,34 @@ describe('RenderedMarkdown', () => {
 
     expect(katexRoot.exists(), diagnostics).toBe(true)
     expect(katexRoot.find('math').exists(), diagnostics).toBe(true)
-    expect(katexRoot.find('.katex-html').exists(), diagnostics).toBe(false)
-    expect(katexRoot.attributes('style'), diagnostics).toBeUndefined()
+    expect(katexRoot.find('.katex-html').exists(), diagnostics).toBe(true)
     expect(wrapper.text(), diagnostics).not.toContain(String.raw`L_{\mu}`)
     expect(wrapper.find('[data-testid="markdown-renderer-diagnostics"]').exists(), diagnostics).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  it('preserves KaTeX layout styles without preserving arbitrary raw HTML styles', async () => {
+    const { default: RenderedMarkdown } = await import('@/components/RenderedMarkdown.vue')
+    const wrapper = mount(RenderedMarkdown, {
+      attachTo: document.body,
+      props: {
+        markdown: String.raw`<span data-testid="raw-style" style="position: fixed; color: red">unsafe style</span> and $x_{safe}=1$`,
+      },
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 900))
+    await wrapper.vm.$nextTick()
+
+    const rawStyle = wrapper.findAll('span').find((span) => span.text() === 'unsafe style')
+    const diagnostics = [
+      `html=${wrapper.html()}`,
+      `text=${wrapper.text()}`,
+    ].join('\n')
+
+    expect(rawStyle, diagnostics).toBeDefined()
+    expect(rawStyle?.attributes('style'), diagnostics).toBeUndefined()
+    expect(wrapper.find('.katex-html').exists(), diagnostics).toBe(true)
 
     wrapper.unmount()
   })
