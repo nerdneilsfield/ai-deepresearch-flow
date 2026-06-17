@@ -10,6 +10,18 @@ afterEach(async () => {
 })
 
 describe('dev mock paper server', () => {
+  it('finds bundled fixtures when started from the frontend directory', async () => {
+    const { startMockPaperServer } = await import('../../dev/mock-paper-server.mjs')
+    const handle = await startMockPaperServer({ repoRoot: process.cwd(), host: '127.0.0.1', port: 0, quiet: true })
+    handles.push(handle)
+
+    const response = await fetch(`${handle.url}/healthz`)
+    expect(response.status).toBe(200)
+    const health = await response.json()
+    expect(health.ok).toBe(true)
+    expect(health.papers).toBeGreaterThan(0)
+  })
+
   it('serves real test-data paper APIs and rendering assets through HTTP', async () => {
     const { startMockPaperServer } = await import('../../dev/mock-paper-server.mjs')
     const handle = await startMockPaperServer({ host: '127.0.0.1', port: 0, quiet: true })

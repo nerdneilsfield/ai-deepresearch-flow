@@ -17,7 +17,22 @@ function resolveDefaultRepoRoot() {
 }
 
 const DEFAULT_REPO_ROOT = resolveDefaultRepoRoot()
-const DEFAULT_STATIC_ROOT = 'frontend/dev/fixtures/EventCamera-static-dir'
+
+function resolveDefaultStaticRoot() {
+  try {
+    return fileURLToPath(new URL('./fixtures/EventCamera-static-dir', import.meta.url))
+  } catch {
+    const cwd = process.cwd()
+    const candidates = [
+      join(cwd, 'dev', 'fixtures', 'EventCamera-static-dir'),
+      join(cwd, 'frontend', 'dev', 'fixtures', 'EventCamera-static-dir'),
+      join(cwd, '..', 'frontend', 'dev', 'fixtures', 'EventCamera-static-dir'),
+    ]
+    return candidates.find((candidate) => existsSync(join(candidate, 'manifest'))) ?? candidates[0]
+  }
+}
+
+const DEFAULT_STATIC_ROOT = resolveDefaultStaticRoot()
 const DEFAULT_FIXTURE_IDS = [
   // Source markdown contains \textcircled; deep_read contains $$ formulas and mermaid.
   '9b5301a567bbc2e99cc7ac6d2d4946a6',
@@ -158,8 +173,22 @@ function loadPaperRecord(staticRoot, manifestPath) {
   }
 }
 
+function resolveStaticRoot(repoRoot, staticRoot) {
+  const requestedRoot = staticRoot ?? DEFAULT_STATIC_ROOT
+  if (isAbsolute(requestedRoot)) return resolve(requestedRoot)
+
+  const candidates = [resolve(repoRoot, requestedRoot)]
+  const portableRoot = requestedRoot.replaceAll('\\', '/')
+  if (portableRoot.startsWith('frontend/')) {
+    candidates.push(resolve(repoRoot, portableRoot.slice('frontend/'.length)))
+  }
+  candidates.push(resolve(DEFAULT_REPO_ROOT, requestedRoot))
+
+  return candidates.find((candidate) => existsSync(join(candidate, 'manifest'))) ?? candidates[0]
+}
+
 function discoverPapers({ repoRoot = DEFAULT_REPO_ROOT, staticRoot, fixtureIds = DEFAULT_FIXTURE_IDS, limit = 8 } = {}) {
-  const absoluteStaticRoot = resolve(repoRoot, staticRoot ?? DEFAULT_STATIC_ROOT)
+  const absoluteStaticRoot = resolveStaticRoot(repoRoot, staticRoot)
   const manifestRoot = join(absoluteStaticRoot, 'manifest')
   if (!existsSync(manifestRoot)) {
     throw new Error(`Mock paper manifest directory not found: ${manifestRoot}`)
