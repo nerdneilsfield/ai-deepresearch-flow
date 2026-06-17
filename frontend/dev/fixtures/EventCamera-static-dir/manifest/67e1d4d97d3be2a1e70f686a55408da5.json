@@ -1,0 +1,51 @@
+{
+  "paper_id": "67e1d4d97d3be2a1e70f686a55408da5",
+  "folder_name": "Min_Liu_2019_Live_Demonstration_A_Real-time_Event-based_Fast_Corner_Detection_Demo_based_on_F_67e1d4d97d3be2a1e70f686a55408da5",
+  "folder_name_short": "Min_Liu_2019_67e1d4d97d3be2a1e70f686a55408da5",
+  "assets": {
+    "pdf": {
+      "static_path": "pdf/d6ad03023f3a7419f69429c35f682c098e0db74851320cb6fc3c93e73ded2891.pdf",
+      "zip_path": "Min_Liu_2019_Live_Demonstration_A_Real-time_Event-based_Fast_Corner_Detection_Demo_based_on_FPGA.pdf",
+      "sha256": "d6ad03023f3a7419f69429c35f682c098e0db74851320cb6fc3c93e73ded2891"
+    },
+    "source_md": {
+      "static_path": "md/1c706db7da11179f25f5fa615b2f41b314d38b6caa60f7a0b153b56522d4fba0.md",
+      "zip_path": "source.md",
+      "sha256": "1c706db7da11179f25f5fa615b2f41b314d38b6caa60f7a0b153b56522d4fba0"
+    },
+    "translated_md": [
+      {
+        "lang": "zh",
+        "static_path": "md_translate/zh/dd1bd75de957fc0ad7d878a40e2f88b85d920bfacb64528bc554adec61d6b9c3.md",
+        "zip_path": "translated/zh.md",
+        "sha256": "dd1bd75de957fc0ad7d878a40e2f88b85d920bfacb64528bc554adec61d6b9c3"
+      }
+    ],
+    "summary": {
+      "static_path": "summary/67e1d4d97d3be2a1e70f686a55408da5.json",
+      "zip_path": "summary.json"
+    },
+    "summary_templates": [
+      {
+        "template_tag": "deep_read",
+        "static_path": "summary/67e1d4d97d3be2a1e70f686a55408da5/deep_read.json",
+        "zip_path": "summaries/deep_read.json"
+      },
+      {
+        "template_tag": "simple",
+        "static_path": "summary/67e1d4d97d3be2a1e70f686a55408da5/simple.json",
+        "zip_path": "summaries/simple.json"
+      }
+    ]
+  },
+  "images": [
+    {
+      "static_path": "images/e5c38e1237c789b8a21865ce805282e375440b1213ec0510f92fdca595492cf3.jpg",
+      "zip_path": "images/e5c38e1237c789b8a21865ce805282e375440b1213ec0510f92fdca595492cf3.jpg",
+      "sha256": "e5c38e1237c789b8a21865ce805282e375440b1213ec0510f92fdca595492cf3",
+      "ext": "jpg",
+      "status": "available"
+    }
+  ],
+  "conflicts": []
+}

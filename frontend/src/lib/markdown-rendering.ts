@@ -30,6 +30,35 @@ const forbiddenRendererAttrs = [
 ]
 
 const unsafeCssRulePattern = /@import\b[^;]*(?:;|$)|[^{};]*\burl\s*\([^)]*\)[^{};]*(?:;|$)|[^{};]*\bexpression\s*\([^)]*\)[^{};]*(?:;|$)|[^{};]*(?:javascript|vbscript|data):[^{};]*(?:;|$)/gi
+const mermaidSvgLayoutAttrs = [
+  'alignment-baseline',
+  'clip-rule',
+  'd',
+  'dominant-baseline',
+  'fill',
+  'fill-opacity',
+  'fill-rule',
+  'font-style',
+  'font-weight',
+  'gradientUnits',
+  'marker-end',
+  'marker-mid',
+  'marker-start',
+  'markerUnits',
+  'orient',
+  'stop-color',
+  'stop-opacity',
+  'stroke',
+  'stroke-dasharray',
+  'stroke-linecap',
+  'stroke-linejoin',
+  'stroke-miterlimit',
+  'stroke-opacity',
+  'stroke-width',
+  'text-anchor',
+  'transform',
+]
+const mermaidSvgLayoutSelector = 'svg,g,path,line,rect,circle,ellipse,polygon,polyline,text,tspan,marker,defs,clipPath,symbol,linearGradient,stop'
 
 function sanitizeSvgStyleText(styleText: string) {
   return String(styleText || '')
@@ -46,6 +75,87 @@ function sanitizeSvgStyleBlocks(svg: string) {
       return sanitized ? `<style${attrs || ''}>${sanitized}</style>` : ''
     },
   )
+}
+
+function isSafeMermaidSvgLayoutAttr(name: string, value: string) {
+  const normalized = String(value || '').trim()
+  if (!normalized) return false
+  if (name === 'fill' || name === 'stroke' || name === 'stop-color') {
+    if (/url\s*\(|javascript:|vbscript:|data:|[;<>]/i.test(normalized)) return false
+    return /^(?:none|transparent|currentColor|inherit|black|white|red|green|blue|gray|grey|#[0-9a-f]{3,8}|(?:rgb|rgba|hsl|hsla)\([-+\d.,%\s/]+\))$/i.test(normalized)
+  }
+  if (name === 'fill-opacity' || name === 'stop-opacity' || name === 'stroke-opacity' || name === 'stroke-miterlimit') {
+    return /^(?:0(?:\.\d+)?|1(?:\.0+)?|[-+]?\d*\.\d+|[-+]?\d+)$/.test(normalized)
+  }
+  if (name === 'stroke-width' || name === 'stroke-dasharray') {
+    return /^(?:none|[-+]?\d*\.?\d+(?:e[-+]?\d+)?(?:px|em|rem|%)?(?:[\s,]+[-+]?\d*\.?\d+(?:e[-+]?\d+)?(?:px|em|rem|%)?)*)$/i.test(normalized)
+  }
+  if (name === 'stroke-linecap') {
+    return /^(?:butt|round|square|inherit)$/i.test(normalized)
+  }
+  if (name === 'stroke-linejoin') {
+    return /^(?:miter|round|bevel|inherit)$/i.test(normalized)
+  }
+  if (name === 'fill-rule' || name === 'clip-rule') {
+    return /^(?:nonzero|evenodd|inherit)$/i.test(normalized)
+  }
+  if (name === 'font-style') {
+    return /^(?:normal|italic|oblique)$/i.test(normalized)
+  }
+  if (name === 'font-weight') {
+    return /^(?:normal|bold|bolder|lighter|[1-9]00)$/i.test(normalized)
+  }
+  if (name === 'gradientUnits') {
+    return /^(?:userSpaceOnUse|objectBoundingBox)$/i.test(normalized)
+  }
+  if (name === 'markerUnits') {
+    return /^(?:userSpaceOnUse|strokeWidth)$/i.test(normalized)
+  }
+  if (name === 'alignment-baseline') {
+    return /^[a-z-]+$/i.test(normalized)
+  }
+  if (name === 'd') {
+    return /^[MmZzLlHhVvCcSsQqTtAaEe0-9+\-.,\s]+$/.test(normalized)
+  }
+  if (name === 'transform') {
+    return /^(?:\s*(?:matrix|translate|scale|rotate|skewX|skewY)\s*\([-+\d.,\seE]+\)\s*)+$/i.test(normalized)
+  }
+  if (name === 'orient') {
+    return /^(?:auto|auto-start-reverse|[-+]?\d*\.?\d+(?:e[-+]?\d+)?(?:deg|grad|rad|turn)?)$/i.test(normalized)
+  }
+  if (name === 'text-anchor') {
+    return /^(?:start|middle|end|inherit)$/i.test(normalized)
+  }
+  if (name === 'dominant-baseline') {
+    return /^[a-z-]+$/i.test(normalized)
+  }
+  if (name.startsWith('marker-')) {
+    return /^url\(#[A-Za-z0-9_.:-]+\)$/i.test(normalized)
+  }
+  return false
+}
+
+function restoreSafeMermaidSvgLayoutAttrs(sourceSvg: string, sanitizedSvg: string) {
+  if (typeof document === 'undefined') return sanitizedSvg
+  const sourceTemplate = document.createElement('template')
+  const sanitizedTemplate = document.createElement('template')
+  sourceTemplate.innerHTML = sourceSvg
+  sanitizedTemplate.innerHTML = sanitizedSvg
+  const sourceNodes = Array.from(sourceTemplate.content.querySelectorAll<Element>(mermaidSvgLayoutSelector))
+  const sanitizedNodes = Array.from(sanitizedTemplate.content.querySelectorAll<Element>(mermaidSvgLayoutSelector))
+
+  sourceNodes.forEach((sourceNode, index) => {
+    const sanitizedNode = sanitizedNodes[index]
+    if (!sanitizedNode || sourceNode.tagName.toLowerCase() !== sanitizedNode.tagName.toLowerCase()) return
+    for (const attr of mermaidSvgLayoutAttrs) {
+      const value = sourceNode.getAttribute(attr)
+      if (value && isSafeMermaidSvgLayoutAttr(attr, value)) {
+        sanitizedNode.setAttribute(attr, value)
+      }
+    }
+  })
+
+  return sanitizedTemplate.innerHTML
 }
 
 function isEscapedAt(content: string, index: number) {
@@ -257,18 +367,50 @@ export function normalizeMermaidLineBreaks(content: string) {
 }
 
 export function sanitizeMermaidSvgContent(svg: string) {
-  const sanitized = DOMPurify.sanitize(sanitizeSvgStyleBlocks(svg), {
+  const svgWithSafeStyles = sanitizeSvgStyleBlocks(svg)
+  const sanitized = DOMPurify.sanitize(svgWithSafeStyles, {
     USE_PROFILES: { svg: true, svgFilters: true },
     ADD_TAGS: ['style'],
+    ADD_ATTR: [
+      'alignment-baseline',
+      'aria-roledescription',
+      'clip-rule',
+      'd',
+      'dominant-baseline',
+      'fill',
+      'fill-opacity',
+      'fill-rule',
+      'font-style',
+      'font-weight',
+      'gradientUnits',
+      'marker-end',
+      'marker-mid',
+      'marker-start',
+      'markerUnits',
+      'orient',
+      'role',
+      'stop-color',
+      'stop-opacity',
+      'stroke',
+      'stroke-dasharray',
+      'stroke-linecap',
+      'stroke-linejoin',
+      'stroke-miterlimit',
+      'stroke-opacity',
+      'stroke-width',
+      'text-anchor',
+      'transform',
+    ],
     FORBID_TAGS: ['script', 'foreignObject'],
     FORBID_ATTR: forbiddenRendererAttrs,
     ALLOW_DATA_ATTR: false,
     ALLOWED_URI_REGEXP: safeMermaidSvgUriPattern,
   })
-  if (typeof document === 'undefined') return sanitized
+  const sanitizedWithLayout = restoreSafeMermaidSvgLayoutAttrs(svgWithSafeStyles, String(sanitized))
+  if (typeof document === 'undefined') return sanitizedWithLayout
 
   const template = document.createElement('template')
-  template.innerHTML = sanitized
+  template.innerHTML = sanitizedWithLayout
   template.content.querySelectorAll('style').forEach((node) => {
     const sanitizedStyle = sanitizeSvgStyleText(node.textContent || '')
     if (sanitizedStyle) {

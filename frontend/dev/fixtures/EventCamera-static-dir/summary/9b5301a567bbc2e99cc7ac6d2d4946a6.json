@@ -1,0 +1,36 @@
+{
+  "paper_id": "9b5301a567bbc2e99cc7ac6d2d4946a6",
+  "paper_title": "Temporal-Guided Visual Foundation Models for Event-Based Vision",
+  "paper_authors": [
+    "Ruihao Xia",
+    "Junhong Cai",
+    "Luziwei Leng",
+    "Liuyi Wang",
+    "Chengju Liu",
+    "Ran Cheng",
+    "Yang Tang",
+    "Pan Zhou"
+  ],
+  "publication_date": "",
+  "publication_venue": "unknown",
+  "abstract": "事件相机在挑战性环境中的视觉任务具有独特优势，但处理异步事件流仍然是一个开放挑战。现有方法依赖专门架构或资源密集型训练，而利用在图像数据上预训练的现代视觉基础模型（VFMs）的潜力在基于事件的视觉中尚未充分探索。为此，我们提出时间引导的VFM（TGVFM），这是一个将VFM与我们的时间上下文融合块无缝集成的新颖框架。我们的时间块引入了三个关键组件：（1）长程时间注意力，用于建模全局时间依赖性；（2）双时空注意力，用于多尺度帧相关性；（3）深度特征引导机制，用于融合语义-时间特征。通过在真实世界数据上重新训练事件到视频模型并利用基于Transformer的VFM，TGVFM在保留时空动态的同时利用预训练表示。实验表明，TGVFM在语义分割、深度估计和目标检测方面实现了最先进的性能，分别比现有方法提高了16%、21%和16%。这项工作通过时间推理释放了基于图像的VFM在基于事件视觉中的跨模态潜力。",
+  "keywords": [
+    "事件相机",
+    "视觉基础模型",
+    "语义分割",
+    "深度估计",
+    "目标检测"
+  ],
+  "paper_institutions": [],
+  "output_language": "zh",
+  "provider": "newapi_njqq",
+  "model": "CPCN-ark-kimi-k2.5",
+  "prompt_template": "simple",
+  "extracted_at": "2026-03-28T07:47:39.321712Z",
+  "template_tag": "simple",
+  "summary": "事件相机在高动态范围、微秒级时间分辨率和低功耗方面具有优势，但处理异步事件流仍面临挑战。现有研究主要关注专门网络架构或资源密集型训练，而基于图像预训练的视觉基础模型（VFMs）在事件视觉领域的潜力尚未充分挖掘。为此，本文提出时间引导的视觉基础模型（TGVFM），通过引入时间上下文融合块（TCFB）将VFMs适配到事件数据。TCFB包含三个核心组件：长程时间注意力（LTA）通过记忆增强的自注意力机制建模全局时间依赖；双时空注意力（DSA）通过跨帧交叉注意力和局部窗口自注意力捕获多尺度帧相关性；深度特征引导机制（DFGM）融合高层语义特征与浅层时序特征以增强语义一致性。此外，研究在DSEC真实世界数据集上重新训练E2VID以生成高质量灰度重建帧，并采用零初始化残差连接策略保护预训练VFM知识。实验在DSEC数据集的语义分割、深度估计和目标检测任务上进行，使用MIoU、REL/RMS等度量指标。结果表明TGVFM在三个任务上分别实现66.11%/69.12%、0.092/0.116 REL和47.7% mAP的最先进性能，较现有方法提升16%-21%。未来研究可探索单一VFM骨干网络处理多任务的能力，以及进一步压缩计算开销。该方法可应用于自动驾驶、高速运动监测等需要高动态范围和低延迟的视觉场景，但需考虑事件相机与帧基相机在数据分布上的差异及计算资源限制。核心机制可概括为：$p_t = f_{\\mathrm{TGVFM}}(i_t, \\mathcal{M})$，其中TGVFM通过TCFB模块在保留预训练VFM空间知识的同时注入时间推理能力，实现事件数据的高效时空建模。",
+  "available_templates": [
+    "deep_read",
+    "simple"
+  ]
+}

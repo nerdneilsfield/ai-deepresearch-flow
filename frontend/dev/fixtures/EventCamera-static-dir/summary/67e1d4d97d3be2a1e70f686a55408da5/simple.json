@@ -1,0 +1,32 @@
+{
+  "paper_id": "67e1d4d97d3be2a1e70f686a55408da5",
+  "paper_title": "Live Demonstration: A Real-time Event-based Fast Corner Detection Demo based on FPGA",
+  "paper_authors": [
+    "Min Liu",
+    "Wei-Tse Kao",
+    "Tobi Delbruck"
+  ],
+  "publication_date": "",
+  "publication_venue": "2019 IEEE/CVF Conference on Computer Vision and Pattern Recognition Workshops (CVPRW)",
+  "abstract": "Corner detection is widely used as a pre-processing step for many computer vision (CV) problems. It is well studied in the conventional CV community and many popular methods are still used nowadays such as Harris, FAST, and SIFT. For event cameras like Dynamic Vision Sensors (DVS), similar approaches also have been proposed in recent years. Two of them are event-based Harris (eHARRIS) and event-based FAST (eFAST). This demo presents our recent work in which we implement eFAST on MiniZed FPGA. The power consumption of the whole system is less than 4W and the hardware eFAST consumes about 0.9W. This demo processes at least 5M events per second, and achieves a power-speed improvement factor product of more than 30X compared with CPU implementation of eFAST. This embedded component could be suitable for integration to applications such as drones and autonomous cars that produce high event rates.",
+  "keywords": [
+    "event-based vision",
+    "corner detection",
+    "FPGA",
+    "eFAST",
+    "real-time processing",
+    "Dynamic Vision Sensor",
+    "hardware acceleration",
+    "low power"
+  ],
+  "paper_institutions": [
+    "Institution of Neuroinformatics, University of Zurich and ETH Zurich"
+  ],
+  "output_language": "zh",
+  "provider": "newapi_njqq",
+  "model": "CPCN-ark-kimi-k2.5",
+  "prompt_template": "simple",
+  "extracted_at": "2026-03-28T07:08:37.069178Z",
+  "template_tag": "simple",
+  "summary": "针对事件相机（如动态视觉传感器DVS）在实时计算机视觉应用中需要低延迟、低功耗角点检测作为预处理步骤的问题，本研究在相关研究工作（传统Harris、FAST、SIFT方法及事件相机的eHARRIS、eFAST方法）基础上，提出了基于MiniZed FPGA的eFAST算法硬件实现方案，使用Vivado HLS高层综合工具开发。实验设置采用DAVIS240C传感器和搭载Xilinx Zynq 7z007s SoC的MiniZed开发板，与配备i5-8259U CPU的PC实现进行对比验证。实验结果表明，该系统处理时间仅为0.1-0.2μs（比PC快6倍以上），功耗仅0.9W（比PC低5倍），吞吐量达≥5M事件/秒（最高10M），功耗-速度乘积提升超过30倍，资源占用率为25% LUT、11% FF和57% BRAM。未来计划将该IP发布供非商业使用，并集成到光流估计、视觉里程计和SLAM等应用中。该系统适用于无人机、自动驾驶汽车等高事件率、低功耗需求的嵌入式应用场景。核心机制为基于FPGA的eFAST硬件流水线实现，采用100MHz时钟实现每事件100-200ns处理延迟的实时处理架构。"
+}

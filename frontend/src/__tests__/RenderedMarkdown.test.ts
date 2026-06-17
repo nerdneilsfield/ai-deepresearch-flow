@@ -144,6 +144,31 @@ describe('RenderedMarkdown', () => {
     wrapper.unmount()
   })
 
+  it('renders ordinary display formulas without visible scroll containers', async () => {
+    const { default: RenderedMarkdown } = await import('@/components/RenderedMarkdown.vue')
+    const wrapper = mount(RenderedMarkdown, {
+      attachTo: document.body,
+      props: {
+        markdown: String.raw`$$Q = W^Q \cdot f_t,\; K = W^K \cdot f_t,\; V = W^V \cdot f_t$$`,
+      },
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 900))
+    await wrapper.vm.$nextTick()
+
+    const formulaContainers = wrapper.findAll('.md-editor-katex-block, .katex-display, .katex-html')
+    const diagnostics = formulaContainers
+      .map((node) => `${node.element.className}: ${getComputedStyle(node.element).overflowX}`)
+      .join('\n')
+
+    expect(formulaContainers.length, diagnostics).toBeGreaterThan(0)
+    for (const node of formulaContainers) {
+      expect(getComputedStyle(node.element).overflowX, diagnostics).not.toBe('auto')
+    }
+
+    wrapper.unmount()
+  })
+
   it('preserves KaTeX layout styles without preserving arbitrary raw HTML styles', async () => {
     const { default: RenderedMarkdown } = await import('@/components/RenderedMarkdown.vue')
     const wrapper = mount(RenderedMarkdown, {

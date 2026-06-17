@@ -118,4 +118,80 @@ describe('markdown rendering helpers', () => {
     expect(sanitized).not.toContain('javascript:')
     expect(sanitized).not.toContain('background-image')
   })
+
+  it('preserves Mermaid SVG placement attributes while sanitizing active content', () => {
+    const sanitized = sanitizeMermaidSvgContent(`
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100">
+        <g class="node" transform="translate(100,50)">
+          <rect width="80" height="40" />
+          <text text-anchor="middle">safe label</text>
+        </g>
+        <script>alert(1)</script>
+      </svg>
+    `)
+
+    expect(sanitized).toContain('safe label')
+    expect(sanitized).toContain('transform="translate(100,50)"')
+    expect(sanitized).toContain('text-anchor="middle"')
+    expect(sanitized).not.toContain('<script')
+  })
+
+  it('preserves safe Mermaid edge and arrowhead geometry', () => {
+    const sanitized = sanitizeMermaidSvgContent(`
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 80">
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+            <path class="arrowMarkerPath" d="M 0 0 L 10 5 L 0 10 z" />
+          </marker>
+        </defs>
+        <path class="flowchart-link" d="M 10 40 C 40 10, 80 10, 110 40" marker-end="url(#arrow)" />
+      </svg>
+    `)
+
+    const template = document.createElement('template')
+    template.innerHTML = sanitized
+    const edge = template.content.querySelector('.flowchart-link')
+    const arrow = template.content.querySelector('.arrowMarkerPath')
+    const marker = template.content.querySelector('marker')
+
+    expect(edge?.getAttribute('d'), sanitized).toBe('M 10 40 C 40 10, 80 10, 110 40')
+    expect(edge?.getAttribute('marker-end'), sanitized).toBe('url(#arrow)')
+    expect(arrow?.getAttribute('d'), sanitized).toBe('M 0 0 L 10 5 L 0 10 z')
+    expect(marker?.getAttribute('orient'), sanitized).toBe('auto')
+  })
+
+  it('preserves safe Mermaid presentation attributes used by non-flowchart diagrams', () => {
+    const sanitized = sanitizeMermaidSvgContent(`
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 80">
+        <defs>
+          <linearGradient id="grad" gradientUnits="objectBoundingBox">
+            <stop offset="0%" stop-color="hsl(210, 0%, 88%)" />
+          </linearGradient>
+          <marker id="seq-arrow" markerUnits="userSpaceOnUse" viewBox="0 0 10 10" orient="auto">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="none" stroke="black" stroke-width="1.5" />
+          </marker>
+        </defs>
+        <symbol id="icon" fill-rule="evenodd" clip-rule="evenodd"><path d="M0 0 L1 1" /></symbol>
+        <text alignment-baseline="central"><tspan font-style="normal" font-weight="700">label</tspan></text>
+        <circle r="4" fill="transparent" stroke="currentColor" />
+      </svg>
+    `)
+
+    const template = document.createElement('template')
+    template.innerHTML = sanitized
+
+    expect(template.content.querySelector('marker')?.getAttribute('markerUnits'), sanitized).toBe('userSpaceOnUse')
+    expect(template.content.querySelector('marker path')?.getAttribute('fill'), sanitized).toBe('none')
+    expect(template.content.querySelector('marker path')?.getAttribute('stroke'), sanitized).toBe('black')
+    expect(template.content.querySelector('marker path')?.getAttribute('stroke-width'), sanitized).toBe('1.5')
+    expect(template.content.querySelector('linearGradient')?.getAttribute('gradientUnits'), sanitized).toBe('objectBoundingBox')
+    expect(template.content.querySelector('stop')?.getAttribute('stop-color'), sanitized).toBe('hsl(210, 0%, 88%)')
+    expect(template.content.querySelector('symbol')?.getAttribute('fill-rule'), sanitized).toBe('evenodd')
+    expect(template.content.querySelector('symbol')?.getAttribute('clip-rule'), sanitized).toBe('evenodd')
+    expect(template.content.querySelector('text')?.getAttribute('alignment-baseline'), sanitized).toBe('central')
+    expect(template.content.querySelector('tspan')?.getAttribute('font-style'), sanitized).toBe('normal')
+    expect(template.content.querySelector('tspan')?.getAttribute('font-weight'), sanitized).toBe('700')
+    expect(template.content.querySelector('circle')?.getAttribute('fill'), sanitized).toBe('transparent')
+    expect(template.content.querySelector('circle')?.getAttribute('stroke'), sanitized).toBe('currentColor')
+  })
 })

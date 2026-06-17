@@ -92,6 +92,21 @@ function replaceHostForCodeBlock(code: HTMLElement, replacement: HTMLElement) {
   return true
 }
 
+function normalizeMermaidSvgSize(wrapper: HTMLElement) {
+  const svg = wrapper.querySelector<SVGSVGElement>('svg')
+  if (!svg) return
+  const viewBox = svg.getAttribute('viewBox') || ''
+  const [, widthRaw] = viewBox.match(/^\s*[-+]?\d*\.?\d+(?:e[-+]?\d+)?\s+[-+]?\d*\.?\d+(?:e[-+]?\d+)?\s+([-+]?\d*\.?\d+(?:e[-+]?\d+)?)\s+([-+]?\d*\.?\d+(?:e[-+]?\d+)?)\s*$/i) || []
+  const naturalWidth = Number(widthRaw)
+  if (Number.isFinite(naturalWidth) && naturalWidth > 0) {
+    svg.style.width = `${Math.ceil(naturalWidth)}px`
+  }
+  svg.style.maxWidth = '100%'
+  svg.style.height = 'auto'
+  svg.style.display = 'block'
+  svg.style.marginInline = 'auto'
+}
+
 export async function renderMermaidCodeBlocks(
   container: HTMLElement,
   options: RenderMermaidCodeBlocksOptions,
@@ -125,6 +140,7 @@ export async function renderMermaidCodeBlocks(
       const svg = await options.sanitizeSvg(renderedSvg(output))
       if (!svg) throw new Error('Mermaid renderer returned an empty SVG')
       wrapper.innerHTML = svg
+      normalizeMermaidSvgSize(wrapper)
       wrapper.setAttribute('data-processed', '')
       if (typeof output !== 'string') output.bindFunctions?.(wrapper)
       result.rendered += 1

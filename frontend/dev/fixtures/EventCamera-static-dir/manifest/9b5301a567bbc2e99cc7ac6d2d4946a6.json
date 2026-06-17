@@ -1,0 +1,123 @@
+{
+  "paper_id": "9b5301a567bbc2e99cc7ac6d2d4946a6",
+  "folder_name": "Ruihao_Xia_2025_Temporal-Guided_Visual_Foundation_Models_for_Event-Based_Vision_9b5301a567bbc2e99cc7ac6d2d4946a6",
+  "folder_name_short": "Ruihao_Xia_2025_9b5301a567bbc2e99cc7ac6d2d4946a6",
+  "assets": {
+    "source_md": {
+      "static_path": "md/b4816a1d1867b8a6770548b010c5501c2426a99087b6c96e288b96787a50bb1d.md",
+      "zip_path": "source.md",
+      "sha256": "b4816a1d1867b8a6770548b010c5501c2426a99087b6c96e288b96787a50bb1d"
+    },
+    "translated_md": [
+      {
+        "lang": "zh",
+        "static_path": "md_translate/zh/c33f114e1fc823b473cb9290a7fc9ecf8b0c7cb94062b4079a882cffc214315f.md",
+        "zip_path": "translated/zh.md",
+        "sha256": "c33f114e1fc823b473cb9290a7fc9ecf8b0c7cb94062b4079a882cffc214315f"
+      }
+    ],
+    "summary": {
+      "static_path": "summary/9b5301a567bbc2e99cc7ac6d2d4946a6.json",
+      "zip_path": "summary.json"
+    },
+    "summary_templates": [
+      {
+        "template_tag": "deep_read",
+        "static_path": "summary/9b5301a567bbc2e99cc7ac6d2d4946a6/deep_read.json",
+        "zip_path": "summaries/deep_read.json"
+      },
+      {
+        "template_tag": "simple",
+        "static_path": "summary/9b5301a567bbc2e99cc7ac6d2d4946a6/simple.json",
+        "zip_path": "summaries/simple.json"
+      }
+    ]
+  },
+  "images": [
+    {
+      "static_path": "images/530033ee5ef0937ae9f7ccdf052fb7e4968dc24a9ca9cb474f7522fbfde3e420.jpg",
+      "zip_path": "images/530033ee5ef0937ae9f7ccdf052fb7e4968dc24a9ca9cb474f7522fbfde3e420.jpg",
+      "sha256": "530033ee5ef0937ae9f7ccdf052fb7e4968dc24a9ca9cb474f7522fbfde3e420",
+      "ext": "jpg",
+      "status": "available"
+    },
+    {
+      "static_path": "images/bc50c5edce5933737f359df9db4200b90e17cfff2cfff5dc5315ed429a96aae0.jpg",
+      "zip_path": "images/bc50c5edce5933737f359df9db4200b90e17cfff2cfff5dc5315ed429a96aae0.jpg",
+      "sha256": "bc50c5edce5933737f359df9db4200b90e17cfff2cfff5dc5315ed429a96aae0",
+      "ext": "jpg",
+      "status": "available"
+    },
+    {
+      "static_path": "images/8c4a9b355587332934d0a9462af6fd2cd61b4b001a0c8ee9f578929dab4724ad.jpg",
+      "zip_path": "images/8c4a9b355587332934d0a9462af6fd2cd61b4b001a0c8ee9f578929dab4724ad.jpg",
+      "sha256": "8c4a9b355587332934d0a9462af6fd2cd61b4b001a0c8ee9f578929dab4724ad",
+      "ext": "jpg",
+      "status": "available"
+    },
+    {
+      "static_path": "images/e6192b5639b1ebfb41d926948bfc0b232fd4e0c5877ce18c319efdcfc4b491a8.jpg",
+      "zip_path": "images/e6192b5639b1ebfb41d926948bfc0b232fd4e0c5877ce18c319efdcfc4b491a8.jpg",
+      "sha256": "e6192b5639b1ebfb41d926948bfc0b232fd4e0c5877ce18c319efdcfc4b491a8",
+      "ext": "jpg",
+      "status": "available"
+    },
+    {
+      "static_path": "images/a65d46048455cffd6ed7dd4db47d75893f112ee98f45a0ee65c8e677ea08607b.jpg",
+      "zip_path": "images/a65d46048455cffd6ed7dd4db47d75893f112ee98f45a0ee65c8e677ea08607b.jpg",
+      "sha256": "a65d46048455cffd6ed7dd4db47d75893f112ee98f45a0ee65c8e677ea08607b",
+      "ext": "jpg",
+      "status": "available"
+    },
+    {
+      "static_path": "images/b48cfff72d7996c4c4b9b1ae93abfd1e40b3ebc12acd498b257546124c864067.jpg",
+      "zip_path": "images/b48cfff72d7996c4c4b9b1ae93abfd1e40b3ebc12acd498b257546124c864067.jpg",
+      "sha256": "b48cfff72d7996c4c4b9b1ae93abfd1e40b3ebc12acd498b257546124c864067",
+      "ext": "jpg",
+      "status": "available"
+    },
+    {
+      "static_path": "images/f7e13a81209a6f3e95be7829901395b800d55d0fd806768cf82a171dce7dfa72.jpg",
+      "zip_path": "images/f7e13a81209a6f3e95be7829901395b800d55d0fd806768cf82a171dce7dfa72.jpg",
+      "sha256": "f7e13a81209a6f3e95be7829901395b800d55d0fd806768cf82a171dce7dfa72",
+      "ext": "jpg",
+      "status": "available"
+    },
+    {
+      "static_path": "images/16bc1f56801968096b1586cc6bc5a748a1e7bc712b5c9c64b963b70d9e4cab32.jpg",
+      "zip_path": "images/16bc1f56801968096b1586cc6bc5a748a1e7bc712b5c9c64b963b70d9e4cab32.jpg",
+      "sha256": "16bc1f56801968096b1586cc6bc5a748a1e7bc712b5c9c64b963b70d9e4cab32",
+      "ext": "jpg",
+      "status": "available"
+    },
+    {
+      "static_path": "images/db402bc74cc4ddfe93a4e0dae09866e2a75473e942815363c5d4eb7038d7debd.jpg",
+      "zip_path": "images/db402bc74cc4ddfe93a4e0dae09866e2a75473e942815363c5d4eb7038d7debd.jpg",
+      "sha256": "db402bc74cc4ddfe93a4e0dae09866e2a75473e942815363c5d4eb7038d7debd",
+      "ext": "jpg",
+      "status": "available"
+    },
+    {
+      "static_path": "images/65f58f9286219194adbdbc42c3b797af12976f64e58a0c707d5a613c03515baf.jpg",
+      "zip_path": "images/65f58f9286219194adbdbc42c3b797af12976f64e58a0c707d5a613c03515baf.jpg",
+      "sha256": "65f58f9286219194adbdbc42c3b797af12976f64e58a0c707d5a613c03515baf",
+      "ext": "jpg",
+      "status": "available"
+    },
+    {
+      "static_path": "images/009759dd6fad5d8c6ab07ca7c9a8f6d21fca57e6b9ddf2d0e89d7f5a7cb3bc29.jpg",
+      "zip_path": "images/009759dd6fad5d8c6ab07ca7c9a8f6d21fca57e6b9ddf2d0e89d7f5a7cb3bc29.jpg",
+      "sha256": "009759dd6fad5d8c6ab07ca7c9a8f6d21fca57e6b9ddf2d0e89d7f5a7cb3bc29",
+      "ext": "jpg",
+      "status": "available"
+    },
+    {
+      "static_path": "images/8adb655b7534643a6db38e55adbee2232c91f23c59315b27c17345109b64bb7d.jpg",
+      "zip_path": "images/8adb655b7534643a6db38e55adbee2232c91f23c59315b27c17345109b64bb7d.jpg",
+      "sha256": "8adb655b7534643a6db38e55adbee2232c91f23c59315b27c17345109b64bb7d",
+      "ext": "jpg",
+      "status": "available"
+    }
+  ],
+  "conflicts": []
+}

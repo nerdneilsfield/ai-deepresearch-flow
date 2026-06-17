@@ -731,12 +731,10 @@ onBeforeUnmount(() => {
   border-color: hsl(var(--border));
 }
 :deep(.katex-display) {
-  overflow-x: auto;
-  overflow-y: hidden;
+  overflow: visible;
 }
 :deep(.md-editor-katex-block) {
-  overflow-x: auto;
-  overflow-y: hidden;
+  overflow: visible;
   text-align: center;
 }
 :deep(.md-editor-katex-block .katex) {
@@ -760,6 +758,8 @@ onBeforeUnmount(() => {
   padding: 0.75rem;
 }
 :deep(.md-editor-mermaid svg) {
+  display: block;
+  margin-inline: auto;
   max-width: 100%;
   height: auto;
 }
