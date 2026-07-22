@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from dataclasses import replace
 from importlib.metadata import PackageNotFoundError, version as package_version
 import logging
 import sqlite3
@@ -1412,7 +1413,25 @@ async def _api_stats(request: Request) -> Response:
 
 async def _api_config(request: Request) -> Response:
     cfg: SnapshotApiConfig = request.app.state.cfg
-    return JSONResponse({"static_base_url": cfg.static_base_url})
+    advanced = getattr(request.app.state, "advanced", None)
+    auth_methods: list[str] = []
+    if advanced is not None:
+        if advanced.auth_mode in {"github-oauth", "both"}:
+            auth_methods.append("github-oauth")
+        if advanced.auth_mode in {"static", "both"}:
+            auth_methods.append("bearer")
+    return JSONResponse(
+        {
+            "static_base_url": cfg.static_base_url,
+            "advanced_search": {
+                "enabled": advanced is not None,
+                "auth_methods": auth_methods,
+                "github_login_url": (
+                    "/api/v1/auth/github/login" if "github-oauth" in auth_methods else None
+                ),
+            },
+        }
+    )
 
 
 def create_app(
@@ -1428,6 +1447,7 @@ def create_app(
     github_oauth_client_secret: str | None = None,
     mcp_github_allowed_user_ids: list[str] | None = None,
     mcp_oauth_client_cache_path: Path | None = None,
+    search_auth_mode: str = "static",
     admin_token: str | None = None,
     admin_embed_db: Path | None = None,
     admin_embed_dimensions: int | None = None,
@@ -1453,6 +1473,8 @@ def create_app(
 
     if mcp_auth_mode not in {"static", "github-oauth"}:
         raise ValueError("mcp_auth_mode must be 'static' or 'github-oauth'")
+    if search_auth_mode not in {"static", "github-oauth", "both"}:
+        raise ValueError("search_auth_mode must be 'static', 'github-oauth', or 'both'")
     validate_mcp_static_access_token(mcp_access_token, context="/mcp and /mcp-sse")
 
     mcp_github_oauth = None
@@ -1463,6 +1485,25 @@ def create_app(
             client_secret=github_oauth_client_secret or "",
             allowed_github_user_ids=tuple(mcp_github_allowed_user_ids or ()),
             client_cache_path=mcp_oauth_client_cache_path,
+        )
+
+    if advanced_config is not None:
+        from deepresearch_flow.paper.snapshot.advanced import SearchWebOAuthConfig
+
+        if search_auth_mode in {"static", "both"} and not advanced_config.search_access_token:
+            raise ValueError("SEARCH_ACCESS_TOKEN is required for static search authentication")
+        web_oauth = None
+        if search_auth_mode in {"github-oauth", "both"}:
+            web_oauth = SearchWebOAuthConfig(
+                public_base_url=mcp_public_base_url or "",
+                client_id=github_oauth_client_id or "",
+                client_secret=github_oauth_client_secret or "",
+                allowed_github_user_ids=tuple(mcp_github_allowed_user_ids or ()),
+            )
+        advanced_config = replace(
+            advanced_config,
+            auth_mode=search_auth_mode,
+            web_oauth=web_oauth,
         )
 
     mcp_config = McpSnapshotConfig(
@@ -1529,9 +1570,13 @@ def create_app(
         routes.append(Mount("/api/v1/admin", app=admin_app))
 
     if advanced_config is not None:
-        from deepresearch_flow.paper.snapshot.advanced import create_advanced_routes
+        from deepresearch_flow.paper.snapshot.advanced import (
+            create_advanced_routes,
+            create_web_oauth_routes,
+        )
 
         routes.extend(create_advanced_routes(advanced_config))
+        routes.extend(create_web_oauth_routes())
 
     if mcp_auth_mode == "github-oauth":
         routes.extend(
@@ -1554,6 +1599,7 @@ def create_app(
             allow_origins=cfg.cors_allowed_origins,
             allow_methods=["*"],
             allow_headers=["*"],
+            allow_credentials=cfg.cors_allowed_origins != ["*"],
         )
     app.state.cfg = cfg
     if advanced_config is not None:

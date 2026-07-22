@@ -7,8 +7,17 @@ from deepresearch_flow.paper.snapshot.advanced.handler import (
     _api_search_advanced,
     _api_verify_token,
 )
+from deepresearch_flow.paper.snapshot.advanced.web_oauth import (
+    SearchWebOAuthConfig,
+    create_web_oauth_routes,
+)
 
-__all__ = ["AdvancedSearchContext", "create_advanced_routes"]
+__all__ = [
+    "AdvancedSearchContext",
+    "SearchWebOAuthConfig",
+    "create_advanced_routes",
+    "create_web_oauth_routes",
+]
 
 
 def create_advanced_routes(_ctx: AdvancedSearchContext) -> list[Route]:

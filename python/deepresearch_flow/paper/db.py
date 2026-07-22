@@ -1135,6 +1135,15 @@ def register_db_commands(db_group: click.Group) -> None:
         help="Token to gate advanced search",
     )
     @click.option(
+        "--search-auth-mode",
+        "search_auth_mode",
+        type=click.Choice(["static", "github-oauth", "both"]),
+        default="static",
+        show_default=True,
+        envvar="SEARCH_AUTH_MODE",
+        help="Advanced search auth mode: static bearer, GitHub OAuth, or both.",
+    )
+    @click.option(
         "-c", "--config", "config_path", default="config.toml", help="Path to config.toml"
     )
     @click.option(
@@ -1165,28 +1174,28 @@ def register_db_commands(db_group: click.Group) -> None:
         "mcp_public_base_url",
         default=None,
         envvar="MCP_PUBLIC_BASE_URL",
-        help="Public origin for MCP OAuth endpoints, without /mcp.",
+        help="Public origin shared by MCP and search GitHub OAuth, without a path.",
     )
     @click.option(
         "--github-oauth-client-id",
         "github_oauth_client_id",
         default=None,
         envvar="GITHUB_OAUTH_CLIENT_ID",
-        help="GitHub OAuth App client ID for MCP GitHub OAuth.",
+        help="GitHub OAuth App client ID shared by MCP and search OAuth.",
     )
     @click.option(
         "--github-oauth-client-secret",
         "github_oauth_client_secret",
         default=None,
         envvar="GITHUB_OAUTH_CLIENT_SECRET",
-        help="GitHub OAuth App client secret for MCP GitHub OAuth.",
+        help="GitHub OAuth App client secret shared by MCP and search OAuth.",
     )
     @click.option(
         "--mcp-github-allowed-user-id",
         "mcp_github_allowed_user_ids",
         multiple=True,
         envvar="MCP_GITHUB_ALLOWED_USER_IDS",
-        help="Allowed numeric GitHub user ID for MCP OAuth; repeat or set a comma-separated env value.",
+        help="Allowed numeric GitHub user ID for MCP/search OAuth; repeat or use comma-separated env.",
     )
     @click.option(
         "--mcp-oauth-client-cache",
@@ -1207,6 +1216,7 @@ def register_db_commands(db_group: click.Group) -> None:
         port: int,
         embed_db: str | None,
         search_access_token_cli: str | None,
+        search_auth_mode: str,
         config_path: str,
         admin_token: str | None,
         mcp_access_token: str | None,
@@ -1316,7 +1326,7 @@ def register_db_commands(db_group: click.Group) -> None:
                 )
 
             token = search_access_token_cli or paper_config.search.access_token
-            if not token:
+            if search_auth_mode in {"static", "both"} and not token:
                 raise click.ClickException(
                     "Advanced search requires a token via --search-access-token, "
                     "SEARCH_ACCESS_TOKEN, or config.search.access_token"
@@ -1355,6 +1365,7 @@ def register_db_commands(db_group: click.Group) -> None:
                 rerank_route_pool=rerank_pool,
                 search_access_token=token,
                 search_config=paper_config.search,
+                auth_mode=search_auth_mode,
             )
         allowed_github_user_ids = [
             item.strip()
@@ -1376,6 +1387,7 @@ def register_db_commands(db_group: click.Group) -> None:
             mcp_oauth_client_cache_path=(
                 Path(mcp_oauth_client_cache_path) if mcp_oauth_client_cache_path else None
             ),
+            search_auth_mode=search_auth_mode,
             admin_token=admin_token,
             admin_embed_db=admin_embed_db,
             admin_embed_dimensions=admin_embed_dimensions,

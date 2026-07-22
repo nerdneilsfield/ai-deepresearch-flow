@@ -9,7 +9,7 @@ import httpx
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from deepresearch_flow.paper.snapshot.advanced.auth import verify_bearer
+from deepresearch_flow.paper.snapshot.advanced.auth import authorize_request, verify_bearer
 from deepresearch_flow.paper.snapshot.advanced.errors import (
     AdvancedSearchError,
     InvalidQueryError,
@@ -52,6 +52,12 @@ async def _api_verify_token(request: Request) -> JSONResponse:
             status_code=503,
             headers={"X-Request-Id": trace_id},
         )
+    if ctx.auth_mode not in {"static", "both"} or not ctx.search_access_token:
+        return JSONResponse(
+            {"valid": False, "reason": "static_disabled"},
+            status_code=404,
+            headers={"X-Request-Id": trace_id},
+        )
     try:
         verify_bearer(request.headers.get("Authorization"), ctx.search_access_token)
     except UnauthorizedError as exc:
@@ -90,7 +96,7 @@ async def _api_search_advanced(request: Request) -> JSONResponse:
         )
 
     try:
-        verify_bearer(request.headers.get("Authorization"), ctx.search_access_token)
+        authorize_request(request, ctx)
     except UnauthorizedError as exc:
         return _error_response(exc, trace_id)
 

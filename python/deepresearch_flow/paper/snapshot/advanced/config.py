@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from deepresearch_flow.paper.snapshot.advanced.web_oauth import SearchWebOAuthConfig
+
 
 @dataclass(frozen=True)
 class AdvancedSearchContext:
@@ -16,5 +18,7 @@ class AdvancedSearchContext:
     paper_config: Any
     embedding_route_pool: Any
     rerank_route_pool: Any | None
-    search_access_token: str
+    search_access_token: str | None
     search_config: Any
+    auth_mode: str = "static"
+    web_oauth: SearchWebOAuthConfig | None = None
