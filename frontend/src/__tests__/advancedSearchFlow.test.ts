@@ -133,6 +133,15 @@ function mockAdvancedFetch(
   const searchQueue = [...searchResponses]
   fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
     const url = typeof input === 'string' ? input : input.toString()
+    if (url.includes('/config')) {
+      return jsonResponse(200, {
+        advanced_search: {
+          enabled: true,
+          auth_methods: ['bearer'],
+          github_login_url: null,
+        },
+      })
+    }
     if (url.includes('/search/advanced/verify-token')) {
       const next = verifyQueue.shift()
       if (!next) throw new Error(`unexpected verify fetch: ${url}`)
@@ -273,7 +282,10 @@ describe('SearchView advanced search integration', () => {
   it('token revoked mid-session clears auth state after a 401 advanced-search response', async () => {
     await setToken('saved-token')
     mockAdvancedFetch(
-      [{ status: 200, body: { valid: true } }],
+      [
+        { status: 200, body: { valid: true } },
+        { status: 401, body: { valid: false, reason: 'invalid' } },
+      ],
       [{
         status: 401,
         body: {
@@ -291,14 +303,19 @@ describe('SearchView advanced search integration', () => {
     const wrapper = await mountView()
     await settle(wrapper)
     await wrapper.find('[data-testid="advanced-panel-toggle"]').trigger('click')
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="advanced-token-status-verified"]').exists()).toBe(true)
+    })
     await wrapper.find('[data-testid="advanced-query-input"]').setValue('vision')
     await wrapper.find('[data-testid="advanced-search-button"]').trigger('click')
     await settle(wrapper)
 
-    expect(pushToastMock).toHaveBeenCalledWith(
-      'Advanced search token is invalid. Please re-verify.',
-      'error',
-    )
+    await vi.waitFor(() => {
+      expect(pushToastMock).toHaveBeenCalledWith(
+        'advancedAuthExpired',
+        'error',
+      )
+    })
     expect(wrapper.find('[data-testid="advanced-token-status-verified"]').exists()).toBe(false)
     expect((wrapper.find('[data-testid="advanced-search-button"]').element as HTMLButtonElement).disabled).toBe(true)
     expect(await getToken()).toBeNull()

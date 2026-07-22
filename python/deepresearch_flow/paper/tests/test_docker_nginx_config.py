@@ -82,6 +82,7 @@ def test_nginx_root_oauth_operational_routes_are_api_routes() -> None:
         "= /token",
         "= /register",
         "= /auth/callback",
+        "= /auth/callback/web",
         "= /consent",
     )
 

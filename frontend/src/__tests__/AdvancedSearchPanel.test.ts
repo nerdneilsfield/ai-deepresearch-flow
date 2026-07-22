@@ -6,8 +6,11 @@ import * as tokenDb from '@/lib/token-db'
 
 type VerifyResultLike = { valid: true } | { valid: false; reason: 'missing' | 'invalid' }
 
-const { verifyTokenMock } = vi.hoisted(() => ({
+const { verifyTokenMock, authConfigMock, sessionMock, logoutMock } = vi.hoisted(() => ({
   verifyTokenMock: vi.fn<(token: string) => Promise<VerifyResultLike>>(),
+  authConfigMock: vi.fn(),
+  sessionMock: vi.fn(),
+  logoutMock: vi.fn(),
 }))
 const { pushToastMock } = vi.hoisted(() => ({
   pushToastMock: vi.fn(),
@@ -15,6 +18,13 @@ const { pushToastMock } = vi.hoisted(() => ({
 
 vi.mock('@/lib/advanced-search', () => ({
   verifyToken: verifyTokenMock,
+  getAdvancedSearchAuthConfig: authConfigMock,
+  getAdvancedSearchSession: sessionMock,
+  logoutAdvancedSearchSession: logoutMock,
+  buildGitHubLoginUrl: (returnTo: string) => `/api/v1/auth/github/login?return_to=${encodeURIComponent(returnTo)}`,
+}))
+vi.mock('vue-i18n', () => ({
+  useI18n: () => ({ t: (key: string, params?: { login?: string }) => params?.login ? `${key}:${params.login}` : key }),
 }))
 vi.mock('@/stores/ui', () => ({
   useUiStore: () => ({
@@ -35,6 +45,12 @@ beforeEach(async () => {
   vi.restoreAllMocks()
   verifyTokenMock.mockReset()
   verifyTokenMock.mockResolvedValue({ valid: false, reason: 'invalid' })
+  authConfigMock.mockReset()
+  authConfigMock.mockResolvedValue({ enabled: true, authMethods: ['bearer'], githubLoginUrl: null })
+  sessionMock.mockReset()
+  sessionMock.mockResolvedValue({ authenticated: false })
+  logoutMock.mockReset()
+  logoutMock.mockResolvedValue(undefined)
   pushToastMock.mockReset()
   const { useAdvancedSearchToken } = await import('@/composables/useAdvancedSearchToken')
   await useAdvancedSearchToken().clear()
@@ -155,10 +171,33 @@ describe('AdvancedSearchPanel', () => {
     await flushPromises()
     await wrapper.vm.$nextTick()
     expect(pushToastMock).toHaveBeenCalledWith(
-      'Token verification failed. Please try again.',
+      'advancedTokenVerifyFailed',
       'error',
     )
     expect((wrapper.find('[data-testid="advanced-token-input"]').element as HTMLInputElement).value).toBe('secret')
     expect(wrapper.find('[data-testid="advanced-token-status-invalid"]').exists()).toBe(false)
+  })
+
+  it('GitHub session enables search without a bearer token and can sign out', async () => {
+    authConfigMock.mockResolvedValueOnce({
+      enabled: true,
+      authMethods: ['github-oauth', 'bearer'],
+      githubLoginUrl: '/api/v1/auth/github/login',
+    })
+    sessionMock.mockResolvedValueOnce({
+      authenticated: true,
+      user: { id: '42', login: 'octocat' },
+    })
+    const { default: AdvancedSearchPanel } = await import('@/components/AdvancedSearchPanel.vue')
+    const wrapper = mount(AdvancedSearchPanel)
+    await settle(wrapper)
+    await wrapper.find('[data-testid="advanced-panel-toggle"]').trigger('click')
+
+    expect(wrapper.find('[data-testid="advanced-github-user"]').text()).toContain('octocat')
+    expect((wrapper.find('[data-testid="advanced-search-button"]').element as HTMLButtonElement).disabled).toBe(false)
+
+    await wrapper.find('[data-testid="advanced-github-logout"]').trigger('click')
+    await settle(wrapper)
+    expect(wrapper.find('[data-testid="advanced-github-login"]').exists()).toBe(true)
   })
 })

@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   AdvancedSearchHTTPError,
   advancedSearch,
+  getAdvancedSearchAuthConfig,
+  getAdvancedSearchSession,
   verifyToken,
 } from '@/lib/advanced-search'
 
@@ -111,6 +113,15 @@ describe('advancedSearch', () => {
     expect(out.success).toBe(true)
   })
 
+  it('uses the browser session when no bearer token is supplied', async () => {
+    stubJson(200, ok)
+    await advancedSearch({ q: 'q' })
+    const call = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0]
+    const init = call?.[1] as RequestInit
+    expect(new Headers(init.headers).has('authorization')).toBe(false)
+    expect(init.credentials).toBe('include')
+  })
+
   it('throws AdvancedSearchHTTPError on 401', async () => {
     stubJson(401, {
       success: false,
@@ -144,5 +155,28 @@ describe('advancedSearch', () => {
       })
     }
     await expect(advancedSearch({ q: 'q' }, 'x')).rejects.toBeInstanceOf(AdvancedSearchHTTPError)
+  })
+})
+
+describe('advanced search auth discovery', () => {
+  it('parses configured auth methods and authenticated GitHub user', async () => {
+    stubJson(200, {
+      advanced_search: {
+        enabled: true,
+        auth_methods: ['github-oauth', 'bearer'],
+        github_login_url: '/api/v1/auth/github/login',
+      },
+    })
+    await expect(getAdvancedSearchAuthConfig()).resolves.toEqual({
+      enabled: true,
+      authMethods: ['github-oauth', 'bearer'],
+      githubLoginUrl: '/api/v1/auth/github/login',
+    })
+
+    stubJson(200, { authenticated: true, user: { id: '42', login: 'octocat' } })
+    await expect(getAdvancedSearchSession()).resolves.toEqual({
+      authenticated: true,
+      user: { id: '42', login: 'octocat' },
+    })
   })
 })
