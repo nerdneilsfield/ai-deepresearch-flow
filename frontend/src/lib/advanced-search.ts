@@ -3,7 +3,19 @@ import { buildUrl, fetchResponse } from '@/lib/http'
 
 export type VerifyResult =
   | { valid: true }
-  | { valid: false; reason: 'missing' | 'invalid' }
+  | { valid: false; reason: 'missing' | 'invalid' | 'static_disabled' }
+
+export type AdvancedSearchAuthMethod = 'github-oauth' | 'bearer'
+
+export interface AdvancedSearchAuthConfig {
+  enabled: boolean
+  authMethods: AdvancedSearchAuthMethod[]
+  githubLoginUrl: string | null
+}
+
+export type AdvancedSearchSession =
+  | { authenticated: false }
+  | { authenticated: true; user: { id: string; login: string } }
 
 export interface AdvancedSearchFilters {
   year?: string
@@ -122,6 +134,49 @@ export async function verifyToken(token: string): Promise<VerifyResult> {
   return body as VerifyResult
 }
 
+export async function getAdvancedSearchAuthConfig(): Promise<AdvancedSearchAuthConfig> {
+  const response = await fetchResponse(buildUrl('/config'), { credentials: 'include' })
+  if (!response.ok) {
+    throw new AdvancedSearchHTTPError(response.status, 'CONFIG_UNAVAILABLE', '', {}, '')
+  }
+  const body = await response.json() as {
+    advanced_search?: {
+      enabled?: boolean
+      auth_methods?: string[]
+      github_login_url?: string | null
+    }
+  }
+  const authMethods = (body.advanced_search?.auth_methods ?? ['bearer']).filter(
+    (value): value is AdvancedSearchAuthMethod => value === 'github-oauth' || value === 'bearer',
+  )
+  return {
+    enabled: body.advanced_search?.enabled ?? true,
+    authMethods,
+    githubLoginUrl: body.advanced_search?.github_login_url ?? null,
+  }
+}
+
+export async function getAdvancedSearchSession(): Promise<AdvancedSearchSession> {
+  const response = await fetchResponse(buildUrl('/auth/session'), {
+    credentials: 'include',
+    retry: 0,
+  })
+  if (!response.ok) return { authenticated: false }
+  return await response.json() as AdvancedSearchSession
+}
+
+export async function logoutAdvancedSearchSession(): Promise<void> {
+  await fetchResponse(buildUrl('/auth/logout'), {
+    method: 'POST',
+    credentials: 'include',
+    retry: 0,
+  })
+}
+
+export function buildGitHubLoginUrl(returnTo: string): string {
+  return buildUrl('/auth/github/login', { return_to: returnTo })
+}
+
 function buildQueryString(params: AdvancedSearchParams): string {
   const parts: string[] = [`q=${encodeURIComponent(params.q)}`]
   if (params.topN !== undefined) parts.push(`top_n=${params.topN}`)
@@ -141,13 +196,16 @@ function buildQueryString(params: AdvancedSearchParams): string {
 
 export async function advancedSearch(
   params: AdvancedSearchParams,
-  token: string,
+  token?: string | null,
 ): Promise<AdvancedSearchResponse> {
+  const headers: Record<string, string> = {}
+  if (token) headers.Authorization = `Bearer ${token}`
   const response = await fetchResponse(
     `${buildUrl('/search/advanced')}?${buildQueryString(params)}`,
     {
       method: 'GET',
-      headers: { Authorization: `Bearer ${token}` },
+      headers,
+      credentials: 'include',
       timeoutMs: ADVANCED_SEARCH_TIMEOUT_MS,
       retry: 0,
     },

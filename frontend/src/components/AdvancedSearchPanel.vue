@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 import type { AdvancedSearchParams } from '@/lib/advanced-search'
-import { useAdvancedSearchToken } from '@/composables/useAdvancedSearchToken'
+import { useAdvancedSearchAuth } from '@/composables/useAdvancedSearchAuth'
 import { useUiStore } from '@/stores/ui'
 
 const props = defineProps<{ searching?: boolean }>()
@@ -14,12 +15,42 @@ const expanded = ref(false)
 const tokenInput = ref('')
 const queryInput = ref('')
 const lastVerifyInvalid = ref(false)
-const { state, token, failureReason, verify, hydrate } = useAdvancedSearchToken()
+const {
+  authenticated,
+  authMethods,
+  oauthUser,
+  tokenState,
+  token,
+  tokenFailureReason,
+  hydrate,
+  verifyToken,
+  logoutOAuth,
+  githubLoginUrl,
+} = useAdvancedSearchAuth()
 const ui = useUiStore()
-const isVerified = computed(() => state.value === 'verified')
-const isVerifying = computed(() => state.value === 'verifying')
+const { t } = useI18n()
+const bearerEnabled = computed(() => authMethods.value.includes('bearer'))
+const githubEnabled = computed(() => authMethods.value.includes('github-oauth'))
+const isVerified = computed(() => tokenState.value === 'verified')
+const isVerifying = computed(() => tokenState.value === 'verifying')
+const returnTo = ref(`${window.location.pathname}${window.location.search}`)
+const loginHref = computed(() => githubLoginUrl(returnTo.value))
 
 onMounted(async () => {
+  const params = new URLSearchParams(window.location.search)
+  const authError = params.get('auth_error')
+  if (authError) {
+    const key = authError === 'not_allowed'
+      ? 'advancedAuthNotAllowed'
+      : authError === 'denied'
+        ? 'advancedAuthDenied'
+        : 'advancedAuthFailed'
+    ui.pushToast(t(key), 'error')
+    params.delete('auth_error')
+    const query = params.toString()
+    returnTo.value = `${window.location.pathname}${query ? `?${query}` : ''}`
+    window.history.replaceState({}, '', returnTo.value)
+  }
   await hydrate()
   if (token.value) {
     tokenInput.value = token.value
@@ -38,14 +69,14 @@ watch(
   { immediate: true },
 )
 
-watch(failureReason, (value) => {
+watch(tokenFailureReason, (value) => {
   lastVerifyInvalid.value = value === 'invalid'
 })
 
 async function onVerify() {
   lastVerifyInvalid.value = false
   try {
-    const ok = await verify(tokenInput.value)
+    const ok = await verifyToken(tokenInput.value)
     if (!ok) {
       lastVerifyInvalid.value = true
       return
@@ -53,13 +84,21 @@ async function onVerify() {
     tokenInput.value = token.value ?? tokenInput.value
   } catch {
     // Keep the current input so the user can retry after transient failures.
-    ui.pushToast('Token verification failed. Please try again.', 'error')
+    ui.pushToast(t('advancedTokenVerifyFailed'), 'error')
   }
 }
 
 function onSearch() {
-  if (state.value !== 'verified' || props.searching) return
+  if (!authenticated.value || props.searching) return
   emit('search', { q: queryInput.value })
+}
+
+async function onLogout() {
+  try {
+    await logoutOAuth()
+  } catch {
+    ui.pushToast(t('advancedLogoutFailed'), 'error')
+  }
 }
 
 function toggle() {
@@ -78,7 +117,7 @@ function toggle() {
       data-testid="advanced-panel-toggle"
       @click="toggle"
     >
-      <span>{{ expanded ? '▼' : '▶' }} Advanced search</span>
+      <span>{{ expanded ? '▼' : '▶' }} {{ t('advancedSearch') }}</span>
     </button>
 
     <div
@@ -86,11 +125,39 @@ function toggle() {
       class="space-y-3 border-t border-border/60 p-4 dark:border-ink-700"
       data-testid="advanced-panel-body"
     >
-      <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+      <div
+        v-if="githubEnabled"
+        class="flex flex-col gap-2 sm:flex-row sm:items-center"
+        data-testid="advanced-github-auth"
+      >
+        <template v-if="oauthUser">
+          <span class="text-sm text-green-600" data-testid="advanced-github-user">
+            {{ t('advancedSignedInAs', { login: oauthUser.login }) }}
+          </span>
+          <button
+            type="button"
+            class="rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-sm hover:bg-accent hover:text-accent-foreground"
+            data-testid="advanced-github-logout"
+            @click="onLogout"
+          >
+            {{ t('advancedSignOut') }}
+          </button>
+        </template>
+        <a
+          v-else
+          :href="loginHref"
+          class="inline-flex w-fit items-center rounded-md border border-input bg-background px-3 py-2 text-sm font-medium text-foreground shadow-sm hover:bg-accent hover:text-accent-foreground"
+          data-testid="advanced-github-login"
+        >
+          {{ t('advancedSignInGitHub') }}
+        </a>
+      </div>
+
+      <div v-if="bearerEnabled" class="flex flex-col gap-2 sm:flex-row sm:items-center">
         <input
           v-model="tokenInput"
           type="password"
-          placeholder="Access token"
+          :placeholder="t('advancedAccessToken')"
           class="min-w-0 flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:bg-muted disabled:text-muted-foreground dark:border-ink-700 dark:bg-ink-950/60 dark:text-ink-100 dark:placeholder:text-ink-500 dark:disabled:bg-ink-800/70"
           data-testid="advanced-token-input"
         />
@@ -101,37 +168,37 @@ function toggle() {
           :disabled="isVerifying || !tokenInput.trim()"
           @click="onVerify"
         >
-          {{ isVerifying ? 'Verifying…' : 'Verify token' }}
+          {{ isVerifying ? t('advancedVerifying') : t('advancedVerifyToken') }}
         </button>
         <span
           v-if="isVerified"
           class="text-sm text-green-600"
           data-testid="advanced-token-status-verified"
-        >✓ verified</span>
+        >✓ {{ t('advancedVerified') }}</span>
         <span
           v-else-if="lastVerifyInvalid"
           class="text-sm text-red-600"
           data-testid="advanced-token-status-invalid"
-        >✗ invalid</span>
+        >✗ {{ t('advancedInvalid') }}</span>
       </div>
 
       <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
         <input
           v-model="queryInput"
           type="text"
-          placeholder="Advanced query"
+          :placeholder="t('advancedQuery')"
           class="min-w-0 flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:bg-muted disabled:text-muted-foreground dark:border-ink-700 dark:bg-ink-950/60 dark:text-ink-100 dark:placeholder:text-ink-500 dark:disabled:bg-ink-800/70"
-          :disabled="!isVerified"
+          :disabled="!authenticated"
           data-testid="advanced-query-input"
         />
         <button
           type="button"
           class="rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-sm hover:bg-accent hover:text-accent-foreground disabled:cursor-not-allowed disabled:opacity-50 dark:border-ink-700 dark:bg-ink-900 dark:text-ink-100 dark:hover:bg-ink-800"
           data-testid="advanced-search-button"
-          :disabled="!isVerified || !!props.searching"
+          :disabled="!authenticated || !!props.searching"
           @click="onSearch"
         >
-          {{ props.searching ? 'Searching…' : 'Advanced search' }}
+          {{ props.searching ? t('advancedSearching') : t('advancedSearch') }}
         </button>
       </div>
     </div>

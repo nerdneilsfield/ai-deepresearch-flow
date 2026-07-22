@@ -25,7 +25,7 @@ import {
   type AdvancedSearchResult,
 } from '@/lib/api'
 import type { SearchItem } from '@/types/api'
-import { useAdvancedSearchToken } from '@/composables/useAdvancedSearchToken'
+import { useAdvancedSearchAuth } from '@/composables/useAdvancedSearchAuth'
 import { BarChart2 } from 'lucide-vue-next'
 
 const { t } = useI18n()
@@ -58,7 +58,11 @@ const {
 } = searchState
 
 const { searchQuery, statsQuery, facetQuery } = useSearchData(searchState)
-const { token: advancedToken, onAuthFailure } = useAdvancedSearchToken()
+const {
+  token: advancedToken,
+  authenticated: advancedAuthenticated,
+  refreshAfterFailure,
+} = useAdvancedSearchAuth()
 
 const results = computed(() => searchQuery.data.value ?? null)
 const stats = computed(() => statsQuery.data.value ?? null)
@@ -108,7 +112,7 @@ function forceSearch() {
 }
 
 async function onAdvancedSearch(params: AdvancedSearchParams) {
-  if (!advancedToken.value) return
+  if (!advancedAuthenticated.value) return
   advancedSearching.value = true
   try {
     const body = await advancedSearch(params, advancedToken.value)
@@ -129,8 +133,8 @@ async function onAdvancedSearch(params: AdvancedSearchParams) {
     advancedDegradationMessage.value = null
     if (error instanceof AdvancedSearchHTTPError) {
       if (error.status === 401) {
-        void onAuthFailure()
-        ui.pushToast('Advanced search token is invalid. Please re-verify.', 'error')
+        await refreshAfterFailure()
+        ui.pushToast(t('advancedAuthExpired'), 'error')
       } else if (error.status === 400) {
         ui.pushToast(`Invalid request: ${error.message}`, 'error')
       } else if (error.status === 503) {
