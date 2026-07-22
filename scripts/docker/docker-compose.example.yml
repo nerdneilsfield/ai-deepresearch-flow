@@ -29,6 +29,11 @@ services:
       PAPER_DB_EMBED_DB: /db/paper_vectors
       PAPER_DB_CONFIG: /app/config.toml
       SEARCH_ACCESS_TOKEN: "${SEARCH_ACCESS_TOKEN:?set SEARCH_ACCESS_TOKEN}"
+      SEARCH_AUTH_MODE: "${SEARCH_AUTH_MODE:-static}"
+      MCP_PUBLIC_BASE_URL: "${MCP_PUBLIC_BASE_URL:-}"
+      GITHUB_OAUTH_CLIENT_ID: "${GITHUB_OAUTH_CLIENT_ID:-}"
+      GITHUB_OAUTH_CLIENT_SECRET: "${GITHUB_OAUTH_CLIENT_SECRET:-}"
+      MCP_GITHUB_ALLOWED_USER_IDS: "${MCP_GITHUB_ALLOWED_USER_IDS:-}"
     # With >=2 advanced env vars set, start-api.sh enters embedded mode.
     profiles: ["local-static-advanced"]
 
@@ -60,5 +65,10 @@ services:
       PAPER_DB_EMBED_DB: /db/paper_vectors
       PAPER_DB_CONFIG: /app/config.toml
       SEARCH_ACCESS_TOKEN: "${SEARCH_ACCESS_TOKEN:?set SEARCH_ACCESS_TOKEN}"
+      SEARCH_AUTH_MODE: "${SEARCH_AUTH_MODE:-static}"
+      MCP_PUBLIC_BASE_URL: "${MCP_PUBLIC_BASE_URL:-}"
+      GITHUB_OAUTH_CLIENT_ID: "${GITHUB_OAUTH_CLIENT_ID:-}"
+      GITHUB_OAUTH_CLIENT_SECRET: "${GITHUB_OAUTH_CLIENT_SECRET:-}"
+      MCP_GITHUB_ALLOWED_USER_IDS: "${MCP_GITHUB_ALLOWED_USER_IDS:-}"
     # With >=2 advanced env vars set, start-api.sh enters embedded mode.
     profiles: ["external-static-advanced"]
