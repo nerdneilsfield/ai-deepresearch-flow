@@ -214,6 +214,26 @@ SEARCH_ACCESS_TOKEN=your-token uv run deepresearch-flow paper db api serve \
   --host 0.0.0.0 --port 8001
 ```
 
+高级搜索支持 `SEARCH_AUTH_MODE=static`、`github-oauth`、`both`，默认 `static`。若要让浏览器
+使用 GitHub 登录，同时保留 bearer token 客户端：
+
+```bash
+SEARCH_AUTH_MODE=both \
+SEARCH_ACCESS_TOKEN=your-token \
+MCP_PUBLIC_BASE_URL=https://papers.example.com \
+GITHUB_OAUTH_CLIENT_ID=... \
+GITHUB_OAUTH_CLIENT_SECRET=... \
+MCP_GITHUB_ALLOWED_USER_IDS=12345678 \
+uv run deepresearch-flow paper db api serve \
+  --snapshot-db /data/paper_snapshot.db \
+  --config ./config.toml \
+  --host 0.0.0.0 --port 8001
+```
+
+浏览器会话保存于 HttpOnly cookie，期限七日。复用的 GitHub OAuth App callback 配为
+`https://papers.example.com/auth/callback`；浏览器流程使用其允许的子路径
+`/auth/callback/web`。不在数字 ID 白名单内的 GitHub 用户会被拒绝。
+
 ### 3.3 API 接口
 
 **BibTeX 元数据**

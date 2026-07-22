@@ -214,6 +214,26 @@ SEARCH_ACCESS_TOKEN=your-token uv run deepresearch-flow paper db api serve \
   --host 0.0.0.0 --port 8001
 ```
 
+Advanced search supports `SEARCH_AUTH_MODE=static`, `github-oauth`, or `both` (default: `static`).
+To offer GitHub sign-in in the browser while retaining bearer-token clients:
+
+```bash
+SEARCH_AUTH_MODE=both \
+SEARCH_ACCESS_TOKEN=your-token \
+MCP_PUBLIC_BASE_URL=https://papers.example.com \
+GITHUB_OAUTH_CLIENT_ID=... \
+GITHUB_OAUTH_CLIENT_SECRET=... \
+MCP_GITHUB_ALLOWED_USER_IDS=12345678 \
+uv run deepresearch-flow paper db api serve \
+  --snapshot-db /data/paper_snapshot.db \
+  --config ./config.toml \
+  --host 0.0.0.0 --port 8001
+```
+
+The browser session lasts seven days and is stored in an HttpOnly cookie. Configure the reused
+GitHub OAuth App callback as `https://papers.example.com/auth/callback`; the browser flow uses its
+allowed subpath `/auth/callback/web`. GitHub users outside the numeric ID allowlist are rejected.
+
 ### 3.3 API Endpoints
 
 **BibTeX metadata**

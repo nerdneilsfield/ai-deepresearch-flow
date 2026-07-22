@@ -188,6 +188,21 @@ Endpoint behavior by deployment mode:
 
 Use static bearer for ordinary CLI agents and automation. Use GitHub OAuth for hosted clients such as ChatGPT/Claude that need an interactive OAuth flow. Do not send the static bearer token to `/oauth/mcp`; that endpoint deliberately rejects it.
 
+### Advanced Search Browser Authentication
+
+`SEARCH_AUTH_MODE` controls authentication for `/api/v1/search/advanced` independently of
+`MCP_AUTH_MODE`:
+
+- `static`: accept `SEARCH_ACCESS_TOKEN` only (default).
+- `github-oauth`: accept the seven-day browser session only.
+- `both`: accept either mechanism.
+
+GitHub browser login reuses `MCP_PUBLIC_BASE_URL`, `GITHUB_OAUTH_CLIENT_ID`,
+`GITHUB_OAUTH_CLIENT_SECRET`, and `MCP_GITHUB_ALLOWED_USER_IDS`. Its callback is
+`/auth/callback/web`; session inspection and logout use `/api/v1/auth/session` and
+`POST /api/v1/auth/logout`. The GitHub access token is used only to read the user's public numeric
+ID and login, then discarded.
+
 ### Auth Modes
 
 #### Static Bearer
@@ -229,7 +244,7 @@ OAuth client setup summary:
 3. Complete GitHub OAuth through the server routes: `/authorize`, `/token`, `/register`, `/auth/callback`, `/consent`.
 4. Do not use `/oauth/mcp-sse`; the OAuth SSE gate currently makes it absent/unsupported.
 
-> **Note:** MCP token, advanced-search token, admin token, and GitHub OAuth credentials are separate credentials.
+> **Note:** MCP, advanced-search, and admin bearer tokens remain separate. MCP OAuth and browser advanced-search OAuth deliberately share the configured GitHub OAuth App credentials and user-ID allowlist.
 
 ##### Create the GitHub OAuth App
 

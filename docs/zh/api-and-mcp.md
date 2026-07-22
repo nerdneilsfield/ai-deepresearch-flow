@@ -188,6 +188,19 @@ Full-content MCP 读取和全文 paper URI resources 是旧的/已移除/归档�
 
 普通 CLI agent 和自动化脚本使用 static bearer。ChatGPT/Claude 这类需要交互式 OAuth 的托管客户端使用 GitHub OAuth。不要把 static bearer token 发到 `/oauth/mcp`；该端点会有意拒绝它。
 
+### 高级搜索浏览器鉴权
+
+`SEARCH_AUTH_MODE` 独立于 `MCP_AUTH_MODE`，控制 `/api/v1/search/advanced`：
+
+- `static`：只接受 `SEARCH_ACCESS_TOKEN`，默认值。
+- `github-oauth`：只接受七日浏览器会话。
+- `both`：任一机制有效即可。
+
+GitHub 浏览器登录复用 `MCP_PUBLIC_BASE_URL`、`GITHUB_OAUTH_CLIENT_ID`、
+`GITHUB_OAUTH_CLIENT_SECRET`、`MCP_GITHUB_ALLOWED_USER_IDS`。callback 为
+`/auth/callback/web`；会话查询与退出分别使用 `/api/v1/auth/session`、
+`POST /api/v1/auth/logout`。GitHub access token 只用于读取公开数字 ID 与 login，随后即丢弃。
+
 ### 鉴权模式
 
 #### Static Bearer
@@ -229,7 +242,7 @@ OAuth 客户端配置摘要：
 3. 通过服务器路由完成 GitHub OAuth：`/authorize`、`/token`、`/register`、`/auth/callback`、`/consent`。
 4. 不要使用 `/oauth/mcp-sse`；当前 OAuth SSE gate 结果是缺失/不支持。
 
-> **注意：** MCP token、advanced-search token、admin token 和 GitHub OAuth 凭据是相互独立的凭据。
+> **注意：** MCP、advanced-search、admin bearer token 仍彼此独立；MCP OAuth 与浏览器语义搜索 OAuth 则有意复用同一套 GitHub OAuth App 凭据和用户 ID 白名单。
 
 ##### 创建 GitHub OAuth App
 

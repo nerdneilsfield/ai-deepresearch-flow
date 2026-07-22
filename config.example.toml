@@ -179,3 +179,4 @@ vector_top_k = 50
 keyword_top_k = 30
 hybrid = true
 # access_token = "env:SEARCH_ACCESS_TOKEN"
+# Browser auth mode is configured at API startup with SEARCH_AUTH_MODE=static|github-oauth|both.
