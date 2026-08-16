@@ -7,6 +7,8 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+PADDLE_OCR_VL_MODEL = "PaddleOCR-VL-1.6"
+
 
 @dataclass(frozen=True)
 class GeneralConfig:
@@ -19,6 +21,9 @@ class BackendConfig:
     api_url: str
     token: str
     options: dict[str, object] = field(default_factory=dict)
+    model: str = PADDLE_OCR_VL_MODEL
+    poll_interval_seconds: float = 5.0
+    job_timeout_seconds: float = 1800.0
 
 
 @dataclass(frozen=True)
@@ -39,6 +44,13 @@ def _resolve_env(value: str) -> str:
             f"(referenced as 'env:{env_name}' in ocr.toml)"
         )
     return resolved
+
+
+def _positive_seconds(value: object, field_name: str) -> float:
+    """Return a positive numeric duration from TOML configuration."""
+    if isinstance(value, bool) or not isinstance(value, int | float) or value <= 0:
+        raise ValueError(f"'{field_name}' must be a positive number in [backend]")
+    return float(value)
 
 
 def load_ocr_config(path: Path) -> OcrConfig:
@@ -74,12 +86,26 @@ def load_ocr_config(path: Path) -> OcrConfig:
     token = _resolve_env(token_raw)
 
     options = backend_raw.get("options", {})
+    model = backend_raw.get("model", PADDLE_OCR_VL_MODEL)
+    if not isinstance(model, str) or model != PADDLE_OCR_VL_MODEL:
+        raise ValueError(
+            f"'model' must be '{PADDLE_OCR_VL_MODEL}' for the paddle backend"
+        )
+    poll_interval_seconds = _positive_seconds(
+        backend_raw.get("poll_interval_seconds", 5.0), "poll_interval_seconds"
+    )
+    job_timeout_seconds = _positive_seconds(
+        backend_raw.get("job_timeout_seconds", 1800.0), "job_timeout_seconds"
+    )
 
     backend = BackendConfig(
         type=backend_type,
         api_url=api_url,
         token=token,
         options=options,
+        model=model,
+        poll_interval_seconds=poll_interval_seconds,
+        job_timeout_seconds=job_timeout_seconds,
     )
 
     return OcrConfig(general=general, backend=backend)

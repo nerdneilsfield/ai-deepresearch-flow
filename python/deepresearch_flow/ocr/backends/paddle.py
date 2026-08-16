@@ -1,23 +1,25 @@
-"""PaddleOCR synchronous cloud API backend."""
+"""PaddleOCR asynchronous jobs API backend."""
 
 from __future__ import annotations
 
-import base64
 import hashlib
+import json
 import logging
 import re
+import time
 from pathlib import Path
 
 import httpx
 
 from deepresearch_flow.ocr.base import OcrPage, OcrResult
-from deepresearch_flow.ocr.config import BackendConfig
+from deepresearch_flow.ocr.config import BackendConfig, PADDLE_OCR_VL_MODEL
 
 logger = logging.getLogger(__name__)
 
 _PDF_EXTENSIONS = {".pdf"}
 _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tiff", ".bmp", ".webp"}
 _SUPPORTED_EXTENSIONS = _PDF_EXTENSIONS | _IMAGE_EXTENSIONS
+_HTTP_TIMEOUT_SECONDS = 120.0
 
 # Matches markdown image references: ![alt](url)
 _IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
@@ -25,19 +27,15 @@ _IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 _HTML_IMG_RE = re.compile(r'<img\s[^>]*src="([^"]+)"[^>]*/?\s*>', re.IGNORECASE)
 
 
-def _file_type_for(path: Path) -> int:
-    """Return PaddleOCR fileType: 0 for PDF, 1 for images."""
+def _validate_supported_file(path: Path) -> None:
+    """Reject file extensions unsupported by the PaddleOCR jobs API."""
     ext = path.suffix.lower()
-    if ext in _PDF_EXTENSIONS:
-        return 0
-    if ext in _IMAGE_EXTENSIONS:
-        return 1
-    raise ValueError(f"Unsupported file extension: {ext}")
+    if ext not in _SUPPORTED_EXTENSIONS:
+        raise ValueError(f"Unsupported file extension: {ext}")
 
 
 def _image_ext_from_url(url: str) -> str:
     """Extract file extension from a URL, defaulting to .png."""
-    # Strip query params.
     clean = url.split("?")[0]
     ext = Path(clean).suffix.lower()
     if ext in (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff"):
@@ -46,118 +44,227 @@ def _image_ext_from_url(url: str) -> str:
 
 
 class PaddleOcrBackend:
-    """PaddleOCR layout-parsing synchronous API backend."""
+    """PaddleOCR-VL-1.6 backend using the asynchronous jobs API."""
 
     def __init__(self, config: BackendConfig) -> None:
-        self._api_url = config.api_url
+        if config.model != PADDLE_OCR_VL_MODEL:
+            raise ValueError(f"Unsupported PaddleOCR model: {config.model}")
+        if config.poll_interval_seconds <= 0:
+            raise ValueError("poll_interval_seconds must be positive")
+        if config.job_timeout_seconds <= 0:
+            raise ValueError("job_timeout_seconds must be positive")
+
+        self._api_url = config.api_url.rstrip("/")
         self._token = config.token
+        self._model = config.model
         self._options = dict(config.options)
+        self._poll_interval_seconds = config.poll_interval_seconds
+        self._job_timeout_seconds = config.job_timeout_seconds
 
     def ocr(self, file_path: Path) -> OcrResult:
-        """Run OCR on a file and return structured results."""
-        file_type = _file_type_for(file_path)
-        file_data = base64.b64encode(file_path.read_bytes()).decode("ascii")
+        """Submit a local file, wait for completion, and return parsed OCR pages."""
+        _validate_supported_file(file_path)
 
-        payload: dict[str, object] = {
-            "file": file_data,
-            "fileType": file_type,
+        with httpx.Client(timeout=_HTTP_TIMEOUT_SECONDS) as client:
+            job_id = self._submit_job(client, file_path)
+            jsonl_url = self._wait_for_job(client, job_id)
+            return self._download_result(client, jsonl_url)
+
+    def _headers(self) -> dict[str, str]:
+        return {"Authorization": f"bearer {self._token}"}
+
+    def _submit_job(self, client: httpx.Client, file_path: Path) -> str:
+        """Create an OCR job and return its server-assigned identifier."""
+        data = {
+            "model": self._model,
+            "optionalPayload": json.dumps(self._options),
         }
-        if self._options:
-            payload["optionalPayload"] = self._options
+        with file_path.open("rb") as file_handle:
+            response = client.post(
+                self._api_url,
+                headers=self._headers(),
+                data=data,
+                files={"file": (file_path.name, file_handle)},
+            )
+        response.raise_for_status()
 
-        headers = {
-            "Authorization": f"token {self._token}",
-            "Content-Type": "application/json",
-        }
+        response_data = self._response_data(response, "job submission")
+        job_id = response_data.get("jobId")
+        if not isinstance(job_id, str) or not job_id:
+            raise RuntimeError("PaddleOCR job submission response did not contain data.jobId")
+        return job_id
 
-        with httpx.Client(timeout=120.0) as client:
-            self._client = client
-            resp = client.post(self._api_url, json=payload, headers=headers)
-            resp.raise_for_status()
+    def _wait_for_job(self, client: httpx.Client, job_id: str) -> str:
+        """Poll a submitted job until it returns a JSONL result URL or fails."""
+        deadline = time.monotonic() + self._job_timeout_seconds
+        job_url = f"{self._api_url}/{job_id}"
 
-            data = resp.json()
-            layout_results = data["result"]["layoutParsingResults"]
+        while True:
+            response = client.get(job_url, headers=self._headers())
+            response.raise_for_status()
+            response_data = self._response_data(response, f"job {job_id}")
+            state = response_data.get("state")
+            if not isinstance(state, str):
+                raise RuntimeError(f"PaddleOCR job {job_id} did not return data.state")
 
-            pages: list[OcrPage] = []
-            for page_idx, layout in enumerate(layout_results):
-                page = self._process_page(page_idx, layout)
-                pages.append(page)
+            if state == "done":
+                result_url = response_data.get("resultUrl")
+                if not isinstance(result_url, dict):
+                    raise RuntimeError(f"PaddleOCR job {job_id} did not return data.resultUrl")
+                jsonl_url = result_url.get("jsonUrl")
+                if not isinstance(jsonl_url, str) or not jsonl_url:
+                    raise RuntimeError(f"PaddleOCR job {job_id} did not return data.resultUrl.jsonUrl")
+                return jsonl_url
+
+            if state == "failed":
+                error_msg = response_data.get("errorMsg", "unknown error")
+                raise RuntimeError(f"PaddleOCR job {job_id} failed: {error_msg}")
+
+            if state not in {"pending", "running"}:
+                raise RuntimeError(f"PaddleOCR job {job_id} returned unexpected state: {state!r}")
+
+            self._log_job_progress(job_id, state, response_data)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(
+                    f"PaddleOCR job {job_id} did not finish within "
+                    f"{self._job_timeout_seconds:g} seconds"
+                )
+            time.sleep(min(self._poll_interval_seconds, remaining))
+
+    @staticmethod
+    def _response_data(response: httpx.Response, context: str) -> dict[str, object]:
+        """Extract the ``data`` object from a jobs API response."""
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise RuntimeError(f"Invalid JSON in PaddleOCR {context} response") from exc
+        if not isinstance(payload, dict) or not isinstance(payload.get("data"), dict):
+            raise RuntimeError(f"Unexpected PaddleOCR {context} response structure")
+        return payload["data"]
+
+    @staticmethod
+    def _log_job_progress(job_id: str, state: str, response_data: dict[str, object]) -> None:
+        """Log the best available progress information from a pending job."""
+        if state == "pending":
+            logger.info("PaddleOCR job %s is pending", job_id)
+            return
+
+        progress = response_data.get("extractProgress")
+        if not isinstance(progress, dict):
+            logger.info("PaddleOCR job %s is running", job_id)
+            return
+        total_pages = progress.get("totalPages")
+        extracted_pages = progress.get("extractedPages")
+        if isinstance(total_pages, int | float) and isinstance(extracted_pages, int | float):
+            logger.info(
+                "PaddleOCR job %s is running: %s/%s pages",
+                job_id,
+                extracted_pages,
+                total_pages,
+            )
+        else:
+            logger.info("PaddleOCR job %s is running", job_id)
+
+    def _download_result(self, client: httpx.Client, jsonl_url: str) -> OcrResult:
+        """Download and convert a completed job's JSONL result into OCR pages."""
+        response = client.get(jsonl_url)
+        response.raise_for_status()
+
+        pages: list[OcrPage] = []
+        for line_number, line in enumerate(response.text.splitlines(), start=1):
+            if not line.strip():
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(
+                    f"Invalid PaddleOCR JSONL result at line {line_number}"
+                ) from exc
+            if not isinstance(entry, dict):
+                raise RuntimeError(f"Unexpected PaddleOCR JSONL result at line {line_number}")
+            result = entry.get("result")
+            if not isinstance(result, dict):
+                raise RuntimeError(f"PaddleOCR JSONL result at line {line_number} lacks result")
+            layout_results = result.get("layoutParsingResults")
+            if not isinstance(layout_results, list):
+                raise RuntimeError(
+                    f"PaddleOCR JSONL result at line {line_number} lacks layoutParsingResults"
+                )
+
+            for layout in layout_results:
+                if not isinstance(layout, dict):
+                    raise RuntimeError(
+                        f"PaddleOCR JSONL result at line {line_number} has an invalid page"
+                    )
+                pages.append(self._process_page(client, len(pages), layout))
 
         return OcrResult(pages=pages)
 
-    def _process_page(self, page_idx: int, layout: dict) -> OcrPage:
-        """Process a single layoutParsingResult into an OcrPage."""
-        md_section = layout["markdown"]
-        raw_markdown: str = md_section["text"]
-        raw_images: dict[str, str] = md_section.get("images", {})
-        output_images: dict[str, str] = layout.get("outputImages", {})
+    def _process_page(
+        self,
+        client: httpx.Client,
+        page_idx: int,
+        layout: dict[str, object],
+    ) -> OcrPage:
+        """Process one layout-parsing result into an OCR output page."""
+        md_section = layout.get("markdown")
+        if not isinstance(md_section, dict):
+            raise RuntimeError("PaddleOCR layout result lacks markdown")
+        raw_markdown = md_section.get("text")
+        if not isinstance(raw_markdown, str):
+            raise RuntimeError("PaddleOCR layout markdown lacks text")
+        raw_images = self._string_mapping(md_section.get("images"), "markdown.images")
+        output_images = self._string_mapping(layout.get("outputImages"), "outputImages")
 
-        # Build mapping: original ref -> content-hash local_key.
         url_to_local: dict[str, str] = {}
         images: dict[str, bytes] = {}
         missing: list[str] = []
 
-        # 1) Process images from API mapping.
-        #    Map both the remote URL and the local name/key variants so that
-        #    references like <img src="imgs/foo.jpg"> also resolve.
         for name, url in raw_images.items():
-            ext = _image_ext_from_url(url)
-            local_key = self._download_image(url, ext, images, missing)
-            if local_key:
+            local_key = url_to_local.get(url)
+            if local_key is None:
+                local_key = self._download_image(client, url, _image_ext_from_url(url), images, missing)
                 url_to_local[url] = local_key
-                url_to_local[name] = local_key
-                if "/" not in name:
-                    url_to_local[f"imgs/{name}"] = local_key
+            url_to_local[name] = local_key
+            if "/" not in name:
+                url_to_local[f"imgs/{name}"] = local_key
 
-        # 2) Process output images (layout visualizations etc.).
-        for kind, url in output_images.items():
-            ext = _image_ext_from_url(url)
-            local_key = self._download_image(url, ext, images, missing)
-            if local_key:
+        for url in output_images.values():
+            local_key = url_to_local.get(url)
+            if local_key is None:
+                local_key = self._download_image(client, url, _image_ext_from_url(url), images, missing)
                 url_to_local[url] = local_key
 
-        # 3) Scan markdown for image refs not covered by API mappings.
-        #    Covers both ![alt](url) and <img src="url"> patterns.
         for match in _IMAGE_RE.finditer(raw_markdown):
             ref = match.group(2)
-            if ref not in url_to_local:
-                ext = _image_ext_from_url(ref)
-                if ref.startswith(("http://", "https://")):
-                    local_key = self._download_image(ref, ext, images, missing)
-                    if local_key:
-                        url_to_local[ref] = local_key
+            if ref not in url_to_local and ref.startswith(("http://", "https://")):
+                url_to_local[ref] = self._download_image(
+                    client, ref, _image_ext_from_url(ref), images, missing
+                )
 
         for match in _HTML_IMG_RE.finditer(raw_markdown):
             ref = match.group(1)
-            if ref not in url_to_local:
-                ext = _image_ext_from_url(ref)
-                if ref.startswith(("http://", "https://")):
-                    local_key = self._download_image(ref, ext, images, missing)
-                    if local_key:
-                        url_to_local[ref] = local_key
+            if ref not in url_to_local and ref.startswith(("http://", "https://")):
+                url_to_local[ref] = self._download_image(
+                    client, ref, _image_ext_from_url(ref), images, missing
+                )
 
-        # Rewrite markdown image refs: ![alt](url) → ![alt](local)
-        def _replace_md_ref(match: re.Match[str]) -> str:
+        def replace_markdown_image(match: re.Match[str]) -> str:
             alt = match.group(1)
             ref = match.group(2)
-            local = url_to_local.get(ref, ref)
-            return f"![{alt}]({local})"
+            return f"![{alt}]({url_to_local.get(ref, ref)})"
 
-        normalized_markdown = _IMAGE_RE.sub(_replace_md_ref, raw_markdown)
+        normalized_markdown = _IMAGE_RE.sub(replace_markdown_image, raw_markdown)
 
-        # Rewrite HTML img tags: <img src="url" alt="X" ...> → ![X](local)
-        def _replace_html_ref(match: re.Match[str]) -> str:
+        def replace_html_image(match: re.Match[str]) -> str:
             original = match.group(0)
             ref = match.group(1)
-            local = url_to_local.get(ref, ref)
-            # Extract alt text if present.
             alt_match = re.search(r'alt="([^"]*)"', original, re.IGNORECASE)
             alt = alt_match.group(1) if alt_match else ""
-            return f"![{alt}]({local})"
+            return f"![{alt}]({url_to_local.get(ref, ref)})"
 
-        # Also strip wrapping <div> around standalone HTML img tags.
-        normalized_markdown = _HTML_IMG_RE.sub(_replace_html_ref, normalized_markdown)
-        # Clean up empty <div ...>  </div> wrappers left behind.
+        normalized_markdown = _HTML_IMG_RE.sub(replace_html_image, normalized_markdown)
         normalized_markdown = re.sub(
             r"<div[^>]*>\s*(!\[[^\]]*\]\([^)]+\))\s*</div>",
             r"\1",
@@ -171,25 +278,39 @@ class PaddleOcrBackend:
             missing_images=tuple(missing),
         )
 
+    @staticmethod
+    def _string_mapping(value: object, field_name: str) -> dict[str, str]:
+        """Validate an optional object whose keys and values are strings."""
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise RuntimeError(f"PaddleOCR {field_name} must be a string mapping")
+        result: dict[str, str] = {}
+        for key, item in value.items():
+            if not isinstance(key, str) or not isinstance(item, str):
+                raise RuntimeError(f"PaddleOCR {field_name} must be a string mapping")
+            result[key] = item
+        return result
+
+    @staticmethod
     def _download_image(
-        self,
+        client: httpx.Client,
         url: str,
         ext: str,
         images: dict[str, bytes],
         missing: list[str],
-    ) -> str | None:
-        """Download an image URL. Returns the content-hash local key, or None on failure."""
+    ) -> str:
+        """Download an image and return its content-hash local path."""
         try:
-            resp = self._client.get(url)
-            resp.raise_for_status()
-            content = resp.content
+            response = client.get(url)
+            response.raise_for_status()
+            content = response.content
             digest = hashlib.sha256(content).hexdigest()[:12]
             local_key = f"images/{digest}{ext}"
             images[local_key] = content
             return local_key
         except (httpx.HTTPStatusError, httpx.RequestError) as exc:
             logger.warning("Failed to download image %s: %s", url, exc)
-            # Use URL hash as placeholder for missing ref.
             digest = hashlib.sha256(url.encode()).hexdigest()[:12]
             local_key = f"images/{digest}{ext}"
             missing.append(local_key)
