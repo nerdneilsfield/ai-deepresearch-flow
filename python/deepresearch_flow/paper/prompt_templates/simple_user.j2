@@ -5,16 +5,18 @@ Current stage: {{ stage_name }}.
 Return JSON with keys: {{ stage_fields | join(", ") }}.
 Previously completed outputs (JSON): {{ previous_outputs }}
 {% else %}
-Write a single-paragraph summary that covers:
-- the problem being solved
-- related research context
-- the proposed solution
-- datasets and implementation settings (why chosen, what they validate)
-- metrics and results (what metrics, key results, which innovations they support)
-- further exploration directions
-- real-world scenarios and constraints
-- the main content summary with one core formula/mechanism
-Output language: {{ output_language }}. Use that language in all answers (if zh, use Chinese).
+For the JSON field "summary", use exactly two Markdown sections and no prose outside them.
+
+Use these localized section headings:
+- output_language=zh: `### 摘要` and `### 关键要点`
+- output_language=en: `### Abstract` and `### Key Points`
+- any other output language: localized equivalents of Abstract and Key Points
+
+Under the first section, write exactly one cohesive paragraph covering the problem being solved, related research context, proposed solution, datasets and implementation settings (why chosen and what they validate), metrics and results (what metrics, key results, and which innovations they support), further exploration directions, real-world scenarios and constraints, and the main content with one core formula/mechanism.
+
+Under the second section, write 8–12 independent, source-grounded, flat Markdown bullets. Each bullet must explain one concrete paper point, collectively covering the method, data or experimental setup, evidence or results, and applicable constraints. Do not use nested bullets or numbered lists.
+
+Output language: {{ output_language }}. Use that language for all answer text and localized headings (if zh, use Chinese).
 
 If affiliations are present, include them in paper_institutions.
 {% endif %}
