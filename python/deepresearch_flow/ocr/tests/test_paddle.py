@@ -1,4 +1,4 @@
-"""Tests for PaddleOCR backend with mocked HTTP responses."""
+"""Black-box tests for the PaddleOCR jobs API backend."""
 
 from __future__ import annotations
 
@@ -14,439 +14,237 @@ import pytest
 from deepresearch_flow.ocr.backends.paddle import PaddleOcrBackend
 from deepresearch_flow.ocr.config import BackendConfig
 
-# --- Fixtures ----------------------------------------------------------------
-
+JOB_URL = "https://example.com/api/v2/ocr/jobs"
+JOB_ID = "job-123"
+JSONL_URL = "https://cdn.example.com/results.jsonl"
 FAKE_IMAGE_BYTES = b"\x89PNG\r\n\x1a\n fake png data"
 FAKE_IMAGE_HASH = hashlib.sha256(FAKE_IMAGE_BYTES).hexdigest()[:12]
+_HASH_IMG_RE = re.compile(r"images/[0-9a-f]{12}\.\w+")
 
 
 @pytest.fixture()
 def backend() -> PaddleOcrBackend:
-    cfg = BackendConfig(
-        type="paddle",
-        api_url="https://example.com/layout-parsing",
-        token="test-token",
-        options={"useDocOrientationClassify": False},
+    return PaddleOcrBackend(
+        BackendConfig(
+            type="paddle",
+            api_url=JOB_URL,
+            token="test-token",
+            options={"useDocOrientationClassify": False},
+            poll_interval_seconds=0.001,
+            job_timeout_seconds=10,
+        )
     )
-    return PaddleOcrBackend(cfg)
 
 
-@pytest.fixture()
-def single_page_response() -> dict:
-    """Minimal PaddleOCR API response with one page."""
+def _layout(markdown: str, images: dict[str, str] | None = None) -> dict[str, object]:
     return {
-        "result": {
-            "layoutParsingResults": [
-                {
-                    "markdown": {
-                        "text": "# Title\n\nSome text\n\n![fig](http://cdn.example.com/fig1.png)",
-                        "images": {
-                            "fig1.png": "http://cdn.example.com/fig1.png",
-                        },
-                    },
-                    "outputImages": {
-                        "layout": "http://cdn.example.com/layout_0.jpg",
-                    },
-                }
-            ]
-        }
+        "markdown": {"text": markdown, "images": images or {}},
+        "outputImages": {},
     }
 
 
-@pytest.fixture()
-def multi_page_response() -> dict:
-    """PaddleOCR API response with two pages."""
-    return {
-        "result": {
-            "layoutParsingResults": [
-                {
-                    "markdown": {
-                        "text": "Page 0 text",
-                        "images": {},
-                    },
-                    "outputImages": {},
-                },
-                {
-                    "markdown": {
-                        "text": "Page 1 text with ![img](http://cdn.example.com/t.png)",
-                        "images": {"t.png": "http://cdn.example.com/t.png"},
-                    },
-                    "outputImages": {},
-                },
-            ]
-        }
-    }
+def _jsonl(*pages_per_line: list[dict[str, object]]) -> str:
+    return "\n".join(
+        json.dumps({"result": {"layoutParsingResults": pages}}) for pages in pages_per_line
+    )
 
 
-# --- Helpers ------------------------------------------------------------------
-
-# Pattern for content-hash image names: images/{12 hex chars}.ext
-_HASH_IMG_RE = re.compile(r"images/[0-9a-f]{12}\.\w+")
-
-
-def _mock_transport(
-    ocr_response: dict, image_bytes: bytes = FAKE_IMAGE_BYTES
+def _transport(
+    states: list[dict[str, object]],
+    jsonl_text: str,
+    *,
+    image_status: int = 200,
+    captured_requests: list[httpx.Request] | None = None,
 ) -> httpx.MockTransport:
-    """Build a MockTransport that returns the OCR response for POST and image bytes for GET."""
+    pending_states = iter(states)
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.method == "POST":
-            return httpx.Response(200, json=ocr_response)
-        # GET requests are image downloads.
-        return httpx.Response(200, content=image_bytes)
+        if request.method == "POST" and str(request.url) == JOB_URL:
+            if captured_requests is not None:
+                captured_requests.append(request)
+            return httpx.Response(200, json={"data": {"jobId": JOB_ID}})
+        if request.method == "GET" and str(request.url) == f"{JOB_URL}/{JOB_ID}":
+            return httpx.Response(200, json={"data": next(pending_states)})
+        if request.method == "GET" and str(request.url) == JSONL_URL:
+            return httpx.Response(200, text=jsonl_text)
+        return httpx.Response(image_status, content=FAKE_IMAGE_BYTES)
 
     return httpx.MockTransport(handler)
 
 
-def _mock_transport_with_image_failure(ocr_response: dict) -> httpx.MockTransport:
-    """POST succeeds, but all GET (image download) requests return 404."""
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.method == "POST":
-            return httpx.Response(200, json=ocr_response)
-        return httpx.Response(404)
-
-    return httpx.MockTransport(handler)
-
-
-def _run_with_transport(backend: PaddleOcrBackend, transport: httpx.MockTransport, file_path: Path):
-    """Run backend.ocr() with a mocked httpx transport."""
-    mock_client = httpx.Client(transport=transport)
-    with patch("deepresearch_flow.ocr.backends.paddle.httpx.Client", return_value=mock_client):
+def _run_with_transport(
+    backend: PaddleOcrBackend, transport: httpx.MockTransport, file_path: Path
+):
+    client = httpx.Client(transport=transport)
+    with patch("deepresearch_flow.ocr.backends.paddle.httpx.Client", return_value=client):
         return backend.ocr(file_path)
 
 
-# --- Tests --------------------------------------------------------------------
-
-
 class TestPaddleOcrBackend:
-    def test_single_page_pdf(
-        self, backend: PaddleOcrBackend, single_page_response: dict, tmp_path: Path
+    def test_submits_job_polls_and_parses_multi_line_result(
+        self, backend: PaddleOcrBackend, tmp_path: Path
     ) -> None:
-        pdf_file = tmp_path / "test.pdf"
+        pdf_file = tmp_path / "paper.pdf"
         pdf_file.write_bytes(b"%PDF-1.4 fake")
+        captured_requests: list[httpx.Request] = []
+        first_page = _layout(
+            "# Title\n\n![figure](https://cdn.example.com/figure.png)",
+            {"figure.png": "https://cdn.example.com/figure.png"},
+        )
+        first_page["outputImages"] = {"layout": "https://cdn.example.com/layout.jpg"}
+        second_page = _layout("Page two")
+        transport = _transport(
+            [
+                {"state": "pending"},
+                {
+                    "state": "running",
+                    "extractProgress": {"totalPages": 2, "extractedPages": 1},
+                },
+                {"state": "done", "resultUrl": {"jsonUrl": JSONL_URL}},
+            ],
+            _jsonl([first_page], [second_page]),
+            captured_requests=captured_requests,
+        )
 
-        transport = _mock_transport(single_page_response)
-        result = _run_with_transport(backend, transport, pdf_file)
-
-        assert len(result.pages) == 1
-        page = result.pages[0]
-        assert page.page_index == 0
-        # Markdown references should be content-hash local paths.
-        assert _HASH_IMG_RE.search(page.markdown)
-        assert "http://cdn.example.com" not in page.markdown
-        # Images dict should have the downloaded bytes.
-        assert len(page.images) == 2  # fig + layout output image
-        for key, data in page.images.items():
-            assert _HASH_IMG_RE.match(key)
-            assert data == FAKE_IMAGE_BYTES
-        assert page.missing_images == ()
-
-    def test_multi_page(
-        self, backend: PaddleOcrBackend, multi_page_response: dict, tmp_path: Path
-    ) -> None:
-        pdf_file = tmp_path / "multi.pdf"
-        pdf_file.write_bytes(b"%PDF-1.4 fake")
-
-        transport = _mock_transport(multi_page_response)
         result = _run_with_transport(backend, transport, pdf_file)
 
         assert len(result.pages) == 2
-        assert result.pages[0].page_index == 0
-        assert result.pages[1].page_index == 1
-        # Page 1 has one markdown image.
-        assert len(result.pages[1].images) == 1
+        assert [page.page_index for page in result.pages] == [0, 1]
+        assert "https://cdn.example.com" not in result.pages[0].markdown
+        assert _HASH_IMG_RE.search(result.pages[0].markdown)
+        assert len(result.pages[0].images) == 2
+        assert captured_requests[0].headers["authorization"] == "bearer test-token"
+        assert captured_requests[0].headers["content-type"].startswith("multipart/form-data")
+        request_body = captured_requests[0].content.decode("utf-8", errors="replace")
+        assert "PaddleOCR-VL-1.6" in request_body
+        assert "useDocOrientationClassify" in request_body
 
-    def test_image_file_type(self, backend: PaddleOcrBackend, tmp_path: Path) -> None:
-        """Image files should set fileType=1 in the API request."""
-        img_file = tmp_path / "scan.png"
-        img_file.write_bytes(b"\x89PNG fake")
+    def test_job_failure_includes_server_reason(
+        self, backend: PaddleOcrBackend, tmp_path: Path
+    ) -> None:
+        pdf_file = tmp_path / "paper.pdf"
+        pdf_file.write_bytes(b"%PDF-1.4 fake")
+        transport = _transport(
+            [{"state": "failed", "errorMsg": "quota exhausted"}], ""
+        )
 
-        captured_request: list[httpx.Request] = []
+        with pytest.raises(RuntimeError, match="job-123.*quota exhausted"):
+            _run_with_transport(backend, transport, pdf_file)
 
-        def handler(request: httpx.Request) -> httpx.Response:
-            if request.method == "POST":
-                captured_request.append(request)
-                return httpx.Response(
-                    200,
-                    json={
-                        "result": {
-                            "layoutParsingResults": [
-                                {"markdown": {"text": "ok", "images": {}}, "outputImages": {}}
-                            ]
-                        }
-                    },
-                )
-            return httpx.Response(200, content=b"img")
+    def test_job_timeout_includes_job_identifier(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pdf_file = tmp_path / "paper.pdf"
+        pdf_file.write_bytes(b"%PDF-1.4 fake")
+        timeout_backend = PaddleOcrBackend(
+            BackendConfig(
+                type="paddle",
+                api_url=JOB_URL,
+                token="test-token",
+                job_timeout_seconds=1,
+            )
+        )
+        monotonic_values = iter([0.0, 0.0, 2.0])
+        monkeypatch.setattr(
+            "deepresearch_flow.ocr.backends.paddle.time.monotonic",
+            lambda: next(monotonic_values),
+        )
+        monkeypatch.setattr("deepresearch_flow.ocr.backends.paddle.time.sleep", lambda _: None)
+        transport = _transport([{"state": "pending"}, {"state": "pending"}], "")
 
-        transport = httpx.MockTransport(handler)
-        _run_with_transport(backend, transport, img_file)
+        with pytest.raises(TimeoutError, match="job-123"):
+            _run_with_transport(timeout_backend, transport, pdf_file)
 
-        body = json.loads(captured_request[0].content)
-        assert body["fileType"] == 1
+    def test_invalid_jsonl_result_raises_clear_error(
+        self, backend: PaddleOcrBackend, tmp_path: Path
+    ) -> None:
+        pdf_file = tmp_path / "paper.pdf"
+        pdf_file.write_bytes(b"%PDF-1.4 fake")
+        transport = _transport(
+            [{"state": "done", "resultUrl": {"jsonUrl": JSONL_URL}}], "not json"
+        )
 
-    def test_api_error_raises(self, backend: PaddleOcrBackend, tmp_path: Path) -> None:
-        pdf_file = tmp_path / "bad.pdf"
-        pdf_file.write_bytes(b"%PDF")
+        with pytest.raises(RuntimeError, match="JSONL result at line 1"):
+            _run_with_transport(backend, transport, pdf_file)
+
+    def test_image_download_failure_keeps_normalized_reference(
+        self, backend: PaddleOcrBackend, tmp_path: Path
+    ) -> None:
+        pdf_file = tmp_path / "paper.pdf"
+        pdf_file.write_bytes(b"%PDF-1.4 fake")
+        page = _layout(
+            "![missing](https://cdn.example.com/missing.png)",
+            {"missing.png": "https://cdn.example.com/missing.png"},
+        )
+        transport = _transport(
+            [{"state": "done", "resultUrl": {"jsonUrl": JSONL_URL}}],
+            _jsonl([page]),
+            image_status=404,
+        )
+
+        result = _run_with_transport(backend, transport, pdf_file)
+
+        assert result.pages[0].images == {}
+        assert len(result.pages[0].missing_images) == 1
+        assert "https://cdn.example.com" not in result.pages[0].markdown
+        assert _HASH_IMG_RE.search(result.pages[0].markdown)
+
+    def test_html_image_and_unmapped_url_are_downloaded_and_normalized(
+        self, backend: PaddleOcrBackend, tmp_path: Path
+    ) -> None:
+        pdf_file = tmp_path / "paper.pdf"
+        pdf_file.write_bytes(b"%PDF-1.4 fake")
+        page = _layout(
+            '<div><img src="https://cdn.example.com/chart.jpg" alt="Chart" /></div>\n'
+            "![extra](https://cdn.example.com/extra.png)"
+        )
+        transport = _transport(
+            [{"state": "done", "resultUrl": {"jsonUrl": JSONL_URL}}], _jsonl([page])
+        )
+
+        result = _run_with_transport(backend, transport, pdf_file)
+
+        assert "<img" not in result.pages[0].markdown
+        assert "<div" not in result.pages[0].markdown
+        assert "https://cdn.example.com" not in result.pages[0].markdown
+        assert len(result.pages[0].images) == 2
+
+    def test_matching_image_content_is_deduplicated(
+        self, backend: PaddleOcrBackend, tmp_path: Path
+    ) -> None:
+        pdf_file = tmp_path / "paper.pdf"
+        pdf_file.write_bytes(b"%PDF-1.4 fake")
+        page = _layout(
+            "![a](https://cdn.example.com/a.png) ![b](https://cdn.example.com/b.png)",
+            {
+                "a.png": "https://cdn.example.com/a.png",
+                "b.png": "https://cdn.example.com/b.png",
+            },
+        )
+        transport = _transport(
+            [{"state": "done", "resultUrl": {"jsonUrl": JSONL_URL}}], _jsonl([page])
+        )
+
+        result = _run_with_transport(backend, transport, pdf_file)
+
+        assert result.pages[0].images == {f"images/{FAKE_IMAGE_HASH}.png": FAKE_IMAGE_BYTES}
+        assert result.pages[0].markdown.count(f"images/{FAKE_IMAGE_HASH}.png") == 2
+
+    def test_submission_http_error_is_propagated(
+        self, backend: PaddleOcrBackend, tmp_path: Path
+    ) -> None:
+        pdf_file = tmp_path / "paper.pdf"
+        pdf_file.write_bytes(b"%PDF-1.4 fake")
 
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(500, text="Internal Server Error")
 
-        transport = httpx.MockTransport(handler)
         with pytest.raises(httpx.HTTPStatusError):
-            _run_with_transport(backend, transport, pdf_file)
+            _run_with_transport(backend, httpx.MockTransport(handler), pdf_file)
 
-    def test_image_download_failure_records_missing(
-        self, backend: PaddleOcrBackend, single_page_response: dict, tmp_path: Path
-    ) -> None:
-        pdf_file = tmp_path / "test.pdf"
-        pdf_file.write_bytes(b"%PDF-1.4 fake")
-
-        transport = _mock_transport_with_image_failure(single_page_response)
-        result = _run_with_transport(backend, transport, pdf_file)
-
-        page = result.pages[0]
-        # Images dict should be empty (all downloads failed).
-        assert len(page.images) == 0
-        # Missing images should be recorded with hash-based names.
-        assert len(page.missing_images) == 2  # fig + layout output image
-        for ref in page.missing_images:
-            assert _HASH_IMG_RE.match(ref)
-        # Markdown still has the local references (not the original URLs).
-        assert _HASH_IMG_RE.search(page.markdown)
-
-    def test_unsupported_extension_raises(self, backend: PaddleOcrBackend, tmp_path: Path) -> None:
-        txt_file = tmp_path / "doc.txt"
-        txt_file.write_text("hello")
+    def test_unsupported_extension_is_rejected(self, backend: PaddleOcrBackend, tmp_path: Path) -> None:
+        text_file = tmp_path / "paper.txt"
+        text_file.write_text("not an OCR input")
 
         with pytest.raises(ValueError, match="Unsupported file extension"):
-            backend.ocr(txt_file)
-
-    def test_unmapped_url_in_markdown_gets_normalized(
-        self, backend: PaddleOcrBackend, tmp_path: Path
-    ) -> None:
-        """Regression: URLs in markdown not listed in images mapping must still be normalized."""
-        pdf_file = tmp_path / "test.pdf"
-        pdf_file.write_bytes(b"%PDF-1.4 fake")
-
-        response = {
-            "result": {
-                "layoutParsingResults": [
-                    {
-                        "markdown": {
-                            "text": "Text\n\n![extra](http://cdn.example.com/unmapped.png)\n\nMore text",
-                            "images": {},  # Empty — URL not in mapping.
-                        },
-                        "outputImages": {},
-                    }
-                ]
-            }
-        }
-
-        transport = _mock_transport(response)
-        result = _run_with_transport(backend, transport, pdf_file)
-
-        page = result.pages[0]
-        # The remote URL must be replaced with a hash-based local path.
-        assert "http://cdn.example.com" not in page.markdown
-        assert _HASH_IMG_RE.search(page.markdown)
-        # Image was downloaded.
-        assert len(page.images) == 1
-        assert page.missing_images == ()
-
-    def test_unmapped_url_download_failure(self, backend: PaddleOcrBackend, tmp_path: Path) -> None:
-        """Unmapped URL that fails to download should be in missing_images."""
-        pdf_file = tmp_path / "test.pdf"
-        pdf_file.write_bytes(b"%PDF-1.4 fake")
-
-        response = {
-            "result": {
-                "layoutParsingResults": [
-                    {
-                        "markdown": {
-                            "text": "![x](http://cdn.example.com/gone.png)",
-                            "images": {},
-                        },
-                        "outputImages": {},
-                    }
-                ]
-            }
-        }
-
-        transport = _mock_transport_with_image_failure(response)
-        result = _run_with_transport(backend, transport, pdf_file)
-
-        page = result.pages[0]
-        assert len(page.images) == 0
-        assert len(page.missing_images) == 1
-        # Markdown should still have the local ref, not the original URL.
-        assert "http://cdn.example.com" not in page.markdown
-        assert _HASH_IMG_RE.search(page.markdown)
-
-    def test_html_img_tags_normalized(self, backend: PaddleOcrBackend, tmp_path: Path) -> None:
-        """HTML <img src="..."> tags should also be normalized to local paths."""
-        pdf_file = tmp_path / "test.pdf"
-        pdf_file.write_bytes(b"%PDF-1.4 fake")
-
-        response = {
-            "result": {
-                "layoutParsingResults": [
-                    {
-                        "markdown": {
-                            "text": (
-                                "Text\n\n"
-                                '<div style="text-align: center;">'
-                                '<img src="http://cdn.example.com/chart.jpg" alt="Image" width="35%" />'
-                                "</div>\n\n"
-                                "More text"
-                            ),
-                            "images": {},
-                        },
-                        "outputImages": {},
-                    }
-                ]
-            }
-        }
-
-        transport = _mock_transport(response)
-        result = _run_with_transport(backend, transport, pdf_file)
-
-        page = result.pages[0]
-        # HTML img tag should be converted to markdown syntax with hash name.
-        assert "http://cdn.example.com" not in page.markdown
-        assert "<img" not in page.markdown
-        assert _HASH_IMG_RE.search(page.markdown)
-        # Wrapping div should be stripped.
-        assert "<div" not in page.markdown
-        # Image was downloaded.
-        assert len(page.images) == 1
-        assert page.missing_images == ()
-
-    def test_html_img_local_path_with_mapping(
-        self, backend: PaddleOcrBackend, tmp_path: Path
-    ) -> None:
-        """Local relative paths in HTML <img> tags resolve via markdown.images mapping."""
-        pdf_file = tmp_path / "test.pdf"
-        pdf_file.write_bytes(b"%PDF-1.4 fake")
-
-        response = {
-            "result": {
-                "layoutParsingResults": [
-                    {
-                        "markdown": {
-                            "text": (
-                                '<div><img src="imgs/chart.jpg" alt="Image" width="35%" /></div>'
-                            ),
-                            "images": {
-                                "chart.jpg": "http://cdn.example.com/chart.jpg",
-                            },
-                        },
-                        "outputImages": {},
-                    }
-                ]
-            }
-        }
-
-        transport = _mock_transport(response)
-        result = _run_with_transport(backend, transport, pdf_file)
-
-        page = result.pages[0]
-        # imgs/ prefix resolved via mapping, HTML converted to markdown.
-        assert "imgs/" not in page.markdown
-        assert "<img" not in page.markdown
-        assert _HASH_IMG_RE.search(page.markdown)
-        assert len(page.images) == 1
-
-    def test_html_img_local_path_without_mapping_preserved(
-        self, backend: PaddleOcrBackend, tmp_path: Path
-    ) -> None:
-        """Local relative paths without mapping stay as-is (converted to markdown syntax)."""
-        pdf_file = tmp_path / "test.pdf"
-        pdf_file.write_bytes(b"%PDF-1.4 fake")
-
-        response = {
-            "result": {
-                "layoutParsingResults": [
-                    {
-                        "markdown": {
-                            "text": (
-                                '<div><img src="imgs/unknown.jpg" alt="Image" width="35%" /></div>'
-                            ),
-                            "images": {},  # No mapping.
-                        },
-                        "outputImages": {},
-                    }
-                ]
-            }
-        }
-
-        transport = _mock_transport(response)
-        result = _run_with_transport(backend, transport, pdf_file)
-
-        page = result.pages[0]
-        # HTML tag converted to markdown, but path stays (no download possible).
-        assert "<img" not in page.markdown
-        assert "![Image](imgs/unknown.jpg)" in page.markdown
-
-    def test_html_img_reuses_mapped_image(self, backend: PaddleOcrBackend, tmp_path: Path) -> None:
-        """HTML <img src="imgs/foo.jpg"> should reuse the same local key as markdown.images["foo.jpg"]."""
-        pdf_file = tmp_path / "test.pdf"
-        pdf_file.write_bytes(b"%PDF-1.4 fake")
-
-        response = {
-            "result": {
-                "layoutParsingResults": [
-                    {
-                        "markdown": {
-                            "text": (
-                                "![md_ref](http://cdn.example.com/fig.jpg)\n\n"
-                                '<div><img src="imgs/fig.jpg" alt="Table" /></div>'
-                            ),
-                            "images": {
-                                "fig.jpg": "http://cdn.example.com/fig.jpg",
-                            },
-                        },
-                        "outputImages": {},
-                    }
-                ]
-            }
-        }
-
-        transport = _mock_transport(response)
-        result = _run_with_transport(backend, transport, pdf_file)
-
-        page = result.pages[0]
-        # Only 1 image should be downloaded (HTML img reuses the same).
-        assert len(page.images) == 1
-        # Both references should point to the same hash-based key.
-        hash_key = f"images/{FAKE_IMAGE_HASH}.jpg"
-        assert page.markdown.count(hash_key) == 2
-
-    def test_same_content_deduplicates(self, backend: PaddleOcrBackend, tmp_path: Path) -> None:
-        """Two different URLs returning same content should produce one image file."""
-        pdf_file = tmp_path / "test.pdf"
-        pdf_file.write_bytes(b"%PDF-1.4 fake")
-
-        response = {
-            "result": {
-                "layoutParsingResults": [
-                    {
-                        "markdown": {
-                            "text": "![a](http://cdn.example.com/a.png)\n\n![b](http://cdn.example.com/b.png)",
-                            "images": {
-                                "a.png": "http://cdn.example.com/a.png",
-                                "b.png": "http://cdn.example.com/b.png",
-                            },
-                        },
-                        "outputImages": {},
-                    }
-                ]
-            }
-        }
-
-        transport = _mock_transport(response)  # same bytes for all GETs
-        result = _run_with_transport(backend, transport, pdf_file)
-
-        page = result.pages[0]
-        # Same content = same hash = only 1 entry in images dict.
-        assert len(page.images) == 1
+            backend.ocr(text_file)
