@@ -168,11 +168,15 @@ If your source documents are PDFs or scanned images:
 ```bash
 cp ocr.example.toml ocr.toml
 # Set: export PADDLE_OCR_TOKEN=xxx
+# The example uses PaddleOCR-VL-1.6's asynchronous Job API.
+# Adjust poll_interval_seconds and job_timeout_seconds in ocr.toml if needed.
 
 uv run deepresearch-flow recognize ocr ./pdfs --config ocr.toml --output-dir ./ocr_output
 ```
 
-Output follows the mineru layout (`full.md` + `images/` per document).
+The backend uploads local PDF/image files, polls the Job API, then writes the result in
+the mineru layout (`full.md` + `images/` per document). The configured timeout stops the
+local wait only; it does not cancel the remote PaddleOCR job.
 
 #### Step 3: Repair OCR Outputs (Recommended)
 

@@ -6,8 +6,11 @@ output_dir = "ocr_output"       # Default output directory
 
 [backend]
 type = "paddle"                 # Backend type: "paddle"
-api_url = "https://paddleocr.aistudio-app.com/layout-parsing"
-token = "env:PADDLE_OCR_TOKEN"  # Supports env: prefix for secret resolution
+api_url = "https://paddleocr.aistudio-app.com/api/v2/ocr/jobs"
+token = "env:PADDLE_OCR_TOKEN"  # Sent as: Authorization: bearer <token>
+model = "PaddleOCR-VL-1.6"      # Only supported Paddle model for this backend
+poll_interval_seconds = 5        # Delay between asynchronous Job status checks
+job_timeout_seconds = 1800       # Local wait limit; does not cancel the remote Job
 
 [backend.options]               # Backend-specific options (optional)
 useDocOrientationClassify = false
