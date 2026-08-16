@@ -274,6 +274,26 @@ def test_render_paper_markdown_uses_requested_or_default_template() -> None:
     assert "**Publication Venue:** ACL" in fallback_rendered
 
 
+def test_render_paper_markdown_keeps_legacy_simple_summary() -> None:
+    paper = {
+        "output_language": "zh",
+        "templates": {
+            "simple": {
+                "paper_title": "Legacy Paper",
+                "paper_authors": ["Alice"],
+                "summary": "旧版单段 summary 仍应原样显示。",
+            }
+        },
+    }
+
+    rendered, template_name, warning = render_paper_markdown(paper, "zh", template_tag="simple")
+
+    assert template_name == "simple"
+    assert warning is None
+    assert "## 总结 / Summary" in rendered
+    assert "旧版单段 summary 仍应原样显示。" in rendered
+
+
 @pytest.mark.parametrize("paper_archetype", ["survey", "method", "system", "other"])
 def test_render_paper_markdown_keeps_deep_read_output_unchanged_with_archetype(
     paper_archetype: str,
