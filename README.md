@@ -172,6 +172,7 @@ cp ocr.example.toml ocr.toml
 # Adjust poll_interval_seconds and job_timeout_seconds in ocr.toml if needed.
 
 uv run deepresearch-flow recognize ocr ./pdfs --config ocr.toml --output-dir ./ocr_output
+# Processes up to 4 files concurrently by default; override with --workers 2.
 ```
 
 The backend uploads local PDF/image files, polls the Job API, then writes the result in

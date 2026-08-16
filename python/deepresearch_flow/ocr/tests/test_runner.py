@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 import pytest
@@ -34,6 +35,17 @@ class FailingBackend:
 
     def ocr(self, file_path: Path) -> OcrResult:
         raise RuntimeError(f"boom: {file_path.name}")
+
+
+class ConcurrentBackend:
+    """Completes only when the requested number of OCR calls overlap."""
+
+    def __init__(self, concurrent_calls: int) -> None:
+        self._barrier = threading.Barrier(concurrent_calls)
+
+    def ocr(self, file_path: Path) -> OcrResult:
+        self._barrier.wait(timeout=1)
+        return OcrResult(pages=[OcrPage(page_index=0, markdown=file_path.name, images={})])
 
 
 class FakeProgress:
@@ -182,6 +194,41 @@ class TestRunOcr:
         assert (output_dir / "a" / "full.md").exists()
         assert (output_dir / "b" / "full.md").exists()
 
+    def test_directory_processes_files_concurrently(self, tmp_path: Path) -> None:
+        input_dir = tmp_path / "input"
+        input_dir.mkdir()
+        (input_dir / "a.pdf").write_bytes(b"%PDF")
+        (input_dir / "b.pdf").write_bytes(b"%PDF")
+
+        stats, results = run_ocr(
+            ConcurrentBackend(concurrent_calls=2),
+            input_dir,
+            tmp_path / "output",
+            max_workers=2,
+        )
+
+        assert stats == {"processed": 2, "failed": 0, "skipped": 0}
+        assert [result.name for result in results] == ["a.pdf", "b.pdf"]
+        assert (tmp_path / "output" / "a" / "full.md").is_file()
+        assert (tmp_path / "output" / "b" / "full.md").is_file()
+
+    def test_same_stem_files_receive_distinct_output_directories(self, tmp_path: Path) -> None:
+        input_dir = tmp_path / "input"
+        input_dir.mkdir()
+        (input_dir / "doc.pdf").write_bytes(b"%PDF")
+        (input_dir / "doc.png").write_bytes(b"\x89PNG")
+
+        stats, _ = run_ocr(
+            FakeBackend([OcrPage(page_index=0, markdown="text", images={})]),
+            input_dir,
+            tmp_path / "output",
+            max_workers=2,
+        )
+
+        assert stats == {"processed": 2, "failed": 0, "skipped": 0}
+        assert (tmp_path / "output" / "doc" / "full.md").is_file()
+        assert (tmp_path / "output" / "doc_1" / "full.md").is_file()
+
     def test_progress_updates_once_per_file(self, tmp_path: Path) -> None:
         input_dir = tmp_path / "input"
         input_dir.mkdir()
@@ -281,6 +328,13 @@ class TestRunOcr:
 
         with pytest.raises(ValueError, match="max_retries"):
             _ocr_with_retry(FakeBackend(), pdf, max_retries=0)
+
+    def test_non_positive_worker_limit_is_rejected(self, tmp_path: Path) -> None:
+        pdf = tmp_path / "doc.pdf"
+        pdf.write_bytes(b"%PDF")
+
+        with pytest.raises(ValueError, match="max_workers"):
+            run_ocr(FakeBackend(), pdf, tmp_path / "output", max_workers=0)
 
 
 class TestMigrateToHashNames:

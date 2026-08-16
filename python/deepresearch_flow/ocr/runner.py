@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import shutil
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import logging
 import re
@@ -81,6 +83,27 @@ def _resolve_output_dir(base: Path, stem: str) -> Path:
         n += 1
 
 
+def _reserve_output_dir(
+    base: Path,
+    stem: str,
+    reserved: set[Path],
+    *,
+    overwrite: bool,
+) -> Path:
+    """Reserve a deterministic, unique output directory for one input file."""
+    candidate = base / stem
+    if overwrite and candidate not in reserved:
+        reserved.add(candidate)
+        return candidate
+
+    n = 0
+    while candidate.exists() or candidate in reserved:
+        n += 1
+        candidate = base / f"{stem}_{n}"
+    reserved.add(candidate)
+    return candidate
+
+
 def _write_output(
     output_dir: Path,
     markdown: str,
@@ -140,6 +163,44 @@ def _ocr_with_retry(
     raise last_exc
 
 
+def _process_file(
+    backend: OcrBackend,
+    file_path: Path,
+    doc_dir: Path,
+    *,
+    overwrite_existing: bool,
+    max_retries: int,
+) -> OcrFileResult:
+    """OCR one file and write its pre-reserved output directory."""
+    logger.info("Processing: %s", file_path.name)
+    try:
+        result = _ocr_with_retry(backend, file_path, max_retries)
+    except Exception as exc:
+        logger.error("Failed to OCR %s after %d attempt(s): %s", file_path.name, max_retries, exc)
+        return OcrFileResult(name=file_path.name, status="failed", error=str(exc))
+
+    if not result.pages:
+        logger.warning("Empty OCR result for %s, skipping", file_path.name)
+        return OcrFileResult(name=file_path.name, status="skipped")
+
+    try:
+        markdown, images, missing = _merge_pages(result.pages)
+        if overwrite_existing and doc_dir.exists():
+            shutil.rmtree(doc_dir)
+        _write_output(doc_dir, markdown, images, missing)
+    except Exception as exc:
+        logger.error("Failed to write OCR output for %s: %s", file_path.name, exc)
+        return OcrFileResult(name=file_path.name, status="failed", error=str(exc))
+
+    logger.info("Written: %s/full.md (%d pages)", doc_dir.name, len(result.pages))
+    return OcrFileResult(
+        name=file_path.name,
+        status="processed",
+        pages=len(result.pages),
+        images=len(images),
+    )
+
+
 def run_ocr(
     backend: OcrBackend,
     input_path: Path,
@@ -147,67 +208,76 @@ def run_ocr(
     *,
     overwrite: bool = False,
     max_retries: int = 1,
+    max_workers: int = 4,
     progress: ProgressBarLike | None = None,
 ) -> tuple[OcrStats, list[OcrFileResult]]:
-    """Run OCR on input file(s) and write results to output_dir."""
+    """Run OCR on input file(s) concurrently and write results to output_dir."""
+    if max_workers < 1:
+        raise ValueError("max_workers must be at least 1")
+
     files = discover_files(input_path)
-    stats: OcrStats = {"processed": 0, "failed": 0, "skipped": 0}
-    results: list[OcrFileResult] = []
+    results_by_index: dict[int, OcrFileResult] = {}
+    work_items: list[tuple[int, Path, Path, bool]] = []
+    reserved_output_dirs: set[Path] = set()
 
-    for file_path in files:
-        try:
-            if not overwrite and _has_existing_output(output_dir, file_path.stem):
-                logger.info("Skipping (already exists): %s", file_path.name)
-                stats["skipped"] += 1
-                results.append(OcrFileResult(name=file_path.name, status="skipped"))
-                continue
+    for index, file_path in enumerate(files):
+        if not overwrite and _has_existing_output(output_dir, file_path.stem):
+            logger.info("Skipping (already exists): %s", file_path.name)
+            results_by_index[index] = OcrFileResult(name=file_path.name, status="skipped")
+            if progress is not None:
+                progress.update(1)
+            continue
 
-            logger.info("Processing: %s", file_path.name)
-            try:
-                result = _ocr_with_retry(backend, file_path, max_retries)
-            except Exception as exc:
-                logger.error(
-                    "Failed to OCR %s after %d attempt(s): %s", file_path.name, max_retries, exc
-                )
-                stats["failed"] += 1
-                results.append(
-                    OcrFileResult(
+        doc_dir = _reserve_output_dir(
+            output_dir,
+            file_path.stem,
+            reserved_output_dirs,
+            overwrite=overwrite,
+        )
+        work_items.append(
+            (
+                index,
+                file_path,
+                doc_dir,
+                overwrite and doc_dir == output_dir / file_path.stem,
+            )
+        )
+
+    if work_items:
+        worker_count = min(max_workers, len(work_items))
+        with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="ocr") as executor:
+            futures = {
+                executor.submit(
+                    _process_file,
+                    backend,
+                    file_path,
+                    doc_dir,
+                    overwrite_existing=overwrite_existing,
+                    max_retries=max_retries,
+                ): index
+                for index, file_path, doc_dir, overwrite_existing in work_items
+            }
+            for future in as_completed(futures):
+                index = futures[future]
+                file_path = files[index]
+                try:
+                    results_by_index[index] = future.result()
+                except Exception as exc:
+                    logger.exception("Unexpected OCR worker failure for %s", file_path.name)
+                    results_by_index[index] = OcrFileResult(
                         name=file_path.name,
                         status="failed",
                         error=str(exc),
                     )
-                )
-                continue
+                if progress is not None:
+                    progress.update(1)
 
-            if not result.pages:
-                logger.warning("Empty OCR result for %s, skipping", file_path.name)
-                stats["skipped"] += 1
-                results.append(OcrFileResult(name=file_path.name, status="skipped"))
-                continue
-
-            doc_dir = output_dir / file_path.stem
-            if overwrite and doc_dir.exists():
-                import shutil
-
-                shutil.rmtree(doc_dir)
-
-            doc_dir = _resolve_output_dir(output_dir, file_path.stem)
-            markdown, images, missing = _merge_pages(result.pages)
-            _write_output(doc_dir, markdown, images, missing)
-
-            stats["processed"] += 1
-            results.append(
-                OcrFileResult(
-                    name=file_path.name,
-                    status="processed",
-                    pages=len(result.pages),
-                    images=len(images),
-                )
-            )
-            logger.info("Written: %s/full.md (%d pages)", doc_dir.name, len(result.pages))
-        finally:
-            if progress is not None:
-                progress.update(1)
+    results = [results_by_index[index] for index in range(len(files))]
+    stats: OcrStats = {
+        "processed": sum(result.status == "processed" for result in results),
+        "failed": sum(result.status == "failed" for result in results),
+        "skipped": sum(result.status == "skipped" for result in results),
+    }
 
     return stats, results
 

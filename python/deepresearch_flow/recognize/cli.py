@@ -495,6 +495,13 @@ def recognize() -> None:
     show_default=True,
     help="Max retry attempts per file on failure.",
 )
+@click.option(
+    "--workers",
+    type=click.IntRange(min=1),
+    default=4,
+    show_default=True,
+    help="Maximum number of files to OCR concurrently.",
+)
 @click.option("--verbose", is_flag=True, default=False, help="Enable debug logging.")
 def ocr(
     input_path: str,
@@ -502,6 +509,7 @@ def ocr(
     output_dir: str | None,
     overwrite: bool,
     max_retries: int,
+    workers: int,
     verbose: bool,
 ) -> None:
     """Run OCR on PDF/image files using a configured backend."""
@@ -533,6 +541,7 @@ def ocr(
 
     console.print(f"Input:  {input_path}")
     console.print(f"Output: {resolved_output}")
+    console.print(f"Workers: {workers}")
 
     progress: tqdm | None = None
     input_path_obj = Path(input_path)
@@ -550,6 +559,7 @@ def ocr(
             resolved_output,
             overwrite=overwrite,
             max_retries=max_retries,
+            max_workers=workers,
             progress=progress,
         )
     finally:
