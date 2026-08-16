@@ -234,6 +234,13 @@ The browser session lasts seven days and is stored in an HttpOnly cookie. Config
 GitHub OAuth App callback as `https://papers.example.com/auth/callback`; the browser flow uses its
 allowed subpath `/auth/callback/web`. GitHub users outside the numeric ID allowlist are rejected.
 
+Deploy the frontend and API on the same origin when possible. For a cross-origin deployment,
+the default CORS wildcard (`*`) does not permit credentialed browser requests and the OAuth session
+cookie will not authenticate semantic-search fetches. Explicitly allow the frontend origin, for
+example `--cors-origin https://frontend.example.com`, and keep frontend requests configured with
+`credentials: include` (the bundled frontend already does this). `MCP_PUBLIC_BASE_URL` must be the
+public HTTPS origin through which the browser reaches the API and OAuth callback.
+
 ### 3.3 API Endpoints
 
 **BibTeX metadata**

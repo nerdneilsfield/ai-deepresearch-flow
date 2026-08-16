@@ -234,6 +234,12 @@ uv run deepresearch-flow paper db api serve \
 `https://papers.example.com/auth/callback`；浏览器流程使用其允许的子路径
 `/auth/callback/web`。不在数字 ID 白名单内的 GitHub 用户会被拒绝。
 
+应尽量让前端与 API 同源部署。若必须跨源部署，默认 CORS 通配符（`*`）不允许携带凭据的
+浏览器请求，OAuth session cookie 因而不能为语义搜索 fetch 鉴权。须显式允许前端 origin，
+例如 `--cors-origin https://frontend.example.com`，并让前端请求保持 `credentials: include`
+（仓库自带前端已如此配置）。`MCP_PUBLIC_BASE_URL` 必须是浏览器实际访问 API 与 OAuth
+callback 的公开 HTTPS origin。
+
 ### 3.3 API 接口
 
 **BibTeX 元数据**
