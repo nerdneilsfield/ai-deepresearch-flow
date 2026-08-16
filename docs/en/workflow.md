@@ -6,6 +6,10 @@
 
 Keep a growing PDF library in sync without reprocessing everything. This workflow identifies new PDFs, processes only the missing ones, and merges them back into the existing library.
 
+> Prerequisite: an existing processed JSON library (for example,
+> `paper_infos.json`) and its associated assets. To initialize from only PDFs
+> and optional BibTeX, follow the Zero to Hero workflow in the README first.
+
 ```bash
 # 1) Compare processed JSON vs new PDF library to find missing PDFs
 uv run deepresearch-flow paper db compare \

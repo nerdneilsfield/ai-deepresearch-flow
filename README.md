@@ -119,51 +119,23 @@ Keys use `env:VAR_NAME` syntax to keep secrets out of config files. Multiple pro
 
 ### 3) The "Zero to Hero" Workflow
 
-#### Step 1: Extract Structured Insights
+Start with `./pdfs/` and, optionally, `./papers.bib`. You do not need an
+existing JSON library, SQLite database, or processed Markdown directory.
 
-```bash
-uv run deepresearch-flow paper extract \
-  --input ./docs \
-  --model openai/gpt-4o-mini \
-  --prompt-template deep_read
+The workflow produces these roots:
+
+```text
+pdfs/ + papers.bib
+  → ocr_output/
+  → md_simple/            # local image files
+  → md_base64/            # images embedded as data URLs
+  ├─ summary_json/<template>.json
+  └─ md_base64_translated/
 ```
 
-<p align="center">
-  <img src=".github/assets/extract.png" width="70%" alt="extract" />
-</p>
+#### Step 1: OCR PDFs or Images
 
-#### Step 1.1: Verify & Retry Missing Fields
-
-```bash
-uv run deepresearch-flow paper db verify \
-  --input-json ./paper_infos.json \
-  --prompt-template deep_read \
-  --output-json ./paper_verify.json
-
-uv run deepresearch-flow paper extract \
-  --input ./docs \
-  --model openai/gpt-4o-mini \
-  --prompt-template deep_read \
-  --retry-list-json ./paper_verify.json
-```
-
-<p align="center">
-  <img src=".github/assets/verify.png" width="70%" alt="verify" />
-</p>
-
-#### Step 2: Safe Translation
-
-```bash
-uv run deepresearch-flow translator translate \
-  --input ./docs \
-  --target-lang zh \
-  --model openai/gpt-4o-mini \
-  --fix-level moderate
-```
-
-#### Step 2.5: OCR on PDFs/Images (Optional)
-
-If your source documents are PDFs or scanned images:
+Copy and configure the OCR settings:
 
 ```bash
 cp ocr.example.toml ocr.toml
@@ -171,81 +143,192 @@ cp ocr.example.toml ocr.toml
 # The example uses PaddleOCR-VL-1.6's asynchronous Job API.
 # Adjust poll_interval_seconds and job_timeout_seconds in ocr.toml if needed.
 
-uv run deepresearch-flow recognize ocr ./pdfs --config ocr.toml --output-dir ./ocr_output
+uv run deepresearch-flow recognize ocr ./pdfs \
+  --config ocr.toml \
+  --output-dir ./ocr_output
 # Processes up to 4 files concurrently by default; override with --workers 2.
 ```
 
-The backend uploads local PDF/image files, polls the Job API, then writes the result in
-the mineru layout (`full.md` + `images/` per document). The configured timeout stops the
-local wait only; it does not cancel the remote PaddleOCR job.
+The backend writes MinerU-compatible layouts: one `full.md` and `images/`
+directory per document. The configured timeout stops local polling only; it does
+not cancel the remote PaddleOCR job.
 
-#### Step 3: Repair OCR Outputs (Recommended)
+#### Step 2: Repair Nested OCR Outputs
 
-Recommended order: `fix` → `fix-math` → `fix-mermaid` → `fix`.
+Each OCR document is nested below `ocr_output/`, so both repair commands must
+use `-r`:
 
 ```bash
-# Fix OCR markdown structure
+# Repair Markdown structure in every OCR document
 uv run deepresearch-flow recognize fix \
-  --input ./docs --in-place
+  --input ./ocr_output -r --in-place
+
+# Repair LaTeX formulas in every OCR document
+uv run deepresearch-flow recognize fix-math \
+  --input ./ocr_output -r \
+  --model openai/gpt-4o-mini \
+  --in-place
 ```
 
 <p align="center">
   <img src=".github/assets/fix.png" width="70%" alt="fix" />
 </p>
 
-```bash
-# Fix LaTeX formulas
-uv run deepresearch-flow recognize fix-math \
-  --input ./docs --model openai/gpt-4o-mini --in-place
-```
-
 <p align="center">
   <img src=".github/assets/fix-math.png" width="70%" alt="fix math" />
 </p>
 
+#### Step 3: Organize Source Markdown
+
+Create both source representations in one pass. `organize` also needs `-r`
+to discover nested OCR layouts. Do not pass `--fix`: Step 2 has already
+repaired the OCR source.
+
 ```bash
-# Fix Mermaid diagrams
+uv run deepresearch-flow recognize organize \
+  --input ./ocr_output -r \
+  --output-simple ./md_simple \
+  --output-base64 ./md_base64
+```
+
+`md_simple/` keeps image files under `md_simple/images/`; `md_base64/`
+embeds images, so it is the translation input.
+
+#### Step 4: Generate Structured Summaries
+
+Generate one JSON bundle per selected prompt template. This example uses
+`deep_read`; repeat it for every template you need, naming each output
+`./summary_json/<template>.json`.
+
+```bash
+uv run deepresearch-flow paper extract \
+  --input ./md_simple \
+  --model openai/gpt-4o-mini \
+  --prompt-template deep_read \
+  --output ./summary_json/deep_read.json
+```
+
+<p align="center">
+  <img src=".github/assets/extract.png" width="70%" alt="extract" />
+</p>
+
+#### Step 4.1: Verify and Retry Summary Fields
+
+Keep verification reports outside `summary_json/` so JSON repair scans only
+summary bundles. `paper db verify` validates the JSON bundle; it does not
+require a database. Repeat this unit for every selected template.
+
+```bash
+uv run deepresearch-flow paper db verify \
+  --input-json ./summary_json/deep_read.json \
+  --prompt-template deep_read \
+  --output-json ./summary_verify/deep_read.json
+
+uv run deepresearch-flow paper extract \
+  --input ./md_simple \
+  --model openai/gpt-4o-mini \
+  --prompt-template deep_read \
+  --output ./summary_json/deep_read.json \
+  --retry-list-json ./summary_verify/deep_read.json
+```
+
+<p align="center">
+  <img src=".github/assets/verify.png" width="70%" alt="verify" />
+</p>
+
+#### Step 5: Translate Base64 Markdown
+
+```bash
+uv run deepresearch-flow translator translate \
+  --input ./md_base64 \
+  --target-lang zh \
+  --model openai/gpt-4o-mini \
+  --fix-level moderate \
+  --output-dir ./md_base64_translated
+```
+
+#### Step 6: Repair Generated Artifacts
+
+Repair every summary JSON after extraction and retry. JSON inputs require
+`--json`; keep `-r` because the directory can contain multiple template
+bundles.
+
+```bash
+uv run deepresearch-flow recognize fix \
+  --input ./summary_json --json -r --in-place
+
+uv run deepresearch-flow recognize fix-math \
+  --input ./summary_json --json -r \
+  --model openai/gpt-4o-mini \
+  --in-place
+
 uv run deepresearch-flow recognize fix-mermaid \
-  --input ./paper_outputs --json \
-  --model openai/gpt-4o-mini --in-place
+  --input ./summary_json --json -r \
+  --model openai/gpt-4o-mini \
+  --in-place
 ```
 
 <p align="center">
   <img src=".github/assets/fix-mermaid.png" width="70%" alt="fix mermaid" />
 </p>
 
-```bash
-# Retry only failed formulas/diagrams
-uv run deepresearch-flow recognize fix-math \
-  --input ./docs --model openai/gpt-4o-mini --retry-failed
+Repair the translated Markdown separately. Mermaid repair is only part of the
+summary JSON branch.
 
-# Final format normalization
+```bash
 uv run deepresearch-flow recognize fix \
-  --input ./docs --in-place
+  --input ./md_base64_translated -r --in-place
+
+uv run deepresearch-flow recognize fix-math \
+  --input ./md_base64_translated -r \
+  --model openai/gpt-4o-mini \
+  --in-place
 ```
 
-<p align="center">
-  <img src=".github/assets/fix-retry-failed.png" width="70%" alt="fix retry failed" />
-</p>
+#### Step 7: Build a Snapshot Database or Serve Locally
 
-#### Step 4: Serve Your Local Knowledge Base
+Both commands consume the repaired summary JSON. Add one `--input` option for
+each additional file in `summary_json/`; neither command consumes the other
+command's output.
+
+Build a persistent SQLite snapshot and static assets:
+
+```bash
+uv run deepresearch-flow paper db snapshot build \
+  --input ./summary_json/deep_read.json \
+  --bibtex ./papers.bib \
+  --md-root ./md_simple \
+  --md-translated-root ./md_base64_translated \
+  --pdf-root ./pdfs \
+  --output-db ./dist/paper_snapshot.db \
+  --static-export-dir ./dist/paper-static
+```
+
+Or start the local web UI directly from the same inputs:
 
 ```bash
 uv run deepresearch-flow paper db serve \
-  --input paper_infos.json \
-  --md-root ./docs \
-  --md-translated-root ./docs \
+  --input ./summary_json/deep_read.json \
+  --bibtex ./papers.bib \
+  --md-root ./md_simple \
+  --md-translated-root ./md_base64_translated \
+  --pdf-root ./pdfs \
   --host 127.0.0.1
 ```
 
-#### Step 4.1: Add Semantic Search (Optional)
+If you have no BibTeX file, omit `--bibtex ./papers.bib`.
 
-Build a LanceDB vector index from extracted JSON:
+#### Step 8: Add Semantic Search (Optional)
+
+Build a LanceDB vector index from the same repaired summaries and Markdown
+roots:
 
 ```bash
 uv run deepresearch-flow paper embed \
   --config ./config.toml \
-  --input ./paper_infos.json \
+  --input ./summary_json/deep_read.json \
+  --md-root ./md_simple \
+  --md-translated-root ./md_base64_translated \
   --max-concurrency 4 \
   --document-window 8 \
   --output-embed-db ./paper_vectors
@@ -255,13 +338,16 @@ Serve with semantic search enabled:
 
 ```bash
 uv run deepresearch-flow paper db serve \
-  --input ./paper_infos.json \
-  --md-root ./docs \
+  --input ./summary_json/deep_read.json \
+  --bibtex ./papers.bib \
+  --md-root ./md_simple \
+  --md-translated-root ./md_base64_translated \
+  --pdf-root ./pdfs \
   --embed-db ./paper_vectors \
   --search-access-token "your-token"
 ```
 
-#### Step 5: MCP Integration (Optional)
+#### Step 9: MCP Integration (Optional)
 
 The project exposes bounded MCP tools for AI agent access via FastMCP. See the [MCP documentation](docs/en/api-and-mcp.md#mcp) for endpoint, auth, and tool reference.
 

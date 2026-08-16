@@ -4,14 +4,15 @@
 
 ## 构建生产 Snapshot
 
-构建一个可用于生产环境的 snapshot（SQLite + 静态资源）：
+从零流程已生成并修复 summary JSON 后，构建一个可用于生产环境的 snapshot
+（SQLite + 静态资源）。此命令读取这些 JSON 包；不会从 PDF 或 BibTeX 直接生成它们。
 
 ```bash
 uv run deepresearch-flow paper db snapshot build \
-  --input ./paper_infos.json \
+  --input ./summary_json/deep_read.json \
   --bibtex ./papers.bib \
-  --md-root ./docs \
-  --md-translated-root ./docs \
+  --md-root ./md_simple \
+  --md-translated-root ./md_base64_translated \
   --pdf-root ./pdfs \
   --output-db ./dist/paper_snapshot.db \
   --static-export-dir ./dist/paper-static
@@ -19,6 +20,8 @@ uv run deepresearch-flow paper db snapshot build \
 
 说明：
 
+- 每增加一份已修复的摘要模板，就增加一个
+  `--input ./summary_json/<template>.json`。
 - 构建主机需要能够读取原始的 PDF/Markdown 目录。
 - CDN 服务器只需要导出后的目录（比如 `/data/paper-static`）。
 - `--output-embed-db` 可以在同一次构建中生成 LanceDB 索引。

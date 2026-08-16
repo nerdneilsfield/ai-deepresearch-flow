@@ -6,6 +6,9 @@
 
 如果你的 PDF 库在持续增长，不用每次都全量重建。下面的流程会找出新增的 PDF，只处理它们，然后合并回已有库中。
 
+> 前提：已有处理完成的 JSON 文献库（例如 `paper_infos.json`）及其关联资源。
+> 若起点只有 PDF 和可选 BibTeX，请先走 README 的从零流程。
+
 ```bash
 # 1) 对比已处理的 JSON 和新 PDF 库，找出缺失的 PDF
 uv run deepresearch-flow paper db compare \

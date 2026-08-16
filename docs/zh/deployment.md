@@ -23,14 +23,16 @@
 
 ## 1. 构建快照与静态资源导出
 
-构建机器需要能读取原始的 PDF 和 Markdown 文件目录。CDN 端只需要拿到导出后的静态目录。
+在从零流程已生成并修复 summary JSON、`md_simple/` 与
+`md_base64_translated/` 后执行此步。不需要已有 snapshot 数据库；构建机器需要能读取
+原始 PDF 和 Markdown 根目录。CDN 端只需要拿到导出后的静态目录。
 
 ```bash
 uv run deepresearch-flow paper db snapshot build \
-  --input ./paper_infos.json \
+  --input ./summary_json/deep_read.json \
   --bibtex ./papers.bib \
-  --md-root ./docs \
-  --md-translated-root ./docs \
+  --md-root ./md_simple \
+  --md-translated-root ./md_base64_translated \
   --pdf-root ./pdfs \
   --output-db ./dist/paper_snapshot.db \
   --static-export-dir /data/paper-static
@@ -38,8 +40,11 @@ uv run deepresearch-flow paper db snapshot build \
 
 说明：
 
+- 每增加一份已修复的摘要模板，就增加一个
+  `--input ./summary_json/<template>.json`。
 - `--pdf-root` 指向存放原始 PDF 文件的目录。
-- `--md-root` / `--md-translated-root` 指向 Markdown 原文和译文的目录。
+- `--md-root` / `--md-translated-root` 分别指向 `md_simple/` 与
+  `md_base64_translated/`。
 - `--static-export-dir` 是静态资源的输出目录。把这个目录复制或挂载到 CDN 上即可。
 
 ---

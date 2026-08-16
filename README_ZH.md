@@ -119,128 +119,208 @@ models = [
 
 ### 3) 从零到一的流程
 
-#### 步骤 1：抽取结构化信息
+从 `./pdfs/` 和可选的 `./papers.bib` 开始。不需要已有的 JSON 文献库、SQLite 数据库或处理过的 Markdown 目录。
 
-```bash
-uv run deepresearch-flow paper extract \
-  --input ./docs \
-  --model openai/gpt-4o-mini \
-  --prompt-template deep_read
+本流程会生成以下目录和文件：
+
+```text
+pdfs/ + papers.bib
+  → ocr_output/
+  → md_simple/            # 图片保留为本地文件
+  → md_base64/            # 图片内嵌为 data URL
+  ├─ summary_json/<template>.json
+  └─ md_base64_translated/
 ```
 
-<p align="center">
-  <img src=".github/assets/extract.png" width="70%" alt="extract" />
-</p>
+#### 步骤 1：对 PDF/图片执行 OCR
 
-#### 步骤 1.1：校验与重试缺失字段
-
-```bash
-uv run deepresearch-flow paper db verify \
-  --input-json ./paper_infos.json \
-  --prompt-template deep_read \
-  --output-json ./paper_verify.json
-
-uv run deepresearch-flow paper extract \
-  --input ./docs \
-  --model openai/gpt-4o-mini \
-  --prompt-template deep_read \
-  --retry-list-json ./paper_verify.json
-```
-
-<p align="center">
-  <img src=".github/assets/verify.png" width="70%" alt="verify" />
-</p>
-
-#### 步骤 2：安全翻译
-
-```bash
-uv run deepresearch-flow translator translate \
-  --input ./docs \
-  --target-lang zh \
-  --model openai/gpt-4o-mini \
-  --fix-level moderate
-```
-
-#### 步骤 2.5：对 PDF/图片执行 OCR（可选）
-
-如果源文档是 PDF 或扫描图片：
+先复制并填写 OCR 配置：
 
 ```bash
 cp ocr.example.toml ocr.toml
 # 设置: export PADDLE_OCR_TOKEN=xxx
+# 示例使用 PaddleOCR-VL-1.6 的异步 Job API。
+# 如有需要，可在 ocr.toml 中调整 poll_interval_seconds 和 job_timeout_seconds。
 
-uv run deepresearch-flow recognize ocr ./pdfs --config ocr.toml --output-dir ./ocr_output
+uv run deepresearch-flow recognize ocr ./pdfs \
+  --config ocr.toml \
+  --output-dir ./ocr_output
+# 默认最多并发处理 4 个文件；可用 --workers 2 覆盖。
 ```
 
-输出兼容 mineru 布局（每个文档一个 `full.md` + `images/` 目录）。
+后端会写出兼容 MinerU 的布局：每篇文档有一个 `full.md` 和
+`images/` 目录。超时只会停止本地轮询，不会取消远端 PaddleOCR 任务。
 
-#### 步骤 3：修复 OCR 产物（推荐）
+#### 步骤 2：修复嵌套的 OCR 产物
 
-推荐顺序：`fix` → `fix-math` → `fix-mermaid` → `fix`。
+每篇 OCR 文档都嵌套在 `ocr_output/` 下，两个修复命令都必须带 `-r`：
 
 ```bash
-# 修复 OCR Markdown 结构
+# 修复所有 OCR 文档的 Markdown 结构
 uv run deepresearch-flow recognize fix \
-  --input ./docs --in-place
+  --input ./ocr_output -r --in-place
+
+# 修复所有 OCR 文档的 LaTeX 公式
+uv run deepresearch-flow recognize fix-math \
+  --input ./ocr_output -r \
+  --model openai/gpt-4o-mini \
+  --in-place
 ```
 
 <p align="center">
   <img src=".github/assets/fix.png" width="70%" alt="fix" />
 </p>
 
-```bash
-# 修复 LaTeX 公式
-uv run deepresearch-flow recognize fix-math \
-  --input ./docs --model openai/gpt-4o-mini --in-place
-```
-
 <p align="center">
   <img src=".github/assets/fix-math.png" width="70%" alt="fix math" />
 </p>
 
+#### 步骤 3：整理源 Markdown
+
+用一条命令同时生成两种源文件表示。为发现嵌套 OCR 布局，`organize`
+也必须带 `-r`。不要传 `--fix`，因为步骤 2 已经修复 OCR 源文件。
+
 ```bash
-# 修复 Mermaid 图
+uv run deepresearch-flow recognize organize \
+  --input ./ocr_output -r \
+  --output-simple ./md_simple \
+  --output-base64 ./md_base64
+```
+
+`md_simple/` 会将图片保留在 `md_simple/images/`；`md_base64/`
+会内嵌图片，故它是翻译输入。
+
+#### 步骤 4：生成结构化摘要
+
+每个选用的 prompt template 生成一个 JSON 包。以下示例使用
+`deep_read`；其他模板也重复此操作，并将输出命名为
+`./summary_json/<template>.json`。
+
+```bash
+uv run deepresearch-flow paper extract \
+  --input ./md_simple \
+  --model openai/gpt-4o-mini \
+  --prompt-template deep_read \
+  --output ./summary_json/deep_read.json
+```
+
+<p align="center">
+  <img src=".github/assets/extract.png" width="70%" alt="extract" />
+</p>
+
+#### 步骤 4.1：校验并重试摘要字段
+
+校验报告放在 `summary_json/` 外，避免 JSON 修复扫描到报告文件。每个选用的
+template 都重复这一组命令。这里的 `paper db verify` 只校验 JSON 包，
+不需要数据库。
+
+```bash
+uv run deepresearch-flow paper db verify \
+  --input-json ./summary_json/deep_read.json \
+  --prompt-template deep_read \
+  --output-json ./summary_verify/deep_read.json
+
+uv run deepresearch-flow paper extract \
+  --input ./md_simple \
+  --model openai/gpt-4o-mini \
+  --prompt-template deep_read \
+  --output ./summary_json/deep_read.json \
+  --retry-list-json ./summary_verify/deep_read.json
+```
+
+<p align="center">
+  <img src=".github/assets/verify.png" width="70%" alt="verify" />
+</p>
+
+#### 步骤 5：翻译 Base64 Markdown
+
+```bash
+uv run deepresearch-flow translator translate \
+  --input ./md_base64 \
+  --target-lang zh \
+  --model openai/gpt-4o-mini \
+  --fix-level moderate \
+  --output-dir ./md_base64_translated
+```
+
+#### 步骤 6：修复生成产物
+
+在抽取和重试完成后，修复每一份摘要 JSON。JSON 输入须带 `--json`；
+目录内可能有多个 template JSON，故保留 `-r`。
+
+```bash
+uv run deepresearch-flow recognize fix \
+  --input ./summary_json --json -r --in-place
+
+uv run deepresearch-flow recognize fix-math \
+  --input ./summary_json --json -r \
+  --model openai/gpt-4o-mini \
+  --in-place
+
 uv run deepresearch-flow recognize fix-mermaid \
-  --input ./paper_outputs --json \
-  --model openai/gpt-4o-mini --in-place
+  --input ./summary_json --json -r \
+  --model openai/gpt-4o-mini \
+  --in-place
 ```
 
 <p align="center">
   <img src=".github/assets/fix-mermaid.png" width="70%" alt="fix mermaid" />
 </p>
 
-```bash
-# 仅重试失败的公式/图
-uv run deepresearch-flow recognize fix-math \
-  --input ./docs --model openai/gpt-4o-mini --retry-failed
+译文 Markdown 单独修复；Mermaid 修复只属于摘要 JSON 分支。
 
-# 最后再修一遍统一格式
+```bash
 uv run deepresearch-flow recognize fix \
-  --input ./docs --in-place
+  --input ./md_base64_translated -r --in-place
+
+uv run deepresearch-flow recognize fix-math \
+  --input ./md_base64_translated -r \
+  --model openai/gpt-4o-mini \
+  --in-place
 ```
 
-<p align="center">
-  <img src=".github/assets/fix-retry-failed.png" width="70%" alt="fix retry failed" />
-</p>
+#### 步骤 7：构建 Snapshot 数据库或直接本地启动
 
-#### 步骤 4：启动本地知识库
+两条命令都读取已修复的摘要 JSON。每增加一份 `summary_json/` 中的文件，
+就增加一个 `--input`；二者不会读取对方的输出。
+
+构建持久的 SQLite snapshot 和静态资源：
+
+```bash
+uv run deepresearch-flow paper db snapshot build \
+  --input ./summary_json/deep_read.json \
+  --bibtex ./papers.bib \
+  --md-root ./md_simple \
+  --md-translated-root ./md_base64_translated \
+  --pdf-root ./pdfs \
+  --output-db ./dist/paper_snapshot.db \
+  --static-export-dir ./dist/paper-static
+```
+
+或者以相同输入直接启动本地 Web UI：
 
 ```bash
 uv run deepresearch-flow paper db serve \
-  --input paper_infos.json \
-  --md-root ./docs \
-  --md-translated-root ./docs \
+  --input ./summary_json/deep_read.json \
+  --bibtex ./papers.bib \
+  --md-root ./md_simple \
+  --md-translated-root ./md_base64_translated \
+  --pdf-root ./pdfs \
   --host 127.0.0.1
 ```
 
-#### 步骤 4.1：启用语义搜索（可选）
+没有 BibTeX 文件时，省略 `--bibtex ./papers.bib`。
 
-从抽取结果构建 LanceDB 向量索引：
+#### 步骤 8：启用语义搜索（可选）
+
+从相同的已修复摘要和 Markdown 根目录构建 LanceDB 向量索引：
 
 ```bash
 uv run deepresearch-flow paper embed \
   --config ./config.toml \
-  --input ./paper_infos.json \
+  --input ./summary_json/deep_read.json \
+  --md-root ./md_simple \
+  --md-translated-root ./md_base64_translated \
   --max-concurrency 4 \
   --document-window 8 \
   --output-embed-db ./paper_vectors
@@ -250,13 +330,16 @@ uv run deepresearch-flow paper embed \
 
 ```bash
 uv run deepresearch-flow paper db serve \
-  --input ./paper_infos.json \
-  --md-root ./docs \
+  --input ./summary_json/deep_read.json \
+  --bibtex ./papers.bib \
+  --md-root ./md_simple \
+  --md-translated-root ./md_base64_translated \
+  --pdf-root ./pdfs \
   --embed-db ./paper_vectors \
   --search-access-token "your-token"
 ```
 
-#### 步骤 5：MCP 集成（可选）
+#### 步骤 9：MCP 集成（可选）
 
 项目通过 FastMCP 暴露有边界的 MCP 工具，供 AI Agent 访问。端点、鉴权和工具参考详见 [MCP 文档](docs/zh/api-and-mcp.md#mcp)。
 
