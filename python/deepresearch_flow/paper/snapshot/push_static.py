@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class PushStaticStats:
     uploaded: int = 0
+    overwritten: int = 0
     skipped: int = 0
     failed: int = 0
     failed_files: list[dict[str, str]] = field(default_factory=list)
@@ -60,10 +61,16 @@ def _ensure_parents(
 def _record(stats: PushStaticStats, rel_path: str, kind: str, error: str = "") -> None:
     """Record a result for stats and per-directory breakdown."""
     top = _top_dir(rel_path)
-    stats.per_directory.setdefault(top, {"uploaded": 0, "skipped": 0, "failed": 0})
+    stats.per_directory.setdefault(
+        top,
+        {"uploaded": 0, "overwritten": 0, "skipped": 0, "failed": 0},
+    )
     if kind == "uploaded":
         stats.uploaded += 1
         stats.per_directory[top]["uploaded"] += 1
+    elif kind == "overwritten":
+        stats.overwritten += 1
+        stats.per_directory[top]["overwritten"] += 1
     elif kind == "skipped":
         stats.skipped += 1
         stats.per_directory[top]["skipped"] += 1
@@ -81,6 +88,7 @@ def push_static_files(
     only_files: list[str] | None = None,
     on_file_result: Callable[[str, str, str], None] | None = None,
     concurrency: int = 1,
+    overwrite: bool = False,
 ) -> PushStaticStats:
     """Push static files to a remote storage backend.
 
@@ -100,35 +108,40 @@ def push_static_files(
 
     def process_file(rel_path: str) -> None:
         # Check existence — StorageAuthError propagates immediately.
-        if storage.exists(rel_path):
+        exists = storage.exists(rel_path)
+        if exists and not overwrite:
             with stats_lock:
                 _record(stats, rel_path, "skipped")
             if on_file_result:
                 on_file_result(rel_path, "skipped", "")
             return
 
-        # Ensure parent directories.
-        try:
-            with ensured_dirs_lock:
-                _ensure_parents(storage, rel_path, ensured_dirs)
-        except StorageAuthError:
-            raise
-        except Exception as exc:
-            with stats_lock:
-                _record(stats, rel_path, "failed", str(exc))
-            if on_file_result:
-                on_file_result(rel_path, "failed", str(exc))
-            return
+        # An existing file already has its parent directories.  Avoid creating
+        # them again when replacing it because some backends reject duplicate
+        # mkdir requests.
+        if not exists:
+            try:
+                with ensured_dirs_lock:
+                    _ensure_parents(storage, rel_path, ensured_dirs)
+            except StorageAuthError:
+                raise
+            except Exception as exc:
+                with stats_lock:
+                    _record(stats, rel_path, "failed", str(exc))
+                if on_file_result:
+                    on_file_result(rel_path, "failed", str(exc))
+                return
 
         # Upload file bytes.
         file_path = static_export_dir / rel_path
         try:
             data = file_path.read_bytes()
             storage.upload(rel_path, data)
+            result_kind = "overwritten" if exists else "uploaded"
             with stats_lock:
-                _record(stats, rel_path, "uploaded")
+                _record(stats, rel_path, result_kind)
             if on_file_result:
-                on_file_result(rel_path, "uploaded", "")
+                on_file_result(rel_path, result_kind, "")
         except StorageAuthError:
             raise
         except Exception as exc:

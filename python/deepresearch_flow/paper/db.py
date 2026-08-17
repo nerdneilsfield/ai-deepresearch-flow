@@ -1417,6 +1417,12 @@ def register_db_commands(db_group: click.Group) -> None:
         "--dry-run", is_flag=True, default=False, help="Extract and show stats without pushing"
     )
     @click.option(
+        "--overwrite",
+        is_flag=True,
+        default=False,
+        help="Replace matching remote papers and existing static files",
+    )
+    @click.option(
         "--retry-failed",
         "retry_failed_path",
         default=None,
@@ -1471,6 +1477,7 @@ def register_db_commands(db_group: click.Group) -> None:
         static_export_dir: str | None,
         config_path: str,
         dry_run: bool,
+        overwrite: bool,
         retry_failed_path: str | None,
         only_storage: bool,
         only_api: bool,
@@ -1607,17 +1614,22 @@ def register_db_commands(db_group: click.Group) -> None:
 
             def on_batch(batch_idx: int, batch_size: int, data: dict) -> None:
                 added = data.get("added", 0)
+                updated = data.get("updated", 0)
                 skipped = data.get("skipped", 0)
                 errors = len(data.get("errors", []))
-                console.print(
+                message = (
                     f"  Batch {batch_idx + 1}: "
                     f"[green]+{added}[/green] added, "
                     f"[yellow]{skipped}[/yellow] skipped"
-                    + (f", [red]{errors}[/red] errors" if errors else "")
                 )
+                if updated:
+                    message += f", [cyan]~{updated}[/cyan] overwritten"
+                if errors:
+                    message += f", [red]{errors}[/red] errors"
+                console.print(message)
 
             try:
-                stats = push_papers(papers, config, on_batch=on_batch)
+                stats = push_papers(papers, config, on_batch=on_batch, overwrite=overwrite)
             except Exception as exc:
                 raise click.ClickException(f"Push failed: {exc}")
 
@@ -1627,6 +1639,7 @@ def register_db_commands(db_group: click.Group) -> None:
             result_table.add_column("Value", justify="right")
             result_table.add_row("Total papers", str(stats.total))
             result_table.add_row("Added", f"[green]{stats.added}[/green]")
+            result_table.add_row("Overwritten", f"[cyan]{stats.updated}[/cyan]")
             result_table.add_row("Skipped (duplicates)", f"[yellow]{stats.skipped}[/yellow]")
             result_table.add_row(
                 "Errors", f"[red]{len(stats.errors)}[/red]" if stats.errors else "0"
@@ -1667,18 +1680,16 @@ def register_db_commands(db_group: click.Group) -> None:
                 if static_files
                 else None
             )
-            progress_counts = {"uploaded": 0, "skipped": 0, "failed": 0}
+            progress_counts = {"uploaded": 0, "overwritten": 0, "skipped": 0, "failed": 0}
 
             def on_static_file_result(rel_path: str, kind: str, error: str = "") -> None:
                 progress_counts[kind] += 1
                 if progress is not None:
                     progress.update(1)
                     progress.set_postfix(progress_counts, refresh=False)
-                if kind == "uploaded":
+                if kind in {"uploaded", "overwritten", "skipped"}:
                     return
-                elif kind == "skipped":
-                    return
-                elif kind == "failed":
+                if kind == "failed":
                     console.print(f"  [red]× failed[/red] {rel_path}: {error}")
 
             try:
@@ -1689,6 +1700,7 @@ def register_db_commands(db_group: click.Group) -> None:
                         only_files=only_files,
                         on_file_result=on_static_file_result,
                         concurrency=storage_concurrency,
+                        overwrite=overwrite,
                     )
             except StorageAuthError as exc:
                 raise click.ClickException(str(exc)) from exc
@@ -1699,6 +1711,7 @@ def register_db_commands(db_group: click.Group) -> None:
             static_table = Table(title="Static Files Push")
             static_table.add_column("Directory")
             static_table.add_column("Uploaded", justify="right")
+            static_table.add_column("Overwritten", justify="right")
             static_table.add_column("Skipped", justify="right")
             static_table.add_column("Failed", justify="right")
 
@@ -1707,6 +1720,7 @@ def register_db_commands(db_group: click.Group) -> None:
                 static_table.add_row(
                     dirname,
                     f"[green]{d['uploaded']}[/green]",
+                    f"[cyan]{d['overwritten']}[/cyan]",
                     f"[dim]{d['skipped']}[/dim]",
                     f"[red]{d['failed']}[/red]" if d["failed"] else "0",
                 )
@@ -1714,6 +1728,7 @@ def register_db_commands(db_group: click.Group) -> None:
             static_table.add_row(
                 "[bold]Total[/bold]",
                 f"[bold green]{static_stats.uploaded}[/bold green]",
+                f"[bold cyan]{static_stats.overwritten}[/bold cyan]",
                 f"[bold dim]{static_stats.skipped}[/bold dim]",
                 f"[bold red]{static_stats.failed}[/bold red]"
                 if static_stats.failed

@@ -64,6 +64,7 @@ def _validate_authenticated_url(url: str) -> None:
 class PushStats:
     total: int = 0
     added: int = 0
+    updated: int = 0
     skipped: int = 0
     errors: list[dict[str, Any]] = field(default_factory=list)
     paper_ids: list[str] = field(default_factory=list)
@@ -342,6 +343,7 @@ def _post_batch_with_retries(
     batch: list[dict[str, Any]],
     headers: dict[str, str],
     *,
+    overwrite: bool,
     retries: int,
     retry_backoff_seconds: float,
     sleep_fn: Callable[[float], None],
@@ -349,7 +351,11 @@ def _post_batch_with_retries(
     attempt = 0
     while True:
         try:
-            resp = client.post(url, json={"papers": batch}, headers=headers)
+            resp = client.post(
+                url,
+                json={"papers": batch, "overwrite": overwrite},
+                headers=headers,
+            )
             if attempt < retries and _should_retry_status(resp.status_code):
                 attempt += 1
                 sleep_fn(retry_backoff_seconds * attempt)
@@ -372,6 +378,7 @@ def push_papers(
     *,
     timeout: float = DEFAULT_TIMEOUT,
     on_batch: Any | None = None,
+    overwrite: bool = False,
     retries: int = DEFAULT_PUSH_RETRIES,
     retry_backoff_seconds: float = DEFAULT_PUSH_RETRY_BACKOFF_SECONDS,
     sleep_fn: Callable[[float], None] = time.sleep,
@@ -384,6 +391,7 @@ def push_papers(
         timeout: HTTP request timeout in seconds.
         on_batch: Optional callback ``(batch_index, batch_size, response_data)``
                   called after each successful batch.
+        overwrite: Replace matching remote papers instead of skipping them.
 
     Returns:
         Aggregated push statistics.
@@ -409,12 +417,14 @@ def push_papers(
                 url,
                 batch,
                 headers,
+                overwrite=overwrite,
                 retries=retries,
                 retry_backoff_seconds=retry_backoff_seconds,
                 sleep_fn=sleep_fn,
             )
 
             stats.added += data.get("added", 0)
+            stats.updated += data.get("updated", 0)
             stats.skipped += data.get("skipped", 0)
             stats.errors.extend(data.get("errors", []))
             stats.paper_ids.extend(data.get("paper_ids", []))

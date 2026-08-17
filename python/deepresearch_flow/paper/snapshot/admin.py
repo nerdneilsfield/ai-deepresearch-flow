@@ -148,6 +148,7 @@ def _resolve_paper_identity(
 @dataclass
 class _InsertStats:
     added: int = 0
+    updated: int = 0
     skipped: int = 0
     errors: list[dict[str, Any]] = field(default_factory=list)
     paper_ids: list[str] = field(default_factory=list)
@@ -158,6 +159,8 @@ def _insert_paper_metadata(
     paper: dict[str, Any],
     index: int,
     stats: _InsertStats,
+    *,
+    overwrite: bool = False,
 ) -> None:
     """Insert a single paper's metadata into the database.
 
@@ -173,8 +176,11 @@ def _insert_paper_metadata(
 
     existing = conn.execute("SELECT 1 FROM paper WHERE paper_id = ?", (paper_id,)).fetchone()
     if existing:
-        stats.skipped += 1
-        return
+        if not overwrite:
+            stats.skipped += 1
+            return
+        if not _delete_paper(conn, paper_id):
+            raise RuntimeError(f"failed to replace existing paper '{paper_id}'")
 
     year, month = _parse_year_month(paper)
     publication_date = str(paper.get("publication_date") or "").strip()
@@ -426,7 +432,10 @@ def _insert_paper_metadata(
         (paper_id, title.lower(), venue.lower()),
     )
 
-    stats.added += 1
+    if existing:
+        stats.updated += 1
+    else:
+        stats.added += 1
     stats.paper_ids.append(paper_id)
 
 
@@ -468,6 +477,12 @@ async def _admin_add_papers(request: Request) -> JSONResponse:
             status_code=400,
         )
 
+    overwrite = body.get("overwrite", False)
+    if type(overwrite) is not bool:
+        return JSONResponse(
+            {"error": "bad_request", "detail": "overwrite must be a boolean"}, status_code=400
+        )
+
     if len(papers) > MAX_BATCH_SIZE:
         return JSONResponse(
             {"error": "bad_request", "detail": f"batch size exceeds limit ({MAX_BATCH_SIZE})"},
@@ -483,15 +498,22 @@ async def _admin_add_papers(request: Request) -> JSONResponse:
             if not isinstance(paper, dict):
                 stats.errors.append({"index": idx, "error": "paper must be an object"})
                 continue
+            savepoint = f"paper_{idx}"
+            conn.execute(f"SAVEPOINT {savepoint}")
             try:
-                _insert_paper_metadata(conn, paper, idx, stats)
+                _insert_paper_metadata(conn, paper, idx, stats, overwrite=overwrite)
             except Exception as exc:
+                conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                conn.execute(f"RELEASE SAVEPOINT {savepoint}")
                 logger.exception("Failed to insert paper at index %d", idx)
                 stats.errors.append({"index": idx, "error": str(exc)})
+            else:
+                conn.execute(f"RELEASE SAVEPOINT {savepoint}")
 
-        if stats.added > 0:
+        if stats.added > 0 or stats.updated > 0:
             recompute_paper_index(conn)
             recompute_facet_counts(conn)
+            recompute_facet_edges(conn)
 
         conn.commit()
     except Exception as exc:
@@ -507,6 +529,7 @@ async def _admin_add_papers(request: Request) -> JSONResponse:
     return JSONResponse(
         {
             "added": stats.added,
+            "updated": stats.updated,
             "skipped": stats.skipped,
             "errors": stats.errors,
             "paper_ids": stats.paper_ids,
