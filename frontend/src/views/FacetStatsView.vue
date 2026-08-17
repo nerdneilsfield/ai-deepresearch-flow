@@ -6,6 +6,7 @@ import { DEFAULT_PAGE_SIZE } from '@/lib/config'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { PaginationJump } from '@/components/ui/pagination'
 import { useFacetStats } from '@/composables/useFacetStats'
 import { useSelectionStore } from '@/stores/selection'
 import { fetchJson, type SearchResponse } from '@/lib/api'
@@ -236,7 +237,7 @@ onMounted(async () => {
             @toggle-select="selection.toggle(item)"
             @toggle-summary="toggleSummary(item)"
           />
-          <div class="flex items-center justify-between pt-4">
+          <div class="flex flex-wrap items-center justify-between gap-2 pt-4">
             <Button
               variant="outline"
               size="sm"
@@ -245,9 +246,12 @@ onMounted(async () => {
             >
               {{ t('prev') }}
             </Button>
-            <span class="text-sm text-ink-500">
-              {{ t('pageInfo', { page: page, total: Math.ceil(papers.total / pageSize) }) }}
-            </span>
+            <div class="flex items-center gap-2">
+              <span class="text-sm text-ink-500">
+                {{ t('pageInfo', { page: page, total: Math.ceil(papers.total / pageSize) }) }}
+              </span>
+              <PaginationJump v-model="page" :total-pages="Math.ceil(papers.total / pageSize)" />
+            </div>
             <Button
               variant="outline"
               size="sm"

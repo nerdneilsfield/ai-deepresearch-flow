@@ -15,6 +15,7 @@ import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
+import { PaginationJump } from '@/components/ui/pagination'
 import SearchResultItem from '@/components/search/SearchResultItem.vue'
 import AdvancedSearchPanel from '@/components/AdvancedSearchPanel.vue'
 import AdvancedSearchResults from '@/components/AdvancedSearchResults.vue'
@@ -332,12 +333,18 @@ watch(facetQuery.error, (err) => {
           </div>
           <div
             v-if="facetList && facetList.total > facetPageSize && facetSearch.trim().length === 0"
-            class="flex items-center justify-between pt-2 text-xs text-ink-500"
+            class="flex flex-wrap items-center justify-between gap-1 pt-2 text-xs text-ink-500"
           >
             <Button variant="ghost" size="sm" :disabled="facetPage <= 1" @click="facetPage = Math.max(1, facetPage - 1)">
               {{ t('prev') }}
             </Button>
-            <span>{{ t('pageInfo', { page: facetPage, total: Math.ceil(facetList.total / facetPageSize) }) }}</span>
+            <div class="flex items-center gap-2">
+              <span>{{ t('pageInfo', { page: facetPage, total: Math.ceil(facetList.total / facetPageSize) }) }}</span>
+              <PaginationJump
+                v-model="facetPage"
+                :total-pages="Math.ceil(facetList.total / facetPageSize)"
+              />
+            </div>
             <Button
               variant="ghost"
               size="sm"
@@ -452,11 +459,14 @@ watch(facetQuery.error, (err) => {
           @toggle-summary="toggleSummary(item)"
         />
 
-        <div class="flex items-center justify-between pt-2 text-sm text-ink-500">
+        <div class="flex flex-wrap items-center justify-between gap-2 pt-2 text-sm text-ink-500">
           <Button variant="ghost" size="sm" :disabled="page <= 1" @click="page = Math.max(1, page - 1)">
             {{ t('prev') }}
           </Button>
-          <span>{{ t('pageInfo', { page: page, total: totalPages }) }}</span>
+          <div class="flex items-center gap-2">
+            <span>{{ t('pageInfo', { page: page, total: totalPages }) }}</span>
+            <PaginationJump v-model="page" :total-pages="totalPages" />
+          </div>
           <Button
             variant="ghost"
             size="sm"
