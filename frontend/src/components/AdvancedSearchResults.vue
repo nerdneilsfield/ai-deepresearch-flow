@@ -4,6 +4,8 @@ import { useI18n } from 'vue-i18n'
 import type { AdvancedSearchResult } from '@/lib/advanced-search'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import FavoriteRatingControl from '@/components/favorites/FavoriteRatingControl.vue'
+import type { FavoriteRating } from '@/types/favorites'
 
 const props = defineProps<{
   results: AdvancedSearchResult[]
@@ -12,10 +14,14 @@ const props = defineProps<{
   degradationMessage?: string | null
   selectedIds?: Set<string>
   selectionFull?: boolean
+  favoriteIds?: Set<string>
+  favoriteRatings?: Record<string, FavoriteRating>
 }>()
 
 const emit = defineEmits<{
   toggleSelect: [result: AdvancedSearchResult]
+  toggleFavorite: [result: AdvancedSearchResult]
+  setFavoriteRating: [result: AdvancedSearchResult, rating: FavoriteRating]
 }>()
 
 const router = useRouter()
@@ -36,6 +42,14 @@ function openPaper(result: AdvancedSearchResult) {
 function onToggleSelect(event: Event, result: AdvancedSearchResult) {
   event.stopPropagation()
   emit('toggleSelect', result)
+}
+
+function onToggleFavorite(result: AdvancedSearchResult) {
+  emit('toggleFavorite', result)
+}
+
+function onSetFavoriteRating(result: AdvancedSearchResult, rating: FavoriteRating) {
+  emit('setFavoriteRating', result, rating)
 }
 </script>
 
@@ -74,30 +88,38 @@ function onToggleSelect(event: Event, result: AdvancedSearchResult) {
       </p>
       <div class="mt-3 flex items-center justify-between gap-2">
         <div class="text-xs text-muted-foreground dark:text-ink-400">{{ result.chunk.field_name }}</div>
-        <TooltipProvider>
-          <Tooltip v-if="selectionFull && !selectedIds?.has(result.paper_id)">
-            <TooltipTrigger as-child>
-              <Button
-                size="sm"
-                variant="outline"
-                data-testid="advanced-result-select"
-                @click="onToggleSelect($event, result)"
-              >
-                {{ t('select') }}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>{{ t('selectionLimitReached') }}</TooltipContent>
-          </Tooltip>
-          <Button
-            v-else
-            size="sm"
-            variant="outline"
-            data-testid="advanced-result-select"
-            @click="onToggleSelect($event, result)"
-          >
-            {{ selectedIds?.has(result.paper_id) ? t('selected_btn') : t('select') }}
-          </Button>
-        </TooltipProvider>
+        <div class="flex items-center gap-1.5">
+          <FavoriteRatingControl
+            :is-favorite="favoriteIds?.has(result.paper_id) ?? false"
+            :rating="favoriteRatings?.[result.paper_id]"
+            @toggle-favorite="onToggleFavorite(result)"
+            @set-rating="onSetFavoriteRating(result, $event)"
+          />
+          <TooltipProvider>
+            <Tooltip v-if="selectionFull && !selectedIds?.has(result.paper_id)">
+              <TooltipTrigger as-child>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  data-testid="advanced-result-select"
+                  @click="onToggleSelect($event, result)"
+                >
+                  {{ t('select') }}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>{{ t('selectionLimitReached') }}</TooltipContent>
+            </Tooltip>
+            <Button
+              v-else
+              size="sm"
+              variant="outline"
+              data-testid="advanced-result-select"
+              @click="onToggleSelect($event, result)"
+            >
+              {{ selectedIds?.has(result.paper_id) ? t('selected_btn') : t('select') }}
+            </Button>
+          </TooltipProvider>
+        </div>
       </div>
       <p class="mt-3 text-sm text-foreground/80 dark:text-ink-200">{{ result.chunk.text }}</p>
       <dl class="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground dark:text-ink-400 sm:grid-cols-5">

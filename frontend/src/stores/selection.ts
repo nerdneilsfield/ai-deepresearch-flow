@@ -14,6 +14,15 @@ function saveMeta(count: number) {
   }
 }
 
+function uniqueItems(items: SearchItem[]) {
+  const seen = new Set<string>()
+  return items.filter((item) => {
+    if (seen.has(item.paper_id)) return false
+    seen.add(item.paper_id)
+    return true
+  })
+}
+
 export const useSelectionStore = defineStore('selection', {
   state: () => ({ 
     items: [] as SearchItem[],
@@ -46,12 +55,33 @@ export const useSelectionStore = defineStore('selection', {
       saveMeta(this.items.length)
     },
     async add(item: SearchItem) {
+      await this.merge([item])
+    },
+    async merge(items: SearchItem[]) {
       await this.init()
-      if (this.items.some(i => i.paper_id === item.paper_id)) return
-      if (this.items.length >= MAX_BATCH_SIZE) return
-      this.items.push(item)
-      await saveItem(item.paper_id, item)
+      const selectedIds = new Set(this.items.map((item) => item.paper_id))
+      const available = Math.max(0, MAX_BATCH_SIZE - this.items.length)
+      const additions = uniqueItems(items)
+        .filter((item) => !selectedIds.has(item.paper_id))
+        .slice(0, available)
+      if (additions.length === 0) return 0
+      this.items.push(...additions)
+      for (const item of additions) {
+        await saveItem(item.paper_id, item)
+      }
       saveMeta(this.items.length)
+      return additions.length
+    },
+    async replace(items: SearchItem[]) {
+      await this.init()
+      const nextItems = uniqueItems(items).slice(0, MAX_BATCH_SIZE)
+      this.items = nextItems
+      await clearAll()
+      for (const item of nextItems) {
+        await saveItem(item.paper_id, item)
+      }
+      saveMeta(this.items.length)
+      return nextItems.length
     },
     async remove(id: string) {
       await this.init()

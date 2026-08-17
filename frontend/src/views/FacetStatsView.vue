@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge'
 import { PaginationJump } from '@/components/ui/pagination'
 import { useFacetStats } from '@/composables/useFacetStats'
 import { useSelectionStore } from '@/stores/selection'
+import { useFavoriteStore } from '@/stores/favorites'
 import { fetchJson, type SearchResponse } from '@/lib/api'
 import { lazySnippet } from '@/lib/lazy'
 import SearchResultItem from '@/components/search/SearchResultItem.vue'
@@ -18,6 +19,7 @@ const route = useRoute()
 const router = useRouter()
 const { t } = useI18n()
 const selection = useSelectionStore()
+const favorites = useFavoriteStore()
 
 const facet = computed(() => String(route.params.facet || ''))
 const rawValue = computed(() => String(route.params.value || ''))
@@ -230,11 +232,15 @@ onMounted(async () => {
             :display-index="(page - 1) * pageSize + index + 1"
             :is-selected="selection.selectedIds.has(item.paper_id)"
             :selection-full="selection.isFull"
+            :is-favorite="favorites.favoriteIds.has(item.paper_id)"
+            :favorite-rating="favorites.ratingFor(item.paper_id)"
             :expanded="expanded[item.paper_id]"
             :expanded-loading="expandedLoading[item.paper_id]"
             :expanded-markdown="expandedMarkdown[item.paper_id]"
             :snippet-renderer="snippetRenderer"
             @toggle-select="selection.toggle(item)"
+            @toggle-favorite="favorites.toggle(item)"
+            @set-favorite-rating="favorites.setRating(item.paper_id, $event)"
             @toggle-summary="toggleSummary(item)"
           />
           <div class="flex flex-wrap items-center justify-between gap-2 pt-4">

@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { setLocale } from '@/i18n'
 import { useSelectionStore } from '@/stores/selection'
+import { useFavoriteStore } from '@/stores/favorites'
 import { useUiStore } from '@/stores/ui'
 // Toaster component imported but not directly used in template (used by toast function)
 // @ts-expect-error - Toaster is used by the toast utility function
@@ -25,6 +26,7 @@ const route = useRoute()
 const router = useRouter()
 const { locale, t } = useI18n()
 const selection = useSelectionStore()
+const favorites = useFavoriteStore()
 const ui = useUiStore()
 const isOnline = useOnline()
 const { y: scrollY } = useWindowScroll()
@@ -50,9 +52,10 @@ function scrollToTop() {
   window.scrollTo({ top: 0, behavior: 'smooth' })
 }
 
-// Initialize selection store from IndexedDB on app start
+// Initialize locally persisted lists from IndexedDB on app start.
 onMounted(() => {
   selection.init()
+  favorites.init()
 })
 </script>
 
@@ -97,6 +100,24 @@ onMounted(() => {
               @click="goto('/selected')"
             >
               {{ t('selected', { count: selection.count }) }}
+            </button>
+            <button
+              class="rounded-md px-3 py-1.5 font-medium transition-colors"
+              :class="activeRoute === 'favorites' ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'"
+              :aria-current="activeRoute === 'favorites' ? 'page' : undefined"
+              type="button"
+              @click="goto('/favorites')"
+            >
+              {{ t('favorites', { count: favorites.count }) }}
+            </button>
+            <button
+              class="rounded-md px-3 py-1.5 font-medium transition-colors"
+              :class="activeRoute === 'sync' ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'"
+              :aria-current="activeRoute === 'sync' ? 'page' : undefined"
+              type="button"
+              @click="goto('/sync')"
+            >
+              {{ t('sync') }}
             </button>
             <button
               class="rounded-md px-3 py-1.5 font-medium transition-colors"
@@ -161,6 +182,8 @@ onMounted(() => {
                 <Button variant="ghost" @click="goto('/')">{{ t('papers') }}</Button>
                 <Button variant="ghost" @click="goto('/stats')">{{ t('stats') }}</Button>
                 <Button variant="ghost" @click="goto('/selected')">{{ t('selected', { count: selection.count }) }}</Button>
+                <Button variant="ghost" @click="goto('/favorites')">{{ t('favorites', { count: favorites.count }) }}</Button>
+                <Button variant="ghost" @click="goto('/sync')">{{ t('sync') }}</Button>
                 <Button variant="ghost" @click="goto('/help')">{{ t('help') }}</Button>
               </nav>
             </SheetContent>

@@ -19,6 +19,16 @@ const router = createRouter({
       component: () => import('../views/SelectedView.vue'),
     },
     {
+      path: '/favorites',
+      name: 'favorites',
+      component: () => import('../views/FavoritesView.vue'),
+    },
+    {
+      path: '/sync',
+      name: 'sync',
+      component: () => import('../views/SyncView.vue'),
+    },
+    {
       path: '/stats',
       name: 'stats',
       component: () => import('../views/StatsView.vue'),

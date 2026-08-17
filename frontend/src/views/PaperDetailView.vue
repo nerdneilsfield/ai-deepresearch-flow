@@ -10,6 +10,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useUiStore } from '@/stores/ui'
 import { useSelectionStore } from '@/stores/selection'
+import { useFavoriteStore } from '@/stores/favorites'
 import { useRuntimeConfigStore } from '@/stores/runtime-config'
 import { useElementBounding, useMediaQuery, useWindowSize, refDebounced } from '@vueuse/core'
 import { usePaperDetail } from '@/composables/usePaperDetail'
@@ -17,6 +18,9 @@ import { useSplitView, type ViewMode } from '@/composables/useSplitView'
 import { resolveStaticBaseUrl } from '@/lib/static-base'
 import { defineSafeAsyncComponent } from '@/lib/async-component'
 import { ChevronLeft, ChevronRight } from 'lucide-vue-next'
+import FavoriteRatingControl from '@/components/favorites/FavoriteRatingControl.vue'
+import type { SearchItem } from '@/types/api'
+import type { FavoriteRating } from '@/types/favorites'
 
 const SummaryPanel = defineSafeAsyncComponent('Summary panel', () => import('@/components/SummaryPanel.vue'))
 const MarkdownPanel = defineSafeAsyncComponent('Markdown panel', () => import('@/components/MarkdownPanel.vue'))
@@ -28,6 +32,7 @@ const router = useRouter()
 const { t } = useI18n()
 const ui = useUiStore()
 const selection = useSelectionStore()
+const favorites = useFavoriteStore()
 const runtimeConfig = useRuntimeConfigStore()
 
 const paperId = computed(() => String(route.params.paperId || ''))
@@ -37,6 +42,36 @@ const loading = computed(() => detailQuery.isLoading.value)
 const error = computed(() => (detailQuery.error.value ? 'Failed to load paper detail.' : ''))
 const advancedChunkText = computed(() => String(route.query.advanced_chunk_text || '').trim())
 const advancedChunkField = computed(() => String(route.query.advanced_chunk_field || '').trim())
+
+const favoriteItem = computed<SearchItem | null>(() => {
+  const paper = detail.value
+  if (!paper) return null
+  return {
+    paper_id: paper.paper_id,
+    title: paper.title,
+    year: paper.year,
+    venue: paper.venue,
+    authors: paper.authors,
+    preferred_summary_template: paper.preferred_summary_template,
+    has_pdf: Boolean(paper.pdf_url),
+    has_source: Boolean(paper.source_md_url),
+    has_translated: Boolean(Object.keys(paper.translated_md_urls || {}).length),
+    pdf_url: paper.pdf_url,
+    source_md_url: paper.source_md_url,
+    translated_md_urls: paper.translated_md_urls,
+    images_base_url: paper.images_base_url,
+    summary_url: paper.summary_url,
+    manifest_url: paper.manifest_url,
+  }
+})
+
+function toggleFavorite() {
+  if (favoriteItem.value) void favorites.toggle(favoriteItem.value)
+}
+
+function setFavoriteRating(rating: FavoriteRating) {
+  void favorites.setRating(paperId.value, rating)
+}
 
 const prevId = computed(() => selection.getPrevId(paperId.value))
 const nextId = computed(() => selection.getNextId(paperId.value))
@@ -432,6 +467,13 @@ watch([viewMode, leftView, rightView, summaryTemplate], () => {
       >
         <div class="flex flex-wrap items-center justify-between gap-2 text-xs text-ink-500">
           <div class="flex flex-wrap items-center gap-2 lg:flex-nowrap">
+            <FavoriteRatingControl
+              v-if="favoriteItem"
+              :is-favorite="favorites.favoriteIds.has(paperId)"
+              :rating="favorites.ratingFor(paperId)"
+              @toggle-favorite="toggleFavorite"
+              @set-rating="setFavoriteRating"
+            />
             <template v-if="selection.selectedIds.has(paperId)">
               <div class="flex items-center gap-1 border-r border-ink-200 pr-2 mr-1">
                 <Button size="icon-sm" variant="ghost" :disabled="!prevId" @click="navigateTo(prevId)" title="Previous in selection">

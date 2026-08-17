@@ -6,15 +6,19 @@ import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { ChevronDown, ChevronUp } from 'lucide-vue-next'
 import RenderedMarkdown from '@/components/RenderedMarkdown.vue'
+import FavoriteRatingControl from '@/components/favorites/FavoriteRatingControl.vue'
 import { resolveStaticBaseUrl } from '@/lib/static-base'
 import { useRuntimeConfigStore } from '@/stores/runtime-config'
 import { useI18n } from 'vue-i18n'
+import type { FavoriteRating } from '@/types/favorites'
 
 const props = withDefaults(defineProps<{
   item: SearchResponse['items'][number]
   displayIndex: number
   isSelected: boolean
   selectionFull: boolean
+  isFavorite?: boolean
+  favoriteRating?: FavoriteRating
   expanded?: boolean
   expandedMarkdown?: string
   expandedLoading?: boolean
@@ -23,11 +27,14 @@ const props = withDefaults(defineProps<{
   expanded: false,
   expandedMarkdown: '',
   expandedLoading: false,
+  isFavorite: false,
 })
 
 const emit = defineEmits<{
   toggleSelect: []
   toggleSummary: []
+  toggleFavorite: []
+  setFavoriteRating: [rating: FavoriteRating]
 }>()
 
 const { t } = useI18n()
@@ -59,7 +66,7 @@ function formatAuthors(authors?: string[]) {
       <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div class="space-y-1">
           <router-link
-            :to="`/paper/${item.paper_id}`"
+            :to="{ name: 'paper', params: { paperId: item.paper_id } }"
             class="font-display-serif text-lg font-semibold leading-snug tracking-tight text-foreground transition-colors hover:text-primary"
           >
             {{ item.title }}
@@ -83,6 +90,12 @@ function formatAuthors(authors?: string[]) {
               {{ isSelected ? t('selected_btn') : t('select') }}
             </Button>
           </TooltipProvider>
+          <FavoriteRatingControl
+            :is-favorite="isFavorite"
+            :rating="favoriteRating"
+            @toggle-favorite="emit('toggleFavorite')"
+            @set-rating="emit('setFavoriteRating', $event)"
+          />
           <Badge variant="slate">#{{ displayIndex }}</Badge>
         </div>
       </div>

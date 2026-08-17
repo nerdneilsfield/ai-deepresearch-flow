@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useSelectionStore } from '@/stores/selection'
+import { useFavoriteStore } from '@/stores/favorites'
 import { useUiStore } from '@/stores/ui'
 import { lazySnippet } from '@/lib/lazy'
 import { useSearchData, useSearchState } from '@/composables/useSearch'
@@ -26,6 +27,7 @@ import {
   type AdvancedSearchResult,
 } from '@/lib/api'
 import type { SearchItem } from '@/types/api'
+import type { FavoriteRating } from '@/types/favorites'
 import { useAdvancedSearchAuth } from '@/composables/useAdvancedSearchAuth'
 import { BarChart2 } from 'lucide-vue-next'
 
@@ -33,6 +35,7 @@ const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
 const selection = useSelectionStore()
+const favorites = useFavoriteStore()
 const ui = useUiStore()
 
 const searchState = useSearchState()
@@ -151,7 +154,7 @@ async function onAdvancedSearch(params: AdvancedSearchParams) {
   }
 }
 
-function advancedResultToSelectionItem(result: AdvancedSearchResult): SearchItem {
+function advancedResultToSearchItem(result: AdvancedSearchResult): SearchItem {
   return {
     paper_id: result.paper_id,
     title: result.paper.title,
@@ -172,7 +175,15 @@ function advancedResultToSelectionItem(result: AdvancedSearchResult): SearchItem
 }
 
 function onAdvancedToggleSelect(result: AdvancedSearchResult) {
-  void selection.toggle(advancedResultToSelectionItem(result))
+  void selection.toggle(advancedResultToSearchItem(result))
+}
+
+function onAdvancedToggleFavorite(result: AdvancedSearchResult) {
+  void favorites.toggle(advancedResultToSearchItem(result))
+}
+
+function onAdvancedSetFavoriteRating(result: AdvancedSearchResult, rating: FavoriteRating) {
+  void favorites.setRating(result.paper_id, rating)
 }
 
 watch(
@@ -426,7 +437,11 @@ watch(facetQuery.error, (err) => {
         :degradation-message="advancedDegradationMessage"
         :selected-ids="selection.selectedIds"
         :selection-full="selection.isFull"
+        :favorite-ids="favorites.favoriteIds"
+        :favorite-ratings="favorites.ratingsById"
         @toggle-select="onAdvancedToggleSelect"
+        @toggle-favorite="onAdvancedToggleFavorite"
+        @set-favorite-rating="onAdvancedSetFavoriteRating"
       />
 
       <div v-if="loading" class="space-y-3" role="status" aria-live="polite">
@@ -451,11 +466,15 @@ watch(facetQuery.error, (err) => {
           :display-index="item.paper_index || (page - 1) * pageSizeNum + index + 1"
           :is-selected="selection.selectedIds.has(item.paper_id)"
           :selection-full="selection.isFull"
+          :is-favorite="favorites.favoriteIds.has(item.paper_id)"
+          :favorite-rating="favorites.ratingFor(item.paper_id)"
           :expanded="expanded[item.paper_id]"
           :expanded-markdown="expandedMarkdown[item.paper_id]"
           :expanded-loading="expandedLoading[item.paper_id]"
           :snippet-renderer="snippetRenderer"
           @toggle-select="selection.toggle(item)"
+          @toggle-favorite="favorites.toggle(item)"
+          @set-favorite-rating="favorites.setRating(item.paper_id, $event)"
           @toggle-summary="toggleSummary(item)"
         />
 

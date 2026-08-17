@@ -2,11 +2,12 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useSelectionStore } from '@/stores/selection'
+import { useFavoriteStore } from '@/stores/favorites'
 import { useUiStore } from '@/stores/ui'
 import { MAX_BATCH_SIZE } from '@/lib/config'
 import { getPaperDetail, matchBibtex } from '@/lib/api'
 import type { BibtexMatchedItem, BibtexUnmatchedItem } from '@/lib/api'
-import type { SearchItem } from '@/types/api'
+import { SearchItemSchema, type SearchItem } from '@/types/api'
 import {
   discoverSummaryTemplates,
   downloadSelectedJsonl,
@@ -16,6 +17,7 @@ import {
   type SelectedDownloadOptions,
 } from '@/lib/selected-export'
 import { lazySaveAs, lazySnippet } from '@/lib/lazy'
+import { readLocalLibraryImportText } from '@/lib/local-library-import'
 import { useExpandableSummary } from '@/composables/useExpandableSummary'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
@@ -23,6 +25,7 @@ import SearchResultItem from '@/components/search/SearchResultItem.vue'
 import { Download, Upload, Save, Trash2, FileDown, FileUp } from 'lucide-vue-next'
 
 const selection = useSelectionStore()
+const favorites = useFavoriteStore()
 const ui = useUiStore()
 const { t } = useI18n()
 const downloading = ref(false)
@@ -30,6 +33,8 @@ const progress = ref(0)
 const status = ref('')
 const sizeBytes = ref(0)
 const fileInput = ref<HTMLInputElement | null>(null)
+const listImportMode = ref<'merge' | 'replace'>('merge')
+const listShowModePopover = ref(false)
 const bibFileInput = ref<HTMLInputElement | null>(null)
 const bibImporting = ref(false)
 const bibProgress = ref(0)
@@ -239,33 +244,39 @@ async function downloadAll() {
 
 async function saveList() {
   const saveAs = await lazySaveAs()
-  const slim = selection.items.map((item) => ({
-    paper_id: item.paper_id,
-    paper_index: item.paper_index,
-    title: item.title,
-  }))
-  const data = JSON.stringify(slim, null, 2)
+  const data = JSON.stringify({
+    type: 'paperdb-selection',
+    version: 1,
+    items: selection.items,
+  }, null, 2)
   const blob = new Blob([data], { type: 'application/json;charset=utf-8' })
   saveAs(blob, `paperdb_list_${Date.now()}.json`)
 }
 
-function triggerLoadList() {
+function triggerLoadList(mode: 'merge' | 'replace') {
+  listImportMode.value = mode
+  listShowModePopover.value = false
   fileInput.value?.click()
 }
 
-function isFullItem(item: any): item is SearchItem {
-  return item && typeof item.paper_id === 'string' && (item.title || item.venue || item.authors)
+function parseFullItem(item: unknown): SearchItem | null {
+  if (!item || typeof item !== 'object') return null
+  const record = item as { paper_id?: unknown; title?: unknown; venue?: unknown; authors?: unknown }
+  if (typeof record.paper_id !== 'string' || (!record.title && !record.venue && !record.authors)) return null
+  const parsed = SearchItemSchema.safeParse(item)
+  return parsed.success ? parsed.data : null
 }
 
 function toSearchItem(entry: any, detail?: any): SearchItem {
-  if (detail) {
-    return {
-      paper_id: detail.paper_id,
-      paper_index: entry.paper_index,
-      title: detail.title || entry.title || '',
+  const paperIndex = typeof entry.paper_index === 'number' ? entry.paper_index : undefined
+  const candidate = detail
+    ? {
+      paper_id: String(detail.paper_id),
+      paper_index: paperIndex,
+      title: String(detail.title || entry.title || ''),
       year: detail.year ?? '',
       venue: detail.venue ?? '',
-      authors: detail.authors ?? [],
+      authors: Array.isArray(detail.authors) ? detail.authors.filter((author: unknown): author is string => typeof author === 'string') : [],
       summary_preview: detail.summary_preview,
       snippet_markdown: detail.snippet_markdown,
       preferred_summary_template: detail.preferred_summary_template,
@@ -279,72 +290,76 @@ function toSearchItem(entry: any, detail?: any): SearchItem {
       summary_url: detail.summary_url,
       manifest_url: detail.manifest_url,
     }
-  }
-
-  return {
-    paper_id: entry.paper_id,
-    paper_index: entry.paper_index,
-    title: entry.title || '',
-    year: entry.year ?? '',
-    venue: entry.venue ?? '',
-    authors: entry.authors ?? [],
-    summary_preview: entry.summary_preview,
-    snippet_markdown: entry.snippet_markdown,
-    preferred_summary_template: entry.preferred_summary_template,
-    has_pdf: entry.has_pdf,
-    has_source: entry.has_source,
-    has_translated: entry.has_translated,
-    pdf_url: entry.pdf_url ?? null,
-    source_md_url: entry.source_md_url ?? null,
-    translated_md_urls: entry.translated_md_urls ?? {},
-    images_base_url: entry.images_base_url,
-    summary_url: entry.summary_url,
-    manifest_url: entry.manifest_url,
-  }
+    : entry
+  const parsed = SearchItemSchema.safeParse(candidate)
+  if (!parsed.success) throw new Error('Invalid selected-paper record')
+  return parsed.data
 }
 
-function handleFileLoad(event: Event) {
+function listEntries(payload: unknown): unknown[] {
+  let entries: unknown[]
+  if (Array.isArray(payload)) {
+    entries = payload
+  } else if (
+    payload &&
+    typeof payload === 'object' &&
+    (payload as { type?: unknown }).type === 'paperdb-selection' &&
+    Array.isArray((payload as { items?: unknown }).items)
+  ) {
+    entries = (payload as { items: unknown[] }).items
+  } else {
+    throw new Error('Invalid selection list format')
+  }
+  if (entries.length > MAX_BATCH_SIZE) throw new Error('Selected list exceeds the maximum size')
+  return entries
+}
+
+async function resolveSelectionItems(entries: unknown[]) {
+  const seen = new Set<string>()
+  const resolved: SearchItem[] = []
+  for (const entry of entries) {
+    if (!entry || typeof entry !== 'object' || typeof (entry as { paper_id?: unknown }).paper_id !== 'string') continue
+    const paperId = (entry as { paper_id: string }).paper_id
+    if (seen.has(paperId)) continue
+    seen.add(paperId)
+    const fullItem = parseFullItem(entry)
+    if (fullItem) {
+      resolved.push(fullItem)
+      continue
+    }
+    try {
+      const detail = await getPaperDetail(paperId)
+      resolved.push(toSearchItem(entry, detail))
+    } catch {
+      console.warn(`Failed to fetch detail for ${paperId}`)
+    }
+  }
+  return resolved
+}
+
+async function handleFileLoad(event: Event) {
   const target = event.target as HTMLInputElement
   const file = target.files?.[0]
   if (!file) return
 
-  const reader = new FileReader()
-  reader.onload = async (e) => {
-    try {
-      const content = e.target?.result as string
-      const items = JSON.parse(content)
-      if (Array.isArray(items)) {
-        const validItems = items.filter((i: any) => i && typeof i.paper_id === 'string')
-        selection.clear()
-        let loaded = 0
-        for (const entry of validItems) {
-          if (isFullItem(entry)) {
-            selection.add(toSearchItem(entry))
-            loaded += 1
-            continue
-          }
-          try {
-            const detail = await getPaperDetail(entry.paper_id)
-            selection.add(toSearchItem(entry, detail))
-            loaded += 1
-          } catch (err) {
-            console.warn(`Failed to fetch detail for ${entry.paper_id}`)
-          }
-        }
-        ui.pushToast(`Loaded ${loaded} papers`, 'success')
-      } else {
-        throw new Error('Invalid format')
-      }
-    } catch (err) {
-      ui.pushToast('Failed to load list: Invalid JSON', 'error')
-    } finally {
-      if (fileInput.value) fileInput.value.value = ''
-    }
+  try {
+    const entries = listEntries(JSON.parse(await readLocalLibraryImportText(file)))
+    const items = await resolveSelectionItems(entries)
+    if (entries.length > 0 && items.length === 0) throw new Error('No valid selected papers')
+    const imported = listImportMode.value === 'replace'
+      ? await selection.replace(items)
+      : await selection.merge(items)
+    ui.pushToast(t('listImportCompleted', { count: imported }), 'success')
+  } catch (err) {
+    console.error(err)
+    ui.pushToast(t('listImportFailed'), 'error')
+  } finally {
+    target.value = ''
   }
-  reader.readAsText(file)
 }
 
 const BIB_BATCH_SIZE = 50
+const MAX_BIBTEX_IMPORT_ENTRIES = MAX_BATCH_SIZE
 const BIB_ENTRY_RE = /@(?=\w+\s*\{)/g
 
 function splitBibEntries(text: string): string[] {
@@ -382,7 +397,7 @@ async function handleBibFileLoad(event: Event) {
   bibShowUnmatched.value = true
 
   try {
-    const text = await file.text()
+    const text = await readLocalLibraryImportText(file)
     if (!text.trim()) {
       ui.pushToast('BibTeX file is empty', 'error')
       return
@@ -391,6 +406,10 @@ async function handleBibFileLoad(event: Event) {
     const entries = splitBibEntries(text)
     if (entries.length === 0) {
       ui.pushToast('No BibTeX entries found in file', 'error')
+      return
+    }
+    if (entries.length > MAX_BIBTEX_IMPORT_ENTRIES) {
+      ui.pushToast(t('bibtexImportTooMany', { count: MAX_BIBTEX_IMPORT_ENTRIES }), 'error')
       return
     }
 
@@ -481,7 +500,7 @@ async function handleBibFileLoad(event: Event) {
         <input
           ref="fileInput"
           type="file"
-          accept=".json"
+          accept=".json,application/json"
           class="hidden"
           @change="handleFileLoad"
         />
@@ -495,9 +514,28 @@ async function handleBibFileLoad(event: Event) {
         <Button variant="outline" size="sm" @click="saveList" :disabled="selection.count === 0">
           <Save class="mr-2 h-4 w-4" /> {{ t('saveList') }}
         </Button>
-        <Button variant="outline" size="sm" @click="triggerLoadList">
-          <Upload class="mr-2 h-4 w-4" /> {{ t('loadList') }}
-        </Button>
+        <div class="relative">
+          <Button variant="outline" size="sm" @click="listShowModePopover = !listShowModePopover">
+            <Upload class="mr-2 h-4 w-4" /> {{ t('loadList') }}
+          </Button>
+          <div
+            v-if="listShowModePopover"
+            class="absolute right-0 top-full z-10 mt-1 w-48 rounded-md border border-border/60 bg-popover p-1 text-popover-foreground shadow-lg dark:border-ink-700 dark:bg-ink-900"
+          >
+            <button
+              class="w-full rounded px-3 py-1.5 text-left text-sm hover:bg-muted dark:hover:bg-ink-800"
+              @click="triggerLoadList('merge')"
+            >
+              {{ t('listImportMerge') }}
+            </button>
+            <button
+              class="w-full rounded px-3 py-1.5 text-left text-sm hover:bg-muted dark:hover:bg-ink-800"
+              @click="triggerLoadList('replace')"
+            >
+              {{ t('listImportReplace') }}
+            </button>
+          </div>
+        </div>
         <div class="relative">
           <Button variant="outline" size="sm" @click="bibShowModePopover = !bibShowModePopover">
             <FileUp class="mr-2 h-4 w-4" /> {{ t('importBibtex') || 'Import BibTeX' }}
@@ -682,11 +720,15 @@ async function handleBibFileLoad(event: Event) {
         :display-index="index + 1"
         :is-selected="true"
         :selection-full="selection.isFull"
+        :is-favorite="favorites.favoriteIds.has(item.paper_id)"
+        :favorite-rating="favorites.ratingFor(item.paper_id)"
         :expanded="expanded[item.paper_id]"
         :expanded-markdown="expandedMarkdown[item.paper_id]"
         :expanded-loading="expandedLoading[item.paper_id]"
         :snippet-renderer="snippetRenderer"
         @toggle-select="selection.toggle(item)"
+        @toggle-favorite="favorites.toggle(item)"
+        @set-favorite-rating="favorites.setRating(item.paper_id, $event)"
         @toggle-summary="toggleSummary(item)"
       />
     </div>
