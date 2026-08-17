@@ -134,7 +134,189 @@ class TestAdminAddPapers(unittest.TestCase):
         resp = self.client.post("/papers", json={"papers": [paper]}, headers=self.headers)
         data = resp.json()
         assert data["added"] == 0
+        assert data["updated"] == 0
         assert data["skipped"] == 1
+
+    def test_default_duplicate_keeps_existing_data(self) -> None:
+        original = _sample_paper(
+            paper_id="remote-paper-id",
+            doi="10.1000/keep-existing",
+            paper_title="Original Title",
+            templates={
+                "simple": {
+                    "paper_title": "Original Title",
+                    "summary": "Original summary.",
+                }
+            },
+        )
+        replacement = _sample_paper(
+            paper_id="incoming-paper-id",
+            doi="10.1000/keep-existing",
+            paper_title="Replacement Title",
+            templates={
+                "deep_read": {
+                    "paper_title": "Replacement Title",
+                    "summary": "Replacement deep read.",
+                }
+            },
+        )
+
+        self.client.post("/papers", json={"papers": [original]}, headers=self.headers)
+        resp = self.client.post("/papers", json={"papers": [replacement]}, headers=self.headers)
+
+        assert resp.status_code == 200
+        assert resp.json()["skipped"] == 1
+        conn = sqlite3.connect(str(self.db_path))
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute(
+                "SELECT paper_id, title FROM paper WHERE paper_id = ?", ("remote-paper-id",)
+            ).fetchone()
+            assert row is not None
+            assert row["title"] == "Original Title"
+            templates = {
+                item["template_tag"]
+                for item in conn.execute(
+                    "SELECT template_tag FROM paper_summary WHERE paper_id = ?",
+                    ("remote-paper-id",),
+                )
+            }
+            assert templates == {"simple"}
+        finally:
+            conn.close()
+
+    def test_overwrite_replaces_existing_data_and_preserves_remote_id(self) -> None:
+        original = _sample_paper(
+            paper_id="remote-paper-id",
+            doi="10.1000/replace-existing",
+            paper_title="Original Title",
+            paper_authors=["Old Author"],
+            keywords=["old-keyword"],
+            paper_institutions=["Old Institute"],
+            ai_generated_tags=["old-tag"],
+            source_hash="old-source-hash",
+            templates={
+                "simple": {
+                    "paper_title": "Original Title",
+                    "summary": "Original summary.",
+                }
+            },
+            translations={"zh": "old-translation-hash"},
+            bibtex={
+                "type": "article",
+                "key": "old-entry",
+                "raw": "@article{old-entry, title={Original Title}}",
+            },
+        )
+        replacement = _sample_paper(
+            paper_id="incoming-paper-id",
+            doi="10.1000/replace-existing",
+            paper_title="Replacement Title",
+            paper_authors=["New Author"],
+            keywords=["new-keyword"],
+            paper_institutions=["New Institute"],
+            ai_generated_tags=["new-tag"],
+            source_hash="new-source-hash",
+            templates={
+                "deep_read": {
+                    "paper_title": "Replacement Title",
+                    "summary": "Replacement deep read summary.",
+                }
+            },
+            translations={"en": "new-translation-hash"},
+        )
+
+        created = self.client.post("/papers", json={"papers": [original]}, headers=self.headers)
+        assert created.status_code == 200
+        resp = self.client.post(
+            "/papers",
+            json={"papers": [replacement], "overwrite": True},
+            headers=self.headers,
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["added"] == 0
+        assert data["updated"] == 1
+        assert data["skipped"] == 0
+        assert data["paper_ids"] == ["remote-paper-id"]
+
+        conn = sqlite3.connect(str(self.db_path))
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute(
+                "SELECT paper_id, title, source_hash, paper_index FROM paper WHERE paper_id = ?",
+                ("remote-paper-id",),
+            ).fetchone()
+            assert row is not None
+            assert row["title"] == "Replacement Title"
+            assert row["source_hash"] == "new-source-hash"
+            assert row["paper_index"] == 1
+
+            templates = {
+                item["template_tag"]
+                for item in conn.execute(
+                    "SELECT template_tag FROM paper_summary WHERE paper_id = ?",
+                    ("remote-paper-id",),
+                )
+            }
+            assert templates == {"deep_read"}
+            translations = {
+                item["lang"]: item["md_content_hash"]
+                for item in conn.execute(
+                    "SELECT lang, md_content_hash FROM paper_translation WHERE paper_id = ?",
+                    ("remote-paper-id",),
+                )
+            }
+            assert translations == {"en": "new-translation-hash"}
+            bibtex_count = conn.execute(
+                "SELECT COUNT(*) AS count FROM paper_bibtex WHERE paper_id = ?",
+                ("remote-paper-id",),
+            ).fetchone()["count"]
+            assert bibtex_count == 0
+
+            authors = {
+                item["value"]
+                for item in conn.execute(
+                    "SELECT a.value FROM author a "
+                    "JOIN paper_author pa ON a.author_id = pa.author_id "
+                    "WHERE pa.paper_id = ?",
+                    ("remote-paper-id",),
+                )
+            }
+            assert authors == {"new author"}
+            fts = conn.execute(
+                "SELECT title, summary FROM paper_fts WHERE paper_id = ?", ("remote-paper-id",)
+            ).fetchone()
+            assert fts is not None
+            assert "replacement title" in fts["title"].lower()
+            assert "replacement deep read summary" in fts["summary"].lower()
+
+            alias = conn.execute(
+                "SELECT paper_id FROM paper_key_alias WHERE paper_key = ?",
+                ("doi:10.1000/replace-existing",),
+            ).fetchone()
+            assert alias is not None
+            assert alias["paper_id"] == "remote-paper-id"
+            stale_edge = conn.execute(
+                "SELECT 1 FROM facet_edge e "
+                "JOIN facet_node n ON n.node_id IN (e.node_id_a, e.node_id_b) "
+                "WHERE n.facet_type = ? AND n.value = ?",
+                ("author", "old author"),
+            ).fetchone()
+            assert stale_edge is None
+        finally:
+            conn.close()
+
+    def test_overwrite_must_be_boolean(self) -> None:
+        resp = self.client.post(
+            "/papers",
+            json={"papers": [], "overwrite": "true"},
+            headers=self.headers,
+        )
+
+        assert resp.status_code == 400
+        assert resp.json() == {"error": "bad_request", "detail": "overwrite must be a boolean"}
 
     def test_missing_title_is_error(self) -> None:
         paper = _sample_paper()

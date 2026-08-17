@@ -137,6 +137,37 @@ class TestPushStaticFiles:
         assert stats.skipped == 4
         assert stats.failed == 0
 
+    def test_overwrite_existing_files(self, tmp_path: Path) -> None:
+        root = _setup_static_dir(tmp_path)
+        existing = set(discover_static_files(root))
+        storage = FakeStorage(existing=existing)
+
+        stats = push_static_files(root, storage, overwrite=True)
+
+        assert stats.uploaded == 0
+        assert stats.overwritten == 4
+        assert stats.skipped == 0
+        assert stats.failed == 0
+        assert set(storage.uploaded) == existing
+        assert storage.uploaded["pdf/abc123.pdf"] == b"%PDF-fake"
+
+    def test_failed_overwrite_keeps_existing_file(self, tmp_path: Path) -> None:
+        root = _setup_static_dir(tmp_path)
+        storage = FakeStorage(existing={"pdf/abc123.pdf"}, fail_uploads=True)
+
+        stats = push_static_files(
+            root,
+            storage,
+            only_files=["pdf/abc123.pdf"],
+            overwrite=True,
+        )
+
+        assert stats.overwritten == 0
+        assert stats.skipped == 0
+        assert stats.failed == 1
+        assert storage.exists("pdf/abc123.pdf") is True
+        assert storage.uploaded == {}
+
     def test_record_failed_files(self, tmp_path: Path) -> None:
         root = _setup_static_dir(tmp_path)
         storage = FakeStorage(fail_uploads=True)

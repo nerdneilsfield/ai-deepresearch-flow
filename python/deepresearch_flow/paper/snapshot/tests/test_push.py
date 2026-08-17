@@ -325,8 +325,10 @@ class TestPushPapers(TestCase):
 
         # Mock httpx.Client to use Starlette TestClient
         batches_received: list[dict] = []
+        request_payloads: list[dict] = []
 
         def mock_post(url: str, json: dict, headers: dict) -> mock.MagicMock:
+            request_payloads.append(json)
             resp = client.post("/papers", json=json, headers=headers)
             result = mock.MagicMock()
             result.status_code = resp.status_code
@@ -357,6 +359,7 @@ class TestPushPapers(TestCase):
         assert not stats.errors
         assert len(stats.paper_ids) == 2
         assert stats.batches_sent == 1
+        assert request_payloads == [{"papers": papers, "overwrite": False}]
 
         # Verify target DB has the papers
         conn = sqlite3.connect(str(self.target_db))
@@ -373,6 +376,57 @@ class TestPushPapers(TestCase):
             assert "alice" in author_names
         finally:
             conn.close()
+
+    def test_push_overwrite_sends_flag_and_aggregates_updates(self) -> None:
+        client = TestClient(self.admin_app, raise_server_exceptions=False)
+        request_payloads: list[dict] = []
+
+        def mock_post(url: str, json: dict, headers: dict) -> mock.MagicMock:
+            request_payloads.append(json)
+            resp = client.post("/papers", json=json, headers=headers)
+            result = mock.MagicMock()
+            result.status_code = resp.status_code
+            result.json.return_value = resp.json()
+            result.raise_for_status = mock.MagicMock()
+            if resp.status_code >= 400:
+                result.raise_for_status.side_effect = Exception(f"HTTP {resp.status_code}")
+            return result
+
+        original = {
+            "paper_id": "remote-paper-id",
+            "paper_title": "Original Title",
+            "doi": "10.1000/push-overwrite",
+            "templates": {"simple": {"summary": "Original summary."}},
+        }
+        replacement = {
+            "paper_id": "incoming-paper-id",
+            "paper_title": "Replacement Title",
+            "doi": "10.1000/push-overwrite",
+            "templates": {"deep_read": {"summary": "Replacement summary."}},
+        }
+        config = RemoteConfig(
+            api_base_url="http://testserver", admin_token=ADMIN_TOKEN, batch_size=10
+        )
+
+        with mock.patch("deepresearch_flow.paper.snapshot.push.httpx.Client") as mock_cls:
+            inst = mock.MagicMock()
+            inst.post = mock_post
+            inst.__enter__ = mock.MagicMock(return_value=inst)
+            inst.__exit__ = mock.MagicMock(return_value=False)
+            mock_cls.return_value = inst
+
+            first = push_papers([original], config)
+            second = push_papers([replacement], config, overwrite=True)
+
+        assert first.added == 1
+        assert second.added == 0
+        assert second.updated == 1
+        assert second.skipped == 0
+        assert second.paper_ids == ["remote-paper-id"]
+        assert request_payloads == [
+            {"papers": [original], "overwrite": False},
+            {"papers": [replacement], "overwrite": True},
+        ]
 
     def test_push_idempotent(self) -> None:
         """Pushing the same papers twice should skip on second push."""
