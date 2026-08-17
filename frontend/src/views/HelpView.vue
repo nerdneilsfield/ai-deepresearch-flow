@@ -7,6 +7,7 @@ import {
   ArrowRight,
   BarChart3,
   BookOpen,
+  Cloud,
   Columns2,
   Download,
   Eye,
@@ -16,6 +17,8 @@ import {
   ListChecks,
   Route,
   Search,
+  ShieldCheck,
+  Star,
   Wind,
 } from 'lucide-vue-next'
 
@@ -25,6 +28,7 @@ const sectionLinks = computed(() => [
   { id: 'quick-start', label: t('helpSectionQuickStart') },
   { id: 'pages', label: t('helpSectionPages') },
   { id: 'workflows', label: t('helpSectionWorkflows') },
+  { id: 'sync', label: t('helpSectionSync') },
   { id: 'reading', label: t('helpSectionReading') },
   { id: 'troubleshooting', label: t('helpSectionTroubleshooting') },
 ])
@@ -77,6 +81,18 @@ const pageCards = computed(() => [
     tone: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300',
     title: t('helpSelectedPageTitle'),
     description: t('helpSelectedPageDesc'),
+  },
+  {
+    icon: Star,
+    tone: 'bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300',
+    title: t('helpFavoritesPageTitle'),
+    description: t('helpFavoritesPageDesc'),
+  },
+  {
+    icon: Cloud,
+    tone: 'bg-teal-100 text-teal-700 dark:bg-teal-950/40 dark:text-teal-300',
+    title: t('helpSyncPageTitle'),
+    description: t('helpSyncPageDesc'),
   },
   {
     icon: BookOpen,
@@ -165,6 +181,20 @@ const readingCards = computed(() => [
   },
 ])
 
+const syncSteps = computed(() => [
+  t('helpSyncStep1'),
+  t('helpSyncStep2'),
+  t('helpSyncStep3'),
+  t('helpSyncStep4'),
+])
+
+const syncSafetyItems = computed(() => [
+  t('helpSyncSafety1'),
+  t('helpSyncSafety2'),
+  t('helpSyncSafety3'),
+  t('helpSyncSafety4'),
+])
+
 const troubleshootingItems = computed(() => [
   {
     title: t('helpTrouble1Title'),
@@ -181,6 +211,10 @@ const troubleshootingItems = computed(() => [
   {
     title: t('helpTrouble4Title'),
     description: t('helpTrouble4Desc'),
+  },
+  {
+    title: t('helpTrouble5Title'),
+    description: t('helpTrouble5Desc'),
   },
 ])
 
@@ -414,6 +448,65 @@ const operationsTips = computed(() => [
                 {{ index + 1 }}
               </div>
               <div>{{ step }}</div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    </section>
+
+    <section
+      id="sync"
+      data-testid="help-section"
+      class="space-y-4"
+    >
+      <div class="space-y-2">
+        <div class="flex items-center gap-3">
+          <div class="rounded-2xl bg-teal-100 p-2 text-teal-700 dark:bg-teal-950/40 dark:text-teal-300">
+            <Cloud class="h-5 w-5" />
+          </div>
+          <h2 class="text-2xl font-semibold text-ink-900 dark:text-ink-100">
+            {{ t('helpSyncTitle') }}
+          </h2>
+        </div>
+        <p class="max-w-4xl text-sm leading-7 text-ink-600 dark:text-ink-400">
+          {{ t('helpSyncIntro') }}
+        </p>
+      </div>
+
+      <div class="grid gap-4 lg:grid-cols-2">
+        <Card class="border-ink-200 dark:border-ink-700">
+          <CardHeader>
+            <CardTitle class="text-lg text-ink-900 dark:text-ink-100">{{ t('helpSyncStepsTitle') }}</CardTitle>
+          </CardHeader>
+          <CardContent class="space-y-3">
+            <div
+              v-for="(step, index) in syncSteps"
+              :key="step"
+              class="flex gap-3 text-sm leading-7 text-ink-600 dark:text-ink-400"
+            >
+              <div class="mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-teal-100 text-[11px] font-semibold text-teal-800 dark:bg-teal-950/50 dark:text-teal-200">
+                {{ index + 1 }}
+              </div>
+              <div>{{ step }}</div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card class="border-ink-200 dark:border-ink-700">
+          <CardHeader class="flex flex-row items-center gap-3 space-y-0">
+            <div class="rounded-2xl bg-emerald-100 p-2 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
+              <ShieldCheck class="h-5 w-5" />
+            </div>
+            <CardTitle class="text-lg text-ink-900 dark:text-ink-100">{{ t('helpSyncSafetyTitle') }}</CardTitle>
+          </CardHeader>
+          <CardContent class="space-y-3">
+            <div
+              v-for="item in syncSafetyItems"
+              :key="item"
+              class="flex gap-3 text-sm leading-7 text-ink-600 dark:text-ink-400"
+            >
+              <div class="mt-2 h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-500" />
+              <div>{{ item }}</div>
             </div>
           </CardContent>
         </Card>

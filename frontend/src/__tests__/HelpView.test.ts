@@ -8,6 +8,7 @@ const translations: Record<string, string> = {
   helpSectionQuickStart: 'Quick Start',
   helpSectionPages: 'Page Guide',
   helpSectionWorkflows: 'Common Workflows',
+  helpSectionSync: 'Favorites and Secure Sync',
   helpSectionReading: 'Reading and Export',
   helpSectionTroubleshooting: 'Troubleshooting',
   helpQuickStartTitle: 'Quick Start',
@@ -17,6 +18,8 @@ const translations: Record<string, string> = {
   helpSearchPageTitle: 'Papers page',
   helpStatsPageTitle: 'Stats page',
   helpSelectedPageTitle: 'Selected page',
+  helpFavoritesPageTitle: 'Favorites page',
+  helpSyncPageTitle: 'Manual encrypted sync',
   helpSearchModesTitle: 'Search Modes',
   helpBasicSearchTitle: 'Basic search',
   helpAdvancedSearchTitle: 'Advanced search',
@@ -28,6 +31,9 @@ const translations: Record<string, string> = {
   helpTroubleshootingTitle: 'Troubleshooting',
   helpTroubleshootingIntro: 'Most confusion comes from a stale filter or the wrong view.',
   helpWorkflow2Title: 'Compare summary, markdown, and PDF',
+  helpSyncTitle: 'Favorites and manual encrypted sync',
+  helpSyncStepsTitle: 'Safe transfer path',
+  helpSyncSafetyTitle: 'Safety boundaries',
   helpDetailPageTitle: 'Paper detail view',
   helpReadingMode4Title: 'Metadata, facets, and BibTeX',
   helpReadingMode1Title: 'Summaries and summary templates',
@@ -47,10 +53,15 @@ describe('HelpView', () => {
     const wrapper = mount(HelpView)
 
     expect(wrapper.find('[data-testid="help-hero"]').exists()).toBe(true)
-    expect(wrapper.findAll('[data-testid="help-section"]')).toHaveLength(5)
+    expect(wrapper.findAll('[data-testid="help-section"]')).toHaveLength(6)
     expect(wrapper.text()).toContain('Quick Start')
     expect(wrapper.text()).toContain('Page Guide')
     expect(wrapper.text()).toContain('Common Workflows')
+    expect(wrapper.text()).toContain('Favorites and Secure Sync')
+    expect(wrapper.text()).toContain('Favorites page')
+    expect(wrapper.text()).toContain('Manual encrypted sync')
+    expect(wrapper.text()).toContain('Safe transfer path')
+    expect(wrapper.text()).toContain('Safety boundaries')
     expect(wrapper.text()).toContain('Search Modes')
     expect(wrapper.text()).toContain('Basic search')
     expect(wrapper.text()).toContain('Advanced search')
@@ -62,6 +73,7 @@ describe('HelpView', () => {
     expect(wrapper.text()).toContain('Zen')
     expect(wrapper.text()).toContain('Verify token')
     expect(wrapper.html()).toContain('href="#quick-start"')
+    expect(wrapper.html()).toContain('href="#sync"')
     expect(wrapper.html()).toContain('href="#troubleshooting"')
   })
 })
