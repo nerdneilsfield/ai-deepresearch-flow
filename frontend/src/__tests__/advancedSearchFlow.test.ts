@@ -28,6 +28,16 @@ vi.mock('@/stores/selection', () => ({
   }),
 }))
 
+vi.mock('@/stores/favorites', () => ({
+  useFavoriteStore: () => ({
+    favoriteIds: new Set<string>(),
+    ratingsById: {},
+    ratingFor: () => undefined,
+    toggle: vi.fn(),
+    setRating: vi.fn(),
+  }),
+}))
+
 vi.mock('@/components/search/SearchResultItem.vue', () => ({
   default: {
     name: 'SearchResultItem',

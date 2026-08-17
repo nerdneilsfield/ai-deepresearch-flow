@@ -36,6 +36,15 @@ vi.mock('@/stores/selection', () => ({
   }),
 }))
 
+vi.mock('@/stores/favorites', () => ({
+  useFavoriteStore: () => ({
+    favoriteIds: new Set<string>(),
+    ratingFor: () => undefined,
+    toggle: vi.fn(),
+    setRating: vi.fn(),
+  }),
+}))
+
 vi.mock('@/stores/runtime-config', () => ({
   useRuntimeConfigStore: () => ({
     staticBaseUrl: '',

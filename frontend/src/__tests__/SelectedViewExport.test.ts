@@ -9,6 +9,8 @@ const { selectionState, pushToastMock, discoverSummaryTemplatesMock, downloadSel
     isFull: false,
     clear: vi.fn(),
     toggle: vi.fn(),
+    merge: vi.fn(),
+    replace: vi.fn(),
   },
   pushToastMock: vi.fn(),
   discoverSummaryTemplatesMock: vi.fn(),
@@ -19,6 +21,15 @@ const { selectionState, pushToastMock, discoverSummaryTemplatesMock, downloadSel
 
 vi.mock('@/stores/selection', () => ({
   useSelectionStore: () => selectionState,
+}))
+
+vi.mock('@/stores/favorites', () => ({
+  useFavoriteStore: () => ({
+    favoriteIds: new Set<string>(),
+    ratingFor: () => undefined,
+    toggle: vi.fn(),
+    setRating: vi.fn(),
+  }),
 }))
 
 vi.mock('@/stores/ui', () => ({
@@ -88,7 +99,7 @@ async function mountView() {
   return shallowMount(SelectedView, {
     global: {
       stubs: {
-        Button: { template: '<button v-bind="$attrs" @click="$emit(\'click\')"><slot /></button>' },
+        Button: { emits: ['click'], template: '<button v-bind="$attrs" @click="$emit(\'click\')"><slot /></button>' },
         Progress: true,
         SearchResultItem: false,
       },
@@ -100,6 +111,8 @@ beforeEach(() => {
   selectionState.items = [makeItem()]
   selectionState.clear.mockReset()
   selectionState.toggle.mockReset()
+  selectionState.merge.mockReset()
+  selectionState.replace.mockReset()
   pushToastMock.mockReset()
   discoverSummaryTemplatesMock.mockReset()
   discoverSummaryTemplatesMock.mockResolvedValue({ templates: ['default', 'deep_read'], preferredTemplates: ['default'] })
@@ -202,5 +215,18 @@ describe('SelectedView export options', () => {
     await settle(wrapper)
 
     expect(pushToastMock).toHaveBeenCalledWith('selectedExportCompletedWithMissing 3', 'warning')
+  })
+
+  it('offers merge and replace modes before loading a list', async () => {
+    const wrapper = await mountView()
+    await settle(wrapper)
+
+    const loadButton = wrapper.findAll('button').find((button) => button.text().includes('loadList'))
+    expect(loadButton).toBeTruthy()
+    await loadButton!.trigger('click')
+    await settle(wrapper)
+
+    expect(wrapper.text()).toContain('listImportMerge')
+    expect(wrapper.text()).toContain('listImportReplace')
   })
 })
