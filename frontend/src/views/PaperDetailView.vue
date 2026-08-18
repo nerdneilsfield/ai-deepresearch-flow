@@ -17,6 +17,7 @@ import { usePaperDetail } from '@/composables/usePaperDetail'
 import { useSplitView, type ViewMode } from '@/composables/useSplitView'
 import { resolveStaticBaseUrl } from '@/lib/static-base'
 import { normalizeSummaryText } from '@/lib/summary-text'
+import { prefetchPairedSummary } from '@/lib/summary-prefetch'
 import { defineSafeAsyncComponent } from '@/lib/async-component'
 import { ChevronLeft, ChevronRight } from 'lucide-vue-next'
 import FavoriteRatingControl from '@/components/favorites/FavoriteRatingControl.vue'
@@ -195,10 +196,13 @@ const panelHeightStyle = computed(() => {
 })
 
 async function loadSummary(template: string, url: string) {
+  const requestedPaperId = paperId.value
+  const summaryUrlsAtRequest = { ...summaryUrls.value }
   summaryLoading.value = true
   console.log('[loadSummary] Loading URL:', url)
   try {
-    const data = await getSummaryPayloadCached(paperId.value, template, url) as Record<string, any>
+    const data = await getSummaryPayloadCached(requestedPaperId, template, url) as Record<string, any>
+    void prefetchPairedSummary(requestedPaperId, template, summaryUrlsAtRequest)
     console.log('[loadSummary] Data keys:', Object.keys(data))
 
     // Handle different summary formats
