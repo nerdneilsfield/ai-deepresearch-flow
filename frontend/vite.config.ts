@@ -5,8 +5,31 @@ import vue from '@vitejs/plugin-vue'
 
 const packageJson = JSON.parse(readFileSync('./package.json', 'utf-8'))
 
+function modernFontCss() {
+  return {
+    name: 'modern-font-css',
+    enforce: 'pre' as const,
+    transform(code: string, id: string) {
+      const pathname = id.split('?', 1)[0]
+      const isFontProviderCss =
+        pathname.includes('/node_modules/@fontsource/') ||
+        pathname.includes('/node_modules/katex/dist/katex.min.css')
+
+      if (!isFontProviderCss || !pathname.endsWith('.css')) return null
+
+      // Vite's browser baseline supports WOFF2. Omit legacy fallbacks so
+      // deploy artifacts do not carry duplicate copies of every webfont.
+      const optimized = code
+        .replace(/,\s*url\([^)]*\.woff\)\s*format\((?:'|\")woff(?:'|\")\)/g, '')
+        .replace(/,\s*url\([^)]*\.ttf\)\s*format\((?:'|\")truetype(?:'|\")\)/g, '')
+
+      return optimized === code ? null : { code: optimized, map: null }
+    },
+  }
+}
+
 export default defineConfig({
-  plugins: [vue()],
+  plugins: [modernFontCss(), vue()],
   define: {
     'import.meta.env.VITE_APP_VERSION': JSON.stringify(packageJson.version),
   },
@@ -47,7 +70,8 @@ export default defineConfig({
             id.includes('katex') ||
             id.includes('dompurify')
           ) return 'markdown'
-          if (id.includes('markmap') || id.includes('mermaid')) return 'diagrams'
+          if (id.includes('mermaid')) return 'mermaid'
+          if (id.includes('markmap')) return 'markmap'
           return undefined
         },
       },

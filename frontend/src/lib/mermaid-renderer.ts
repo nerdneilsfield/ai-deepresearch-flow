@@ -80,6 +80,10 @@ function mermaidCodeBlocks(container: HTMLElement) {
   )
 }
 
+export function hasMermaidCodeBlocks(container: HTMLElement) {
+  return mermaidCodeBlocks(container).length > 0
+}
+
 function renderedSvg(output: Awaited<ReturnType<MermaidRenderer['render']>>) {
   if (typeof output === 'string') return output
   return output?.svg || ''

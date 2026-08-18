@@ -2,9 +2,29 @@
 import { computed, nextTick, onBeforeUnmount, onErrorCaptured, ref, watch } from 'vue'
 import { MdPreview, config } from 'md-editor-v3'
 import 'md-editor-v3/lib/preview.css'
-import mermaid from 'mermaid'
+import 'katex/dist/katex.min.css'
+import 'highlight.js/styles/github.css'
 import katex from 'katex'
-import hljs from 'highlight.js'
+import hljs from 'highlight.js/lib/core'
+import bash from 'highlight.js/lib/languages/bash'
+import c from 'highlight.js/lib/languages/c'
+import cpp from 'highlight.js/lib/languages/cpp'
+import css from 'highlight.js/lib/languages/css'
+import diff from 'highlight.js/lib/languages/diff'
+import dockerfile from 'highlight.js/lib/languages/dockerfile'
+import go from 'highlight.js/lib/languages/go'
+import java from 'highlight.js/lib/languages/java'
+import javascript from 'highlight.js/lib/languages/javascript'
+import json from 'highlight.js/lib/languages/json'
+import latex from 'highlight.js/lib/languages/latex'
+import markdown from 'highlight.js/lib/languages/markdown'
+import python from 'highlight.js/lib/languages/python'
+import r from 'highlight.js/lib/languages/r'
+import rust from 'highlight.js/lib/languages/rust'
+import sql from 'highlight.js/lib/languages/sql'
+import typescript from 'highlight.js/lib/languages/typescript'
+import xml from 'highlight.js/lib/languages/xml'
+import yaml from 'highlight.js/lib/languages/yaml'
 import DOMPurify from 'dompurify'
 import footnote from 'markdown-it-footnote'
 import taskLists from 'markdown-it-task-lists'
@@ -13,20 +33,36 @@ import type { HeadList } from 'md-editor-v3'
 import type { OutlineItem } from '@/lib/outline'
 import { STATIC_BASE } from '@/lib/config'
 import { useTheme } from '@/composables/useTheme'
+import { lazyMermaid } from '@/lib/lazy'
 import { resolveMarkdownItPlugin } from '@/lib/module-interop'
 import { normalizeMathLayout, normalizeMermaidLineBreaks, sanitizeMermaidSvgContent } from '@/lib/markdown-rendering'
-import { renderMermaidCodeBlocks } from '@/lib/mermaid-renderer'
+import { hasMermaidCodeBlocks, renderMermaidCodeBlocks } from '@/lib/mermaid-renderer'
 
 // Global configuration for md-editor-v3
-mermaid.initialize({ startOnLoad: false })
+hljs.registerLanguage('bash', bash)
+hljs.registerLanguage('c', c)
+hljs.registerLanguage('cpp', cpp)
+hljs.registerLanguage('css', css)
+hljs.registerLanguage('diff', diff)
+hljs.registerLanguage('dockerfile', dockerfile)
+hljs.registerLanguage('go', go)
+hljs.registerLanguage('java', java)
+hljs.registerLanguage('javascript', javascript)
+hljs.registerLanguage('json', json)
+hljs.registerLanguage('latex', latex)
+hljs.registerLanguage('markdown', markdown)
+hljs.registerLanguage('python', python)
+hljs.registerLanguage('r', r)
+hljs.registerLanguage('rust', rust)
+hljs.registerLanguage('sql', sql)
+hljs.registerLanguage('typescript', typescript)
+hljs.registerLanguage('xml', xml)
+hljs.registerLanguage('yaml', yaml)
+
 config({
   editorExtensions: {
     highlight: {
       instance: hljs,
-    },
-    mermaid: {
-      instance: mermaid,
-      enableZoom: true,
     },
     katex: {
       instance: katex,
@@ -38,57 +74,6 @@ config({
       throwOnError: false,
       strict: false,
       output: 'htmlAndMathml',
-    }
-  },
-  mermaidConfig(baseConfig) {
-    const isDark = baseConfig?.theme === 'dark'
-    const flowchart = typeof baseConfig?.flowchart === 'object' && baseConfig.flowchart
-      ? baseConfig.flowchart
-      : {}
-    return {
-      ...baseConfig,
-      startOnLoad: false,
-      securityLevel: 'strict',
-      theme: 'base',
-      htmlLabels: false,
-      flowchart: {
-        ...flowchart,
-        htmlLabels: false,
-        useMaxWidth: true,
-      },
-      themeVariables: isDark
-        ? {
-            background: '#0f172a',
-            mainBkg: '#1e293b',
-            primaryColor: '#1e293b',
-            primaryTextColor: '#e5e7eb',
-            primaryBorderColor: '#64748b',
-            secondaryColor: '#111827',
-            secondaryTextColor: '#e5e7eb',
-            tertiaryColor: '#0f172a',
-            lineColor: '#94a3b8',
-            textColor: '#e5e7eb',
-            nodeTextColor: '#e5e7eb',
-            edgeLabelBackground: '#0f172a',
-            clusterBkg: '#111827',
-            clusterBorder: '#475569',
-          }
-        : {
-            ...(baseConfig?.themeVariables || {}),
-            background: '#ffffff',
-            mainBkg: '#ffffff',
-            primaryColor: '#ffffff',
-            primaryTextColor: '#1f2937',
-            primaryBorderColor: '#94a3b8',
-            secondaryColor: '#f8fafc',
-            tertiaryColor: '#f8fafc',
-            lineColor: '#475569',
-            textColor: '#1f2937',
-            nodeTextColor: '#1f2937',
-            edgeLabelBackground: '#ffffff',
-            clusterBkg: '#f8fafc',
-            clusterBorder: '#cbd5e1',
-          },
     }
   },
   markdownItConfig(md) {
@@ -508,22 +493,36 @@ async function handleHtmlChanged() {
     const root = document.getElementById(editorId)
     if (!root) return
     const mermaidFailures: RendererDiagnostic[] = []
-    await renderMermaidCodeBlocks(root, {
-      idPrefix: `${editorId}-mermaid`,
-      theme: editorTheme.value,
-      renderer: mermaid,
-      sanitizeSvg: sanitizeMermaidSvg,
-      onError(error, source) {
+    if (hasMermaidCodeBlocks(root)) {
+      try {
+        const mermaid = await lazyMermaid()
+        await renderMermaidCodeBlocks(root, {
+          idPrefix: `${editorId}-mermaid`,
+          theme: editorTheme.value,
+          renderer: mermaid,
+          sanitizeSvg: sanitizeMermaidSvg,
+          onError(error, source) {
+            mermaidFailures.push({
+              kind: 'mermaid',
+              severity: 'error',
+              title: 'Mermaid rendering failed.',
+              message: 'The markdown contains Mermaid source, but Mermaid could not produce a usable SVG. Showing the original diagram source so the content is not silently lost.',
+              excerpt: truncateDiagnosticText(source),
+              details: errorMessage(error),
+            })
+          },
+        })
+      } catch (error) {
         mermaidFailures.push({
           kind: 'mermaid',
           severity: 'error',
-          title: 'Mermaid rendering failed.',
-          message: 'The markdown contains Mermaid source, but Mermaid could not produce a usable SVG. Showing the original diagram source so the content is not silently lost.',
-          excerpt: truncateDiagnosticText(source),
+          title: 'Mermaid renderer could not be loaded.',
+          message: 'The markdown contains Mermaid source, but the optional renderer was unavailable. Showing the original diagram source so the content is not silently lost.',
+          excerpt: truncateDiagnosticText(extractMermaidBlocks(currentMd).join('\n\n')),
           details: errorMessage(error),
         })
-      },
-    })
+      }
+    }
     auditRendererOutput(root, currentMd)
     mermaidFailures.forEach(replaceDiagnostic)
     if (diagnosticTimer) clearTimeout(diagnosticTimer)

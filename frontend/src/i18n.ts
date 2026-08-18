@@ -1,4 +1,5 @@
 import { createI18n } from 'vue-i18n'
+import { preloadLocaleFonts } from '@/lib/locale-fonts'
 
 const messages = {
   en: {
@@ -829,6 +830,7 @@ function toDocumentLang(locale: string) {
 
 const initialLocale = detectLocale()
 document.documentElement.lang = toDocumentLang(initialLocale)
+preloadLocaleFonts(initialLocale)
 
 const i18n = createI18n({
   legacy: false,
@@ -841,6 +843,7 @@ export function setLocale(locale: string) {
   i18n.global.locale.value = locale as 'en' | 'zh'
   window.localStorage.setItem('paperdb_lang', locale)
   document.documentElement.lang = toDocumentLang(locale)
+  preloadLocaleFonts(locale)
 }
 
 export default i18n

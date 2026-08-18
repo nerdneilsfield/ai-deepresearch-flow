@@ -7,10 +7,6 @@ import 'vue-virtual-scroller/dist/vue-virtual-scroller.css'
 import '@fontsource-variable/inter'
 import '@fontsource-variable/source-serif-4'
 import '@fontsource-variable/jetbrains-mono'
-// CJK: only the commonly-used weights (avoids loading the full 5MB font)
-import '@fontsource/noto-sans-sc/400.css'
-import '@fontsource/noto-sans-sc/500.css'
-import '@fontsource/noto-sans-sc/700.css'
 
 import './style.css'
 import App from './App.vue'
