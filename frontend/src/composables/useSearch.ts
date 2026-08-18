@@ -1,7 +1,7 @@
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useDebounce } from '@vueuse/core'
-import { useQuery, keepPreviousData } from '@tanstack/vue-query'
+import { useQuery, keepPreviousData, useQueryClient } from '@tanstack/vue-query'
 import { DEFAULT_PAGE_SIZE, SEARCH_DEBOUNCE_MS } from '@/lib/config'
 import {
   getFacet,
@@ -12,6 +12,7 @@ import {
   searchPapers,
 } from '@/lib/api'
 import { QUERY_CACHE_POLICY } from '@/lib/query-client'
+import type { SearchResponse } from '@/types/api'
 
 const BY_VALUE_FACETS = new Set([
   'summary_templates',
@@ -21,6 +22,73 @@ const BY_VALUE_FACETS = new Set([
   'prompt_templates',
   'translation_langs',
 ])
+
+type SearchMode = 'query' | 'facet' | 'list'
+
+interface SearchPageRequest {
+  mode: SearchMode
+  q: string
+  page: number
+  pageSize: number
+  sort: string
+  facet: string
+  facetId: string
+  facetByValue: boolean
+}
+
+function createSearchPageRequest(
+  state: ReturnType<typeof useSearchState>,
+  query: string,
+): SearchPageRequest {
+  const mode: SearchMode = query
+    ? 'query'
+    : state.facet.value && state.facetId.value
+      ? 'facet'
+      : 'list'
+
+  return {
+    mode,
+    q: query,
+    page: state.page.value,
+    pageSize: state.pageSizeNum.value,
+    sort: state.effectiveSort.value,
+    facet: state.facet.value,
+    facetId: state.facetId.value,
+    facetByValue: state.facetByValue.value,
+  }
+}
+
+function searchPageKey(request: SearchPageRequest) {
+  return ['search', request] as const
+}
+
+async function fetchSearchPage(
+  request: SearchPageRequest,
+  signal?: AbortSignal,
+): Promise<SearchResponse> {
+  if (request.mode === 'query') {
+    return searchPapers(request.q, request.page, request.pageSize, request.sort, signal)
+  }
+  if (request.mode === 'facet') {
+    if (request.facetByValue || BY_VALUE_FACETS.has(request.facet)) {
+      return getFacetByValuePapers(
+        request.facet,
+        request.facetId,
+        request.page,
+        request.pageSize,
+        signal,
+      )
+    }
+    return getFacetPapers(
+      request.facet,
+      request.facetId,
+      request.page,
+      request.pageSize,
+      signal,
+    )
+  }
+  return listPapers(request.page, request.pageSize, request.sort, signal)
+}
 
 export function useSearchState() {
   const route = useRoute()
@@ -142,62 +210,42 @@ export function useSearchState() {
 }
 
 export function useSearchData(state: ReturnType<typeof useSearchState>) {
+  const queryClient = useQueryClient()
   const debouncedQuery = useDebounce(state.query, SEARCH_DEBOUNCE_MS)
-
-  const mode = computed(() => {
-    if (debouncedQuery.value) return 'query'
-    if (state.facet.value && state.facetId.value) return 'facet'
-    return 'list'
-  })
+  const searchRequest = computed(() => createSearchPageRequest(state, debouncedQuery.value))
 
   const searchQuery = useQuery({
-    queryKey: computed(() => [
-      'search',
-      {
-        mode: mode.value,
-        q: debouncedQuery.value,
-        page: state.page.value,
-        pageSize: state.pageSizeNum.value,
-        sort: state.effectiveSort.value,
-        facet: state.facet.value,
-        facetId: state.facetId.value,
-        facetByValue: state.facetByValue.value,
-      },
-    ]),
-    queryFn: ({ signal }) => {
-      if (mode.value === 'query') {
-        return searchPapers(
-          debouncedQuery.value,
-          state.page.value,
-          state.pageSizeNum.value,
-          state.effectiveSort.value,
-          signal
-        )
-      }
-      if (mode.value === 'facet') {
-        if (state.facetByValue.value || BY_VALUE_FACETS.has(state.facet.value)) {
-          return getFacetByValuePapers(
-            state.facet.value,
-            state.facetId.value,
-            state.page.value,
-            state.pageSizeNum.value,
-            signal
-          )
-        }
-        return getFacetPapers(
-          state.facet.value,
-          state.facetId.value,
-          state.page.value,
-          state.pageSizeNum.value,
-          signal
-        )
-      }
-      return listPapers(state.page.value, state.pageSizeNum.value, state.effectiveSort.value, signal)
-    },
+    queryKey: computed(() => searchPageKey(searchRequest.value)),
+    queryFn: ({ queryKey, signal }) =>
+      fetchSearchPage(queryKey[1] as SearchPageRequest, signal),
     placeholderData: keepPreviousData,
     staleTime: QUERY_CACHE_POLICY.search.staleTime,
     gcTime: QUERY_CACHE_POLICY.search.gcTime,
   })
+
+  watch(
+    [searchRequest, () => searchQuery.data.value, () => searchQuery.isPlaceholderData.value],
+    ([request, response, isPlaceholderData]) => {
+      if (!response || isPlaceholderData || response.page !== request.page) return
+
+      const totalPages = Math.max(1, Math.ceil(response.total / Math.max(response.page_size, 1)))
+      const adjacentPages = [request.page - 1, request.page + 1]
+        .filter((page) => page >= 1 && page <= totalPages)
+
+      for (const page of adjacentPages) {
+        const adjacentRequest = { ...request, page }
+        void queryClient.prefetchQuery({
+          queryKey: searchPageKey(adjacentRequest),
+          queryFn: ({ signal }) => fetchSearchPage(adjacentRequest, signal),
+          staleTime: QUERY_CACHE_POLICY.search.staleTime,
+          gcTime: QUERY_CACHE_POLICY.search.gcTime,
+        }).catch(() => {
+          // Prefetch is opportunistic; foreground navigation keeps its own error handling.
+        })
+      }
+    },
+    { flush: 'post' },
+  )
 
   const statsQuery = useQuery({
     queryKey: ['stats'],
