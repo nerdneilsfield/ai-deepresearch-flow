@@ -31,8 +31,9 @@ const translations: Record<string, string> = {
   helpTroubleshootingTitle: 'Troubleshooting',
   helpTroubleshootingIntro: 'Most confusion comes from a stale filter or the wrong view.',
   helpWorkflow2Title: 'Compare summary, markdown, and PDF',
-  helpSyncTitle: 'Favorites and manual encrypted sync',
-  helpSyncStepsTitle: 'Safe transfer path',
+  helpSyncTitle: 'Favorites and encrypted manual sync',
+  helpWebDavStepsTitle: 'WebDAV transfer path',
+  helpP2pStepsTitle: 'Direct P2P transfer path',
   helpSyncSafetyTitle: 'Safety boundaries',
   helpDetailPageTitle: 'Paper detail view',
   helpReadingMode4Title: 'Metadata, facets, and BibTeX',
@@ -60,7 +61,8 @@ describe('HelpView', () => {
     expect(wrapper.text()).toContain('Favorites and Secure Sync')
     expect(wrapper.text()).toContain('Favorites page')
     expect(wrapper.text()).toContain('Manual encrypted sync')
-    expect(wrapper.text()).toContain('Safe transfer path')
+    expect(wrapper.text()).toContain('WebDAV transfer path')
+    expect(wrapper.text()).toContain('Direct P2P transfer path')
     expect(wrapper.text()).toContain('Safety boundaries')
     expect(wrapper.text()).toContain('Search Modes')
     expect(wrapper.text()).toContain('Basic search')
