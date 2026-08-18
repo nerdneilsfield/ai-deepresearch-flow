@@ -91,7 +91,7 @@ async function deriveKey(passphrase: string, salt: Uint8Array): Promise<CryptoKe
   )
 }
 
-function parseEnvelope(value: unknown): EncryptedManualSyncEnvelope {
+export function parseEncryptedManualSyncEnvelope(value: unknown): EncryptedManualSyncEnvelope {
   if (!value || typeof value !== 'object') throw new ManualSyncCryptoError('Invalid encrypted sync data')
   const envelope = value as Partial<EncryptedManualSyncEnvelope>
   if (
@@ -159,7 +159,7 @@ export async function decryptManualSyncSnapshot(
   passphrase: string,
 ): Promise<ManualSyncSnapshot> {
   assertPassphrase(passphrase)
-  const envelope = parseEnvelope(value)
+  const envelope = parseEncryptedManualSyncEnvelope(value)
   const crypto = cryptoApi()
   const salt = base64ToBytes(envelope.kdf.salt, SALT_LENGTH)
   const iv = base64ToBytes(envelope.cipher.iv, IV_LENGTH)

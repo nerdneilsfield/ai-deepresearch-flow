@@ -1,7 +1,9 @@
 import { SearchItemSchema, type SearchItem } from '@/types/api'
 import { isFavoriteRating, type FavoriteRecord } from '@/types/favorites'
+import { parseStoredP2pIceServers } from '@/lib/p2p-ice'
 import { parseStoredWebDavSyncSettings } from '@/lib/webdav-settings'
 import { isManualSyncTimestamp, type ManualSyncMetadata, type WebDavSyncSettings } from '@/types/manual-sync'
+import type { P2pSyncMetadata, StoredP2pIceServer } from '@/types/p2p-sync'
 
 const DB_NAME = 'DeepResearchDB'
 const DB_VERSION = 3
@@ -341,6 +343,18 @@ function parseManualSyncMetadata(value: unknown): ManualSyncMetadata | null {
   }
 }
 
+function parseP2pSyncMetadata(value: unknown): P2pSyncMetadata | null {
+  if (!value || typeof value !== 'object') return null
+  const metadata = value as Partial<P2pSyncMetadata>
+  if (
+    metadata.lastAcceptedSnapshotCreatedAt !== null &&
+    !isManualSyncTimestamp(metadata.lastAcceptedSnapshotCreatedAt)
+  ) {
+    return null
+  }
+  return { lastAcceptedSnapshotCreatedAt: metadata.lastAcceptedSnapshotCreatedAt }
+}
+
 export async function loadWebDavSyncSettings(): Promise<WebDavSyncSettings | null> {
   const settings = await loadManualSyncValue<unknown>('webdav-settings')
   return parseStoredWebDavSyncSettings(settings)
@@ -354,6 +368,19 @@ export async function clearWebDavSyncSettings(): Promise<void> {
   await deleteManualSyncValue('webdav-settings')
 }
 
+export async function loadP2pIceServers(): Promise<StoredP2pIceServer[]> {
+  const settings = await loadManualSyncValue<unknown>('p2p-ice-servers')
+  return parseStoredP2pIceServers(settings) ?? []
+}
+
+export async function saveP2pIceServers(settings: StoredP2pIceServer[]): Promise<void> {
+  await saveManualSyncValue('p2p-ice-servers', settings)
+}
+
+export async function clearP2pIceServers(): Promise<void> {
+  await deleteManualSyncValue('p2p-ice-servers')
+}
+
 export async function loadManualSyncMetadata(): Promise<ManualSyncMetadata | null> {
   const metadata = await loadManualSyncValue<unknown>('manual-sync-metadata')
   return parseManualSyncMetadata(metadata)
@@ -365,6 +392,19 @@ export async function saveManualSyncMetadata(metadata: ManualSyncMetadata): Prom
 
 export async function clearManualSyncMetadata(): Promise<void> {
   await deleteManualSyncValue('manual-sync-metadata')
+}
+
+export async function loadP2pSyncMetadata(): Promise<P2pSyncMetadata | null> {
+  const metadata = await loadManualSyncValue<unknown>('p2p-sync-metadata')
+  return parseP2pSyncMetadata(metadata)
+}
+
+export async function saveP2pSyncMetadata(metadata: P2pSyncMetadata): Promise<void> {
+  await saveManualSyncValue('p2p-sync-metadata', metadata)
+}
+
+export async function clearP2pSyncMetadata(): Promise<void> {
+  await deleteManualSyncValue('p2p-sync-metadata')
 }
 
 export type { SearchItem }

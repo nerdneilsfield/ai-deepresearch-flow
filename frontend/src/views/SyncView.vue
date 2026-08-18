@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { AlertTriangle, CloudDownload, CloudUpload, KeyRound, Save, ShieldCheck, Trash2 } from 'lucide-vue-next'
+import P2pSyncPanel from '@/components/sync/P2pSyncPanel.vue'
 import { Button } from '@/components/ui/button'
 import { useFavoriteStore } from '@/stores/favorites'
 import { useManualSyncStore } from '@/stores/manual-sync'
@@ -334,5 +335,7 @@ onMounted(async () => {
         </div>
       </div>
     </section>
+
+    <P2pSyncPanel />
   </div>
 </template>
