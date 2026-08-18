@@ -176,7 +176,7 @@ def test_query_parser_handles_or_fields_and_negation() -> None:
     assert query == Query(
         groups=[
             [
-                QueryTerm(field="title", value="Graph Nets", negated=False),
+                QueryTerm(field="title", value="Graph Nets", negated=False, quoted=True),
                 QueryTerm(field="venue", value="workshop", negated=True),
             ],
             [
@@ -188,6 +188,9 @@ def test_query_parser_handles_or_fields_and_negation() -> None:
     assert parse_query("") == Query(groups=[[]])
     assert parse_query("OR OR") == Query(groups=[[]])
     assert parse_query("-   ") == Query(groups=[[]])
+    assert parse_query('"OR"') == Query(
+        groups=[[QueryTerm(field=None, value="OR", negated=False, quoted=True)]]
+    )
 
 
 def test_web_text_helpers_normalize_and_extract_snippets() -> None:

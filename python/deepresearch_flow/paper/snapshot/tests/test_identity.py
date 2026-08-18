@@ -11,6 +11,7 @@ from deepresearch_flow.paper.snapshot.identity import (
 from deepresearch_flow.paper.snapshot.text import (
     markdown_to_plain_text,
     rewrite_search_query,
+    same_field_search_query,
 )
 
 
@@ -79,6 +80,22 @@ class TestSearchText(unittest.TestCase):
         self.assertEqual(
             rewrite_search_query("deep-to c++ x.y"),
             '"deep-to" "c++" "x.y"',
+        )
+
+    def test_rewrite_search_query_preserves_user_quoted_phrase(self) -> None:
+        self.assertEqual(
+            rewrite_search_query('graph "neural networks"'),
+            '"graph" "neural networks"',
+        )
+        self.assertEqual(
+            rewrite_search_query('"深度学习 transformer"'),
+            '"深 度 学 习 transformer"',
+        )
+        self.assertEqual(
+            same_field_search_query('"graph" "networks"'),
+            'title: ("graph" "networks") OR summary: ("graph" "networks") '
+            'OR source: ("graph" "networks") OR translated: ("graph" "networks") '
+            'OR metadata: ("graph" "networks")',
         )
 
     def test_markdown_to_plain_text_strips_tables(self) -> None:

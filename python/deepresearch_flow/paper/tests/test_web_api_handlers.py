@@ -329,6 +329,23 @@ def test_api_routes_return_expected_payloads(tmp_path: Path) -> None:
     assert client.get("/api/papers?q=graph&translated=with&template=deep_read").json()["total"] == 0
     assert client.get("/api/papers?q=language&template=simple").json()["total"] == 0
 
+    client.app.state.index.papers[1].update(
+        {
+            "paper_title": "Graph",
+            "_title_lc": "graph",
+            "_venue": "Networks",
+            "publication_venue": "Networks",
+            "_search_lc": "graph networks bob",
+        }
+    )
+    phrase = client.get("/api/papers", params={"q": '"graph networks"'})
+    assert phrase.status_code == 200
+    assert [item["title"] for item in phrase.json()["items"]] == ["Graph Networks"]
+
+    words = client.get("/api/papers", params={"q": "graph networks"})
+    assert words.status_code == 200
+    assert [item["title"] for item in words.json()["items"]] == ["Graph Networks"]
+
 
 def test_api_pdf_and_markdown_routes_handle_export_and_fallbacks(tmp_path: Path) -> None:
     export_dir = tmp_path / "static"
@@ -450,6 +467,45 @@ def test_api_semantic_routes_enforce_contracts_and_return_results(
     )
     assert limited.status_code == 200
     assert limited.json()["total"] == 1
+
+    app.state.index.papers[1].update(
+        {
+            "paper_title": "Graph",
+            "_title_lc": "graph",
+            "_venue": "Networks",
+            "publication_venue": "Networks",
+            "_search_lc": "graph networks bob",
+        }
+    )
+
+    async def fake_phrase_hybrid_search(**kwargs):  # noqa: ANN001
+        return [
+            SimpleNamespace(
+                doc_id="hash-1",
+                score=0.9,
+                score_type="hybrid",
+                matched_chunk="graph networks",
+                matched_field="summary",
+                matched_template="simple",
+                matched_chunk_type="paragraph",
+                matched_lang="",
+            ),
+            SimpleNamespace(
+                doc_id="hash-2",
+                score=0.8,
+                score_type="hybrid",
+                matched_chunk="graph networks",
+                matched_field="summary",
+                matched_template="simple",
+                matched_chunk_type="paragraph",
+                matched_lang="",
+            ),
+        ]
+
+    monkeypatch.setattr("deepresearch_flow.paper.search.hybrid_search", fake_phrase_hybrid_search)
+    phrase = client.get("/api/papers/semantic", params={"q": '"graph networks"'})
+    assert phrase.status_code == 200
+    assert [item["doc_id"] for item in phrase.json()["items"]] == ["hash-1"]
 
     invalid = client.get("/api/papers/semantic?q=attention&venue=NeurIPS' OR 1=1")
     assert invalid.status_code == 400

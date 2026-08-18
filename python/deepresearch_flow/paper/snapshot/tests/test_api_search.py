@@ -72,6 +72,52 @@ class TestApiSearchEndpoint(unittest.TestCase):
                     "",
                 ),
             )
+            conn.execute(
+                """
+                INSERT INTO paper(
+                  paper_id, paper_key, paper_key_type, doi, title, year, month, publication_date,
+                  venue, preferred_summary_template, summary_preview, paper_index, source_hash,
+                  output_language, provider, model, prompt_template, extracted_at,
+                  pdf_content_hash, source_md_content_hash
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "paper-split-phrase",
+                    "doi:10.1145/split-phrase",
+                    "doi",
+                    "10.1145/split-phrase",
+                    "End-to-end Methods",
+                    "2025",
+                    "04",
+                    "2025-04-01",
+                    "ICLR",
+                    "deep_read",
+                    "preview",
+                    2,
+                    "sourcehash-split",
+                    "en",
+                    "provider-x",
+                    "model-y",
+                    "deep_read",
+                    "2025-04-01T00:00:00Z",
+                    None,
+                    None,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO paper_fts(paper_id, title, summary, source, translated, metadata)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "paper-split-phrase",
+                    "End-to-end Methods",
+                    "Retrieval methods improve quality.",
+                    "",
+                    "",
+                    "",
+                ),
+            )
             conn.commit()
         finally:
             conn.close()
@@ -91,6 +137,28 @@ class TestApiSearchEndpoint(unittest.TestCase):
         cls.tmpdir.cleanup()
 
     def test_search_handles_hyphenated_long_phrase_without_500(self) -> None:
+        response = self.client.get(
+            "/api/v1/search",
+            params={"q": "end-to-end multimodal"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["total"], 1)
+        self.assertEqual(payload["items"][0]["paper_id"], "paper-end-to-end")
+
+    def test_search_keeps_user_quoted_phrase_together(self) -> None:
+        response = self.client.get(
+            "/api/v1/search",
+            params={"q": '"end-to-end retrieval"'},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["total"], 1)
+        self.assertEqual(payload["items"][0]["paper_id"], "paper-end-to-end")
+
+    def test_search_requires_multiple_terms_in_one_field(self) -> None:
         response = self.client.get(
             "/api/v1/search",
             params={"q": "end-to-end retrieval"},
