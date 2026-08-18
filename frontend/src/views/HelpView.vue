@@ -16,6 +16,7 @@ import {
   Lightbulb,
   ListChecks,
   Route,
+  Radio,
   Search,
   ShieldCheck,
   Star,
@@ -188,11 +189,19 @@ const syncSteps = computed(() => [
   t('helpSyncStep4'),
 ])
 
+const p2pSteps = computed(() => [
+  t('helpP2pStep1'),
+  t('helpP2pStep2'),
+  t('helpP2pStep3'),
+  t('helpP2pStep4'),
+])
+
 const syncSafetyItems = computed(() => [
   t('helpSyncSafety1'),
   t('helpSyncSafety2'),
   t('helpSyncSafety3'),
   t('helpSyncSafety4'),
+  t('helpSyncSafety5'),
 ])
 
 const troubleshootingItems = computed(() => [
@@ -476,7 +485,7 @@ const operationsTips = computed(() => [
       <div class="grid gap-4 lg:grid-cols-2">
         <Card class="border-ink-200 dark:border-ink-700">
           <CardHeader>
-            <CardTitle class="text-lg text-ink-900 dark:text-ink-100">{{ t('helpSyncStepsTitle') }}</CardTitle>
+            <CardTitle class="text-lg text-ink-900 dark:text-ink-100">{{ t('helpWebDavStepsTitle') }}</CardTitle>
           </CardHeader>
           <CardContent class="space-y-3">
             <div
@@ -507,6 +516,27 @@ const operationsTips = computed(() => [
             >
               <div class="mt-2 h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-500" />
               <div>{{ item }}</div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card class="border-ink-200 dark:border-ink-700">
+          <CardHeader class="flex flex-row items-center gap-3 space-y-0">
+            <div class="rounded-2xl bg-sky-100 p-2 text-sky-700 dark:bg-sky-950/40 dark:text-sky-300">
+              <Radio class="h-5 w-5" />
+            </div>
+            <CardTitle class="text-lg text-ink-900 dark:text-ink-100">{{ t('helpP2pStepsTitle') }}</CardTitle>
+          </CardHeader>
+          <CardContent class="space-y-3">
+            <div
+              v-for="(step, index) in p2pSteps"
+              :key="step"
+              class="flex gap-3 text-sm leading-7 text-ink-600 dark:text-ink-400"
+            >
+              <div class="mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-sky-100 text-[11px] font-semibold text-sky-800 dark:bg-sky-950/50 dark:text-sky-200">
+                {{ index + 1 }}
+              </div>
+              <div>{{ step }}</div>
             </div>
           </CardContent>
         </Card>
