@@ -12,6 +12,10 @@ _TEX_MATH_RE = re.compile(r"<tex-math[^>]*>(.*?)</tex-math>", re.IGNORECASE | re
 _TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
 _VENUE_BRACE_RE = re.compile(r"\{\{|\}\}")
+_ESCAPED_LINE_BREAK_RE = re.compile(r"\\r\\n|\\n|\\r")
+_PARAGRAPH_OPEN_RE = re.compile(r"<\s*p(?:\s+[^>]*)?>", re.IGNORECASE)
+_PARAGRAPH_CLOSE_RE = re.compile(r"<\s*/\s*p\s*>", re.IGNORECASE)
+_LINE_BREAK_RE = re.compile(r"<\s*br\s*/?\s*>", re.IGNORECASE)
 
 
 def normalize_title(raw: str) -> str:
@@ -42,6 +46,22 @@ def normalize_venue(raw: str) -> str:
     return text
 
 
+def normalize_summary_text(raw: str) -> str:
+    """Turn escaped line breaks and basic HTML paragraphs into readable text."""
+    if not raw:
+        return ""
+    text = str(raw).replace("\r\n", "\n").replace("\r", "\n")
+    text = _ESCAPED_LINE_BREAK_RE.sub("\n", text)
+    text = _LINE_BREAK_RE.sub("\n", text)
+    text = _PARAGRAPH_CLOSE_RE.sub("\n\n", text)
+    text = _PARAGRAPH_OPEN_RE.sub("\n\n", text)
+    text = _TAG_RE.sub("", text)
+    text = html.unescape(text)
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n[ \t]+", "\n", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
 def extract_summary_snippet(paper: dict[str, object], max_len: int = 280) -> str:
     """Extract a short summary snippet, preferring the simple/simple_phi templates."""
     summary = ""
@@ -66,9 +86,7 @@ def extract_summary_snippet(paper: dict[str, object], max_len: int = 280) -> str
                 break
     if not summary:
         return ""
-    summary = _TAG_RE.sub("", summary)
-    summary = html.unescape(summary)
-    summary = _WS_RE.sub(" ", summary).strip()
+    summary = _WS_RE.sub(" ", normalize_summary_text(summary)).strip()
     if len(summary) > max_len:
         return summary[: max_len - 1].rstrip() + "…"
     return summary

@@ -8,6 +8,7 @@ import { ChevronDown, ChevronUp } from 'lucide-vue-next'
 import RenderedMarkdown from '@/components/RenderedMarkdown.vue'
 import FavoriteRatingControl from '@/components/favorites/FavoriteRatingControl.vue'
 import { resolveStaticBaseUrl } from '@/lib/static-base'
+import { normalizeSummaryText, summaryParagraphs } from '@/lib/summary-text'
 import { useRuntimeConfigStore } from '@/stores/runtime-config'
 import { useI18n } from 'vue-i18n'
 import type { FavoriteRating } from '@/types/favorites'
@@ -39,6 +40,8 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const translatedUrl = computed(() => Object.values(props.item.translated_md_urls || {})[0] || '')
+const normalizedSnippetMarkdown = computed(() => normalizeSummaryText(props.item.snippet_markdown))
+const previewParagraphs = computed(() => summaryParagraphs(props.item.summary_preview))
 const runtimeConfig = useRuntimeConfigStore()
 const imagesBaseUrl = computed(() =>
   resolveStaticBaseUrl(
@@ -111,11 +114,13 @@ function formatAuthors(authors?: string[]) {
             :enable-images="false"
             class="prose prose-sm max-w-none text-foreground/80 dark:prose-invert"
           />
-          <div v-else-if="item.snippet_markdown" class="prose prose-sm max-w-none text-foreground/80 dark:prose-invert">
-            <div v-html="snippetRenderer(item.snippet_markdown)"></div>
+          <div v-else-if="normalizedSnippetMarkdown" class="prose prose-sm max-w-none text-foreground/80 dark:prose-invert">
+            <div v-html="snippetRenderer(normalizedSnippetMarkdown)"></div>
           </div>
-          <div v-else-if="item.summary_preview" class="text-sm leading-relaxed text-foreground/80 summary-clamp">
-            {{ item.summary_preview }}
+          <div v-else-if="previewParagraphs.length" class="text-sm leading-relaxed text-foreground/80 summary-clamp">
+            <p v-for="(paragraph, index) in previewParagraphs" :key="index" class="whitespace-pre-line">
+              {{ paragraph }}
+            </p>
           </div>
         </div>
         <Button

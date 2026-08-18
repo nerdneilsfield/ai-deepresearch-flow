@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import MarkdownContent from './MarkdownContent.vue'
 import { useUiStore } from '@/stores/ui'
+import { summaryParagraphs } from '@/lib/summary-text'
 
 const props = defineProps<{
   summaryUrls: Record<string, string>
@@ -21,6 +22,7 @@ const available = computed(() => {
   if (props.summaryAvailable.length) return props.summaryAvailable
   return Object.keys(props.summaryUrls)
 })
+const abstractParagraphs = computed(() => summaryParagraphs(props.summaryMeta?.abstract))
 
 function setTemplate(tag: string) {
   if (!props.summaryUrls[tag]) {
@@ -80,9 +82,13 @@ function setTemplate(tag: string) {
           <span class="font-semibold">{{ t('keywordsLabel') }}:</span>
           <span class="ml-2">{{ props.summaryMeta.keywords.join(', ') }}</span>
         </div>
-        <div v-if="props.summaryMeta.abstract" class="mt-4">
+        <div v-if="abstractParagraphs.length" class="mt-4">
           <div class="text-base font-semibold text-ink-900 dark:text-ink-100">{{ t('abstractLabel') }}</div>
-          <div class="mt-2 text-ink-700 dark:text-ink-300">{{ props.summaryMeta.abstract }}</div>
+          <div class="mt-2 space-y-2 text-ink-700 dark:text-ink-300">
+            <p v-for="(paragraph, index) in abstractParagraphs" :key="index" class="whitespace-pre-line">
+              {{ paragraph }}
+            </p>
+          </div>
         </div>
       </div>
       <MarkdownContent

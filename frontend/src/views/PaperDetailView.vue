@@ -16,6 +16,7 @@ import { useElementBounding, useMediaQuery, useWindowSize, refDebounced } from '
 import { usePaperDetail } from '@/composables/usePaperDetail'
 import { useSplitView, type ViewMode } from '@/composables/useSplitView'
 import { resolveStaticBaseUrl } from '@/lib/static-base'
+import { normalizeSummaryText } from '@/lib/summary-text'
 import { defineSafeAsyncComponent } from '@/lib/async-component'
 import { ChevronLeft, ChevronRight } from 'lucide-vue-next'
 import FavoriteRatingControl from '@/components/favorites/FavoriteRatingControl.vue'
@@ -244,7 +245,7 @@ async function loadSummary(template: string, url: string) {
 
     console.log('[loadSummary] Final content length:', summaryContent.length)
 
-    summaryMarkdown.value = summaryContent
+    summaryMarkdown.value = normalizeSummaryText(summaryContent)
     console.log('[loadSummary] Set summaryMarkdown, length:', summaryMarkdown.value.length)
 
     summaryMeta.value = {

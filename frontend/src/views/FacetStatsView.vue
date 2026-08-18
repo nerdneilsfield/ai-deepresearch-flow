@@ -11,6 +11,7 @@ import { useFacetStats } from '@/composables/useFacetStats'
 import { useSelectionStore } from '@/stores/selection'
 import { useFavoriteStore } from '@/stores/favorites'
 import { fetchJson, type SearchResponse } from '@/lib/api'
+import { normalizeSummaryText } from '@/lib/summary-text'
 import { lazySnippet } from '@/lib/lazy'
 import SearchResultItem from '@/components/search/SearchResultItem.vue'
 
@@ -108,7 +109,10 @@ async function toggleSummary(item: SearchResponse['items'][number]) {
   }
   // Try to use existing short summary first
   if (item.summary_preview) {
-    expandedMarkdown.value = { ...expandedMarkdown.value, [id]: item.summary_preview }
+    expandedMarkdown.value = {
+      ...expandedMarkdown.value,
+      [id]: normalizeSummaryText(item.summary_preview),
+    }
     expanded.value = { ...expanded.value, [id]: true }
     return
   }
@@ -121,7 +125,10 @@ async function toggleSummary(item: SearchResponse['items'][number]) {
       return
     }
     const result = await fetchJson(item.summary_url) as { summary: string; is_short: boolean }
-    expandedMarkdown.value = { ...expandedMarkdown.value, [id]: result.summary }
+    expandedMarkdown.value = {
+      ...expandedMarkdown.value,
+      [id]: normalizeSummaryText(result.summary),
+    }
     expanded.value = { ...expanded.value, [id]: true }
   } catch {
     expandedMarkdown.value = { ...expandedMarkdown.value, [id]: '' }
