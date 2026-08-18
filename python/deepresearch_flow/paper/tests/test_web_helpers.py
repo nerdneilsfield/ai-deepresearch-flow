@@ -22,6 +22,7 @@ from deepresearch_flow.paper.web.filters import (
 from deepresearch_flow.paper.web.query import Query, QueryTerm, parse_query
 from deepresearch_flow.paper.web.text import (
     extract_summary_snippet,
+    normalize_summary_text,
     normalize_title,
     normalize_venue,
 )
@@ -199,6 +200,10 @@ def test_web_text_helpers_normalize_and_extract_snippets() -> None:
 
     assert normalize_venue("{{NeurIPS}} 2024") == "NeurIPS 2024"
     assert normalize_venue("") == ""
+    assert (
+        normalize_summary_text(r"First\nSecond<p>Third</p><p>Fourth</p>")
+        == "First\nSecond\n\nThird\n\nFourth"
+    )
 
     paper = {
         "templates": {
@@ -207,6 +212,10 @@ def test_web_text_helpers_normalize_and_extract_snippets() -> None:
         }
     }
     assert extract_summary_snippet(paper, max_len=100) == "Hello & world"
+    assert (
+        extract_summary_snippet({"summary": r"First\nSecond<p>Third</p><p>Fourth</p>"})
+        == "First Second Third Fourth"
+    )
 
     long_paper = {"summary": "x" * 20}
     assert extract_summary_snippet(long_paper, max_len=10) == ("x" * 9) + "…"
