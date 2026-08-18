@@ -45,6 +45,7 @@ from deepresearch_flow.paper.snapshot.text import (
     merge_adjacent_markers,
     remove_cjk_spaces,
     rewrite_search_query,
+    same_field_search_query,
 )
 
 _DEFAULT_TIMEOUT = 10.0
@@ -671,7 +672,7 @@ def search_papers(query: str, limit: int = 10) -> list[dict[str, Any]]:
 
     conn = _open_ro_conn(cfg.snapshot_db)
     try:
-        match_expr = rewrite_search_query(query)
+        match_expr = same_field_search_query(rewrite_search_query(query))
         if not match_expr:
             return []
         cur = conn.execute(

@@ -9,6 +9,7 @@ from markdown_it import MarkdownIt
 _HTML_TABLE_RE = re.compile(r"<table\b.*?</table>", re.IGNORECASE | re.DOTALL)
 _TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
+_FTS_SEARCH_COLUMNS = ("title", "summary", "source", "translated", "metadata")
 
 
 def _is_cjk_char(ch: str) -> bool:
@@ -123,6 +124,50 @@ def split_mixed_cjk_latin(token: str) -> list[str]:
     return parts
 
 
+def _tokenize_search_query(text: str) -> list[tuple[str, bool]]:
+    """Split a search query while retaining user-quoted phrase boundaries."""
+    tokens: list[tuple[str, bool]] = []
+    buffer: list[str] = []
+    in_quote = False
+
+    def flush(*, quoted: bool) -> None:
+        value = "".join(buffer).strip()
+        if value:
+            tokens.append((value, quoted))
+        buffer.clear()
+
+    for char in text:
+        if char == '"':
+            if in_quote:
+                flush(quoted=True)
+            else:
+                flush(quoted=False)
+            in_quote = not in_quote
+            continue
+        if not in_quote and char.isspace():
+            flush(quoted=False)
+            continue
+        buffer.append(char)
+
+    flush(quoted=in_quote)
+    return tokens
+
+
+def _fts_terms(raw: str) -> list[str]:
+    terms: list[str] = []
+    for part in _WS_RE.split(raw):
+        for segment in split_mixed_cjk_latin(part):
+            if not segment:
+                continue
+            if all(_is_cjk_char(char) for char in segment):
+                terms.append(insert_cjk_spaces(segment))
+                continue
+            safe = re.sub(r"[^0-9A-Za-z._+-]+", "", segment)
+            if safe:
+                terms.append(safe.lower())
+    return terms
+
+
 def rewrite_search_query(user_query: str) -> str:
     cleaned = normalize_query_punctuation(user_query)
     cleaned = _WS_RE.sub(" ", cleaned).strip()
@@ -130,26 +175,29 @@ def rewrite_search_query(user_query: str) -> str:
         return ""
 
     out: list[str] = []
-    for raw in cleaned.split(" "):
+    for raw, quoted in _tokenize_search_query(cleaned):
         if not raw:
             continue
         upper = raw.upper()
-        if upper in {"AND", "OR"}:
+        if not quoted and upper in {"AND", "OR"}:
             out.append(upper)
             continue
 
-        segments = split_mixed_cjk_latin(raw)
-        for seg in segments:
-            if not seg:
-                continue
-            if all(_is_cjk_char(ch) for ch in seg):
-                phrase = insert_cjk_spaces(seg)
-                out.append(f'"{phrase}"')
-            else:
-                # Keep safe punctuation inside a quoted term so FTS5 does not
-                # reinterpret tokens like `end-to-end` as operators.
-                safe = re.sub(r"[^0-9A-Za-z._+-]+", "", seg)
-                if safe:
-                    out.append(f'"{safe.lower()}"')
+        terms = _fts_terms(raw)
+        if quoted:
+            phrase_terms = [word for term in terms for word in term.split(" ")]
+            if phrase_terms:
+                out.append(f'"{" ".join(phrase_terms)}"')
+            continue
+
+        for term in terms:
+            out.append(f'"{term}"')
 
     return " ".join(out)
+
+
+def same_field_search_query(match_expr: str) -> str:
+    """Require a multi-term FTS query to match within one indexed paper field."""
+    if not match_expr:
+        return ""
+    return " OR ".join(f"{column}: ({match_expr})" for column in _FTS_SEARCH_COLUMNS)

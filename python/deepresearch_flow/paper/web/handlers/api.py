@@ -5,6 +5,7 @@ from __future__ import annotations
 import hmac
 import json
 from pathlib import Path
+import re
 from typing import Any
 
 import httpx
@@ -111,12 +112,89 @@ def _ensure_under_roots(path: Path, roots: list[Path]) -> bool:
     return False
 
 
+_PHRASE_WHITESPACE_RE = re.compile(r"\s+")
+
+
+def _normalize_phrase(value: object) -> str:
+    return _PHRASE_WHITESPACE_RE.sub(" ", str(value or "")).strip().casefold()
+
+
+def _text_values(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, (list, tuple, set)):
+        return [str(item) for item in value if item is not None]
+    return []
+
+
+def _paper_text_values(paper: dict[str, Any], field: str | None) -> list[str]:
+    title = _text_values(paper.get("paper_title") or paper.get("_title_lc"))
+    venue = _text_values(paper.get("_venue") or paper.get("publication_venue"))
+    authors = _text_values(paper.get("_authors") or paper.get("paper_authors"))
+    tags = _text_values(paper.get("_tags") or paper.get("ai_generated_tags"))
+
+    if field is None:
+        return [*title, *venue, *authors, *tags]
+    if field == "title":
+        return title
+    if field == "venue":
+        return venue
+    if field == "author":
+        return authors
+    if field == "tag":
+        return tags
+    if field == "month":
+        return _text_values(paper.get("_month"))
+    if field == "year":
+        return _text_values(paper.get("_year"))
+    return []
+
+
+def _matches_quoted_term(paper: dict[str, Any], term: QueryTerm) -> bool:
+    phrase = _normalize_phrase(term.value)
+    return bool(phrase) and any(
+        phrase in _normalize_phrase(value) for value in _paper_text_values(paper, term.field)
+    )
+
+
+def _matches_unquoted_global_terms_in_one_field(
+    paper: dict[str, Any], terms: list[QueryTerm]
+) -> bool:
+    needles = [_normalize_phrase(term.value) for term in terms]
+    return any(
+        all(needle in _normalize_phrase(value) for needle in needles)
+        for value in _paper_text_values(paper, None)
+    )
+
+
+def _has_quoted_terms(query: Query) -> bool:
+    return any(term.quoted for group in query.groups for term in group)
+
+
+def _matches_quoted_constraints(paper: dict[str, Any], query: Query) -> bool:
+    """Check phrase terms exactly while leaving non-phrase semantic ranking unchanged."""
+    for group in query.groups:
+        phrase_terms = [term for term in group if term.quoted]
+        if not phrase_terms:
+            return True
+        if all(
+            _matches_quoted_term(paper, term)
+            if not term.negated
+            else not _matches_quoted_term(paper, term)
+            for term in phrase_terms
+        ):
+            return True
+    return False
+
+
 def _apply_query(index: PaperIndex, query: Query) -> set[int]:
     """Apply a search query to the paper index and return matching IDs."""
     all_ids = set(index.ordered_ids)
 
     def ids_for_term(term: QueryTerm, base: set[int]) -> set[int]:
         value_lc = term.value.lower()
+        if term.quoted:
+            return {idx for idx in base if _matches_quoted_term(index.papers[idx], term)}
         if term.field is None:
             return {
                 idx for idx in base if value_lc in str(index.papers[idx].get("_search_lc") or "")
@@ -185,6 +263,17 @@ def _apply_query(index: PaperIndex, query: Query) -> set[int]:
                 group_ids -= matched
             else:
                 group_ids &= matched
+        unquoted_global_terms = [
+            term for term in group if term.field is None and not term.negated and not term.quoted
+        ]
+        if len(unquoted_global_terms) > 1:
+            group_ids = {
+                idx
+                for idx in group_ids
+                if _matches_unquoted_global_terms_in_one_field(
+                    index.papers[idx], unquoted_global_terms
+                )
+            }
         result |= group_ids
 
     return result
@@ -357,6 +446,7 @@ async def api_papers_semantic(request: Request) -> JSONResponse:
     query_text = request.query_params.get("q", "").strip()
     if not query_text:
         return JSONResponse({"error": "Query parameter q is required"}, status_code=400)
+    phrase_query = parse_query(query_text)
 
     top_n, param_error = _parse_positive_int_param(
         request.query_params.get("top_n"),
@@ -397,6 +487,9 @@ async def api_papers_semantic(request: Request) -> JSONResponse:
             doc_id = _paper_doc_id(paper)
             if doc_id:
                 paper_by_doc_id[doc_id] = paper
+            source_hash = str(paper.get("source_hash") or "").strip()
+            if source_hash:
+                paper_by_doc_id.setdefault(source_hash, paper)
 
     keyword_search_fn = None
     if index is not None:
@@ -461,6 +554,14 @@ async def api_papers_semantic(request: Request) -> JSONResponse:
             ),
             client=client,
         )
+
+    if _has_quoted_terms(phrase_query):
+        aggregated = [
+            hit
+            for hit in aggregated
+            if (paper := paper_by_doc_id.get(hit.doc_id)) is not None
+            and _matches_quoted_constraints(paper, phrase_query)
+        ]
 
     asset_config = getattr(request.app.state, "asset_config", None)
     prefer_local = getattr(request.app.state, "static_mode", None) == "dev"

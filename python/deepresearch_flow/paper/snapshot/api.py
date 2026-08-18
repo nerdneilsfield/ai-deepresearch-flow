@@ -26,6 +26,7 @@ from deepresearch_flow.paper.snapshot.text import (
     merge_adjacent_markers,
     remove_cjk_spaces,
     rewrite_search_query,
+    same_field_search_query,
 )
 
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -529,7 +530,7 @@ async def _api_search(request: Request) -> Response:
         total = 0
 
         if q:
-            match_expr = rewrite_search_query(q)
+            match_expr = same_field_search_query(rewrite_search_query(q))
             if not match_expr:
                 return JSONResponse(
                     {
