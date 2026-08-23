@@ -62,10 +62,11 @@ def _stamp(value: datetime) -> str:
 class PipelineState:
     """Persistent jobs, steps, leases, and artifact metadata in SQLite."""
 
-    def __init__(self, db_path: str | Path, *, lease_seconds: int = 300, heartbeat_seconds: int = 30):
+    def __init__(self, db_path: str | Path, *, lease_seconds: int = 300, heartbeat_seconds: int = 30, artifact_store: ArtifactStore | None = None):
         self.db_path = Path(db_path)
         self.lease_seconds = int(lease_seconds)
         self.heartbeat_seconds = int(heartbeat_seconds)
+        self.artifact_store = artifact_store
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
 
@@ -272,7 +273,9 @@ class PipelineState:
             raise ValueError(f"unknown step: {step}")
         if not isinstance(artifact, Artifact) or not artifact.path.is_file():
             raise ValueError("step artifact must be a promoted Artifact")
-        ArtifactStore.validate_artifact(artifact, job_id, step)
+        if self.artifact_store is None:
+            raise ValueError("PipelineState requires bound ArtifactStore for artifact success")
+        self.artifact_store.validate_artifact(artifact, job_id, step)
         actual_path = artifact.path.resolve()
         actual_size = actual_path.stat().st_size
         actual_digest = hashlib.sha256(actual_path.read_bytes()).hexdigest()

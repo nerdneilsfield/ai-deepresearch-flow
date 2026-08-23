@@ -1,9 +1,10 @@
 from datetime import datetime, timedelta, timezone
+import hashlib
 from pathlib import Path
 
 import pytest
 
-from deepresearch_flow.pipeline.artifacts import ArtifactStore
+from deepresearch_flow.pipeline.artifacts import Artifact, ArtifactStore
 from deepresearch_flow.pipeline.state import LeaseError, PipelineState
 
 
@@ -63,8 +64,8 @@ def test_expired_lease_is_recoverable_and_old_token_stays_invalid(tmp_path: Path
 
 
 def test_model_change_invalidates_selected_step_and_downstream(tmp_path: Path) -> None:
-    state = PipelineState(tmp_path / "queue.sqlite3")
     artifacts = ArtifactStore(tmp_path / "work", tmp_path / "formal")
+    state = PipelineState(tmp_path / "queue.sqlite3", artifact_store=artifacts)
     job_id = state.create_job(selected_models={"ocr": "one", "extract": "one", "translate": "one"})
     lease = state.acquire_lease(job_id, "worker")
     assert lease is not None
@@ -96,8 +97,8 @@ def test_cancel_is_immediate_when_queued_and_observed_at_step_boundary(tmp_path:
 
 
 def test_retry_starts_at_earliest_missing_step(tmp_path: Path) -> None:
-    state = PipelineState(tmp_path / "queue.sqlite3")
     artifacts = ArtifactStore(tmp_path / "work", tmp_path / "formal")
+    state = PipelineState(tmp_path / "queue.sqlite3", artifact_store=artifacts)
     job_id = state.create_job()
     lease = state.acquire_lease(job_id, "worker")
     assert lease is not None
@@ -108,8 +109,8 @@ def test_retry_starts_at_earliest_missing_step(tmp_path: Path) -> None:
 
 
 def test_step_success_exposes_digest_size_and_clears_on_invalidation(tmp_path: Path) -> None:
-    state = PipelineState(tmp_path / "queue.sqlite3")
     artifacts = ArtifactStore(tmp_path / "work", tmp_path / "formal")
+    state = PipelineState(tmp_path / "queue.sqlite3", artifact_store=artifacts)
     job_id = state.create_job()
     lease = state.acquire_lease(job_id, "worker")
     assert lease is not None
@@ -125,8 +126,8 @@ def test_step_success_exposes_digest_size_and_clears_on_invalidation(tmp_path: P
 
 
 def test_unpromoted_or_mismatched_artifact_cannot_be_recorded(tmp_path: Path) -> None:
-    state = PipelineState(tmp_path / "queue.sqlite3")
     artifacts = ArtifactStore(tmp_path / "work", tmp_path / "formal")
+    state = PipelineState(tmp_path / "queue.sqlite3", artifact_store=artifacts)
     job_id = state.create_job()
     lease = state.acquire_lease(job_id, "worker")
     assert lease is not None
@@ -140,8 +141,8 @@ def test_unpromoted_or_mismatched_artifact_cannot_be_recorded(tmp_path: Path) ->
 
 
 def test_step_success_rejects_cross_job_wrong_kind_and_external_artifacts(tmp_path: Path) -> None:
-    state = PipelineState(tmp_path / "queue.sqlite3")
     artifacts = ArtifactStore(tmp_path / "work", tmp_path / "formal")
+    state = PipelineState(tmp_path / "queue.sqlite3", artifact_store=artifacts)
     source_job = state.create_job()
     target_job = state.create_job()
     source_lease = state.acquire_lease(source_job, "source")
@@ -162,6 +163,30 @@ def test_step_success_rejects_cross_job_wrong_kind_and_external_artifacts(tmp_pa
     forged = source_artifact.__class__(target_job, "ocr", external, source_artifact.digest, external.stat().st_size)
     with pytest.raises(ValueError):
         state.record_step_success(target_job, "ocr", target_lease.token, artifact=forged)
+
+
+def test_step_success_rejects_fully_populated_external_forgery(tmp_path: Path) -> None:
+    artifacts = ArtifactStore(tmp_path / "work", tmp_path / "formal")
+    state = PipelineState(tmp_path / "queue.sqlite3", artifact_store=artifacts)
+    job_id = state.create_job()
+    lease = state.acquire_lease(job_id, "worker")
+    assert lease is not None
+    external_root = tmp_path / "external"
+    external_job = external_root / artifacts._job_key(job_id)
+    external_job.mkdir(parents=True)
+    external_path = external_job / "ocr-00000000000000000000000000000000.artifact"
+    external_path.write_bytes(b"forged")
+    forged = Artifact(
+        job_id,
+        "ocr",
+        external_path,
+        hashlib.sha256(b"forged").hexdigest(),
+        6,
+        external_root,
+        external_job,
+    )
+    with pytest.raises(ValueError):
+        state.record_step_success(job_id, "ocr", lease.token, artifact=forged)
 
 
 def test_attempt_history_and_atomic_job_initialization(tmp_path: Path) -> None:

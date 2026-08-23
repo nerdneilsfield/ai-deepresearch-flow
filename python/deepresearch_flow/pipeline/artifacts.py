@@ -85,17 +85,15 @@ class ArtifactStore:
             raise ValueError("job artifact directory escapes work directory")
         self._contained(directory, self.work_dir)
 
-    @staticmethod
-    def validate_artifact(artifact: Artifact, job_id: str, kind: str) -> None:
+    def validate_artifact(self, artifact: Artifact, job_id: str, kind: str) -> None:
         """Validate artifact ownership, exact kind, and canonical work containment."""
         if artifact.job_id != job_id or artifact.kind != kind:
             raise ValueError("artifact ownership or kind mismatch")
-        if artifact.root is None or artifact.job_directory is None:
-            raise ValueError("artifact lacks trusted store provenance")
-        root = artifact.root.resolve()
-        directory = artifact.job_directory.resolve()
+        directory = self._job_directory(job_id)
+        self._assert_job_directory(directory)
+        directory = directory.resolve()
         path = artifact.path.resolve()
-        if directory.parent != root or path.parent != directory or not path.is_file():
+        if artifact.path.is_symlink() or path.parent != directory or not path.is_file():
             raise ValueError("artifact is outside its canonical work directory")
         try:
             uuid.UUID(directory.name)
