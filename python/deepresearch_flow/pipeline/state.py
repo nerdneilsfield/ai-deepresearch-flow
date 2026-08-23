@@ -714,7 +714,19 @@ class PipelineState:
                 or status in {"failed", "cancelled", "rejected"}
             ) and row["status"] != status:
                 self._invalidate_batch_matching(db, str(row["batch_id"]))
-            db.execute("UPDATE jobs SET status=?,terminal_at=?,lease_owner=CASE WHEN ? THEN NULL ELSE lease_owner END,lease_token=CASE WHEN ? THEN NULL ELSE lease_token END,lease_expires_at=CASE WHEN ? THEN NULL ELSE lease_expires_at END,updated_at=?,revision=revision+1 WHERE id=?", (status, terminal, clear, clear, clear, _stamp(_utc()), job_id))
+            db.execute(
+                "UPDATE jobs SET status=?,terminal_at=?,cancel_requested=CASE WHEN ? THEN 0 ELSE cancel_requested END,lease_owner=CASE WHEN ? THEN NULL ELSE lease_owner END,lease_token=CASE WHEN ? THEN NULL ELSE lease_token END,lease_expires_at=CASE WHEN ? THEN NULL ELSE lease_expires_at END,updated_at=?,revision=revision+1 WHERE id=?",
+                (
+                    status,
+                    terminal,
+                    status in {"published", "published_with_warning"},
+                    clear,
+                    clear,
+                    clear,
+                    _stamp(_utc()),
+                    job_id,
+                ),
+            )
             db.commit()
         return status
 

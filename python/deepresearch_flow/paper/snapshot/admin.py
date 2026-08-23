@@ -11,7 +11,7 @@ import hmac
 import json
 import logging
 import sqlite3
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 import time
@@ -40,6 +40,7 @@ from deepresearch_flow.paper.snapshot.schema import (
     recompute_paper_index,
 )
 from deepresearch_flow.paper.snapshot.text import insert_cjk_spaces, markdown_to_plain_text
+from deepresearch_flow.paper.snapshot.publication import InsertStats, insert_paper_metadata
 from deepresearch_flow.paper.snapshot.update import (
     _canonical_template_tag,
     _choose_preferred_template,
@@ -145,20 +146,11 @@ def _resolve_paper_identity(
 # ---------------------------------------------------------------------------
 
 
-@dataclass
-class _InsertStats:
-    added: int = 0
-    updated: int = 0
-    skipped: int = 0
-    errors: list[dict[str, Any]] = field(default_factory=list)
-    paper_ids: list[str] = field(default_factory=list)
-
-
-def _insert_paper_metadata(
+def _insert_paper_metadata_impl(
     conn: sqlite3.Connection,
     paper: dict[str, Any],
     index: int,
-    stats: _InsertStats,
+    stats: InsertStats,
     *,
     overwrite: bool = False,
 ) -> None:
@@ -490,7 +482,7 @@ async def _admin_add_papers(request: Request) -> JSONResponse:
         )
 
     cfg: AdminConfig = request.app.state.admin_cfg
-    stats = _InsertStats()
+    stats = InsertStats()
     conn = _open_rw_conn(cfg.snapshot_db)
     try:
         init_snapshot_db(conn)
@@ -501,7 +493,10 @@ async def _admin_add_papers(request: Request) -> JSONResponse:
             savepoint = f"paper_{idx}"
             conn.execute(f"SAVEPOINT {savepoint}")
             try:
-                _insert_paper_metadata(conn, paper, idx, stats, overwrite=overwrite)
+                paper_payload: dict[str, Any] = {
+                    str(key): value for key, value in paper.items()
+                }
+                insert_paper_metadata(conn, paper_payload, idx, stats, overwrite=overwrite)
             except Exception as exc:
                 conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
                 conn.execute(f"RELEASE SAVEPOINT {savepoint}")

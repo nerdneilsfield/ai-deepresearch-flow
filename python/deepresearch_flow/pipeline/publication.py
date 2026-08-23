@@ -2,8 +2,9 @@
 
 The pipeline has two independent durability boundaries: formal static objects
 and the Snapshot database.  This module keeps the boundary explicit.  A
-bundle is immutable and content addressed, formal objects are written first,
-and the receipt is committed with Snapshot metadata in one SQLite transaction.
+bundle is immutable and content addressed; one serialized Snapshot transaction
+reserves paper identity before formal writes and commits its receipt only after
+all resources succeed.
 """
 
 from __future__ import annotations
@@ -14,21 +15,19 @@ import hashlib
 import inspect
 import json
 import mimetypes
-import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 import re
 import sqlite3
-import tempfile
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from threading import RLock
-from types import MappingProxyType
-from typing import Any, Protocol, runtime_checkable
+from typing import Any
 
-from deepresearch_flow.paper.snapshot.admin import _InsertStats, _insert_paper_metadata
-from deepresearch_flow.paper.snapshot.common import _open_rw_conn
+from deepresearch_flow.paper.snapshot.publication import (
+    InsertStats,
+    insert_paper_metadata,
+    open_snapshot_connection,
+)
 from deepresearch_flow.paper.snapshot.schema import (
-    init_snapshot_db,
     recompute_facet_counts,
     recompute_facet_edges,
     recompute_paper_index,
@@ -40,139 +39,20 @@ from deepresearch_flow.paper.snapshot.identity import (
     paper_id_for_key,
 )
 from deepresearch_flow.paper.utils import stable_hash
-
-
-class PublicationError(RuntimeError):
-    """Publication failed before a formally published result was established."""
-
-
-class PublicationConflict(PublicationError):
-    """A job or paper already has a different durable publication identity."""
-
-
-@runtime_checkable
-class FormalStore(Protocol):
-    """Minimal write-only interface shared by local and WebDAV stores."""
-
-    def put(self, relative_path: str, data: bytes) -> None:
-        """Write one relative formal object idempotently."""
-
-
-@dataclass(frozen=True)
-class PublicationResource:
-    """One immutable content-addressed formal object."""
-
-    relative_path: str
-    content: bytes
-    digest: str
-    size: int
-    media_type: str
-
-    @property
-    def path(self) -> str:
-        """Compatibility alias used by callers that call paths ``path``."""
-        return self.relative_path
-
-
-@dataclass(frozen=True)
-class PublicationBundle:
-    """Immutable publication input and deterministic bundle identity."""
-
-    job_id: str
-    paper_id: str
-    paper: Mapping[str, Any]
-    bibtex: Mapping[str, Any]
-    resource_map: Mapping[str, PublicationResource]
-    references: Mapping[str, str]
-    bundle_digest: str
-    work_dir: Path | None = None
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "paper", _freeze(self.paper))
-        object.__setattr__(self, "bibtex", _freeze(self.bibtex))
-        object.__setattr__(self, "resource_map", MappingProxyType(dict(self.resource_map)))
-        object.__setattr__(self, "references", MappingProxyType(dict(self.references)))
-
-    @property
-    def resources(self) -> tuple[PublicationResource, ...]:
-        """Return resources in deterministic path order."""
-        return tuple(self.resource_map[key] for key in sorted(self.resource_map))
-
-
-@dataclass(frozen=True)
-class PublicationResult:
-    """Result of Snapshot receipt commit and optional indexing."""
-
-    paper_id: str
-    bundle_digest: str
-    already_published: bool = False
-    indexed: bool = False
-    index_warning: str | None = None
-
-
-@dataclass(frozen=True)
-class PublicationWorkerResult:
-    """Public result for one publication-worker attempt."""
-
-    job_id: str
-    status: str
-    publication: PublicationResult | None = None
-    error: str | None = None
-
-
-class LocalFormalStore:
-    """Atomic local formal store with content-addressed idempotency."""
-
-    def __init__(self, root: str | Path):
-        self.root = Path(root).resolve()
-        self.root.mkdir(parents=True, exist_ok=True)
-
-    def put(self, relative_path: str, data: bytes) -> None:
-        rel = _safe_relative_path(relative_path)
-        destination = (self.root / rel).resolve()
-        if not destination.is_relative_to(self.root):
-            raise PublicationError("formal resource path escapes configured root")
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        # Content-addressed names make repeated writes safe.  Explicit
-        # metadata names (summary/<paper>.json) are replaced atomically so a
-        # manually regenerated preview cannot expose a partial file.
-        fd, temporary_name = tempfile.mkstemp(prefix=".publication-", dir=destination.parent)
-        temporary = Path(temporary_name)
-        try:
-            with os.fdopen(fd, "wb") as stream:
-                stream.write(data)
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temporary, destination)
-        except BaseException:
-            temporary.unlink(missing_ok=True)
-            raise
-
-
-class WebDavFormalStore:
-    """Write-only WebDAV formal store.
-
-    A successful PUT is the durability acknowledgement.  In particular this
-    adapter deliberately does not call ``exists``/``HEAD`` before or after
-    upload; content-addressed paths make retries safe without the extra round
-    trip and some WebDAV servers do not implement HEAD consistently.
-    """
-
-    def __init__(self, storage: Any, *, prefix: str = ""):
-        self.storage = storage
-        self.prefix = _safe_relative_path(prefix) if prefix else ""
-
-    def put(self, relative_path: str, data: bytes) -> None:
-        rel = _safe_relative_path(relative_path)
-        target = f"{self.prefix}/{rel}" if self.prefix else rel
-        mkdir = getattr(self.storage, "mkdir", None)
-        if callable(mkdir):
-            parts = target.split("/")[:-1]
-            current = ""
-            for part in parts:
-                current = f"{current}/{part}" if current else part
-                mkdir(current)
-        self.storage.upload(target, data)
+from .publication_models import (
+    FormalStore,
+    PublicationBundle,
+    PublicationCancelled,
+    PublicationConflict,
+    PublicationError,
+    PublicationResource,
+    PublicationResult,
+    PublicationWorkerResult,
+    plain,
+)
+from .publication_store import LocalFormalStore, WebDavFormalStore, safe_relative_path
+from .publication_indexing import LanceDBIndexer
+from .publication_worker import PublicationWorker
 
 
 def build_publication_bundle(
@@ -204,6 +84,17 @@ def build_publication_bundle(
     if "title" in normalized_paper:
         normalized_paper["title"] = str(normalized_paper["title"]).strip()
 
+    normalized_bibtex = _normalize_bibtex(bibtex)
+    if normalized_bibtex.get("status") == "not_provided":
+        # A preview may carry metadata copied from an earlier run.  An
+        # explicit no-BibTeX decision is authoritative and must clear it
+        # before Snapshot identity and insertion are prepared.
+        normalized_paper.pop("bibtex", None)
+        normalized_paper.pop("bibtex_raw", None)
+
+    paper_id = _paper_id_for(normalized_paper)
+    normalized_paper["paper_id"] = paper_id
+
     raw_work_dir = Path(work_dir).resolve() if work_dir is not None else None
     resource_map: dict[str, PublicationResource] = {}
     references: dict[str, str] = {}
@@ -221,7 +112,7 @@ def build_publication_bundle(
             paper_id=_paper_id_for(normalized_paper),
             translation_language=translation_language,
         )
-        relative_path = _safe_relative_path(relative_path)
+        relative_path = safe_relative_path(relative_path)
         media_type = mimetypes.guess_type(relative_path)[0] or "application/octet-stream"
         resource_map[relative_path] = PublicationResource(
             relative_path=relative_path,
@@ -232,11 +123,6 @@ def build_publication_bundle(
         )
         references[name] = relative_path
         aliases[name.casefold()] = relative_path
-
-    paper_id = _paper_id_for(normalized_paper)
-    if paper_id != _paper_id_for(normalized_paper, explicit_id=normalized_paper.get("paper_id")):
-        paper_id = _paper_id_for(normalized_paper, explicit_id=normalized_paper.get("paper_id"))
-    normalized_paper["paper_id"] = paper_id
 
     # Resource-derived hashes are the canonical values consumed by Snapshot
     # and the vector loader.  Existing source_hash remains a provenance key.
@@ -261,34 +147,78 @@ def build_publication_bundle(
         if isinstance(summary, dict):
             normalized_paper["templates"] = {"simple": summary}
 
-    normalized_bibtex = _normalize_bibtex(bibtex)
     bib_for_paper = _bibtex_paper_value(normalized_bibtex)
     if bib_for_paper is not None:
         normalized_paper["bibtex"] = bib_for_paper
 
-    # Rebuild the resource paths once paper_id is known.  Semantic summary
-    # paths include paper_id; the usual metadata-only identity does not.
+    # Snapshot's public embedding loader reads one JSON object per template
+    # from ``summary/<paper_id>/<template>.json``.  Preserve every template
+    # record, while retaining ``summary_json`` as a reference to preferred
+    # template for callers that only know semantic alias.
     if summary_ref:
-        expected_summary = f"summary/{paper_id}.json"
-        if summary_ref != expected_summary:
-            resource = resource_map.pop(summary_ref)
+        summary_resource = resource_map.pop(summary_ref)
+        payloads = _summary_template_payloads(
+            normalized_paper.get("templates"), summary_resource.content
+        )
+        if payloads:
+            preferred_tag = _preferred_summary_tag(normalized_paper, payloads)
+            for template_tag, payload in payloads.items():
+                path = f"summary/{paper_id}/{template_tag}.json"
+                content = json.dumps(
+                    payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+                ).encode("utf-8")
+                digest = hashlib.sha256(content).hexdigest()
+                resource_map[path] = PublicationResource(
+                    relative_path=path,
+                    content=content,
+                    digest=digest,
+                    size=len(content),
+                    media_type="application/json",
+                )
+                references[f"summary:{template_tag}"] = path
+            references["summary_json"] = f"summary/{paper_id}/{preferred_tag}.json"
+            aliases["summary_json"] = references["summary_json"]
+        else:
+            # Keep malformed preview payload available for review, but put it
+            # on immutable paper/template layout rather than a replaceable
+            # top-level metadata path.
+            path = f"summary/{paper_id}/simple.json"
             resource = PublicationResource(
-                relative_path=expected_summary,
-                content=resource.content,
-                digest=resource.digest,
-                size=resource.size,
-                media_type=resource.media_type,
+                relative_path=path,
+                content=summary_resource.content,
+                digest=summary_resource.digest,
+                size=summary_resource.size,
+                media_type="application/json",
             )
-            resource_map[expected_summary] = resource
-            for key, ref in list(references.items()):
-                if ref == summary_ref:
-                    references[key] = expected_summary
+            resource_map[path] = resource
+            references["summary_json"] = path
+            aliases["summary_json"] = path
+    elif isinstance(normalized_paper.get("templates"), Mapping):
+        payloads = _summary_template_payloads(normalized_paper.get("templates"), b"")
+        if payloads:
+            preferred_tag = _preferred_summary_tag(normalized_paper, payloads)
+            for template_tag, payload in payloads.items():
+                path = f"summary/{paper_id}/{template_tag}.json"
+                content = json.dumps(
+                    payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+                ).encode("utf-8")
+                digest = hashlib.sha256(content).hexdigest()
+                resource_map[path] = PublicationResource(
+                    relative_path=path,
+                    content=content,
+                    digest=digest,
+                    size=len(content),
+                    media_type="application/json",
+                )
+                references[f"summary:{template_tag}"] = path
+            references["summary_json"] = f"summary/{paper_id}/{preferred_tag}.json"
+            aliases["summary_json"] = references["summary_json"]
 
     payload = {
         "job_id": normalized_job_id,
         "paper_id": paper_id,
-        "paper": _plain(normalized_paper),
-        "bibtex": _plain(normalized_bibtex),
+        "paper": plain(normalized_paper),
+        "bibtex": plain(normalized_bibtex),
         "references": {key: references[key] for key in sorted(references)},
         "resources": [
             {
@@ -349,44 +279,27 @@ def publish_bundle(
     formal_store: FormalStore,
     *,
     indexer: Callable[[PublicationBundle], Any] | None = None,
+    lease_check: Callable[[], None] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> PublicationResult:
     """Publish formal resources, commit one Snapshot receipt, then index.
 
-    Formal writes happen before the first Snapshot schema write.  A matching
-    receipt short-circuits both duplicate Snapshot insertion and formal PUTs,
-    and still runs the supplied indexer, which makes embedding recovery an
-    indexing-only operation.  A conflicting receipt is never overwritten.
+    One serialized Snapshot transaction reserves paper identity before formal
+    writes.  It commits the receipt only after every formal write succeeds;
+    an orphaned content-addressed object is acceptable on later failure.
+    Matching receipts short-circuit formal writes and still run indexer.
     """
     db_path = Path(snapshot_db)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with _SNAPSHOT_COMMIT_LOCK:
-        existing = _read_receipt(db_path, bundle.job_id)
-        if existing is not None:
-            existing_digest, existing_paper_id = existing
-            if existing_digest != bundle.bundle_digest:
-                raise PublicationConflict(
-                    f"publication receipt for job {bundle.job_id} has conflicting bundle digest"
-                )
-            return _run_indexer(
-                bundle,
-                paper_id=existing_paper_id,
-                bundle_digest=existing_digest,
-                already_published=True,
-                indexer=indexer,
-            )
-
-        for resource in bundle.resources:
-            try:
-                formal_store.put(resource.relative_path, resource.content)
-            except Exception as exc:
-                raise PublicationError(
-                    f"formal resource write failed for {resource.relative_path}: {exc}"
-                ) from exc
-
-        conn = _open_rw_conn(db_path)
+        _check_lease(lease_check)
+        _check_cancel(cancel_check)
+        conn = open_snapshot_connection(db_path)
         try:
-            init_snapshot_db(conn)
+            _check_lease(lease_check)
             conn.execute("BEGIN IMMEDIATE")
+            _check_lease(lease_check)
+            _check_cancel(cancel_check)
             receipt = conn.execute(
                 "SELECT bundle_digest,paper_id FROM pipeline_publication_receipt WHERE job_id=?",
                 (bundle.job_id,),
@@ -399,6 +312,7 @@ def publish_bundle(
                     raise PublicationConflict(
                         f"publication receipt for job {bundle.job_id} has conflicting bundle digest"
                     )
+                conn.rollback()
                 return _run_indexer(
                     bundle,
                     paper_id=existing_paper_id,
@@ -407,9 +321,32 @@ def publish_bundle(
                     indexer=indexer,
                 )
 
-            stats = _InsertStats()
+            duplicate = conn.execute(
+                "SELECT paper_id FROM paper WHERE paper_id=?", (bundle.paper_id,)
+            ).fetchone()
+            if duplicate is not None:
+                raise PublicationConflict(
+                    f"paper {bundle.paper_id} already exists without matching publication receipt"
+                )
+
+            _check_cancel(cancel_check)
+            for resource in bundle.resources:
+                _check_lease(lease_check)
+                _check_cancel(cancel_check)
+                try:
+                    formal_store.put(resource.relative_path, resource.content)
+                except PublicationConflict:
+                    raise
+                except Exception as exc:
+                    raise PublicationError(
+                        f"formal resource write failed for {resource.relative_path}: {exc}"
+                    ) from exc
+
+            _check_lease(lease_check)
+            _check_cancel(cancel_check)
+            stats = InsertStats()
             try:
-                _insert_paper_metadata(conn, dict(_plain(bundle.paper)), 0, stats, overwrite=False)
+                insert_paper_metadata(conn, dict(plain(bundle.paper)), 0, stats, overwrite=False)
             except Exception as exc:
                 raise PublicationError(f"Snapshot metadata commit failed: {exc}") from exc
             if stats.errors:
@@ -424,6 +361,8 @@ def publish_bundle(
                     f"bundle paper_id {bundle.paper_id} does not match Snapshot paper_id {paper_id}"
                 )
             _update_snapshot_static_references(conn, bundle, paper_id)
+            _check_lease(lease_check)
+            _check_cancel(cancel_check)
             conn.execute(
                 "INSERT INTO pipeline_publication_receipt(job_id,bundle_digest,paper_id,published_at) VALUES(?,?,?,?)",
                 (bundle.job_id, bundle.bundle_digest, paper_id, _now_iso()),
@@ -431,7 +370,14 @@ def publish_bundle(
             recompute_paper_index(conn)
             recompute_facet_counts(conn)
             recompute_facet_edges(conn)
+            _check_lease(lease_check)
             conn.commit()
+        except PublicationCancelled:
+            conn.rollback()
+            raise
+        except PublicationConflict:
+            conn.rollback()
+            raise
         except PublicationError:
             conn.rollback()
             raise
@@ -480,111 +426,6 @@ def validate_vector_index(
     )
 
 
-@dataclass(frozen=True)
-class LanceDBIndexer:
-    """Callable incremental indexer backed by existing embed pipeline."""
-
-    config: Any
-    snapshot_db: Path
-    static_root: Path
-    vector_dir: Path
-
-    def __call__(self, bundle: PublicationBundle) -> None:
-        del bundle
-        from deepresearch_flow.paper.embed_pipeline import run_embed_pipeline
-
-        result = run_embed_pipeline(
-            config=self.config,
-            snapshot_db=self.snapshot_db,
-            static_export_dir=self.static_root,
-            vector_dir=self.vector_dir,
-        )
-        if inspect.isawaitable(result):
-            try:
-                asyncio.get_running_loop()
-            except RuntimeError:
-                asyncio.run(result)
-            else:
-                raise RuntimeError("LanceDBIndexer cannot run inside an active event loop")
-
-
-class PublicationWorker:
-    """Lease-fenced worker for ``publish_queued`` and indexing retries."""
-
-    def __init__(
-        self,
-        state: Any,
-        snapshot_db: str | Path,
-        formal_store: FormalStore,
-        *,
-        bundle_builder: Callable[[str], PublicationBundle],
-        indexer: Callable[[PublicationBundle], Any] | None = None,
-        worker_id: str = "pipeline-publisher",
-    ) -> None:
-        self.state = state
-        self.snapshot_db = Path(snapshot_db)
-        self.formal_store = formal_store
-        self.bundle_builder = bundle_builder
-        self.indexer = indexer
-        self.worker_id = worker_id
-
-    def run_job(self, job_id: str) -> PublicationWorkerResult:
-        try:
-            lease = self.state.acquire_lease(job_id, self.worker_id)
-        except Exception as exc:
-            return PublicationWorkerResult(job_id, "failed", error=str(exc))
-        if lease is None:
-            return PublicationWorkerResult(job_id, "busy")
-        try:
-            current = str(self.state.get_job(job_id)["status"])
-            if current not in {"publish_queued", "indexing"}:
-                self.state.release_lease(job_id, lease.token)
-                return PublicationWorkerResult(job_id, current)
-            if current == "publish_queued":
-                self.state.transition(job_id, "publishing", lease.token)
-            bundle = self.bundle_builder(job_id)
-            if inspect.isawaitable(bundle):
-                bundle = _await_sync(bundle)
-            if not isinstance(bundle, PublicationBundle):
-                raise TypeError("bundle_builder must return PublicationBundle")
-            self.state.set_digests(job_id, bundle_digest=bundle.bundle_digest, lease_token=lease.token)
-
-            def index_after_snapshot(value: PublicationBundle) -> Any:
-                if str(self.state.get_job(job_id)["status"]) == "publishing":
-                    self.state.transition(job_id, "indexing", lease.token)
-                if self.indexer is None:
-                    return None
-                return self.indexer(value)
-
-            publication = publish_bundle(
-                bundle,
-                self.snapshot_db,
-                self.formal_store,
-                indexer=index_after_snapshot,
-            )
-            final_status = "published_with_warning" if publication.index_warning else "published"
-            self.state.transition(job_id, final_status, lease.token)
-            return PublicationWorkerResult(job_id, final_status, publication=publication)
-        except Exception as exc:
-            try:
-                status = str(self.state.get_job(job_id)["status"])
-                if status in {"publishing", "indexing"}:
-                    self.state.transition(job_id, "failed", lease.token)
-            except Exception:
-                pass
-            return PublicationWorkerResult(job_id, "failed", error=str(exc))
-
-    def run_once(self, job_ids: list[str] | None = None) -> list[PublicationWorkerResult]:
-        ids = (
-            list(job_ids)
-            if job_ids is not None
-            else self.state.list_job_ids({"publish_queued", "indexing"})
-        )
-        return [self.run_job(job_id) for job_id in ids]
-
-    run = run_once
-
-
 _SNAPSHOT_COMMIT_LOCK = RLock()
 
 
@@ -623,34 +464,19 @@ def _run_indexer(
     )
 
 
-def _await_sync(value: Any) -> Any:
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(value)
-    raise RuntimeError("publication callback returned awaitable in active event loop")
-
-
-def _read_receipt(db_path: Path, job_id: str) -> tuple[str, str] | None:
-    if not db_path.exists():
-        return None
-    try:
-        conn = sqlite3.connect(db_path, timeout=30)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA busy_timeout=30000")
-        row = conn.execute(
-            "SELECT bundle_digest,paper_id FROM pipeline_publication_receipt WHERE job_id=?",
-            (job_id,),
-        ).fetchone()
-    except sqlite3.OperationalError:
-        # Existing pre-pipeline snapshots simply do not have receipt schema.
-        return None
-    finally:
+def _check_lease(check: Callable[[], None] | None) -> None:
+    if check is not None:
         try:
-            conn.close()
-        except UnboundLocalError:
-            pass
-    return None if row is None else (str(row["bundle_digest"]), str(row["paper_id"]))
+            check()
+        except PublicationError:
+            raise
+        except Exception as exc:
+            raise PublicationError(f"publication lease lost: {exc}") from exc
+
+
+def _check_cancel(check: Callable[[], bool] | None) -> None:
+    if check is not None and check():
+        raise PublicationCancelled("publication cancelled before Snapshot receipt")
 
 
 def _update_snapshot_static_references(
@@ -716,6 +542,48 @@ def _resource_path(
     return f"objects/{digest}"
 
 
+def _summary_template_payloads(value: Any, raw_summary: bytes) -> dict[str, dict[str, Any]]:
+    payloads: dict[str, dict[str, Any]] = {}
+    if isinstance(value, Mapping):
+        for raw_tag, raw_payload in value.items():
+            if raw_payload is None:
+                continue
+            tag = _canonical_template_tag(str(raw_tag))
+            if isinstance(raw_payload, Mapping):
+                payloads[tag] = {
+                    str(key): plain(item) for key, item in raw_payload.items()
+                }
+            else:
+                payloads[tag] = {"summary": str(raw_payload)}
+    if payloads or not raw_summary:
+        return dict(sorted(payloads.items()))
+    try:
+        parsed = json.loads(raw_summary.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+    if isinstance(parsed, dict):
+        return {"simple": parsed}
+    return {}
+
+
+def _preferred_summary_tag(paper: Mapping[str, Any], payloads: Mapping[str, Any]) -> str:
+    for key in ("preferred_summary_template", "template_tag", "prompt_template"):
+        value = str(paper.get(key) or "").strip()
+        if value:
+            candidate = _canonical_template_tag(value)
+            if candidate in payloads:
+                return candidate
+    if "simple" in payloads:
+        return "simple"
+    return sorted(payloads)[0]
+
+
+def _canonical_template_tag(value: str) -> str:
+    tag = re.sub(r"[^a-z0-9_-]+", "_", str(value).strip().lower())
+    tag = re.sub(r"_+", "_", tag).strip("_")
+    return tag or "default"
+
+
 def _paper_id_for(paper: Mapping[str, Any], explicit_id: Any | None = None) -> str:
     explicit = str(explicit_id if explicit_id is not None else paper.get("paper_id") or "").strip()
     if explicit:
@@ -776,20 +644,6 @@ def _read_resource(value: Any, work_dir: Path | None) -> bytes:
     raise TypeError("publication resources must be bytes or readable paths")
 
 
-def _safe_relative_path(value: str) -> str:
-    normalized = str(value).replace("\\", "/")
-    if "\x00" in normalized or not normalized or normalized.startswith("/"):
-        raise ValueError("publication resource path must be relative and traversal-free")
-    path = PurePosixPath(normalized)
-    if (
-        path.is_absolute()
-        or re.fullmatch(r"[A-Za-z]:", path.parts[0] if path.parts else "")
-        or any(part in {"", ".", ".."} for part in path.parts)
-    ):
-        raise ValueError("publication resource path must be relative and traversal-free")
-    return path.as_posix()
-
-
 def _safe_component(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", str(value)).strip("._")
 
@@ -804,22 +658,6 @@ def _normalize_value(value: Any) -> Any:
     return value
 
 
-def _freeze(value: Any) -> Any:
-    if isinstance(value, Mapping):
-        return MappingProxyType({str(key): _freeze(item) for key, item in value.items()})
-    if isinstance(value, list):
-        return tuple(_freeze(item) for item in value)
-    return value
-
-
-def _plain(value: Any) -> Any:
-    if isinstance(value, Mapping):
-        return {str(key): _plain(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_plain(item) for item in value]
-    return value
-
-
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -829,6 +667,7 @@ __all__ = [
     "LanceDBIndexer",
     "LocalFormalStore",
     "PublicationBundle",
+    "PublicationCancelled",
     "PublicationConflict",
     "PublicationError",
     "PublicationResource",

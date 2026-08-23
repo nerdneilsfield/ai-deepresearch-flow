@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sqlite3
+from threading import Event, Thread
+import time
 from typing import override
 
 import pytest
 
 from deepresearch_flow.pipeline.publication import (
     LocalFormalStore,
+    PublicationBundle,
     PublicationConflict,
     PublicationError,
     PublicationWorker,
@@ -54,7 +58,7 @@ def test_bundle_is_normalized_content_addressed_and_deterministic(tmp_path: Path
     assert len(first.resource_map) == 4
     assert any(path.startswith("pdf/") and path.endswith(".pdf") for path in first.resource_map)
     assert any(path.startswith("md/") and path.endswith(".md") for path in first.resource_map)
-    assert "summary/" + first.paper_id + ".json" in first.resource_map
+    assert "summary/" + first.paper_id + "/simple.json" in first.resource_map
     assert any(path.startswith("md_translate/en/") for path in first.resource_map)
     assert first.references["pdf"].startswith("pdf/")
 
@@ -65,6 +69,16 @@ def test_local_formal_store_is_idempotent(tmp_path: Path) -> None:
     store.put("pdf/abc.pdf", b"%PDF-1.7")
 
     assert (tmp_path / "formal/pdf/abc.pdf").read_bytes() == b"%PDF-1.7"
+
+
+def test_local_formal_store_rejects_immutable_path_overwrite(tmp_path: Path) -> None:
+    store = LocalFormalStore(tmp_path / "formal")
+    store.put("summary/paper/simple.json", b"first")
+
+    with pytest.raises(PublicationConflict):
+        store.put("summary/paper/simple.json", b"second")
+
+    assert (tmp_path / "formal/summary/paper/simple.json").read_bytes() == b"first"
 
 
 def test_webdav_formal_store_upload_does_not_require_head() -> None:
@@ -106,9 +120,16 @@ def test_static_failure_prevents_snapshot_commit(tmp_path: Path) -> None:
 
     conn = sqlite3.connect(tmp_path / "snapshot.sqlite3")
     try:
-        assert conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='paper'"
-        ).fetchone() is None
+        tables = {
+            str(row[0])
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        if "paper" in tables:
+            assert conn.execute("SELECT COUNT(*) FROM paper").fetchone()[0] == 0
+        if "pipeline_publication_receipt" in tables:
+            assert conn.execute(
+                "SELECT COUNT(*) FROM pipeline_publication_receipt"
+            ).fetchone()[0] == 0
     finally:
         conn.close()
 
@@ -226,8 +247,6 @@ def test_publication_worker_commits_receipt_before_index_and_reports_warning(tmp
 
 
 def test_expired_publication_lease_requeues_and_receipt_retry_indexes_only(tmp_path: Path) -> None:
-    from datetime import datetime, timedelta, timezone
-
     from deepresearch_flow.pipeline import ArtifactStore, PipelineState
 
     artifacts = ArtifactStore(tmp_path / "work", tmp_path / "formal")
@@ -260,3 +279,317 @@ def test_expired_publication_lease_requeues_and_receipt_retry_indexes_only(tmp_p
         indexer=lambda _: None,
     ).run_once()
     assert result[0].status == "published"
+
+
+def test_publication_worker_heartbeat_keeps_blocking_formal_write_lease_alive(
+    tmp_path: Path,
+) -> None:
+    from deepresearch_flow.pipeline import ArtifactStore, PipelineState
+
+    artifacts = ArtifactStore(tmp_path / "work", tmp_path / "formal")
+    state = PipelineState(
+        tmp_path / "queue.sqlite3",
+        artifact_store=artifacts,
+        lease_seconds=2,
+        heartbeat_seconds=1,
+    )
+    job_id = state.create_job()
+    state.admin_transition(job_id, "running")
+    state.admin_transition(job_id, "review_ready")
+    queue_publication(state, job_id, int(state.get_job(job_id)["revision"]))
+    bundle = _bundle(tmp_path, job_id=job_id)
+    started = Event()
+    release = Event()
+
+    class BlockingStore(LocalFormalStore):
+        @override
+        def put(self, relative_path: str, data: bytes) -> None:
+            started.set()
+            if not release.wait(timeout=8):
+                raise TimeoutError("test store was not released")
+            super().put(relative_path, data)
+
+    worker = PublicationWorker(
+        state,
+        tmp_path / "snapshot.sqlite3",
+        BlockingStore(tmp_path / "formal"),
+        bundle_builder=lambda _: bundle,
+    )
+    result: list[object] = []
+    thread = Thread(target=lambda: result.extend(worker.run_once()), daemon=True)
+    thread.start()
+    assert started.wait(timeout=3)
+    time.sleep(2.5)
+    release.set()
+    thread.join(timeout=8)
+
+    assert result and result[0].status == "published"
+    assert state.get_job(job_id)["status"] == "published"
+
+
+def test_stale_publication_worker_cannot_commit_after_lease_takeover_during_write(
+    tmp_path: Path,
+) -> None:
+    from deepresearch_flow.pipeline import ArtifactStore, PipelineState
+
+    artifacts = ArtifactStore(tmp_path / "work", tmp_path / "formal")
+    state = PipelineState(tmp_path / "queue.sqlite3", artifact_store=artifacts)
+    job_id = state.create_job()
+    state.admin_transition(job_id, "running")
+    state.admin_transition(job_id, "review_ready")
+    queue_publication(state, job_id, int(state.get_job(job_id)["revision"]))
+    bundle = _bundle(tmp_path, job_id=job_id)
+    takeover = Event()
+    release = Event()
+
+    class TakeoverStore(LocalFormalStore):
+        @override
+        def put(self, relative_path: str, data: bytes) -> None:
+            if not takeover.is_set():
+                takeover.set()
+                state.recover_expired(
+                    now=datetime.now(timezone.utc) + timedelta(days=1)
+                )
+            release.set()
+            super().put(relative_path, data)
+
+    result = PublicationWorker(
+        state,
+        tmp_path / "snapshot.sqlite3",
+        TakeoverStore(tmp_path / "formal"),
+        bundle_builder=lambda _: bundle,
+    ).run_once()[0]
+
+    assert result.status == "failed"
+    assert state.get_job(job_id)["status"] == "publish_queued"
+    conn = sqlite3.connect(tmp_path / "snapshot.sqlite3")
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM paper").fetchone()[0] == 0
+        assert conn.execute(
+            "SELECT COUNT(*) FROM pipeline_publication_receipt"
+        ).fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_publication_worker_heartbeat_keeps_blocking_indexer_lease_alive(
+    tmp_path: Path,
+) -> None:
+    from deepresearch_flow.pipeline import ArtifactStore, PipelineState
+
+    artifacts = ArtifactStore(tmp_path / "work", tmp_path / "formal")
+    state = PipelineState(
+        tmp_path / "queue.sqlite3",
+        artifact_store=artifacts,
+        lease_seconds=2,
+        heartbeat_seconds=1,
+    )
+    job_id = state.create_job()
+    state.admin_transition(job_id, "running")
+    state.admin_transition(job_id, "review_ready")
+    queue_publication(state, job_id, int(state.get_job(job_id)["revision"]))
+    bundle = _bundle(tmp_path, job_id=job_id)
+    started = Event()
+    release = Event()
+
+    def blocking_index(_: object) -> None:
+        started.set()
+        if not release.wait(timeout=8):
+            raise TimeoutError("test indexer was not released")
+
+    worker = PublicationWorker(
+        state,
+        tmp_path / "snapshot.sqlite3",
+        LocalFormalStore(tmp_path / "formal"),
+        bundle_builder=lambda _: bundle,
+        indexer=blocking_index,
+    )
+    result: list[object] = []
+    thread = Thread(target=lambda: result.extend(worker.run_once()), daemon=True)
+    thread.start()
+    assert started.wait(timeout=3)
+    time.sleep(2.5)
+    release.set()
+    thread.join(timeout=8)
+
+    assert result and result[0].status == "published"
+    assert state.get_job(job_id)["status"] == "published"
+
+
+def test_cancellation_before_and_during_formal_writes_prevents_receipt(
+    tmp_path: Path,
+) -> None:
+    from deepresearch_flow.pipeline import ArtifactStore, PipelineState
+
+    def setup() -> tuple[PipelineState, str, object]:
+        artifacts = ArtifactStore(tmp_path / "work", tmp_path / "formal")
+        state = PipelineState(tmp_path / "queue.sqlite3", artifact_store=artifacts)
+        job_id = state.create_job()
+        state.admin_transition(job_id, "running")
+        state.admin_transition(job_id, "review_ready")
+        queue_publication(state, job_id, int(state.get_job(job_id)["revision"]))
+        return state, job_id, _bundle(tmp_path, job_id=job_id)
+
+    state, job_id, bundle = setup()
+    state.request_cancel(job_id)
+    before = PublicationWorker(
+        state,
+        tmp_path / "before.sqlite3",
+        LocalFormalStore(tmp_path / "before-formal"),
+        bundle_builder=lambda _: bundle,
+    ).run_once()[0]
+    assert before.status == "cancelled"
+    assert state.get_job(job_id)["status"] == "cancelled"
+
+    state, job_id, bundle = setup()
+    uploaded = Event()
+
+    class CancellingStore(LocalFormalStore):
+        @override
+        def put(self, relative_path: str, data: bytes) -> None:
+            super().put(relative_path, data)
+            if not uploaded.is_set():
+                uploaded.set()
+                state.request_cancel(job_id)
+
+    during = PublicationWorker(
+        state,
+        tmp_path / "during.sqlite3",
+        CancellingStore(tmp_path / "during-formal"),
+        bundle_builder=lambda _: bundle,
+    ).run_once()[0]
+    assert during.status == "cancelled"
+    conn = sqlite3.connect(tmp_path / "during.sqlite3")
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM paper").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_cancellation_requested_after_receipt_does_not_undo_publication(
+    tmp_path: Path,
+) -> None:
+    from deepresearch_flow.pipeline import ArtifactStore, PipelineState
+
+    artifacts = ArtifactStore(tmp_path / "work", tmp_path / "formal")
+    state = PipelineState(tmp_path / "queue.sqlite3", artifact_store=artifacts)
+    job_id = state.create_job()
+    state.admin_transition(job_id, "running")
+    state.admin_transition(job_id, "review_ready")
+    queue_publication(state, job_id, int(state.get_job(job_id)["revision"]))
+    bundle = _bundle(tmp_path, job_id=job_id)
+
+    def index(_: object) -> None:
+        state.request_cancel(job_id)
+
+    result = PublicationWorker(
+        state,
+        tmp_path / "snapshot.sqlite3",
+        LocalFormalStore(tmp_path / "formal"),
+        bundle_builder=lambda _: bundle,
+        indexer=index,
+    ).run_once()[0]
+
+    assert result.status == "published"
+    assert state.get_job(job_id)["status"] == "published"
+    assert state.get_job(job_id)["cancel_requested"] is False
+
+
+def test_summary_templates_are_read_by_snapshot_embed_loader(tmp_path: Path) -> None:
+    from deepresearch_flow.paper.embed_source import load_from_snapshot
+
+    paper = _paper()
+    paper["templates"] = {
+        "simple": {"summary": "short"},
+        "detailed": {"summary": "long"},
+    }
+    bundle = build_publication_bundle(
+        "job-templates",
+        paper,
+        bibtex={"status": "not_provided"},
+        resources={"pdf": b"%PDF-1.7", "source_markdown": b"# title"},
+        work_dir=tmp_path,
+    )
+    publish_bundle(bundle, tmp_path / "snapshot.sqlite3", LocalFormalStore(tmp_path / "formal"))
+
+    docs = load_from_snapshot(tmp_path / "snapshot.sqlite3", tmp_path / "formal")
+    assert len(docs) == 1
+    assert set(docs[0].template_records) == {"simple", "detailed"}
+
+
+def test_no_bibtex_input_removes_stale_metadata_value(tmp_path: Path) -> None:
+    paper = _paper()
+    paper["bibtex"] = {
+        "raw": "@article{stale, title={Old}}",
+        "key": "stale",
+        "type": "article",
+        "fields": {"title": "Old"},
+    }
+    bundle = build_publication_bundle(
+        "job-no-bib",
+        paper,
+        bibtex={"status": "not_provided"},
+        resources={"pdf": b"%PDF-1.7", "source_markdown": b"# title"},
+        work_dir=tmp_path,
+    )
+    publish_bundle(bundle, tmp_path / "snapshot.sqlite3", LocalFormalStore(tmp_path / "formal"))
+
+    conn = sqlite3.connect(tmp_path / "snapshot.sqlite3")
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM paper_bibtex").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_duplicate_paper_publications_never_overwrite_immutable_resources(
+    tmp_path: Path,
+) -> None:
+    first = _bundle(tmp_path, job_id="job-first")
+    second = build_publication_bundle(
+        "job-second",
+        _paper(),
+        bibtex={"status": "not_provided"},
+        resources={
+            "pdf": b"%PDF-1.7 tiny",
+            "source_markdown": b"# different source\n",
+            "summary_json": b'{"summary":"different"}\n',
+            "translated_markdown": b"# different translation\n",
+        },
+        work_dir=tmp_path,
+    )
+    store = LocalFormalStore(tmp_path / "formal")
+    publish_bundle(first, tmp_path / "snapshot.sqlite3", store)
+    with pytest.raises(PublicationConflict):
+        publish_bundle(second, tmp_path / "snapshot.sqlite3", store)
+
+    summary_resource = first.resource_map[first.references["summary_json"]]
+    assert (
+        tmp_path / "formal" / first.references["summary_json"]
+    ).read_bytes() == summary_resource.content
+
+
+def test_concurrent_duplicate_jobs_publish_one_snapshot_paper(tmp_path: Path) -> None:
+    first = _bundle(tmp_path, job_id="job-concurrent-first")
+    second = _bundle(tmp_path, job_id="job-concurrent-second")
+    db = tmp_path / "snapshot.sqlite3"
+    store = LocalFormalStore(tmp_path / "formal")
+
+    def attempt(bundle: PublicationBundle) -> object:
+        try:
+            return publish_bundle(bundle, db, store)
+        except Exception as exc:
+            return exc
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(attempt, (first, second)))
+
+    assert sum(isinstance(result, PublicationConflict) for result in results) == 1
+    assert sum(not isinstance(result, Exception) for result in results) == 1
+    conn = sqlite3.connect(db)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM paper").fetchone()[0] == 1
+        assert conn.execute(
+            "SELECT COUNT(*) FROM pipeline_publication_receipt"
+        ).fetchone()[0] == 1
+    finally:
+        conn.close()
