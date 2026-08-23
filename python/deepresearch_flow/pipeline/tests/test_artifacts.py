@@ -1,5 +1,6 @@
 from pathlib import Path
 from datetime import datetime, timezone
+import hashlib
 import os
 
 import pytest
@@ -46,6 +47,18 @@ def test_unsafe_artifact_kind_is_rejected(tmp_path: Path) -> None:
     store = ArtifactStore(tmp_path / "work", tmp_path / "formal")
     with pytest.raises(ValueError):
         store.begin("job-1", "ocr*")
+
+
+def test_kind_lookup_does_not_prefix_collide(tmp_path: Path) -> None:
+    store = ArtifactStore(tmp_path / "work", tmp_path / "formal")
+    for kind in ("ocr", "ocr-extra"):
+        pending = store.begin("job-1", kind)
+        pending.write(kind.encode())
+        pending.promote()
+    resolved_ocr = store.resolve("job-1", "ocr")
+    resolved_extra = store.resolve("job-1", "ocr-extra")
+    assert resolved_ocr is not None and resolved_ocr.digest == hashlib.sha256(b"ocr").hexdigest()
+    assert resolved_extra is not None and resolved_extra.digest == hashlib.sha256(b"ocr-extra").hexdigest()
 
 
 def test_cleanup_removes_only_expired_terminal_work(tmp_path: Path) -> None:

@@ -30,6 +30,13 @@ def test_worker_lease_is_cleared_on_transition_and_admin_transition_is_explicit(
     assert state.admin_transition(job_id, "rejected") == "rejected"
 
 
+def test_generic_worker_transition_rejects_missing_lease_token(tmp_path: Path) -> None:
+    state = PipelineState(tmp_path / "queue.sqlite3")
+    job_id = state.create_job()
+    with pytest.raises(LeaseError):
+        state.transition(job_id, "running", None)
+
+
 def test_only_one_worker_acquires_lease_and_stale_token_cannot_mutate(tmp_path: Path) -> None:
     state = PipelineState(tmp_path / "queue.sqlite3", lease_seconds=60)
     job_id = state.create_job()
@@ -130,6 +137,31 @@ def test_unpromoted_or_mismatched_artifact_cannot_be_recorded(tmp_path: Path) ->
     artifact = pending.promote()
     with pytest.raises(ValueError):
         state.record_step_success(job_id, "ocr", lease.token, artifact=artifact.__class__(job_id, "ocr", artifact.path, "bad", artifact.size))
+
+
+def test_step_success_rejects_cross_job_wrong_kind_and_external_artifacts(tmp_path: Path) -> None:
+    state = PipelineState(tmp_path / "queue.sqlite3")
+    artifacts = ArtifactStore(tmp_path / "work", tmp_path / "formal")
+    source_job = state.create_job()
+    target_job = state.create_job()
+    source_lease = state.acquire_lease(source_job, "source")
+    target_lease = state.acquire_lease(target_job, "target")
+    assert source_lease is not None and target_lease is not None
+    pending = artifacts.begin(source_job, "ocr")
+    pending.write(b"source")
+    source_artifact = pending.promote()
+    with pytest.raises(ValueError):
+        state.record_step_success(target_job, "ocr", target_lease.token, artifact=source_artifact)
+    pending = artifacts.begin(target_job, "extract")
+    pending.write(b"wrong kind")
+    wrong_kind = pending.promote()
+    with pytest.raises(ValueError):
+        state.record_step_success(target_job, "ocr", target_lease.token, artifact=wrong_kind)
+    external = tmp_path / "external.artifact"
+    external.write_bytes(b"outside")
+    forged = source_artifact.__class__(target_job, "ocr", external, source_artifact.digest, external.stat().st_size)
+    with pytest.raises(ValueError):
+        state.record_step_success(target_job, "ocr", target_lease.token, artifact=forged)
 
 
 def test_attempt_history_and_atomic_job_initialization(tmp_path: Path) -> None:

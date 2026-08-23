@@ -21,6 +21,8 @@ class Artifact:
     path: Path
     digest: str
     size: int
+    root: Path | None = None
+    job_directory: Path | None = None
 
 
 class PendingArtifact:
@@ -45,7 +47,7 @@ class PendingArtifact:
         target = self.directory / f"{self.kind}-{uuid.uuid4().hex}.artifact"
         os.replace(self._temporary, target)
         digest = hashlib.sha256(target.read_bytes()).hexdigest()
-        return Artifact(self.job_id, self.kind, target, digest, target.stat().st_size)
+        return Artifact(self.job_id, self.kind, target, digest, target.stat().st_size, self.store.work_dir, self.directory)
 
     def __del__(self) -> None:
         try:
@@ -83,6 +85,27 @@ class ArtifactStore:
             raise ValueError("job artifact directory escapes work directory")
         self._contained(directory, self.work_dir)
 
+    @staticmethod
+    def validate_artifact(artifact: Artifact, job_id: str, kind: str) -> None:
+        """Validate artifact ownership, exact kind, and canonical work containment."""
+        if artifact.job_id != job_id or artifact.kind != kind:
+            raise ValueError("artifact ownership or kind mismatch")
+        if artifact.root is None or artifact.job_directory is None:
+            raise ValueError("artifact lacks trusted store provenance")
+        root = artifact.root.resolve()
+        directory = artifact.job_directory.resolve()
+        path = artifact.path.resolve()
+        if directory.parent != root or path.parent != directory or not path.is_file():
+            raise ValueError("artifact is outside its canonical work directory")
+        try:
+            uuid.UUID(directory.name)
+        except ValueError as exc:
+            raise ValueError("artifact job directory is not UUID-backed") from exc
+        stem = path.name.removesuffix(".artifact")
+        candidate_kind, separator, identifier = stem.rpartition("-")
+        if not separator or candidate_kind != kind or not re.fullmatch(r"[0-9a-f]{32}", identifier):
+            raise ValueError("artifact path does not match exact kind")
+
     def begin(self, job_id: str, kind: str) -> PendingArtifact:
         self._validate_kind(kind)
         return PendingArtifact(self, job_id, kind)
@@ -116,14 +139,23 @@ class ArtifactStore:
         self._validate_kind(kind)
         directory = self._contained(self._job_directory(job_id), self.work_dir)
         self._assert_job_directory(directory)
-        candidates = sorted((candidate for candidate in directory.iterdir() if candidate.is_file() and candidate.name.startswith(f"{kind}-") and candidate.name.endswith(".artifact"))) if directory.exists() else []
+        candidates = []
+        if directory.exists():
+            for candidate in directory.iterdir():
+                if not candidate.is_file() or not candidate.name.endswith(".artifact"):
+                    continue
+                stem = candidate.name.removesuffix(".artifact")
+                candidate_kind, separator, identifier = stem.rpartition("-")
+                if candidate_kind == kind and separator and re.fullmatch(r"[0-9a-f]{32}", identifier):
+                    candidates.append(candidate)
+            candidates.sort()
         if not candidates:
             if directory.exists() and any(candidate.is_file() and candidate.name.endswith(".artifact") for candidate in directory.iterdir()):
                 raise FileNotFoundError(f"artifact not found: {job_id}/{kind}")
             return None
         path = self._contained(candidates[-1], self.work_dir)
         content = path.read_bytes()
-        return Artifact(job_id, kind, path, hashlib.sha256(content).hexdigest(), len(content))
+        return Artifact(job_id, kind, path, hashlib.sha256(content).hexdigest(), len(content), self.work_dir, directory)
 
     def cleanup(self, jobs: Mapping[str, str | Mapping[str, str]], *, now: datetime | None = None, force: bool = False) -> list[str]:
         """Delete work directories for expired terminal jobs; never formal roots."""

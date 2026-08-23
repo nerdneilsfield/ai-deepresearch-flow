@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from .artifacts import Artifact
+from .artifacts import Artifact, ArtifactStore
 
 JOB_STATUSES = frozenset(
     {
@@ -157,7 +157,7 @@ class PipelineState:
         row = db.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
         if row is None:
             raise KeyError(job_id)
-        if token is not None and row["lease_token"] != token:
+        if token is None or row["lease_token"] != token:
             raise LeaseError(f"lease token rejected for job {job_id}")
         if row["status"] in {"running", "publishing", "indexing"}:
             if token is None or not row["lease_expires_at"] or row["lease_expires_at"] <= _stamp(_utc()):
@@ -204,7 +204,7 @@ class PipelineState:
             db.commit()
         return Lease(job_id, row["lease_owner"], lease_token, expiry)
 
-    def transition(self, job_id: str, status: str, lease_token: str) -> str:
+    def transition(self, job_id: str, status: str, lease_token: str | None) -> str:
         if status not in JOB_STATUSES:
             raise ValueError(f"unknown job status: {status}")
         with self._connect() as db:
@@ -272,6 +272,7 @@ class PipelineState:
             raise ValueError(f"unknown step: {step}")
         if not isinstance(artifact, Artifact) or not artifact.path.is_file():
             raise ValueError("step artifact must be a promoted Artifact")
+        ArtifactStore.validate_artifact(artifact, job_id, step)
         actual_path = artifact.path.resolve()
         actual_size = actual_path.stat().st_size
         actual_digest = hashlib.sha256(actual_path.read_bytes()).hexdigest()
