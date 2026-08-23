@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import PurePath
 from typing import Any, Callable, Iterable, Mapping
 
-from .state import LeaseError, PipelineState
+from .state import BatchMatchConflict, LeaseError, PipelineState
 
 
 @dataclass(frozen=True)
@@ -22,73 +22,98 @@ def complete_batch(state: PipelineState, job_id: str, lease_token: str | None) -
     """Resolve and durably bind one job from a complete batch snapshot."""
     job = state.get_job(job_id)
     batch_id = job.get("batch_id")
-    if not batch_id or not state.list_bibtex_entries(str(batch_id)):
+    if not batch_id:
         return "review_ready", "not_provided"
     batch_key = str(batch_id)
-    result = state.get_batch_match_result(batch_key)
-    if result is None:
-        if lease_token is None or not state.batch_summary_ready(batch_key):
-            raise LeaseError("batch summaries are not complete")
-        entries = state.list_bibtex_entries(batch_key)
-        entry_keys = {str(entry["key"]) for entry in entries}
-        bindings = state.list_batch_bibtex_bindings(batch_key)
-        locked = {
-            str(binding["job_id"]): str(binding["entry_key"])
-            for binding in bindings
-            if str(binding["entry_key"]) in entry_keys
-        }
-        binding_attention = [
-            {
-                "job_id": str(binding["job_id"]),
-                "reason": "binding_missing",
-                "candidate_keys": [],
-            }
-            for binding in bindings
-            if str(binding["entry_key"]) not in entry_keys
-        ]
-        inputs = {item["job_id"]: item for item in state.list_batch_job_inputs(batch_key)}
-        jobs: list[dict[str, Any]] = []
-        for item in state.list_batch_summaries(batch_key):
-            if item["job_id"] in locked or any(
-                attention["job_id"] == item["job_id"] for attention in binding_attention
-            ):
-                continue
-            candidate = {"job_id": item["job_id"], **inputs.get(item["job_id"], {})}
-            extracted = item.get("summary")
-            if isinstance(extracted, Mapping):
-                for canonical, aliases in (("title", ("title", "paper_title")), ("doi", ("doi", "paper_doi"))):
-                    value = next(
-                        (extracted.get(alias) for alias in aliases if isinstance(extracted.get(alias), str) and extracted.get(alias).strip()),
-                        None,
+    for _ in range(8):
+        snapshot = state.get_batch_matching_snapshot(batch_key)
+        if not snapshot["entries"]:
+            return "review_ready", "not_provided"
+        result = snapshot["result"]
+        revision = int(snapshot["revision"])
+        if result is None:
+            if lease_token is None or not snapshot["ready"]:
+                raise LeaseError("batch summaries are not complete")
+            entries = snapshot["entries"]
+            entry_keys = {str(entry["key"]) for entry in entries}
+            bindings = snapshot["bindings"]
+            locked: dict[str, str] = {}
+            bound_without_entry: set[str] = set()
+            binding_attention: list[dict[str, Any]] = []
+            for binding in bindings:
+                bound_job = str(binding["job_id"])
+                entry_key = binding["entry_key"]
+                if entry_key is None:
+                    bound_without_entry.add(bound_job)
+                elif str(entry_key) in entry_keys:
+                    locked[bound_job] = str(entry_key)
+                else:
+                    binding_attention.append(
+                        {"job_id": bound_job, "reason": "binding_missing", "candidate_keys": []}
                     )
-                    if isinstance(value, str):
-                        candidate[canonical] = value
-            jobs.append(candidate)
-        matched = BibTeXMatcher(state).match_batch(
-            batch_key, jobs, reserved_entry_keys=locked.values()
-        )
-        locked_matches = [
-            {"job_id": job, "entry_key": entry, "reason": "existing"}
-            for job, entry in locked.items()
-        ]
-        result = state.store_batch_match_result(
-            batch_key,
-            job_id,
-            lease_token,
-            {
-                "matches": locked_matches + matched.matches,
-                "needs_attention": binding_attention + matched.needs_attention,
-                "unmatched_entries": matched.unmatched_entries,
-            },
-        )
-    matches = [item for item in result.get("matches", []) if item.get("job_id") == job_id]
-    attention = [item for item in result.get("needs_attention", []) if item.get("job_id") == job_id]
-    if matches and not attention:
-        if lease_token is None:
-            raise LeaseError("automatic binding requires active lease")
-        state.bind_worker_bibtex(job_id, str(matches[0]["entry_key"]), lease_token)
-        return "review_ready", "matched"
-    return "needs_attention", "needs_attention"
+            inputs = {item["job_id"]: item for item in snapshot["inputs"]}
+            jobs: list[dict[str, Any]] = []
+            for item in snapshot["summaries"]:
+                if item["job_id"] in locked or item["job_id"] in bound_without_entry or any(
+                    attention["job_id"] == item["job_id"] for attention in binding_attention
+                ):
+                    continue
+                candidate = {"job_id": item["job_id"], **inputs.get(item["job_id"], {})}
+                extracted = item.get("summary")
+                if isinstance(extracted, Mapping):
+                    for canonical, aliases in (
+                        ("title", ("title", "paper_title")),
+                        ("doi", ("doi", "paper_doi")),
+                    ):
+                        value = next(
+                            (
+                                extracted.get(alias)
+                                for alias in aliases
+                                if isinstance(extracted.get(alias), str) and extracted.get(alias).strip()
+                            ),
+                            None,
+                        )
+                        if isinstance(value, str):
+                            candidate[canonical] = value
+                jobs.append(candidate)
+            matched = BibTeXMatcher(state).match_batch(
+                batch_key, jobs, reserved_entry_keys=locked.values()
+            )
+            locked_matches = [
+                {"job_id": locked_job, "entry_key": entry, "reason": "existing"}
+                for locked_job, entry in locked.items()
+            ]
+            try:
+                result = state.store_batch_match_result(
+                    batch_key,
+                    job_id,
+                    lease_token,
+                    expected_revision=revision,
+                    result={
+                        "matches": locked_matches + matched.matches,
+                        "needs_attention": binding_attention + matched.needs_attention,
+                        "unmatched_entries": matched.unmatched_entries,
+                    },
+                )
+            except BatchMatchConflict:
+                continue
+        matches = [item for item in result.get("matches", []) if item.get("job_id") == job_id]
+        attention = [item for item in result.get("needs_attention", []) if item.get("job_id") == job_id]
+        if matches and not attention:
+            if lease_token is None:
+                raise LeaseError("automatic binding requires active lease")
+            try:
+                state.bind_worker_bibtex(
+                    job_id,
+                    str(matches[0]["entry_key"]),
+                    lease_token,
+                    expected_batch_revision=revision,
+                )
+            except BatchMatchConflict:
+                continue
+            return "review_ready", "matched"
+        return "needs_attention", "needs_attention"
+    raise LeaseError("batch matching changed while processing")
 
 
 def normalize_doi(value: str | None) -> str:

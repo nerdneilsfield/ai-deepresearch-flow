@@ -5,7 +5,7 @@ import pytest
 from deepresearch_flow.pipeline.artifacts import ArtifactStore
 from deepresearch_flow.pipeline.config import PipelineConfig
 from deepresearch_flow.pipeline.matching import BibTeXMatcher
-from deepresearch_flow.pipeline.state import PipelineState
+from deepresearch_flow.pipeline.state import BatchMatchConflict, PipelineState
 
 
 def test_matches_doi_then_title_then_key_and_reports_unmatched_in_job_order(tmp_path: Path) -> None:
@@ -146,3 +146,80 @@ def test_manual_binding_is_restricted_to_attention_and_review_states(tmp_path: P
     assert review_lease is not None
     state.transition(review, "review_ready", review_lease.token)
     assert matcher.bind_manual(review, "ref", regenerate_preview=lambda _: None)["status"] == "review_ready"
+
+
+def test_stale_batch_match_snapshot_cannot_commit_after_sibling_requeue(tmp_path: Path) -> None:
+    state = PipelineState(
+        tmp_path / "queue.sqlite3",
+        artifact_store=ArtifactStore(tmp_path / "work", tmp_path / "formal"),
+    )
+    batch = state.create_batch()
+    first, second = state.create_job(batch), state.create_job(batch)
+    state.persist_bibtex_entries(batch, [{"key": "first-ref", "title": "First"}])
+    state.set_job_input(first, "first.pdf", "digest-1", 1, title="First")
+    state.set_job_input(second, "second.pdf", "digest-2", 1, title="Second")
+    first_lease = state.acquire_lease(first, "first-worker")
+    second_lease = state.acquire_lease(second, "second-worker")
+    assert first_lease is not None and second_lease is not None
+    state.record_job_summary(first, {"paper_title": "First"}, first_lease.token)
+    state.record_job_summary(second, {"paper_title": "Second"}, second_lease.token)
+
+    snapshot = state.get_batch_matching_snapshot(batch)
+    assert snapshot["ready"] is True
+
+    state.transition(second, "failed", second_lease.token)
+    state.admin_transition(second, "queued")
+
+    with pytest.raises(BatchMatchConflict):
+        state.store_batch_match_result(
+            batch,
+            first,
+            first_lease.token,
+            expected_revision=snapshot["revision"],
+            result={
+                "matches": [{"job_id": first, "entry_key": "first-ref", "reason": "title"}],
+                "needs_attention": [],
+                "unmatched_entries": [],
+            },
+        )
+    assert state.get_batch_match_result(batch) is None
+
+
+def test_batch_match_generation_retry_is_idempotent_after_requeue(tmp_path: Path) -> None:
+    state = PipelineState(
+        tmp_path / "queue.sqlite3",
+        artifact_store=ArtifactStore(tmp_path / "work", tmp_path / "formal"),
+    )
+    batch = state.create_batch()
+    first, second = state.create_job(batch), state.create_job(batch)
+    state.persist_bibtex_entries(batch, [{"key": "first-ref", "title": "First"}])
+    for job, name in ((first, "First"), (second, "Second")):
+        state.set_job_input(job, f"{name.lower()}.pdf", f"{name}-digest", 1, title=name)
+    first_lease = state.acquire_lease(first, "first-worker")
+    second_lease = state.acquire_lease(second, "second-worker")
+    assert first_lease is not None and second_lease is not None
+    state.record_job_summary(first, {"paper_title": "First"}, first_lease.token)
+    state.record_job_summary(second, {"paper_title": "Second"}, second_lease.token)
+    initial = state.get_batch_matching_snapshot(batch)
+    result = {
+        "matches": [{"job_id": first, "entry_key": "first-ref", "reason": "title"}],
+        "needs_attention": [{"job_id": second, "reason": "unmatched", "candidate_keys": []}],
+        "unmatched_entries": [],
+    }
+    state.transition(second, "failed", second_lease.token)
+    state.admin_transition(second, "queued")
+    with pytest.raises(BatchMatchConflict):
+        state.store_batch_match_result(
+            batch, first, first_lease.token, expected_revision=initial["revision"], result=result
+        )
+
+    current = state.get_batch_matching_snapshot(batch)
+    stored = state.store_batch_match_result(
+        batch, first, first_lease.token, expected_revision=current["revision"], result=result
+    )
+    repeated = state.store_batch_match_result(
+        batch, first, first_lease.token, expected_revision=current["revision"], result=result
+    )
+    assert stored == result
+    assert repeated == result
+    assert state.get_batch_match_result(batch) == result

@@ -55,6 +55,10 @@ class LeaseError(RuntimeError):
     """Worker attempted a mutation without the currently held lease."""
 
 
+class BatchMatchConflict(RuntimeError):
+    """Batch inputs changed while a BibTeX match was being computed."""
+
+
 @dataclass(frozen=True)
 class Lease:
     job_id: str
@@ -141,7 +145,8 @@ class PipelineState:
                     PRIMARY KEY(batch_id, entry_key), FOREIGN KEY(batch_id) REFERENCES batches(id)
                 );
                 CREATE TABLE IF NOT EXISTS batch_match_results (
-                    batch_id TEXT PRIMARY KEY, result_json TEXT NOT NULL, created_at TEXT NOT NULL,
+                    batch_id TEXT PRIMARY KEY, revision INTEGER NOT NULL DEFAULT 0,
+                    result_json TEXT NOT NULL, created_at TEXT NOT NULL,
                     FOREIGN KEY(batch_id) REFERENCES batches(id)
                 );
                 CREATE TABLE IF NOT EXISTS job_bibtex (
@@ -156,6 +161,15 @@ class PipelineState:
                 db.execute("ALTER TABLE step_attempts ADD COLUMN error_type TEXT")
             if "retryable" not in columns:
                 db.execute("ALTER TABLE step_attempts ADD COLUMN retryable INTEGER")
+            result_columns = {row["name"] for row in db.execute("PRAGMA table_info(batch_match_results)").fetchall()}
+            if "revision" not in result_columns:
+                db.execute("ALTER TABLE batch_match_results ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
+
+    @staticmethod
+    def _invalidate_batch_matching(db: sqlite3.Connection, batch_id: str | None) -> None:
+        if batch_id:
+            db.execute("DELETE FROM batch_match_results WHERE batch_id=?", (batch_id,))
+            db.execute("UPDATE batches SET revision=revision+1 WHERE id=?", (batch_id,))
 
     def create_batch(self, batch_id: str | None = None) -> str:
         batch_id = batch_id or str(uuid.uuid4())
@@ -183,6 +197,8 @@ class PipelineState:
                 "INSERT INTO jobs(id,batch_id,status,created_at,updated_at,selected_models,config_fingerprint) VALUES(?,?,?,?,?,?,?)",
                 (job_id, batch_id, "queued", now, now, models, config_fingerprint),
             )
+            if batch_id is not None:
+                db.execute("UPDATE batches SET revision=revision+1 WHERE id=?", (batch_id,))
             db.executemany(
                 "INSERT INTO steps(job_id,name,model_key) VALUES(?,?,?)",
                 [(job_id, name, (selected_models or {}).get(name)) for name in ALL_STEP_NAMES],
@@ -213,12 +229,19 @@ class PipelineState:
         self, job_id: str, filename: str, digest: str, size: int, *, doi: str | None = None, title: str | None = None
     ) -> None:
         with self._connect() as db:
-            if db.execute("SELECT 1 FROM jobs WHERE id=?", (job_id,)).fetchone() is None:
+            db.execute("BEGIN IMMEDIATE")
+            job = db.execute("SELECT batch_id FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if job is None:
+                db.rollback()
                 raise KeyError(job_id)
             db.execute(
                 "INSERT OR REPLACE INTO job_inputs(job_id,filename,digest,size,doi,title) VALUES(?,?,?,?,?,?)",
                 (job_id, filename, digest, int(size), doi, title),
             )
+            if job["batch_id"]:
+                db.execute("DELETE FROM batch_match_results WHERE batch_id=?", (job["batch_id"],))
+                db.execute("UPDATE batches SET revision=revision+1 WHERE id=?", (job["batch_id"],))
+            db.commit()
 
     def get_job_input(self, job_id: str) -> dict[str, Any]:
         with self._connect() as db:
@@ -248,11 +271,14 @@ class PipelineState:
         payload = json.dumps(summary, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
-            self._check_token(db, job_id, lease_token)
+            row = self._check_token(db, job_id, lease_token)
             db.execute(
                 "INSERT OR REPLACE INTO job_summaries(job_id,summary_json,updated_at) VALUES(?,?,?)",
                 (job_id, payload, _stamp(_utc())),
             )
+            if row["batch_id"]:
+                db.execute("DELETE FROM batch_match_results WHERE batch_id=?", (row["batch_id"],))
+                db.execute("UPDATE batches SET revision=revision+1 WHERE id=?", (row["batch_id"],))
             db.commit()
 
     def list_batch_summaries(self, batch_id: str) -> list[dict[str, Any]]:
@@ -273,17 +299,89 @@ class PipelineState:
         ]
 
     def batch_summary_ready(self, batch_id: str) -> bool:
-        """Report whether every job in batch has a persisted summary."""
+        """Report whether every eligible job in batch has a persisted summary."""
+        return bool(self.get_batch_matching_snapshot(batch_id)["ready"])
+
+    def get_batch_matching_snapshot(self, batch_id: str) -> dict[str, Any]:
+        """Read matching inputs, readiness, bindings, and revision coherently.
+
+        A single SQLite read transaction gives a matcher one durable view.  A
+        later CAS in :meth:`store_batch_match_result` decides whether that view
+        is still current before any result becomes visible.
+        """
         with self._connect() as db:
-            row = db.execute(
+            db.execute("BEGIN")
+            batch = db.execute("SELECT revision FROM batches WHERE id=?", (batch_id,)).fetchone()
+            if batch is None:
+                db.rollback()
+                raise KeyError(batch_id)
+            revision = int(batch["revision"])
+            entry_rows = db.execute(
+                "SELECT entry_json FROM bibtex_entries WHERE batch_id=? ORDER BY rowid", (batch_id,)
+            ).fetchall()
+            job_rows = db.execute(
                 """
-                SELECT COUNT(*) AS jobs, COUNT(job_summaries.job_id) AS summaries
-                FROM jobs LEFT JOIN job_summaries ON job_summaries.job_id = jobs.id
-                WHERE jobs.batch_id=? AND jobs.status NOT IN ('failed','cancelled','rejected')
+                SELECT jobs.id AS job_id, jobs.status, job_inputs.filename,
+                       job_inputs.digest, job_inputs.size, job_inputs.doi,
+                       job_inputs.title, job_summaries.summary_json
+                FROM jobs
+                LEFT JOIN job_inputs ON job_inputs.job_id=jobs.id
+                LEFT JOIN job_summaries ON job_summaries.job_id=jobs.id
+                WHERE jobs.batch_id=?
+                ORDER BY jobs.created_at, jobs.id
                 """,
                 (batch_id,),
+            ).fetchall()
+            binding_rows = db.execute(
+                """
+                SELECT jobs.id AS job_id, job_bibtex.entry_key
+                FROM jobs JOIN job_bibtex ON job_bibtex.job_id=jobs.id
+                WHERE jobs.batch_id=?
+                ORDER BY jobs.created_at, jobs.id
+                """,
+                (batch_id,),
+            ).fetchall()
+            match = db.execute(
+                "SELECT revision,result_json FROM batch_match_results WHERE batch_id=?", (batch_id,)
             ).fetchone()
-        return bool(row and row["jobs"] > 0 and row["jobs"] == row["summaries"])
+            db.commit()
+
+        terminal = {"failed", "cancelled", "rejected"}
+        eligible_rows = [row for row in job_rows if row["status"] not in terminal]
+        summaries = [
+            {"job_id": str(row["job_id"]), "summary": json.loads(row["summary_json"])}
+            for row in eligible_rows
+            if row["summary_json"] is not None
+        ]
+        inputs = [
+            {
+                "job_id": str(row["job_id"]),
+                "filename": row["filename"],
+                "digest": row["digest"],
+                "size": row["size"],
+                "doi": row["doi"],
+                "title": row["title"],
+            }
+            for row in job_rows
+            if row["filename"] is not None
+        ]
+        result = None
+        if match is not None and int(match["revision"]) == revision:
+            result = json.loads(match["result_json"])
+        return {
+            "batch_id": batch_id,
+            "revision": revision,
+            "entries": [json.loads(row["entry_json"]) for row in entry_rows],
+            "jobs": [
+                {"job_id": str(row["job_id"]), "status": str(row["status"])}
+                for row in eligible_rows
+            ],
+            "inputs": inputs,
+            "summaries": summaries,
+            "bindings": [dict(row) for row in binding_rows],
+            "ready": bool(eligible_rows) and len(summaries) == len(eligible_rows),
+            "result": result,
+        }
 
     def list_batch_bibtex_bindings(self, batch_id: str) -> list[dict[str, Any]]:
         """Return existing bindings so new match generations preserve them."""
@@ -292,7 +390,7 @@ class PipelineState:
                 """
                 SELECT jobs.id AS job_id, job_bibtex.entry_key
                 FROM jobs JOIN job_bibtex ON job_bibtex.job_id = jobs.id
-                WHERE jobs.batch_id=? AND job_bibtex.entry_key IS NOT NULL
+                WHERE jobs.batch_id=?
                 ORDER BY jobs.created_at, jobs.id
                 """,
                 (batch_id,),
@@ -302,19 +400,28 @@ class PipelineState:
     def get_batch_match_result(self, batch_id: str) -> dict[str, Any] | None:
         """Read durable batch-wide matching result, if already computed."""
         with self._connect() as db:
-            row = db.execute(
-                "SELECT result_json FROM batch_match_results WHERE batch_id=?", (batch_id,)
+            db.execute("BEGIN")
+            row = db.execute("SELECT revision FROM batches WHERE id=?", (batch_id,)).fetchone()
+            if row is None:
+                raise KeyError(batch_id)
+            result = db.execute(
+                "SELECT revision,result_json FROM batch_match_results WHERE batch_id=?", (batch_id,)
             ).fetchone()
-        return None if row is None else json.loads(row["result_json"])
+            db.commit()
+        if result is None or int(result["revision"]) != int(row["revision"]):
+            return None
+        return json.loads(result["result_json"])
 
     def store_batch_match_result(
         self,
         batch_id: str,
         job_id: str,
         lease_token: str,
+        *,
+        expected_revision: int,
         result: dict[str, Any],
     ) -> dict[str, Any]:
-        """Atomically publish one deterministic result; first writer wins."""
+        """Atomically publish one result only for its matching revision."""
         payload = json.dumps(result, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -322,21 +429,41 @@ class PipelineState:
             if row["batch_id"] != batch_id:
                 db.rollback()
                 raise ValueError("job does not belong to batch")
-            db.execute(
-                "INSERT OR IGNORE INTO batch_match_results(batch_id,result_json,created_at) VALUES(?,?,?)",
-                (batch_id, payload, _stamp(_utc())),
-            )
+            batch = db.execute("SELECT revision FROM batches WHERE id=?", (batch_id,)).fetchone()
+            if batch is None:
+                db.rollback()
+                raise KeyError(batch_id)
+            current_revision = int(batch["revision"])
+            if current_revision != int(expected_revision):
+                db.rollback()
+                raise BatchMatchConflict("batch matching inputs changed")
             stored = db.execute(
-                "SELECT result_json FROM batch_match_results WHERE batch_id=?", (batch_id,)
+                "SELECT revision,result_json FROM batch_match_results WHERE batch_id=?", (batch_id,)
             ).fetchone()
+            if stored is None:
+                db.execute(
+                    "INSERT INTO batch_match_results(batch_id,revision,result_json,created_at) VALUES(?,?,?,?)",
+                    (batch_id, current_revision, payload, _stamp(_utc())),
+                )
+                stored_payload = payload
+            else:
+                if int(stored["revision"]) != current_revision:
+                    db.execute("DELETE FROM batch_match_results WHERE batch_id=?", (batch_id,))
+                    db.execute(
+                        "INSERT INTO batch_match_results(batch_id,revision,result_json,created_at) VALUES(?,?,?,?)",
+                        (batch_id, current_revision, payload, _stamp(_utc())),
+                    )
+                    stored_payload = payload
+                else:
+                    stored_payload = str(stored["result_json"])
             db.commit()
-        if stored is None:
-            raise RuntimeError("batch matching result was not stored")
-        return json.loads(stored["result_json"])
+        return json.loads(stored_payload)
 
     def persist_bibtex_entries(self, batch_id: str, entries: list[dict[str, Any]]) -> None:
         with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
             if db.execute("SELECT 1 FROM batches WHERE id=?", (batch_id,)).fetchone() is None:
+                db.rollback()
                 raise KeyError(batch_id)
             db.execute("DELETE FROM bibtex_entries WHERE batch_id=?", (batch_id,))
             db.execute("DELETE FROM batch_match_results WHERE batch_id=?", (batch_id,))
@@ -345,6 +472,7 @@ class PipelineState:
                 "INSERT INTO bibtex_entries(batch_id,entry_key,entry_json) VALUES(?,?,?)",
                 [(batch_id, str(entry["key"]), json.dumps(entry, sort_keys=True)) for entry in entries],
             )
+            db.commit()
 
     def list_bibtex_entries(self, batch_id: str) -> list[dict[str, Any]]:
         with self._connect() as db:
@@ -386,11 +514,23 @@ class PipelineState:
             row = db.execute("SELECT entry_key FROM job_bibtex WHERE job_id=?", (job_id,)).fetchone()
         return None if row is None else row["entry_key"]
 
-    def bind_worker_bibtex(self, job_id: str, entry_key: str, lease_token: str) -> None:
+    def bind_worker_bibtex(
+        self,
+        job_id: str,
+        entry_key: str,
+        lease_token: str,
+        *,
+        expected_batch_revision: int | None = None,
+    ) -> None:
         """Persist unique automatic match while worker still owns lease."""
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             row = self._check_token(db, job_id, lease_token)
+            if expected_batch_revision is not None and row["batch_id"] is not None:
+                batch = db.execute("SELECT revision FROM batches WHERE id=?", (row["batch_id"],)).fetchone()
+                if batch is None or int(batch["revision"]) != int(expected_batch_revision):
+                    db.rollback()
+                    raise BatchMatchConflict("batch matching inputs changed")
             if row["batch_id"] is None or db.execute(
                 "SELECT 1 FROM bibtex_entries WHERE batch_id=? AND entry_key=?",
                 (row["batch_id"], entry_key),
@@ -518,6 +658,11 @@ class PipelineState:
                 raise ValueError(f"invalid transition {row['status']} -> {status}")
             terminal = _stamp(_utc()) if status in _TERMINAL else None
             clear = status not in {"running", "publishing", "indexing"}
+            if row["batch_id"] and (
+                row["status"] in {"failed", "cancelled", "rejected"}
+                or status in {"failed", "cancelled", "rejected"}
+            ) and row["status"] != status:
+                self._invalidate_batch_matching(db, str(row["batch_id"]))
             db.execute("UPDATE jobs SET status=?,terminal_at=?,lease_owner=CASE WHEN ? THEN NULL ELSE lease_owner END,lease_token=CASE WHEN ? THEN NULL ELSE lease_token END,lease_expires_at=CASE WHEN ? THEN NULL ELSE lease_expires_at END,updated_at=?,revision=revision+1 WHERE id=?", (status, terminal, clear, clear, clear, _stamp(_utc()), job_id))
             db.commit()
         return status
@@ -536,6 +681,11 @@ class PipelineState:
                 db.rollback()
                 raise ValueError(f"invalid transition {row['status']} -> {status}")
             terminal = _stamp(_utc()) if status in _TERMINAL else None
+            if row["batch_id"] and (
+                row["status"] in {"failed", "cancelled", "rejected"}
+                or status in {"failed", "cancelled", "rejected"}
+            ) and row["status"] != status:
+                self._invalidate_batch_matching(db, str(row["batch_id"]))
             db.execute("UPDATE jobs SET status=?,terminal_at=?,lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,updated_at=?,revision=revision+1 WHERE id=?", (status, terminal, _stamp(_utc()), job_id))
             db.commit()
         return status
@@ -550,6 +700,7 @@ class PipelineState:
                 db.rollback()
                 raise KeyError(job_id)
             if row["status"] == "queued":
+                self._invalidate_batch_matching(db, str(row["batch_id"]) if row["batch_id"] else None)
                 db.execute("UPDATE jobs SET status='cancelled',terminal_at=?,cancel_requested=1,updated_at=? WHERE id=?", (_stamp(_utc()), _stamp(_utc()), job_id))
             elif row["status"] not in _TERMINAL:
                 db.execute("UPDATE jobs SET cancel_requested=1,updated_at=? WHERE id=?", (_stamp(_utc()), job_id))
@@ -564,6 +715,7 @@ class PipelineState:
             db.execute("BEGIN IMMEDIATE")
             row = self._check_token(db, job_id, lease_token)
             if row["cancel_requested"]:
+                self._invalidate_batch_matching(db, str(row["batch_id"]) if row["batch_id"] else None)
                 db.execute("UPDATE jobs SET status='cancelled',terminal_at=?,lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,updated_at=?,revision=revision+1 WHERE id=?", (_stamp(_utc()), _stamp(_utc()), job_id))
                 db.commit()
                 return "cancelled"
@@ -838,8 +990,11 @@ class PipelineState:
         stamp = _stamp(_utc(now))
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
-            rows = db.execute("SELECT id FROM jobs WHERE status IN ('running','publishing','indexing') AND lease_expires_at <= ?", (stamp,)).fetchall()
+            rows = db.execute("SELECT id,batch_id FROM jobs WHERE status IN ('running','publishing','indexing') AND lease_expires_at <= ?", (stamp,)).fetchall()
             ids = [row["id"] for row in rows]
+            batch_ids = {str(row["batch_id"]) for row in rows if row["batch_id"] is not None}
+            for batch_id in batch_ids:
+                self._invalidate_batch_matching(db, batch_id)
             db.executemany("UPDATE jobs SET lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,status='queued',updated_at=?,revision=revision+1 WHERE id=?", [(_stamp(_utc(now)), job_id) for job_id in ids])
             db.commit()
         return ids

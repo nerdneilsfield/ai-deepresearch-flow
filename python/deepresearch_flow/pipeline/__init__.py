@@ -6,6 +6,7 @@ from .ingestion import BatchIngestor, IngestionResult, IngestionService, UploadI
 from .matching import BibTeXMatcher, BibtexMatcher, MatchResult
 from .state import (
     ALL_STEP_NAMES,
+    BatchMatchConflict,
     JOB_STATUSES,
     PROCESSING_STEP_NAMES,
     STEP_NAMES,
@@ -17,6 +18,7 @@ __all__ = [
     "ArtifactStore",
     "JOB_STATUSES",
     "ALL_STEP_NAMES",
+    "BatchMatchConflict",
     "Lease",
     "PipelineConfig",
     "PipelineState",
