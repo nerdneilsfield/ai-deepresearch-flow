@@ -171,10 +171,14 @@ def test_step_success_rejects_fully_populated_external_forgery(tmp_path: Path) -
     job_id = state.create_job()
     lease = state.acquire_lease(job_id, "worker")
     assert lease is not None
+    pending = artifacts.begin(job_id, "ocr")
+    pending.write(b"legitimate")
+    legitimate = pending.promote()
+    assert legitimate.job_directory is not None
     external_root = tmp_path / "external"
-    external_job = external_root / artifacts._job_key(job_id)
+    external_job = external_root / legitimate.job_directory.name
     external_job.mkdir(parents=True)
-    external_path = external_job / "ocr-00000000000000000000000000000000.artifact"
+    external_path = external_job / legitimate.path.name
     external_path.write_bytes(b"forged")
     forged = Artifact(
         job_id,
