@@ -866,7 +866,7 @@ class PipelineState:
             )
             db.execute("DELETE FROM artifacts WHERE job_id=? AND kind IN (?,?,?,?,?)", (job_id, *_PREVIEW_ARTIFACT_KINDS))
             db.execute(
-                "UPDATE jobs SET status='needs_attention',terminal_at=NULL,preview_digest=NULL," 
+                "UPDATE jobs SET status='needs_attention',terminal_at=NULL,preview_digest=NULL,"
                 "bundle_digest=NULL,preview_error=?,cancel_requested=0,revision=revision+1,updated_at=? "
                 "WHERE id=?",
                 ("preview regeneration pending", _stamp(_utc()), job_id),
@@ -941,7 +941,7 @@ class PipelineState:
             )
             db.execute("DELETE FROM artifacts WHERE job_id=? AND kind IN (?,?,?,?,?)", (job_id, *_PREVIEW_ARTIFACT_KINDS))
             db.execute(
-                "UPDATE jobs SET status='needs_attention',preview_error=?,preview_digest=NULL," 
+                "UPDATE jobs SET status='needs_attention',preview_error=?,preview_digest=NULL,"
                 "bundle_digest=NULL,terminal_at=NULL,updated_at=?,revision=revision+1 WHERE id=?",
                 (safe_error, _stamp(_utc()), job_id),
             )
@@ -964,7 +964,7 @@ class PipelineState:
                 db.rollback()
                 raise ValueError("preview regeneration is not pending")
             db.execute(
-                "UPDATE jobs SET status='review_ready',preview_error=NULL,terminal_at=NULL," 
+                "UPDATE jobs SET status='review_ready',preview_error=NULL,terminal_at=NULL,"
                 "updated_at=?,revision=revision+1 WHERE id=?",
                 (_stamp(_utc()), job_id),
             )
