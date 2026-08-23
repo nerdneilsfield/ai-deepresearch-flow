@@ -26,8 +26,8 @@ from deepresearch_flow.paper.snapshot.auth import BearerAuthError, verify_bearer
 
 from .artifacts import Artifact, ArtifactStore
 from .config import PipelineConfig
-from .ingestion import BatchIngestor, UploadPart
-from .state import PipelineState
+from .ingestion import BatchIngestor, UploadPart, safe_bibtex_key
+from .state import PipelineState, PreviewGenerationConflict
 from .steps import PreviewArtifacts
 
 logger = logging.getLogger(__name__)
@@ -225,12 +225,7 @@ def _safe_bibtex_text(value: object, *, limit: int = 2000) -> str | None:
 
 
 def _safe_bibtex_key(value: object) -> str | None:
-    key = _safe_bibtex_text(value, limit=200)
-    if key is None or "/" in key or "\\" in key:
-        return None
-    if any(marker in key.casefold() for marker in ("secret", "token", "password", "api_key")):
-        return None
-    return key
+    return safe_bibtex_key(value)
 
 
 def _safe_bibtex_entry(entry: Mapping[str, Any]) -> dict[str, str]:
@@ -326,9 +321,12 @@ def _job_summary(job: Mapping[str, Any]) -> dict[str, Any]:
     completed = sum(1 for item in steps if str(item.get("status")) == "complete")
     entries = job.get("bibtex_entries")
     entry_count = len(entries) if isinstance(entries, list) else int(entries or 0)
-    entry_key = job.get("bibtex_entry_key")
+    raw_entry_key = job.get("bibtex_entry_key")
+    entry_key = _safe_bibtex_key(raw_entry_key)
     if not entry_count:
         bibtex_status = "not_provided"
+    elif raw_entry_key and entry_key is None:
+        bibtex_status = "needs_attention"
     elif entry_key:
         bibtex_status = "matched"
     elif str(job.get("status")) == "needs_attention":
@@ -745,6 +743,27 @@ async def _publish_job(request: Request) -> Response:
     return JSONResponse({"job": _job_dto(job), "result": result})
 
 
+def _stale_binding_response(state: PipelineState, job_id: str) -> JSONResponse:
+    try:
+        job = state.get_job_details(job_id)
+        entries = state.list_bibtex_entries(str(job.get("batch_id"))) if job.get("batch_id") else []
+        job["bibtex_entries"] = entries
+        job["bibtex_candidates"] = _safe_bibtex_candidates(entries)
+        job["bibtex_diagnostics"] = {"reason": "stale_binding", "candidate_keys": []}
+    except KeyError:
+        return _json_error("not_found", "job not found", 404)
+    except Exception:
+        logger.exception("pipeline stale binding lookup failed")
+        return _json_error("internal_error", "binding lookup failed", 500)
+    return JSONResponse(
+        {
+            "error": {"code": "stale_binding", "message": "binding changed; retry this pairing"},
+            "job": _job_dto(job),
+        },
+        status_code=409,
+    )
+
+
 async def _bibtex_match(request: Request) -> Response:
     _config_value, state, _artifacts = _ctx(request)
     body_value = await _json_body(request)
@@ -752,6 +771,8 @@ async def _bibtex_match(request: Request) -> Response:
         return body_value
     has_key = "entry_key" in body_value or "bibtex_key" in body_value
     explicit_none = body_value.get("no_bibtex") is True
+    if has_key and explicit_none:
+        return _json_error("invalid_body", "entry_key and no_bibtex cannot be combined", 422)
     if not has_key and not explicit_none:
         return _json_error("invalid_body", "entry_key or no_bibtex is required", 422)
     raw_key = body_value.get("entry_key", body_value.get("bibtex_key"))
@@ -759,6 +780,11 @@ async def _bibtex_match(request: Request) -> Response:
         raw_key = None
     if raw_key is not None and (not isinstance(raw_key, str) or not raw_key.strip()):
         return _json_error("invalid_body", "entry_key must be a non-empty string or null", 422)
+    if raw_key is not None:
+        normalized_key = _safe_bibtex_key(raw_key)
+        if normalized_key is None or normalized_key != raw_key.strip():
+            return _json_error("invalid_bibtex_match", "BibTeX entry key is unsafe", 422)
+        raw_key = normalized_key
     job_id = str(request.path_params["job_id"])
     try:
         current = state.get_job_details(job_id)
@@ -795,18 +821,41 @@ async def _bibtex_match(request: Request) -> Response:
     except Exception:
         logger.exception("pipeline BibTeX binding preparation failed")
         return _json_error("internal_error", "BibTeX binding failed", 500)
+    expected_generation = str(result["binding_generation"])
+    expected_revision = int(result["revision"])
+    regenerated: object = None
     try:
         regenerated = callback(job_id)
         if inspect.isawaitable(regenerated):
             regenerated = await regenerated
         if not isinstance(regenerated, PreviewArtifacts):
             raise ValueError("preview regenerator returned invalid result")
-        state.mark_preview_regenerated(job_id, regenerated)
+        state.mark_preview_regenerated(
+            job_id,
+            regenerated,
+            expected_generation=expected_generation,
+            expected_revision=expected_revision,
+        )
+    except PreviewGenerationConflict:
+        if isinstance(regenerated, PreviewArtifacts):
+            state.discard_unregistered_preview_artifacts(job_id, regenerated)
+        return _stale_binding_response(state, job_id)
     except Exception:
         logger.exception("pipeline preview regeneration failed")
         try:
-            state.mark_preview_regeneration_failed(job_id, "preview regeneration failed")
+            state.mark_preview_regeneration_failed(
+                job_id,
+                "preview regeneration failed",
+                expected_generation=expected_generation,
+                expected_revision=expected_revision,
+            )
+            if isinstance(regenerated, PreviewArtifacts):
+                state.discard_unregistered_preview_artifacts(job_id, regenerated)
             job = state.get_job_details(job_id)
+        except PreviewGenerationConflict:
+            if isinstance(regenerated, PreviewArtifacts):
+                state.discard_unregistered_preview_artifacts(job_id, regenerated)
+            return _stale_binding_response(state, job_id)
         except Exception:
             logger.exception("pipeline preview failure state could not be persisted")
             return _json_error("internal_error", "preview regeneration failed", 500)
@@ -829,7 +878,11 @@ async def _bibtex_match(request: Request) -> Response:
     job["bibtex_entries"] = entries
     job["bibtex_candidates"] = _safe_bibtex_candidates(entries)
     job["bibtex_diagnostics"] = {"reason": "manual", "candidate_keys": []}
-    result = {**result, "status": "review_ready"}
+    result = {
+        "job_id": result["job_id"],
+        "entry_key": _safe_bibtex_key(result.get("entry_key")),
+        "status": "review_ready",
+    }
     return JSONResponse({"job": _job_dto(job), "binding": result})
 
 

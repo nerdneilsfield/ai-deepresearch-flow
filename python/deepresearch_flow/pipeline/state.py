@@ -70,6 +70,10 @@ class BatchMatchConflict(RuntimeError):
     """Batch inputs changed while a BibTeX match was being computed."""
 
 
+class PreviewGenerationConflict(RuntimeError):
+    """A manual preview callback completed for an obsolete binding."""
+
+
 @dataclass(frozen=True)
 class Lease:
     job_id: str
@@ -235,6 +239,7 @@ class PipelineState:
                     updated_at TEXT NOT NULL, terminal_at TEXT, lease_owner TEXT, lease_token TEXT, lease_expires_at TEXT,
                     cancel_requested INTEGER NOT NULL DEFAULT 0, revision INTEGER NOT NULL DEFAULT 0,
                     preview_digest TEXT, bundle_digest TEXT, preview_error TEXT,
+                    preview_generation TEXT,
                     selected_models TEXT NOT NULL DEFAULT '{}',
                     config_fingerprint TEXT NOT NULL DEFAULT '',
                     FOREIGN KEY(batch_id) REFERENCES batches(id)
@@ -292,6 +297,8 @@ class PipelineState:
             job_columns = {row["name"] for row in db.execute("PRAGMA table_info(jobs)").fetchall()}
             if "preview_error" not in job_columns:
                 db.execute("ALTER TABLE jobs ADD COLUMN preview_error TEXT")
+            if "preview_generation" not in job_columns:
+                db.execute("ALTER TABLE jobs ADD COLUMN preview_generation TEXT")
             result_columns = {row["name"] for row in db.execute("PRAGMA table_info(batch_match_results)").fetchall()}
             if "revision" not in result_columns:
                 db.execute("ALTER TABLE batch_match_results ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
@@ -880,6 +887,12 @@ class PipelineState:
             )
             if job["batch_id"]:
                 self._invalidate_batch_matching(db, str(job["batch_id"]))
+            generation = secrets.token_urlsafe(32)
+            next_revision = int(job["revision"]) + 1
+            db.execute(
+                "UPDATE jobs SET preview_generation=?,revision=? WHERE id=?",
+                (generation, next_revision, job_id),
+            )
             db.commit()
         self._remove_preview_files(stale_artifacts, job_id)
         return {
@@ -887,6 +900,8 @@ class PipelineState:
             "entry_key": entry_key,
             "status": "needs_attention",
             "preview_invalidated": True,
+            "binding_generation": generation,
+            "revision": next_revision,
         }
 
     def _remove_preview_files(self, artifacts: list[dict[str, Any]], job_id: str) -> None:
@@ -921,16 +936,27 @@ class PipelineState:
             except (OSError, ValueError):
                 continue
 
-    def mark_preview_regeneration_failed(self, job_id: str, error: str) -> dict[str, Any]:
+    def mark_preview_regeneration_failed(
+        self,
+        job_id: str,
+        error: str,
+        *,
+        expected_generation: str,
+        expected_revision: int,
+    ) -> dict[str, Any]:
         """Keep binding visible while recording recoverable preview failure."""
         safe_error = str(error).strip()[:500] or "preview regeneration failed"
         stale_artifacts: list[dict[str, Any]] = []
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
-            row = db.execute("SELECT status,lease_token FROM jobs WHERE id=?", (job_id,)).fetchone()
+            row = db.execute(
+                "SELECT status,lease_token,preview_generation,revision FROM jobs WHERE id=?",
+                (job_id,),
+            ).fetchone()
             if row is None:
                 db.rollback()
                 raise KeyError(job_id)
+            self._assert_preview_generation(row, expected_generation, expected_revision)
             if row["lease_token"] is not None:
                 db.rollback()
                 raise ValueError("preview regeneration requires no active lease")
@@ -1018,16 +1044,34 @@ class PipelineState:
         ]
         return rows, aggregate, sum(item[3] for item in rows)
 
+    @staticmethod
+    def _assert_preview_generation(
+        row: sqlite3.Row,
+        expected_generation: str,
+        expected_revision: int,
+    ) -> None:
+        if (
+            row["preview_generation"] != expected_generation
+            or int(row["revision"]) != int(expected_revision)
+        ):
+            raise PreviewGenerationConflict("preview binding is stale")
+
     def mark_preview_regenerated(
-        self, job_id: str, preview: PreviewArtifacts
+        self,
+        job_id: str,
+        preview: PreviewArtifacts,
+        *,
+        expected_generation: str,
+        expected_revision: int,
     ) -> dict[str, Any]:
         """Atomically register validated preview output and mark review ready."""
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
-            row = db.execute("SELECT status,lease_token FROM jobs WHERE id=?", (job_id,)).fetchone()
+            row = db.execute("SELECT status,lease_token,preview_generation,revision FROM jobs WHERE id=?", (job_id,)).fetchone()
             if row is None:
                 db.rollback()
                 raise KeyError(job_id)
+            self._assert_preview_generation(row, expected_generation, expected_revision)
             if row["lease_token"] is not None:
                 db.rollback()
                 raise ValueError("preview regeneration requires no active lease")
@@ -1071,6 +1115,46 @@ class PipelineState:
             "preview_digest": aggregate,
             "artifact_kinds": list(_PREVIEW_PROTECTED_KINDS),
         }
+
+    def discard_unregistered_preview_artifacts(
+        self, job_id: str, preview: PreviewArtifacts
+    ) -> None:
+        """Remove only exact callback files still absent from artifact metadata.
+
+        This is used after a stale callback returns.  A current callback may
+        already have registered the same path, so the SQLite lock and path
+        check happen before unlinking; registered artifacts are never touched.
+        """
+        if self.artifact_store is None or not isinstance(preview, PreviewArtifacts):
+            return
+        candidates: list[Path] = []
+        for artifact in preview.protected:
+            if not isinstance(artifact, Artifact) or artifact.job_id != job_id:
+                continue
+            if artifact.kind not in _PREVIEW_PROTECTED_KINDS or artifact.root is None:
+                continue
+            try:
+                if Path(artifact.root).resolve() != self.artifact_store.formal_root:
+                    continue
+                self.artifact_store.validate_protected_artifact(artifact, job_id, artifact.kind)
+                actual = artifact.path.resolve()
+                if artifact.job_directory is None or Path(artifact.job_directory).resolve() != actual.parent:
+                    continue
+                candidates.append(actual)
+            except (OSError, ValueError):
+                continue
+        if not candidates:
+            return
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            for path in candidates:
+                registered = db.execute(
+                    "SELECT 1 FROM artifacts WHERE job_id=? AND path=? LIMIT 1",
+                    (job_id, str(path)),
+                ).fetchone()
+                if registered is None:
+                    path.unlink(missing_ok=True)
+            db.commit()
 
     def get_job_bibtex_key(self, job_id: str) -> str | None:
         with self._connect() as db:
@@ -1407,10 +1491,10 @@ class PipelineState:
             changed = False
             if row["status"] == "queued":
                 self._invalidate_batch_matching(db, str(row["batch_id"]) if row["batch_id"] else None)
-                db.execute("UPDATE jobs SET status='cancelled',terminal_at=?,cancel_requested=1,updated_at=? WHERE id=?", (_stamp(_utc()), _stamp(_utc()), job_id))
+                db.execute("UPDATE jobs SET status='cancelled',terminal_at=?,cancel_requested=1,revision=revision+1,updated_at=? WHERE id=?", (_stamp(_utc()), _stamp(_utc()), job_id))
                 changed = True
             elif row["status"] not in _TERMINAL:
-                db.execute("UPDATE jobs SET cancel_requested=1,updated_at=? WHERE id=?", (_stamp(_utc()), job_id))
+                db.execute("UPDATE jobs SET cancel_requested=1,revision=revision+1,updated_at=? WHERE id=?", (_stamp(_utc()), job_id))
                 changed = not bool(row["cancel_requested"])
             db.commit()
         return changed

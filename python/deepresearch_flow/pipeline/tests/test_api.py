@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import threading
 from pathlib import Path
 
 import httpx
@@ -69,7 +70,9 @@ def _headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {TOKEN}"}
 
 
-def _valid_preview(artifacts: ArtifactStore, job_id: str) -> PreviewArtifacts:
+def _valid_preview(
+    artifacts: ArtifactStore, job_id: str, *, label: bytes = b"regenerated"
+) -> PreviewArtifacts:
     names = (
         "preview_pdf",
         "preview_source_md",
@@ -77,10 +80,10 @@ def _valid_preview(artifacts: ArtifactStore, job_id: str) -> PreviewArtifacts:
         "preview_translated_md",
     )
     contents = (
-        b"%PDF-1.7 regenerated",
-        b"# regenerated source",
-        b'{"summary":"regenerated"}',
-        b"# regenerated translation",
+        b"%PDF-1.7 " + label,
+        b"# " + label + b" source",
+        b'{"summary":"' + label + b'"}',
+        b"# " + label + b" translation",
     )
     protected = tuple(
         artifacts.protect(job_id, name, content)
@@ -528,6 +531,199 @@ def test_valid_preview_regenerator_registers_all_artifacts_and_enables_publish(t
     )
     assert published.status_code == 200
     assert published.json()["job"]["status"] == "publish_queued"
+
+
+def test_concurrent_manual_binding_fences_stale_success_callback(tmp_path: Path) -> None:
+    app, state, artifacts = _make_app(tmp_path)
+    response = _upload(
+        app,
+        files=[
+            ("pdfs", ("a.pdf", b"%PDF-1.7 a", "application/pdf")),
+            (
+                "bibtex",
+                (
+                    "a.bib",
+                    b"@article{first, title={First}} @article{second, title={Second}}",
+                    "text/plain",
+                ),
+            ),
+        ],
+    )
+    job_id = response.json()["job_ids"][0]
+    lease = state.acquire_lease(job_id, "api-test")
+    assert lease is not None
+    state.transition(job_id, "needs_attention", lease.token)
+
+    first_started = threading.Event()
+    release_first = threading.Event()
+    call_lock = threading.Lock()
+    calls = 0
+
+    def regenerate(current_job: str) -> PreviewArtifacts:
+        nonlocal calls
+        with call_lock:
+            calls += 1
+            call_number = calls
+        if call_number == 1:
+            result = _valid_preview(artifacts, current_job, label=b"first")
+            first_started.set()
+            assert release_first.wait(5)
+            return result
+        return _valid_preview(artifacts, current_job, label=b"second")
+
+    app.state.preview_regenerator = regenerate
+    responses: dict[str, httpx.Response] = {}
+
+    def put(name: str, entry_key: str) -> None:
+        responses[name] = _request(
+            app,
+            "PUT",
+            f"/jobs/{job_id}/bibtex-match",
+            json={"entry_key": entry_key},
+            headers=_headers(),
+        )
+
+    first_thread = threading.Thread(target=put, args=("first", "first"))
+    first_thread.start()
+    assert first_started.wait(5)
+    second_thread = threading.Thread(target=put, args=("second", "second"))
+    second_thread.start()
+    second_thread.join(5)
+    assert not second_thread.is_alive()
+    assert responses["second"].status_code == 200
+    release_first.set()
+    first_thread.join(5)
+    assert not first_thread.is_alive()
+
+    assert responses["first"].status_code == 409
+    assert responses["first"].json()["error"]["code"] == "stale_binding"
+    final = _request(app, "GET", f"/jobs/{job_id}", headers=_headers())
+    assert final.status_code == 200
+    final_job = final.json()["job"]
+    assert final_job["bibtex"]["entry_key"] == "second"
+    assert final_job["status"] == "review_ready"
+    artifact = _request(app, "GET", f"/jobs/{job_id}/artifacts/pdf", headers=_headers())
+    assert artifact.status_code == 200
+    assert b"second" in artifact.content
+
+
+def test_concurrent_manual_binding_fences_stale_failure_callback(tmp_path: Path) -> None:
+    app, state, artifacts = _make_app(tmp_path)
+    response = _upload(
+        app,
+        files=[
+            ("pdfs", ("a.pdf", b"%PDF-1.7 a", "application/pdf")),
+            (
+                "bibtex",
+                (
+                    "a.bib",
+                    b"@article{first, title={First}} @article{second, title={Second}}",
+                    "text/plain",
+                ),
+            ),
+        ],
+    )
+    job_id = response.json()["job_ids"][0]
+    lease = state.acquire_lease(job_id, "api-test")
+    assert lease is not None
+    state.transition(job_id, "needs_attention", lease.token)
+
+    first_started = threading.Event()
+    release_first = threading.Event()
+    call_lock = threading.Lock()
+    calls = 0
+
+    def regenerate(current_job: str) -> PreviewArtifacts:
+        nonlocal calls
+        with call_lock:
+            calls += 1
+            call_number = calls
+        if call_number == 1:
+            _valid_preview(artifacts, current_job, label=b"stale")
+            first_started.set()
+            assert release_first.wait(5)
+            raise RuntimeError("stale callback failed")
+        return _valid_preview(artifacts, current_job, label=b"current")
+
+    app.state.preview_regenerator = regenerate
+    responses: dict[str, httpx.Response] = {}
+
+    def put(name: str, entry_key: str) -> None:
+        responses[name] = _request(
+            app,
+            "PUT",
+            f"/jobs/{job_id}/bibtex-match",
+            json={"entry_key": entry_key},
+            headers=_headers(),
+        )
+
+    first_thread = threading.Thread(target=put, args=("first", "first"))
+    first_thread.start()
+    assert first_started.wait(5)
+    second_thread = threading.Thread(target=put, args=("second", "second"))
+    second_thread.start()
+    second_thread.join(5)
+    assert not second_thread.is_alive()
+    assert responses["second"].status_code == 200
+    release_first.set()
+    first_thread.join(5)
+    assert not first_thread.is_alive()
+
+    assert responses["first"].status_code == 409
+    assert responses["first"].json()["error"]["code"] == "stale_binding"
+    final = _request(app, "GET", f"/jobs/{job_id}", headers=_headers())
+    assert final.json()["job"]["bibtex"]["entry_key"] == "second"
+    assert final.json()["job"]["status"] == "review_ready"
+    artifact = _request(app, "GET", f"/jobs/{job_id}/artifacts/pdf", headers=_headers())
+    assert artifact.status_code == 200
+    assert b"current" in artifact.content
+
+
+def test_unsafe_bibtex_keys_are_rejected_or_redacted(tmp_path: Path) -> None:
+    app, state, artifacts = _make_app(tmp_path)
+    unsafe_upload = _upload(
+        app,
+        files=[
+            ("pdfs", ("a.pdf", b"%PDF-1.7 a", "application/pdf")),
+            ("bibtex", ("unsafe.bib", b"@article{../secret, title={Secret}}", "text/plain")),
+        ],
+    )
+    assert unsafe_upload.status_code == 422
+    assert unsafe_upload.json()["error"]["code"] == "invalid_upload"
+    assert state.list_batches() == []
+
+    response = _upload(
+        app,
+        files=[
+            ("pdfs", ("a.pdf", b"%PDF-1.7 a", "application/pdf")),
+            ("bibtex", ("safe.bib", b"@article{safe-key, title={Safe}}", "text/plain")),
+        ],
+    )
+    job_id = response.json()["job_ids"][0]
+    lease = state.acquire_lease(job_id, "api-test")
+    assert lease is not None
+    state.transition(job_id, "needs_attention", lease.token)
+    app.state.preview_regenerator = lambda current_job: _valid_preview(artifacts, current_job)
+    unsafe_binding = _request(
+        app,
+        "PUT",
+        f"/jobs/{job_id}/bibtex-match",
+        json={"entry_key": "../secret"},
+        headers=_headers(),
+    )
+    assert unsafe_binding.status_code == 422
+    assert "/secret" not in unsafe_binding.text
+
+    legacy_batch = state.create_batch()
+    legacy_job = state.create_job(legacy_batch)
+    state.persist_bibtex_entries(legacy_batch, [{"key": "../legacy-secret", "title": "Legacy"}])
+    legacy_lease = state.acquire_lease(legacy_job, "api-test")
+    assert legacy_lease is not None
+    state.transition(legacy_job, "needs_attention", legacy_lease.token)
+    state.bind_job_bibtex(legacy_job, "../legacy-secret")
+    legacy = _request(app, "GET", f"/jobs/{legacy_job}", headers=_headers())
+    assert legacy.status_code == 200
+    assert "legacy-secret" not in legacy.text
 
 
 def test_upload_and_body_error_taxonomy_is_stable(tmp_path: Path) -> None:

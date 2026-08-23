@@ -32,6 +32,7 @@ from .state import (
     Lease,
     LeaseGuard,
     PipelineState,
+    PreviewGenerationConflict,
 )
 
 __all__ = [
@@ -39,6 +40,7 @@ __all__ = [
     "JOB_STATUSES",
     "ALL_STEP_NAMES",
     "BatchMatchConflict",
+    "PreviewGenerationConflict",
     "Lease",
     "LeaseGuard",
     "PipelineConfig",

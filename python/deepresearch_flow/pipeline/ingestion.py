@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass
 from typing import BinaryIO, Iterable
 
@@ -17,6 +18,18 @@ from .state import PipelineState
 class UploadPart:
     filename: str
     stream: BinaryIO
+
+
+def safe_bibtex_key(value: object) -> str | None:
+    """Return BibTeX key safe for admin projection and manual pairing."""
+    if value is None:
+        return None
+    text = re.sub(r"[\x00-\x1f\x7f]", " ", str(value)).strip()
+    if not text or len(text) > 200 or "/" in text or "\\" in text:
+        return None
+    if any(marker in text.casefold() for marker in ("secret", "token", "password", "api_key")):
+        return None
+    return text
 
 
 @dataclass(frozen=True)
@@ -137,6 +150,8 @@ class BatchIngestor:
             raise ValueError("BibTeX syntax is invalid") from exc
         result: list[dict[str, object]] = []
         for key, entry in database.entries.items():
+            if safe_bibtex_key(key) is None:
+                raise ValueError("BibTeX key is invalid")
             fields = {str(name).lower(): str(value) for name, value in entry.fields.items()}
             authors = entry.persons.get("author", ())
             if authors:
