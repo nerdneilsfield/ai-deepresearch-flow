@@ -89,7 +89,7 @@ class PipelineConfig:
             host = parsed.hostname or ""
             if parsed.port:
                 host = f"{host}:{parsed.port}"
-            result["webdav_url"] = urlunsplit((parsed.scheme, host, parsed.path, parsed.query, parsed.fragment))
+            result["webdav_url"] = urlunsplit((parsed.scheme, host, parsed.path, "", ""))
         return result
 
     def fingerprint(self) -> str:
@@ -138,17 +138,23 @@ def load_pipeline_config(path: str | Path) -> PipelineConfig:
                 allowed = allowed.get("allowlist", allowed.get("allowed", [])) if isinstance(allowed, dict) else allowed
                 if not isinstance(value, str) or (allowed and value not in allowed):
                     raise ValueError(f"pipeline {name} selected model is not in allowlist")
-                if default is None:
-                    if name == "ocr": ocr_default = value
-                    elif name == "extract": extract_default = value
-                    else: translate_default = value
+                if name == "ocr": ocr_default = value
+                elif name == "extract": extract_default = value
+                else: translate_default = value
     templates = raw.get("extract_templates", raw.get("fixed_extract_templates", []))
     if isinstance(templates, str):
         templates = [templates]
     if not isinstance(templates, list) or any(not isinstance(item, str) for item in templates):
         raise ValueError("pipeline extract_templates must be a list of strings")
+    enabled = raw.get("enabled", False)
+    if not isinstance(enabled, bool):
+        raise ValueError("pipeline enabled must be a boolean")
+    if enabled:
+        groups = (("ocr", ocr_allowed, ocr_default), ("extract", extract_allowed, extract_default), ("translate", translate_allowed, translate_default))
+        if any(not allowed or default is None for _, allowed, default in groups):
+            raise ValueError("pipeline model allowlist and default are required when enabled")
     return PipelineConfig(
-        enabled=bool(raw.get("enabled", False)),
+        enabled=enabled,
         pdfs_per_batch=_positive(raw.get("pdfs_per_batch"), "pdfs_per_batch", 20),
         max_pdf_bytes=_positive(raw.get("max_pdf_bytes"), "max_pdf_bytes", 100 * 1024 * 1024),
         max_batch_bytes=_positive(raw.get("max_batch_bytes"), "max_batch_bytes", 500 * 1024 * 1024),

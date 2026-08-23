@@ -25,7 +25,7 @@ def test_pipeline_models_must_be_in_allowlists(tmp_path: Path) -> None:
     path.write_text(
         """
 [pipeline]
-enabled = true
+enabled = false
 [pipeline.models.ocr]
 allowlist = ["ocr-a"]
 default = "ocr-b"
@@ -47,6 +47,12 @@ api_token = "secret-value"
 [pipeline.models.ocr]
 allowlist = ["ocr-a"]
 default = "ocr-a"
+[pipeline.models.extract]
+allowlist = ["extract-a"]
+default = "extract-a"
+[pipeline.models.translate]
+allowlist = ["translate-a"]
+default = "translate-a"
 """,
         encoding="utf-8",
     )
@@ -74,6 +80,12 @@ webdav_url = "https://dav.example.test/library"
 [pipeline.models.ocr]
 allowlist = ["ocr-a", "ocr-b"]
 selected = "ocr-b"
+[pipeline.models.extract]
+allowlist = ["extract-a"]
+default = "extract-a"
+[pipeline.models.translate]
+allowlist = ["translate-a"]
+default = "translate-a"
 """,
         encoding="utf-8",
     )
@@ -85,3 +97,49 @@ selected = "ocr-b"
     assert config.ocr.default == "ocr-b"
     assert config.translation_language == "zh-Hant"
     assert config.public_snapshot()["webdav_url"] == "https://dav.example.test/library"
+
+
+def test_enabled_pipeline_requires_complete_nonempty_model_allowlists(tmp_path: Path) -> None:
+    path = tmp_path / "service.toml"
+    path.write_text("[pipeline]\nenabled = true\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="allowlist"):
+        load_pipeline_config(path)
+
+
+def test_selected_model_overrides_default_and_false_is_strict_boolean(tmp_path: Path) -> None:
+    path = tmp_path / "service.toml"
+    path.write_text(
+        """
+[pipeline]
+enabled = true
+selected_models = { ocr = "ocr-b", extract = "extract-a", translate = "translate-a" }
+[pipeline.models.ocr]
+allowlist = ["ocr-a", "ocr-b"]
+default = "ocr-a"
+[pipeline.models.extract]
+allowlist = ["extract-a"]
+default = "extract-a"
+[pipeline.models.translate]
+allowlist = ["translate-a"]
+default = "translate-a"
+""",
+        encoding="utf-8",
+    )
+    config = load_pipeline_config(path)
+    assert config.ocr.default == "ocr-b"
+
+    path.write_text("[pipeline]\nenabled = 'false'\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="enabled"):
+        load_pipeline_config(path)
+
+
+def test_public_snapshot_and_fingerprint_strip_webdav_query_fragment(tmp_path: Path) -> None:
+    path = tmp_path / "service.toml"
+    path.write_text(
+        '[pipeline]\nwebdav_url = "https://dav.example.test/lib?token=secret#private"\n',
+        encoding="utf-8",
+    )
+    config = load_pipeline_config(path)
+    assert config.public_snapshot()["webdav_url"] == "https://dav.example.test/lib"
+    assert "secret" not in config.fingerprint()

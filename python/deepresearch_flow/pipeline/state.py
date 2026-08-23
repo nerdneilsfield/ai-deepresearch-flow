@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import secrets
 import sqlite3
 import uuid
@@ -10,6 +11,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+from .artifacts import Artifact
 
 JOB_STATUSES = frozenset(
     {
@@ -24,7 +27,7 @@ _TRANSITIONS: dict[str, set[str]] = {
     "queued": {"running", "cancelled", "rejected"},
     "running": {"needs_attention", "review_ready", "failed", "cancelled", "publish_queued"},
     "needs_attention": {"running", "cancelled", "rejected"},
-    "review_ready": {"publish_queued", "running", "cancelled"},
+    "review_ready": {"publish_queued", "running", "cancelled", "rejected"},
     "failed": {"queued", "running", "cancelled"},
     "publish_queued": {"publishing", "cancelled"},
     "publishing": {"indexing", "failed", "cancelled"},
@@ -82,7 +85,7 @@ class PipelineState:
                 );
                 CREATE TABLE IF NOT EXISTS jobs (
                     id TEXT PRIMARY KEY, batch_id TEXT, status TEXT NOT NULL, created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL, lease_owner TEXT, lease_token TEXT, lease_expires_at TEXT,
+                    updated_at TEXT NOT NULL, terminal_at TEXT, lease_owner TEXT, lease_token TEXT, lease_expires_at TEXT,
                     cancel_requested INTEGER NOT NULL DEFAULT 0, revision INTEGER NOT NULL DEFAULT 0,
                     preview_digest TEXT, bundle_digest TEXT, selected_models TEXT NOT NULL DEFAULT '{}',
                     config_fingerprint TEXT NOT NULL DEFAULT '',
@@ -100,6 +103,12 @@ class PipelineState:
                 );
                 CREATE TABLE IF NOT EXISTS heartbeats (
                     job_id TEXT PRIMARY KEY, owner TEXT NOT NULL, at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS step_attempts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL, step TEXT NOT NULL,
+                    attempt INTEGER NOT NULL, status TEXT NOT NULL, lease_owner TEXT,
+                    started_at TEXT NOT NULL, finished_at TEXT, artifact_digest TEXT,
+                    artifact_size INTEGER, error TEXT, FOREIGN KEY(job_id) REFERENCES jobs(id)
                 );
                 """
             )
@@ -120,21 +129,18 @@ class PipelineState:
         config_fingerprint: str = "",
     ) -> str:
         job_id = job_id or str(uuid.uuid4())
-        if batch_id is not None:
-            with self._connect() as db:
-                exists = db.execute("SELECT 1 FROM batches WHERE id = ?", (batch_id,)).fetchone()
-            if exists is None:
-                self.create_batch(batch_id)
         now = _stamp(_utc())
-        import json
-
         models = json.dumps(selected_models or {}, sort_keys=True)
         with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if batch_id is not None:
+                db.execute("INSERT OR IGNORE INTO batches(id,created_at) VALUES(?,?)", (batch_id, now))
             db.execute(
                 "INSERT INTO jobs(id,batch_id,status,created_at,updated_at,selected_models,config_fingerprint) VALUES(?,?,?,?,?,?,?)",
                 (job_id, batch_id, "queued", now, now, models, config_fingerprint),
             )
             db.executemany("INSERT INTO steps(job_id,name,model_key) VALUES(?,?,?)", [(job_id, name, (selected_models or {}).get(name)) for name in STEP_NAMES])
+            db.commit()
         return job_id
 
     def get_job(self, job_id: str) -> dict[str, Any]:
@@ -143,8 +149,6 @@ class PipelineState:
         if row is None:
             raise KeyError(job_id)
         result = dict(row)
-        import json
-
         result["selected_models"] = json.loads(result["selected_models"])
         result["cancel_requested"] = bool(result["cancel_requested"])
         return result
@@ -200,7 +204,7 @@ class PipelineState:
             db.commit()
         return Lease(job_id, row["lease_owner"], lease_token, expiry)
 
-    def transition(self, job_id: str, status: str, lease_token: str | None = None) -> str:
+    def transition(self, job_id: str, status: str, lease_token: str) -> str:
         if status not in JOB_STATUSES:
             raise ValueError(f"unknown job status: {status}")
         with self._connect() as db:
@@ -209,7 +213,27 @@ class PipelineState:
             if status not in _TRANSITIONS[row["status"]]:
                 db.rollback()
                 raise ValueError(f"invalid transition {row['status']} -> {status}")
-            db.execute("UPDATE jobs SET status=?,updated_at=?,revision=revision+1 WHERE id=?", (status, _stamp(_utc()), job_id))
+            terminal = _stamp(_utc()) if status in _TERMINAL else None
+            clear = status not in {"running", "publishing", "indexing"}
+            db.execute("UPDATE jobs SET status=?,terminal_at=?,lease_owner=CASE WHEN ? THEN NULL ELSE lease_owner END,lease_token=CASE WHEN ? THEN NULL ELSE lease_token END,lease_expires_at=CASE WHEN ? THEN NULL ELSE lease_expires_at END,updated_at=?,revision=revision+1 WHERE id=?", (status, terminal, clear, clear, clear, _stamp(_utc()), job_id))
+            db.commit()
+        return status
+
+    def admin_transition(self, job_id: str, status: str) -> str:
+        """Perform an explicit non-worker state transition."""
+        if status not in JOB_STATUSES:
+            raise ValueError(f"unknown job status: {status}")
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if row is None:
+                db.rollback()
+                raise KeyError(job_id)
+            if status not in _TRANSITIONS[row["status"]]:
+                db.rollback()
+                raise ValueError(f"invalid transition {row['status']} -> {status}")
+            terminal = _stamp(_utc()) if status in _TERMINAL else None
+            db.execute("UPDATE jobs SET status=?,terminal_at=?,lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,updated_at=?,revision=revision+1 WHERE id=?", (status, terminal, _stamp(_utc()), job_id))
             db.commit()
         return status
 
@@ -223,7 +247,7 @@ class PipelineState:
                 db.rollback()
                 raise KeyError(job_id)
             if row["status"] == "queued":
-                db.execute("UPDATE jobs SET status='cancelled',cancel_requested=1,updated_at=? WHERE id=?", (_stamp(_utc()), job_id))
+                db.execute("UPDATE jobs SET status='cancelled',terminal_at=?,cancel_requested=1,updated_at=? WHERE id=?", (_stamp(_utc()), _stamp(_utc()), job_id))
             elif row["status"] not in _TERMINAL:
                 db.execute("UPDATE jobs SET cancel_requested=1,updated_at=? WHERE id=?", (_stamp(_utc()), job_id))
             db.commit()
@@ -233,19 +257,58 @@ class PipelineState:
         return bool(self.get_job(job_id)["cancel_requested"])
 
     def step_boundary(self, job_id: str, lease_token: str) -> str:
-        if self.cancel_requested(job_id):
-            return self.transition(job_id, "cancelled", lease_token)
-        return self.get_job(job_id)["status"]
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = self._check_token(db, job_id, lease_token)
+            if row["cancel_requested"]:
+                db.execute("UPDATE jobs SET status='cancelled',terminal_at=?,lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,updated_at=?,revision=revision+1 WHERE id=?", (_stamp(_utc()), _stamp(_utc()), job_id))
+                db.commit()
+                return "cancelled"
+            db.commit()
+            return row["status"]
 
-    def record_step_success(self, job_id: str, step: str, lease_token: str, digest: str, size: int, *, path: str = "") -> None:
+    def record_step_success(self, job_id: str, step: str, lease_token: str, digest: str | None = None, size: int | None = None, *, path: str = "", artifact: object | None = None) -> None:
+        if step not in STEP_NAMES:
+            raise ValueError(f"unknown step: {step}")
+        if not isinstance(artifact, Artifact) or not artifact.path.is_file():
+            raise ValueError("step artifact must be a promoted Artifact")
+        actual_path = artifact.path.resolve()
+        actual_size = actual_path.stat().st_size
+        actual_digest = hashlib.sha256(actual_path.read_bytes()).hexdigest()
+        if actual_digest != artifact.digest or actual_size != artifact.size or (digest is not None and digest != actual_digest) or (size is not None and size != actual_size):
+            raise ValueError("artifact metadata does not match promoted artifact")
+        path = str(actual_path)
+        digest, size = actual_digest, actual_size
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = self._check_token(db, job_id, lease_token)
+            attempt = db.execute("SELECT attempt FROM steps WHERE job_id=? AND name=?", (job_id, step)).fetchone()["attempt"] + 1
+            db.execute("UPDATE steps SET status='complete',attempt=attempt+1,artifact_digest=?,artifact_size=? WHERE job_id=? AND name=?", (digest, size, job_id, step))
+            db.execute("INSERT OR REPLACE INTO artifacts(job_id,kind,path,digest,size,created_at) VALUES(?,?,?,?,?,?)", (job_id, step, path, digest, size, _stamp(_utc())))
+            db.execute("INSERT INTO step_attempts(job_id,step,attempt,status,lease_owner,started_at,finished_at,artifact_digest,artifact_size) VALUES(?,?,?,?,?,?,?,?,?)", (job_id, step, attempt, "complete", row["lease_owner"], _stamp(_utc()), _stamp(_utc()), digest, size))
+            db.commit()
+
+    def record_step_attempt(self, job_id: str, step: str, lease_token: str, status: str, *, error: str | None = None, artifact: Artifact | None = None) -> int:
         if step not in STEP_NAMES:
             raise ValueError(f"unknown step: {step}")
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
-            self._check_token(db, job_id, lease_token)
-            db.execute("UPDATE steps SET status='complete',attempt=attempt+1,artifact_digest=?,artifact_size=? WHERE job_id=? AND name=?", (digest, size, job_id, step))
-            db.execute("INSERT OR REPLACE INTO artifacts(job_id,kind,path,digest,size,created_at) VALUES(?,?,?,?,?,?)", (job_id, step, path, digest, size, _stamp(_utc())))
+            row = self._check_token(db, job_id, lease_token)
+            attempt = db.execute("SELECT attempt FROM steps WHERE job_id=? AND name=?", (job_id, step)).fetchone()["attempt"] + 1
+            digest = artifact.digest if isinstance(artifact, Artifact) else None
+            size = artifact.size if isinstance(artifact, Artifact) else None
+            db.execute("UPDATE steps SET attempt=? WHERE job_id=? AND name=?", (attempt, job_id, step))
+            db.execute("INSERT INTO step_attempts(job_id,step,attempt,status,lease_owner,started_at,finished_at,artifact_digest,artifact_size,error) VALUES(?,?,?,?,?,?,?,?,?,?)", (job_id, step, attempt, status, row["lease_owner"], _stamp(_utc()), _stamp(_utc()), digest, size, error))
             db.commit()
+        return attempt
+
+    def list_attempts(self, job_id: str, step: str | None = None) -> list[dict[str, Any]]:
+        with self._connect() as db:
+            if step is None:
+                rows = db.execute("SELECT * FROM step_attempts WHERE job_id=? ORDER BY id", (job_id,)).fetchall()
+            else:
+                rows = db.execute("SELECT * FROM step_attempts WHERE job_id=? AND step=? ORDER BY id", (job_id, step)).fetchall()
+        return [dict(row) for row in rows]
 
     def step_artifact(self, job_id: str, step: str) -> dict[str, Any] | None:
         with self._connect() as db:
@@ -270,7 +333,7 @@ class PipelineState:
         current = self.get_job(job_id)["selected_models"].get(step, "")
         self.change_model(job_id, step, current, lease_token)
 
-    def set_digests(self, job_id: str, *, preview_digest: str | None = None, bundle_digest: str | None = None, lease_token: str | None = None) -> None:
+    def set_digests(self, job_id: str, *, preview_digest: str | None = None, bundle_digest: str | None = None, lease_token: str) -> None:
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             self._check_token(db, job_id, lease_token)
@@ -285,7 +348,11 @@ class PipelineState:
             self._check_token(db, job_id, lease_token)
             index = STEP_NAMES.index(step)
             downstream = STEP_NAMES[index:]
-            db.executemany("UPDATE steps SET model_key=?,status='missing',artifact_digest=NULL,artifact_size=NULL WHERE job_id=? AND name=?", [(model_key if name == step else None, job_id, name) for name in downstream])
+            row = self._check_token(db, job_id, lease_token)
+            selected = json.loads(row["selected_models"])
+            selected[step] = model_key
+            db.execute("UPDATE jobs SET selected_models=?,updated_at=?,revision=revision+1 WHERE id=?", (json.dumps(selected, sort_keys=True), _stamp(_utc()), job_id))
+            db.executemany("UPDATE steps SET model_key=?,status='missing',artifact_digest=NULL,artifact_size=NULL WHERE job_id=? AND name=?", [(selected.get(name), job_id, name) for name in downstream])
             db.executemany("DELETE FROM artifacts WHERE job_id=? AND kind=?", [(job_id, name) for name in downstream])
             db.commit()
 
