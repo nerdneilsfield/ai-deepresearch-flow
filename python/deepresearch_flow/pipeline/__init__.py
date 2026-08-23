@@ -4,6 +4,24 @@ from .artifacts import ArtifactStore
 from .config import PipelineConfig, load_pipeline_config
 from .ingestion import BatchIngestor, IngestionResult, IngestionService, UploadIngestion, UploadPart
 from .matching import BibTeXMatcher, BibtexMatcher, MatchResult
+from .publication import (
+    FormalStore,
+    LanceDBIndexer,
+    LocalFormalStore,
+    PublicationBundle,
+    PublicationConflict,
+    PublicationError,
+    PublicationResource,
+    PublicationResult,
+    PublicationWorker,
+    PublicationWorkerResult,
+    WebDavFormalStore,
+    build_bundle_from_preview,
+    build_publication_bundle,
+    publish_bundle,
+    queue_publication,
+    validate_vector_index,
+)
 from .state import (
     ALL_STEP_NAMES,
     BatchMatchConflict,
@@ -33,6 +51,22 @@ __all__ = [
     "BibTeXMatcher",
     "BibtexMatcher",
     "MatchResult",
+    "FormalStore",
+    "LanceDBIndexer",
+    "LocalFormalStore",
+    "PublicationBundle",
+    "PublicationConflict",
+    "PublicationError",
+    "PublicationResource",
+    "PublicationResult",
+    "PublicationWorker",
+    "PublicationWorkerResult",
+    "WebDavFormalStore",
+    "build_bundle_from_preview",
+    "build_publication_bundle",
+    "publish_bundle",
+    "queue_publication",
+    "validate_vector_index",
 ]
 
 from .worker import (

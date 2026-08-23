@@ -7,6 +7,10 @@ from deepresearch_flow.paper.snapshot.common import _column_exists
 
 def init_snapshot_db(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA foreign_keys=ON;")
+    # Snapshot writers include the pipeline publisher.  Keep the existing WAL
+    # mode, but make short cross-process waits explicit instead of relying on
+    # sqlite's process-default timeout.
+    conn.execute("PRAGMA busy_timeout=30000;")
     conn.execute("PRAGMA journal_mode=WAL;")
 
     conn.executescript(
@@ -15,6 +19,15 @@ def init_snapshot_db(conn: sqlite3.Connection) -> None:
           key TEXT PRIMARY KEY,
           value TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS pipeline_publication_receipt (
+          job_id TEXT PRIMARY KEY,
+          bundle_digest TEXT NOT NULL,
+          paper_id TEXT NOT NULL,
+          published_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_pipeline_publication_receipt_paper_id
+          ON pipeline_publication_receipt(paper_id);
 
         CREATE TABLE IF NOT EXISTS paper (
           paper_id TEXT PRIMARY KEY,

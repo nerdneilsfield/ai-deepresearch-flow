@@ -25,12 +25,9 @@ from deepresearch_flow.paper.snapshot.identity import (
     paper_id_for_key,
 )
 from deepresearch_flow.paper.snapshot.image_utils import rewrite_markdown_images, _hash_bytes
-from deepresearch_flow.paper.snapshot.schema import (
-    init_snapshot_db,
-    recompute_facet_counts,
-    recompute_paper_index,
-)
+from deepresearch_flow.paper.snapshot.schema import recompute_facet_counts, recompute_paper_index
 from deepresearch_flow.paper.snapshot.text import insert_cjk_spaces, markdown_to_plain_text
+from deepresearch_flow.paper.snapshot.transaction import open_snapshot_connection
 from deepresearch_flow.paper.utils import stable_hash
 
 
@@ -751,12 +748,9 @@ def update_snapshot(opts: SnapshotUpdateOptions) -> None:
 
     console.print(f"[cyan]Processing {len(papers)} papers...[/cyan]")
 
-    conn = sqlite3.connect(str(output_db))
-    conn.row_factory = sqlite3.Row
+    conn = open_snapshot_connection(output_db)
 
     try:
-        # Ensure new schema additions exist when updating older snapshots.
-        init_snapshot_db(conn)
         written_images: set[str] = set()
         for paper in papers:
             stats.papers_checked += 1

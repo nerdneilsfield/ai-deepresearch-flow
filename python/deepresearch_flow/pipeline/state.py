@@ -752,6 +752,37 @@ class PipelineState:
             db.commit()
         return status
 
+    def queue_publication(self, job_id: str, expected_revision: int) -> dict[str, Any]:
+        """CAS a reviewed Job into the durable publication queue.
+
+        Admin callers must send the revision they displayed.  This keeps a
+        stale review page from publishing a newer BibTeX binding or preview.
+        The method intentionally does not acquire a worker lease; publication
+        workers claim ``publish_queued`` with the normal lease protocol.
+        """
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT status,revision FROM jobs WHERE id=?", (job_id,)
+            ).fetchone()
+            if row is None:
+                db.rollback()
+                raise KeyError(job_id)
+            if int(row["revision"]) != int(expected_revision):
+                db.rollback()
+                raise ValueError("publication revision is stale")
+            if str(row["status"]) != "review_ready":
+                db.rollback()
+                raise ValueError("publication requires review_ready job")
+            now = _stamp(_utc())
+            next_revision = int(row["revision"]) + 1
+            db.execute(
+                "UPDATE jobs SET status='publish_queued',revision=?,updated_at=? WHERE id=?",
+                (next_revision, now, job_id),
+            )
+            db.commit()
+        return {"job_id": job_id, "status": "publish_queued", "revision": next_revision}
+
     def request_cancel(self, job_id: str, lease_token: str | None = None) -> bool:
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -768,6 +799,34 @@ class PipelineState:
                 db.execute("UPDATE jobs SET cancel_requested=1,updated_at=? WHERE id=?", (_stamp(_utc()), job_id))
             db.commit()
         return True
+
+    def retry_indexing(self, job_id: str, expected_revision: int | None = None) -> dict[str, Any]:
+        """Requeue only vector indexing after a published warning.
+
+        Snapshot/static receipt remains authoritative; this operation never
+        invalidates processing artifacts or asks publication to rewrite them.
+        """
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT status,revision FROM jobs WHERE id=?", (job_id,)
+            ).fetchone()
+            if row is None:
+                db.rollback()
+                raise KeyError(job_id)
+            if expected_revision is not None and int(row["revision"]) != int(expected_revision):
+                db.rollback()
+                raise ValueError("indexing revision is stale")
+            if str(row["status"]) != "published_with_warning":
+                db.rollback()
+                raise ValueError("indexing retry requires published_with_warning job")
+            next_revision = int(row["revision"]) + 1
+            db.execute(
+                "UPDATE jobs SET status='indexing',terminal_at=NULL,revision=?,updated_at=? WHERE id=?",
+                (next_revision, _stamp(_utc()), job_id),
+            )
+            db.commit()
+        return {"job_id": job_id, "status": "indexing", "revision": next_revision}
 
     def cancel_requested(self, job_id: str) -> bool:
         return bool(self.get_job(job_id)["cancel_requested"])
@@ -1067,7 +1126,7 @@ class PipelineState:
         stamp = _stamp(_utc(now))
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
-            rows = db.execute("SELECT id,batch_id FROM jobs WHERE status IN ('running','publishing','indexing') AND lease_expires_at <= ?", (stamp,)).fetchall()
+            rows = db.execute("SELECT id,batch_id,status FROM jobs WHERE status IN ('running','publishing','indexing') AND lease_expires_at <= ?", (stamp,)).fetchall()
             ids = [row["id"] for row in rows]
             for row in rows:
                 if row["batch_id"]:
@@ -1078,6 +1137,9 @@ class PipelineState:
                         if self._matching_retry_invalid(db, str(row["id"]))
                         else None,
                     )
-            db.executemany("UPDATE jobs SET lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,status='queued',updated_at=?,revision=revision+1 WHERE id=?", [(_stamp(_utc(now)), job_id) for job_id in ids])
+            db.executemany(
+                "UPDATE jobs SET lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,status=CASE WHEN status IN ('publishing','indexing') THEN 'publish_queued' ELSE 'queued' END,updated_at=?,revision=revision+1 WHERE id=?",
+                [(_stamp(_utc(now)), job_id) for job_id in ids],
+            )
             db.commit()
         return ids
