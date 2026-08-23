@@ -6,6 +6,7 @@ from deepresearch_flow.pipeline.artifacts import ArtifactStore
 from deepresearch_flow.pipeline.config import PipelineConfig
 from deepresearch_flow.pipeline.matching import BibTeXMatcher
 from deepresearch_flow.pipeline.state import BatchMatchConflict, PipelineState
+from deepresearch_flow.pipeline.matching import complete_batch
 
 
 def test_matches_doi_then_title_then_key_and_reports_unmatched_in_job_order(tmp_path: Path) -> None:
@@ -223,3 +224,87 @@ def test_batch_match_generation_retry_is_idempotent_after_requeue(tmp_path: Path
     assert stored == result
     assert repeated == result
     assert state.get_batch_match_result(batch) == result
+
+
+def test_explicit_no_bibtex_binding_remains_publishable_after_retry(tmp_path: Path) -> None:
+    state = PipelineState(
+        tmp_path / "queue.sqlite3",
+        artifact_store=ArtifactStore(tmp_path / "work", tmp_path / "formal"),
+    )
+    batch = state.create_batch()
+    job = state.create_job(batch)
+    state.persist_bibtex_entries(batch, [{"key": "ref", "title": "A paper"}])
+    lease = state.acquire_lease(job, "worker")
+    assert lease is not None
+    state.record_job_summary(job, {"paper_title": "A paper"}, lease.token)
+    state.transition(job, "needs_attention", lease.token)
+    state.bind_job_bibtex(job, None)
+
+    retry = state.acquire_lease(job, "retry")
+    assert retry is not None
+    assert complete_batch(state, job, retry.token) == ("review_ready", "not_provided")
+
+
+def test_matching_affecting_requeue_removes_old_summary_from_snapshot(tmp_path: Path) -> None:
+    state = PipelineState(
+        tmp_path / "queue.sqlite3",
+        artifact_store=ArtifactStore(tmp_path / "work", tmp_path / "formal"),
+    )
+    batch = state.create_batch()
+    first, second = state.create_job(batch), state.create_job(batch)
+    state.persist_bibtex_entries(batch, [{"key": "first-ref", "title": "First"}])
+    leases = [state.acquire_lease(job, f"worker-{job}") for job in (first, second)]
+    assert all(leases)
+    for job, lease in zip((first, second), leases, strict=True):
+        assert lease is not None
+        state.record_job_summary(job, {"paper_title": job}, lease.token)
+    assert state.get_batch_matching_snapshot(batch)["ready"] is True
+
+    assert leases[0] is not None
+    state.record_step_attempt(first, "ocr", leases[0].token, "failed", error="retry")
+    state.transition(first, "failed", leases[0].token)
+    state.admin_transition(first, "queued")
+
+    snapshot = state.get_batch_matching_snapshot(batch)
+    assert snapshot["ready"] is False
+    assert [item["job_id"] for item in snapshot["summaries"]] == [second]
+
+
+def test_extract_model_change_invalidates_summary_eligibility(tmp_path: Path) -> None:
+    state = PipelineState(
+        tmp_path / "queue.sqlite3",
+        artifact_store=ArtifactStore(tmp_path / "work", tmp_path / "formal"),
+    )
+    batch = state.create_batch()
+    job = state.create_job(batch, selected_models={"ocr": "one", "extract": "one", "translate": "one"})
+    state.persist_bibtex_entries(batch, [{"key": "ref", "title": "Paper"}])
+    lease = state.acquire_lease(job, "worker")
+    assert lease is not None
+    state.record_job_summary(job, {"paper_title": "Paper"}, lease.token)
+    assert state.get_batch_matching_snapshot(batch)["ready"] is True
+
+    state.change_model(job, "extract", "two", lease.token)
+
+    snapshot = state.get_batch_matching_snapshot(batch)
+    assert snapshot["ready"] is False
+    assert snapshot["summaries"] == []
+
+
+def test_downstream_only_retry_preserves_matching_summary(tmp_path: Path) -> None:
+    state = PipelineState(
+        tmp_path / "queue.sqlite3",
+        artifact_store=ArtifactStore(tmp_path / "work", tmp_path / "formal"),
+    )
+    batch = state.create_batch()
+    job = state.create_job(batch)
+    state.persist_bibtex_entries(batch, [{"key": "ref", "title": "Paper"}])
+    lease = state.acquire_lease(job, "worker")
+    assert lease is not None
+    state.record_job_summary(job, {"paper_title": "Paper"}, lease.token)
+    state.record_step_attempt(job, "translate", lease.token, "failed", error="retry")
+    state.transition(job, "failed", lease.token)
+    state.admin_transition(job, "queued")
+
+    snapshot = state.get_batch_matching_snapshot(batch)
+    assert snapshot["ready"] is True
+    assert [item["job_id"] for item in snapshot["summaries"]] == [job]

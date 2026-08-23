@@ -35,6 +35,7 @@ PROCESSING_STEP_NAMES = (
     "translation_repair",
     "preview",
 )
+_MATCHING_STEP_NAMES = PROCESSING_STEP_NAMES[: PROCESSING_STEP_NAMES.index("summary_repair") + 1]
 ALL_STEP_NAMES = tuple(dict.fromkeys((*STEP_NAMES, *PROCESSING_STEP_NAMES)))
 _TERMINAL = {"published", "published_with_warning", "rejected", "cancelled"}
 _TRANSITIONS: dict[str, set[str]] = {
@@ -166,10 +167,41 @@ class PipelineState:
                 db.execute("ALTER TABLE batch_match_results ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
 
     @staticmethod
-    def _invalidate_batch_matching(db: sqlite3.Connection, batch_id: str | None) -> None:
+    def _invalidate_batch_matching(
+        db: sqlite3.Connection,
+        batch_id: str | None,
+        *,
+        clear_summary_job_id: str | None = None,
+    ) -> None:
         if batch_id:
             db.execute("DELETE FROM batch_match_results WHERE batch_id=?", (batch_id,))
             db.execute("UPDATE batches SET revision=revision+1 WHERE id=?", (batch_id,))
+        if clear_summary_job_id is not None:
+            db.execute("DELETE FROM job_summaries WHERE job_id=?", (clear_summary_job_id,))
+
+    @staticmethod
+    def _matching_retry_invalid(db: sqlite3.Connection, job_id: str) -> bool:
+        """Return whether retry may change persisted matching inputs."""
+        rows = db.execute(
+            "SELECT name,status FROM steps WHERE job_id=?", (job_id,)
+        ).fetchall()
+        statuses = {str(row["name"]): str(row["status"]) for row in rows}
+        failed = [name for name in PROCESSING_STEP_NAMES if statuses.get(name) == "failed"]
+        if failed:
+            return PROCESSING_STEP_NAMES.index(failed[0]) <= PROCESSING_STEP_NAMES.index("summary_repair")
+        return any(statuses.get(name) != "complete" for name in _MATCHING_STEP_NAMES)
+
+    @staticmethod
+    def _failed_step_is_matching(db: sqlite3.Connection, job_id: str) -> bool:
+        """Use recorded failed-step boundary when deciding retry eligibility."""
+        rows = db.execute(
+            "SELECT name,status FROM steps WHERE job_id=?", (job_id,)
+        ).fetchall()
+        statuses = {str(row["name"]): str(row["status"]) for row in rows}
+        failed = [name for name in PROCESSING_STEP_NAMES if statuses.get(name) == "failed"]
+        if not failed:
+            return True
+        return PROCESSING_STEP_NAMES.index(failed[0]) <= PROCESSING_STEP_NAMES.index("summary_repair")
 
     def create_batch(self, batch_id: str | None = None) -> str:
         batch_id = batch_id or str(uuid.uuid4())
@@ -595,9 +627,28 @@ class PipelineState:
             if row["status"] in _TERMINAL:
                 db.rollback()
                 return None
-            if row["batch_id"] and row["status"] in {"queued", "failed", "needs_attention", "batch_waiting"}:
-                db.execute("DELETE FROM batch_match_results WHERE batch_id=?", (row["batch_id"],))
-                db.execute("UPDATE batches SET revision=revision+1 WHERE id=?", (row["batch_id"],))
+            if row["batch_id"]:
+                takeover = bool(
+                    old_expiry
+                    and old_expiry <= _stamp(now_value)
+                    and row["status"] in {"running", "publishing", "indexing"}
+                )
+                clear_summary = False
+                invalidate = False
+                if takeover:
+                    invalidate = True
+                    clear_summary = self._matching_retry_invalid(db, job_id)
+                elif row["status"] == "failed":
+                    invalidate = True if self._failed_step_is_matching(db, job_id) else False
+                    clear_summary = invalidate
+                elif row["status"] in {"needs_attention", "batch_waiting"}:
+                    invalidate = True
+                if invalidate:
+                    self._invalidate_batch_matching(
+                        db,
+                        str(row["batch_id"]),
+                        clear_summary_job_id=job_id if clear_summary else None,
+                    )
             status = "running" if row["status"] in {"queued", "failed", "needs_attention", "batch_waiting"} else row["status"]
             db.execute(
                 "UPDATE jobs SET status=?,lease_owner=?,lease_token=?,lease_expires_at=?,updated_at=?,revision=revision+1 WHERE id=?",
@@ -681,10 +732,21 @@ class PipelineState:
                 db.rollback()
                 raise ValueError(f"invalid transition {row['status']} -> {status}")
             terminal = _stamp(_utc()) if status in _TERMINAL else None
+            matching_requeue_handled = False
+            if row["batch_id"] and status in {"queued", "running"}:
+                if row["status"] == "failed":
+                    if self._failed_step_is_matching(db, job_id):
+                        self._invalidate_batch_matching(
+                            db, str(row["batch_id"]), clear_summary_job_id=job_id
+                        )
+                        matching_requeue_handled = True
+                elif row["status"] in {"needs_attention", "batch_waiting", "review_ready"}:
+                    self._invalidate_batch_matching(db, str(row["batch_id"]))
+                    matching_requeue_handled = True
             if row["batch_id"] and (
                 row["status"] in {"failed", "cancelled", "rejected"}
                 or status in {"failed", "cancelled", "rejected"}
-            ) and row["status"] != status:
+            ) and row["status"] != status and not matching_requeue_handled:
                 self._invalidate_batch_matching(db, str(row["batch_id"]))
             db.execute("UPDATE jobs SET status=?,terminal_at=?,lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,updated_at=?,revision=revision+1 WHERE id=?", (status, terminal, _stamp(_utc()), job_id))
             db.commit()
@@ -908,6 +970,17 @@ class PipelineState:
                     earliest = name
             if earliest is not None:
                 suffix = PROCESSING_STEP_NAMES[PROCESSING_STEP_NAMES.index(earliest) :]
+                if PROCESSING_STEP_NAMES.index(earliest) <= PROCESSING_STEP_NAMES.index("summary_repair"):
+                    has_summary = db.execute(
+                        "SELECT 1 FROM job_summaries WHERE job_id=?", (job_id,)
+                    ).fetchone()
+                    if has_summary is not None:
+                        job = db.execute("SELECT batch_id FROM jobs WHERE id=?", (job_id,)).fetchone()
+                        self._invalidate_batch_matching(
+                            db,
+                            str(job["batch_id"]) if job and job["batch_id"] else None,
+                            clear_summary_job_id=job_id,
+                        )
                 db.executemany(
                     "UPDATE steps SET status='missing',artifact_digest=NULL,artifact_size=NULL WHERE job_id=? AND name=?",
                     [(job_id, name) for name in suffix],
@@ -951,6 +1024,10 @@ class PipelineState:
             db.execute("UPDATE jobs SET selected_models=?,updated_at=?,revision=revision+1 WHERE id=?", (json.dumps(selected, sort_keys=True), _stamp(_utc()), job_id))
             db.executemany("UPDATE steps SET model_key=?,status='missing',artifact_digest=NULL,artifact_size=NULL WHERE job_id=? AND name=?", [(selected.get(name), job_id, name) for name in downstream])
             db.executemany("DELETE FROM artifacts WHERE job_id=? AND kind=?", [(job_id, name) for name in downstream])
+            if step in {"ocr", "extract"} and row["batch_id"]:
+                self._invalidate_batch_matching(
+                    db, str(row["batch_id"]), clear_summary_job_id=job_id
+                )
             db.commit()
 
     def register_protected_artifact(
@@ -992,9 +1069,15 @@ class PipelineState:
             db.execute("BEGIN IMMEDIATE")
             rows = db.execute("SELECT id,batch_id FROM jobs WHERE status IN ('running','publishing','indexing') AND lease_expires_at <= ?", (stamp,)).fetchall()
             ids = [row["id"] for row in rows]
-            batch_ids = {str(row["batch_id"]) for row in rows if row["batch_id"] is not None}
-            for batch_id in batch_ids:
-                self._invalidate_batch_matching(db, batch_id)
+            for row in rows:
+                if row["batch_id"]:
+                    self._invalidate_batch_matching(
+                        db,
+                        str(row["batch_id"]),
+                        clear_summary_job_id=row["id"]
+                        if self._matching_retry_invalid(db, str(row["id"]))
+                        else None,
+                    )
             db.executemany("UPDATE jobs SET lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,status='queued',updated_at=?,revision=revision+1 WHERE id=?", [(_stamp(_utc(now)), job_id) for job_id in ids])
             db.commit()
         return ids

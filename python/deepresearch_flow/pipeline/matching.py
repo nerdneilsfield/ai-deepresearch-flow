@@ -29,6 +29,12 @@ def complete_batch(state: PipelineState, job_id: str, lease_token: str | None) -
         snapshot = state.get_batch_matching_snapshot(batch_key)
         if not snapshot["entries"]:
             return "review_ready", "not_provided"
+        explicit_binding = next(
+            (binding for binding in snapshot["bindings"] if str(binding["job_id"]) == job_id),
+            None,
+        )
+        if explicit_binding is not None and explicit_binding["entry_key"] is None:
+            return "review_ready", "not_provided"
         result = snapshot["result"]
         revision = int(snapshot["revision"])
         if result is None:

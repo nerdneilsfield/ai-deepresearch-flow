@@ -63,6 +63,35 @@ def test_expired_lease_is_recoverable_and_old_token_stays_invalid(tmp_path: Path
         state.transition(job_id, "failed", old.token)
 
 
+def test_expired_running_takeover_invalidates_batch_match_and_old_summary(tmp_path: Path) -> None:
+    artifacts = ArtifactStore(tmp_path / "work", tmp_path / "formal")
+    state = PipelineState(tmp_path / "queue.sqlite3", lease_seconds=60, artifact_store=artifacts)
+    batch = state.create_batch()
+    first, second = state.create_job(batch), state.create_job(batch)
+    state.persist_bibtex_entries(batch, [{"key": "first-ref", "title": "First"}])
+    now = datetime.now(timezone.utc)
+    first_lease = state.acquire_lease(first, "first-worker", now=now)
+    second_lease = state.acquire_lease(second, "second-worker", now=now)
+    assert first_lease is not None and second_lease is not None
+    state.record_job_summary(first, {"paper_title": "First"}, first_lease.token)
+    state.record_job_summary(second, {"paper_title": "Second"}, second_lease.token)
+    snapshot = state.get_batch_matching_snapshot(batch)
+    state.store_batch_match_result(
+        batch,
+        first,
+        first_lease.token,
+        expected_revision=snapshot["revision"],
+        result={"matches": [], "needs_attention": [], "unmatched_entries": []},
+    )
+
+    takeover = state.acquire_lease(second, "takeover", now=now + timedelta(seconds=120))
+
+    assert takeover is not None
+    current = state.get_batch_matching_snapshot(batch)
+    assert current["result"] is None
+    assert second not in {item["job_id"] for item in current["summaries"]}
+
+
 def test_model_change_invalidates_selected_step_and_downstream(tmp_path: Path) -> None:
     artifacts = ArtifactStore(tmp_path / "work", tmp_path / "formal")
     state = PipelineState(tmp_path / "queue.sqlite3", artifact_store=artifacts)
@@ -79,6 +108,23 @@ def test_model_change_invalidates_selected_step_and_downstream(tmp_path: Path) -
     assert state.step_artifact(job_id, "extract") is None
     assert state.step_artifact(job_id, "translate") is None
     assert state.get_job(job_id)["selected_models"] == {"ocr": "one", "extract": "two", "translate": "one"}
+
+
+def test_resume_from_matching_step_invalidates_old_summary(tmp_path: Path) -> None:
+    artifacts = ArtifactStore(tmp_path / "work", tmp_path / "formal")
+    state = PipelineState(tmp_path / "queue.sqlite3", artifact_store=artifacts)
+    batch = state.create_batch()
+    job_id = state.create_job(batch)
+    state.persist_bibtex_entries(batch, [{"key": "ref", "title": "Paper"}])
+    lease = state.acquire_lease(job_id, "worker")
+    assert lease is not None
+    state.record_job_summary(job_id, {"paper_title": "Paper"}, lease.token)
+
+    assert state.resume_step(job_id, lease.token) == "ocr"
+
+    snapshot = state.get_batch_matching_snapshot(batch)
+    assert snapshot["ready"] is False
+    assert snapshot["summaries"] == []
 
 
 def test_cancel_is_immediate_when_queued_and_observed_at_step_boundary(tmp_path: Path) -> None:
