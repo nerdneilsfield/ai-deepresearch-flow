@@ -29,9 +29,30 @@ def complete_batch(state: PipelineState, job_id: str, lease_token: str | None) -
     if result is None:
         if lease_token is None or not state.batch_summary_ready(batch_key):
             raise LeaseError("batch summaries are not complete")
+        entries = state.list_bibtex_entries(batch_key)
+        entry_keys = {str(entry["key"]) for entry in entries}
+        bindings = state.list_batch_bibtex_bindings(batch_key)
+        locked = {
+            str(binding["job_id"]): str(binding["entry_key"])
+            for binding in bindings
+            if str(binding["entry_key"]) in entry_keys
+        }
+        binding_attention = [
+            {
+                "job_id": str(binding["job_id"]),
+                "reason": "binding_missing",
+                "candidate_keys": [],
+            }
+            for binding in bindings
+            if str(binding["entry_key"]) not in entry_keys
+        ]
         inputs = {item["job_id"]: item for item in state.list_batch_job_inputs(batch_key)}
         jobs: list[dict[str, Any]] = []
         for item in state.list_batch_summaries(batch_key):
+            if item["job_id"] in locked or any(
+                attention["job_id"] == item["job_id"] for attention in binding_attention
+            ):
+                continue
             candidate = {"job_id": item["job_id"], **inputs.get(item["job_id"], {})}
             extracted = item.get("summary")
             if isinstance(extracted, Mapping):
@@ -43,14 +64,20 @@ def complete_batch(state: PipelineState, job_id: str, lease_token: str | None) -
                     if isinstance(value, str):
                         candidate[canonical] = value
             jobs.append(candidate)
-        matched = BibTeXMatcher(state).match_batch(batch_key, jobs)
+        matched = BibTeXMatcher(state).match_batch(
+            batch_key, jobs, reserved_entry_keys=locked.values()
+        )
+        locked_matches = [
+            {"job_id": job, "entry_key": entry, "reason": "existing"}
+            for job, entry in locked.items()
+        ]
         result = state.store_batch_match_result(
             batch_key,
             job_id,
             lease_token,
             {
-                "matches": matched.matches,
-                "needs_attention": matched.needs_attention,
+                "matches": locked_matches + matched.matches,
+                "needs_attention": binding_attention + matched.needs_attention,
                 "unmatched_entries": matched.unmatched_entries,
             },
         )
@@ -86,7 +113,13 @@ class BibTeXMatcher:
     def __init__(self, state: PipelineState):
         self.state = state
 
-    def match_batch(self, batch_id: str, jobs: Iterable[dict[str, Any]]) -> MatchResult:
+    def match_batch(
+        self,
+        batch_id: str,
+        jobs: Iterable[dict[str, Any]],
+        *,
+        reserved_entry_keys: Iterable[str] = (),
+    ) -> MatchResult:
         entries = self.state.list_bibtex_entries(batch_id)
         if not entries:
             return MatchResult([], [], [])
@@ -106,7 +139,7 @@ class BibTeXMatcher:
 
         matches: list[dict[str, Any]] = []
         needs_attention: list[dict[str, Any]] = []
-        used: set[str] = set()
+        used: set[str] = {str(key) for key in reserved_entry_keys}
         for supplied in jobs:
             job_id = str(supplied["job_id"])
             candidate, reason, diagnostic = self._choose(supplied, by_doi, by_title, by_key, used)

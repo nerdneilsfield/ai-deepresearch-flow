@@ -262,7 +262,8 @@ class PipelineState:
                 """
                 SELECT jobs.id AS job_id, job_summaries.summary_json
                 FROM jobs JOIN job_summaries ON job_summaries.job_id = jobs.id
-                WHERE jobs.batch_id=? ORDER BY jobs.created_at, jobs.id
+                WHERE jobs.batch_id=? AND jobs.status NOT IN ('failed','cancelled','rejected')
+                ORDER BY jobs.created_at, jobs.id
                 """,
                 (batch_id,),
             ).fetchall()
@@ -278,11 +279,25 @@ class PipelineState:
                 """
                 SELECT COUNT(*) AS jobs, COUNT(job_summaries.job_id) AS summaries
                 FROM jobs LEFT JOIN job_summaries ON job_summaries.job_id = jobs.id
-                WHERE jobs.batch_id=?
+                WHERE jobs.batch_id=? AND jobs.status NOT IN ('failed','cancelled','rejected')
                 """,
                 (batch_id,),
             ).fetchone()
         return bool(row and row["jobs"] > 0 and row["jobs"] == row["summaries"])
+
+    def list_batch_bibtex_bindings(self, batch_id: str) -> list[dict[str, Any]]:
+        """Return existing bindings so new match generations preserve them."""
+        with self._connect() as db:
+            rows = db.execute(
+                """
+                SELECT jobs.id AS job_id, job_bibtex.entry_key
+                FROM jobs JOIN job_bibtex ON job_bibtex.job_id = jobs.id
+                WHERE jobs.batch_id=? AND job_bibtex.entry_key IS NOT NULL
+                ORDER BY jobs.created_at, jobs.id
+                """,
+                (batch_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def get_batch_match_result(self, batch_id: str) -> dict[str, Any] | None:
         """Read durable batch-wide matching result, if already computed."""
@@ -325,6 +340,7 @@ class PipelineState:
                 raise KeyError(batch_id)
             db.execute("DELETE FROM bibtex_entries WHERE batch_id=?", (batch_id,))
             db.execute("DELETE FROM batch_match_results WHERE batch_id=?", (batch_id,))
+            db.execute("UPDATE batches SET revision=revision+1 WHERE id=?", (batch_id,))
             db.executemany(
                 "INSERT INTO bibtex_entries(batch_id,entry_key,entry_json) VALUES(?,?,?)",
                 [(batch_id, str(entry["key"]), json.dumps(entry, sort_keys=True)) for entry in entries],
@@ -359,6 +375,9 @@ class PipelineState:
                 raise ValueError(f"unknown job status: {status}")
             db.execute("INSERT OR REPLACE INTO job_bibtex(job_id,entry_key) VALUES(?,?)", (job_id, entry_key))
             db.execute("UPDATE jobs SET status=?,revision=revision+1,updated_at=? WHERE id=?", (status, _stamp(_utc()), job_id))
+            if job["batch_id"]:
+                db.execute("DELETE FROM batch_match_results WHERE batch_id=?", (job["batch_id"],))
+                db.execute("UPDATE batches SET revision=revision+1 WHERE id=?", (job["batch_id"],))
             db.commit()
         return {"job_id": job_id, "entry_key": entry_key, "status": status}
 
@@ -436,6 +455,9 @@ class PipelineState:
             if row["status"] in _TERMINAL:
                 db.rollback()
                 return None
+            if row["batch_id"] and row["status"] in {"queued", "failed", "needs_attention", "batch_waiting"}:
+                db.execute("DELETE FROM batch_match_results WHERE batch_id=?", (row["batch_id"],))
+                db.execute("UPDATE batches SET revision=revision+1 WHERE id=?", (row["batch_id"],))
             status = "running" if row["status"] in {"queued", "failed", "needs_attention", "batch_waiting"} else row["status"]
             db.execute(
                 "UPDATE jobs SET status=?,lease_owner=?,lease_token=?,lease_expires_at=?,updated_at=?,revision=revision+1 WHERE id=?",

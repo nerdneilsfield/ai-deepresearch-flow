@@ -361,6 +361,122 @@ def test_batch_completion_is_restart_safe_after_concurrent_run(tmp_path: Path) -
     assert [state.get_job_bibtex_key(job) for job in jobs] == ["tiny-ref", "other-ref"]
 
 
+def test_failed_batch_sibling_does_not_block_successful_job(tmp_path: Path) -> None:
+    config, state, artifacts, _ = _setup(tmp_path)
+    ingested = BatchIngestor(config, state, artifacts).ingest(
+        [
+            UploadPart("tiny.pdf", BytesIO(b"%PDF-1.7 tiny")),
+            UploadPart("other.pdf", BytesIO(b"%PDF-1.7 other")),
+        ],
+        selected_models={"ocr": "ocr-a", "extract": "extract-a", "translate": "translate-a"},
+    )
+    jobs = ingested.jobs
+    batch_id = state.get_job(jobs[0])["batch_id"]
+    state.persist_bibtex_entries(batch_id, [{"key": "tiny-ref", "title": "Tiny paper"}])
+    second_pdf = artifacts.resolve(jobs[1], "pdf")
+    assert second_pdf is not None
+
+    class FailingSiblingAdapters(FakeAdapters):
+        @override
+        def ocr(self, pdf_path: Path, model_key: str) -> str:
+            if pdf_path == second_pdf.path:
+                raise RuntimeError("sibling provider failure")
+            return super().ocr(pdf_path, model_key)
+
+    results = PipelineWorker(
+        config, state, artifacts, adapters=FailingSiblingAdapters(), concurrency=2
+    ).run_once(list(jobs))
+
+    assert [item.status for item in results] == ["review_ready", "failed"]
+    assert state.get_job_bibtex_key(jobs[0]) == "tiny-ref"
+
+
+@pytest.mark.parametrize("terminal_mode", ["cancelled", "rejected"])
+def test_cancelled_or_rejected_batch_sibling_does_not_block_successful_job(
+    tmp_path: Path, terminal_mode: str
+) -> None:
+    config, state, artifacts, _ = _setup(tmp_path)
+    ingested = BatchIngestor(config, state, artifacts).ingest(
+        [
+            UploadPart("tiny.pdf", BytesIO(b"%PDF-1.7 tiny")),
+            UploadPart("other.pdf", BytesIO(b"%PDF-1.7 other")),
+        ],
+        selected_models={"ocr": "ocr-a", "extract": "extract-a", "translate": "translate-a"},
+    )
+    jobs = ingested.jobs
+    batch_id = state.get_job(jobs[0])["batch_id"]
+    state.persist_bibtex_entries(batch_id, [{"key": "tiny-ref", "title": "Tiny paper"}])
+    second_pdf = artifacts.resolve(jobs[1], "pdf")
+    assert second_pdf is not None
+    if terminal_mode == "rejected":
+        state.admin_transition(jobs[1], "rejected")
+
+    class TerminalSiblingAdapters(FakeAdapters):
+        @override
+        def ocr(self, pdf_path: Path, model_key: str) -> str:
+            if pdf_path == second_pdf.path:
+                state.request_cancel(jobs[1])
+            return super().ocr(pdf_path, model_key)
+
+    results = PipelineWorker(
+        config, state, artifacts, adapters=TerminalSiblingAdapters(), concurrency=2
+    ).run_once(list(jobs))
+
+    expected_sibling_status = terminal_mode
+    assert [item.status for item in results] == ["review_ready", expected_sibling_status]
+    assert state.get_job_bibtex_key(jobs[0]) == "tiny-ref"
+
+
+def test_requeued_sibling_enters_new_match_generation_without_rebinding_reviewed_job(
+    tmp_path: Path,
+) -> None:
+    config, state, artifacts, _ = _setup(tmp_path)
+    ingested = BatchIngestor(config, state, artifacts).ingest(
+        [
+            UploadPart("tiny.pdf", BytesIO(b"%PDF-1.7 tiny")),
+            UploadPart("other.pdf", BytesIO(b"%PDF-1.7 other")),
+        ],
+        selected_models={"ocr": "ocr-a", "extract": "extract-a", "translate": "translate-a"},
+    )
+    jobs = ingested.jobs
+    batch_id = state.get_job(jobs[0])["batch_id"]
+    state.persist_bibtex_entries(
+        batch_id,
+        [{"key": "tiny-ref", "title": "Tiny paper"}, {"key": "other-ref", "title": "Other paper"}],
+    )
+    second_pdf = artifacts.resolve(jobs[1], "pdf")
+    assert second_pdf is not None
+
+    class InitiallyFailingAdapters(FakeAdapters):
+        @override
+        def ocr(self, pdf_path: Path, model_key: str) -> str:
+            if pdf_path == second_pdf.path:
+                raise RuntimeError("retryable sibling failure")
+            return super().ocr(pdf_path, model_key)
+
+    first = PipelineWorker(
+        config, state, artifacts, adapters=InitiallyFailingAdapters(), concurrency=2
+    ).run_once(list(jobs))
+    assert [item.status for item in first] == ["review_ready", "failed"]
+    assert state.get_job_bibtex_key(jobs[0]) == "tiny-ref"
+    state.admin_transition(jobs[1], "queued")
+
+    class RetriedSiblingAdapters(FakeAdapters):
+        @override
+        def extract(self, markdown: str, model_key: str, **kwargs: object) -> dict[str, object]:
+            if str(kwargs["job_id"]) == jobs[1]:
+                return {"paper_title": "Other paper"}
+            return {"paper_title": "Tiny paper"}
+
+    retried = PipelineWorker(
+        config, state, artifacts, adapters=RetriedSiblingAdapters()
+    ).run_once([jobs[1]])
+
+    assert [item.status for item in retried] == ["review_ready"]
+    assert state.get_job_bibtex_key(jobs[0]) == "tiny-ref"
+    assert state.get_job_bibtex_key(jobs[1]) == "other-ref"
+
+
 def test_worker_restart_after_completion_reuses_all_checkpoints(tmp_path: Path) -> None:
     config, state, artifacts, job_id = _setup(tmp_path)
     first_adapters = FakeAdapters()
