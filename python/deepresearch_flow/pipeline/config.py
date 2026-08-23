@@ -8,7 +8,7 @@ import os
 import tomllib
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 from urllib.parse import urlsplit, urlunsplit
 
 
@@ -70,6 +70,14 @@ class PipelineConfig:
     translation_language: str = "en"
     lease_seconds: int = 300
     heartbeat_seconds: int = 30
+    validation_retry_limit: int = 2
+    supporting_models: tuple[tuple[str, str], ...] = ()
+
+    def __post_init__(self) -> None:
+        # Accept mapping-shaped construction from service settings while
+        # retaining a hash-stable immutable representation.
+        if isinstance(self.supporting_models, Mapping):
+            object.__setattr__(self, "supporting_models", tuple(sorted(self.supporting_models.items())))
 
     @property
     def lease_duration_seconds(self) -> int:
@@ -78,6 +86,10 @@ class PipelineConfig:
     @property
     def heartbeat_interval_seconds(self) -> int:
         return self.heartbeat_seconds
+
+    @property
+    def supporting_model_defaults(self) -> dict[str, str]:
+        return dict(self.supporting_models)
 
     def public_snapshot(self) -> dict[str, Any]:
         """Return stable non-secret configuration suitable for an admin API."""
@@ -126,6 +138,14 @@ def load_pipeline_config(path: str | Path) -> PipelineConfig:
     ocr_allowed, ocr_default = _model_group(models, "ocr")
     extract_allowed, extract_default = _model_group(models, "extract")
     translate_allowed, translate_default = _model_group(models, "translate")
+    supporting_raw = models.get("supporting", raw.get("supporting_models", {}))
+    if supporting_raw is None:
+        supporting_raw = {}
+    if not isinstance(supporting_raw, dict) or any(
+        not isinstance(key, str) or not isinstance(value, str)
+        for key, value in supporting_raw.items()
+    ):
+        raise ValueError("pipeline supporting models must be a table of strings")
     # A selected model can also be specified independently of nested defaults.
     selected = raw.get("selected_models", {})
     if isinstance(selected, dict):
@@ -173,4 +193,6 @@ def load_pipeline_config(path: str | Path) -> PipelineConfig:
         translation_language=str(raw.get("translation_language", "en")),
         lease_seconds=_positive(raw.get("lease_seconds", raw.get("lease_duration_seconds")), "lease_seconds", 300),
         heartbeat_seconds=_positive(raw.get("heartbeat_seconds", raw.get("heartbeat_interval_seconds")), "heartbeat_seconds", 30),
+        validation_retry_limit=_positive(raw.get("validation_retry_limit"), "validation_retry_limit", 2),
+        supporting_models=tuple(sorted(supporting_raw.items())),
     )

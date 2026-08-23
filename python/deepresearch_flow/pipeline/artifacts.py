@@ -105,6 +105,9 @@ class ArtifactStore:
     def _job_directory(self, job_id: str) -> Path:
         return self.work_dir / self._job_key(job_id)
 
+    def _protected_job_directory(self, job_id: str) -> Path:
+        return self.formal_root / self._job_key(job_id)
+
     def _assert_job_directory(self, directory: Path) -> None:
         if directory.exists() and directory.is_symlink():
             raise ValueError("job artifact directory must not be a symlink")
@@ -130,6 +133,48 @@ class ArtifactStore:
         candidate_kind, separator, identifier = stem.rpartition("-")
         if not separator or candidate_kind != kind or not re.fullmatch(r"[0-9a-f]{32}", identifier):
             raise ValueError("artifact path does not match exact kind")
+
+    def validate_protected_artifact(self, artifact: Artifact, job_id: str, kind: str) -> None:
+        """Validate protected output ownership and exact formal-root containment."""
+        if artifact.job_id != job_id or artifact.kind != kind:
+            raise ValueError("artifact ownership or kind mismatch")
+        directory = self._protected_job_directory(job_id)
+        if directory.exists() and directory.is_symlink():
+            raise ValueError("protected artifact directory must not be a symlink")
+        directory.mkdir(parents=True, exist_ok=True)
+        if directory.resolve().parent != self.formal_root:
+            raise ValueError("protected artifact directory escapes formal root")
+        path = artifact.path.resolve()
+        if artifact.path.is_symlink() or path.parent != directory.resolve() or not path.is_file():
+            raise ValueError("protected artifact is outside canonical formal directory")
+        stem = path.name.removesuffix(".artifact")
+        candidate_kind, separator, identifier = stem.rpartition("-")
+        if not separator or candidate_kind != kind or not re.fullmatch(r"[0-9a-f]{32}", identifier):
+            raise ValueError("protected artifact path does not match exact kind")
+
+    def protect(self, job_id: str, kind: str, content: bytes) -> Artifact:
+        """Atomically place immutable preview content below formal root."""
+        self._validate_kind(kind)
+        directory = self._protected_job_directory(job_id)
+        if directory.exists() and directory.is_symlink():
+            raise ValueError("protected artifact directory must not be a symlink")
+        directory.mkdir(parents=True, exist_ok=True)
+        if directory.resolve().parent != self.formal_root:
+            raise ValueError("protected artifact directory escapes formal root")
+        fd, name = tempfile.mkstemp(prefix=".artifact-", dir=directory)
+        temporary = Path(name)
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+            target = directory / f"{kind}-{uuid.uuid4().hex}.artifact"
+            os.replace(temporary, target)
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
+        digest = hashlib.sha256(content).hexdigest()
+        return Artifact(job_id, kind, target, digest, len(content), self.formal_root, directory)
 
     def begin(self, job_id: str, kind: str) -> PendingArtifact:
         self._validate_kind(kind)
@@ -209,5 +254,13 @@ class ArtifactStore:
         """Remove one incomplete job's work directory after failed ingestion."""
         directory = self._job_directory(job_id)
         self._assert_job_directory(directory)
+        if directory.exists():
+            shutil.rmtree(directory)
+
+    def discard_protected(self, job_id: str) -> None:
+        """Remove protected outputs for an incomplete/cancelled job only."""
+        directory = self._protected_job_directory(job_id)
+        if directory.exists() and directory.is_symlink():
+            raise ValueError("protected artifact directory must not be a symlink")
         if directory.exists():
             shutil.rmtree(directory)

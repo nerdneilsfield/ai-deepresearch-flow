@@ -22,6 +22,20 @@ JOB_STATUSES = frozenset(
     }
 )
 STEP_NAMES = ("ocr", "extract", "translate")
+# Legacy model seam remains public; worker uses expanded immutable sequence.
+PROCESSING_STEP_NAMES = (
+    "ocr",
+    "source_repair",
+    "math_repair",
+    "organize",
+    "extract",
+    "validation",
+    "summary_repair",
+    "translate",
+    "translation_repair",
+    "preview",
+)
+ALL_STEP_NAMES = tuple(dict.fromkeys((*STEP_NAMES, *PROCESSING_STEP_NAMES)))
 _TERMINAL = {"published", "published_with_warning", "rejected", "cancelled"}
 _TRANSITIONS: dict[str, set[str]] = {
     "queued": {"running", "cancelled", "rejected"},
@@ -109,7 +123,9 @@ class PipelineState:
                     id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL, step TEXT NOT NULL,
                     attempt INTEGER NOT NULL, status TEXT NOT NULL, lease_owner TEXT,
                     started_at TEXT NOT NULL, finished_at TEXT, artifact_digest TEXT,
-                    artifact_size INTEGER, error TEXT, FOREIGN KEY(job_id) REFERENCES jobs(id)
+                    artifact_size INTEGER, error TEXT, duration_ms INTEGER,
+                    error_type TEXT, retryable INTEGER,
+                    FOREIGN KEY(job_id) REFERENCES jobs(id)
                 );
                 CREATE TABLE IF NOT EXISTS job_inputs (
                     job_id TEXT PRIMARY KEY, filename TEXT NOT NULL, digest TEXT NOT NULL, size INTEGER NOT NULL,
@@ -124,6 +140,13 @@ class PipelineState:
                 );
                 """
             )
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(step_attempts)").fetchall()}
+            if "duration_ms" not in columns:
+                db.execute("ALTER TABLE step_attempts ADD COLUMN duration_ms INTEGER")
+            if "error_type" not in columns:
+                db.execute("ALTER TABLE step_attempts ADD COLUMN error_type TEXT")
+            if "retryable" not in columns:
+                db.execute("ALTER TABLE step_attempts ADD COLUMN retryable INTEGER")
 
     def create_batch(self, batch_id: str | None = None) -> str:
         batch_id = batch_id or str(uuid.uuid4())
@@ -151,7 +174,10 @@ class PipelineState:
                 "INSERT INTO jobs(id,batch_id,status,created_at,updated_at,selected_models,config_fingerprint) VALUES(?,?,?,?,?,?,?)",
                 (job_id, batch_id, "queued", now, now, models, config_fingerprint),
             )
-            db.executemany("INSERT INTO steps(job_id,name,model_key) VALUES(?,?,?)", [(job_id, name, (selected_models or {}).get(name)) for name in STEP_NAMES])
+            db.executemany(
+                "INSERT INTO steps(job_id,name,model_key) VALUES(?,?,?)",
+                [(job_id, name, (selected_models or {}).get(name)) for name in ALL_STEP_NAMES],
+            )
             db.commit()
         return job_id
 
@@ -159,6 +185,20 @@ class PipelineState:
         with self._connect() as db:
             rows = db.execute("SELECT id FROM batches ORDER BY created_at, id").fetchall()
         return [row["id"] for row in rows]
+
+    def list_job_ids(self, statuses: set[str] | frozenset[str] | None = None) -> list[str]:
+        """List jobs for Supervisor scheduling in stable creation order."""
+        with self._connect() as db:
+            if statuses:
+                values = sorted(statuses)
+                placeholders = ",".join("?" for _ in values)
+                rows = db.execute(
+                    f"SELECT id FROM jobs WHERE status IN ({placeholders}) ORDER BY created_at,id",
+                    values,
+                ).fetchall()
+            else:
+                rows = db.execute("SELECT id FROM jobs ORDER BY created_at,id").fetchall()
+        return [str(row["id"]) for row in rows]
 
     def set_job_input(
         self, job_id: str, filename: str, digest: str, size: int, *, doi: str | None = None, title: str | None = None
@@ -224,6 +264,21 @@ class PipelineState:
         with self._connect() as db:
             row = db.execute("SELECT entry_key FROM job_bibtex WHERE job_id=?", (job_id,)).fetchone()
         return None if row is None else row["entry_key"]
+
+    def bind_worker_bibtex(self, job_id: str, entry_key: str, lease_token: str) -> None:
+        """Persist unique automatic match while worker still owns lease."""
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = self._check_token(db, job_id, lease_token)
+            if row["batch_id"] is None or db.execute(
+                "SELECT 1 FROM bibtex_entries WHERE batch_id=? AND entry_key=?",
+                (row["batch_id"], entry_key),
+            ).fetchone() is None:
+                db.rollback()
+                raise KeyError(entry_key)
+            db.execute("INSERT OR REPLACE INTO job_bibtex(job_id,entry_key) VALUES(?,?)", (job_id, entry_key))
+            db.execute("UPDATE jobs SET updated_at=?,revision=revision+1 WHERE id=?", (_stamp(_utc()), job_id))
+            db.commit()
 
     def discard_batch(self, batch_id: str) -> list[str]:
         """Delete one incomplete batch and its jobs, preserving all other batches."""
@@ -301,6 +356,32 @@ class PipelineState:
             db.commit()
         return Lease(job_id, row["lease_owner"], lease_token, expiry)
 
+    def lease_valid(self, job_id: str, lease_token: str) -> bool:
+        """Check current lease without mutating queue state."""
+        try:
+            with self._connect() as db:
+                self._check_token(db, job_id, lease_token)
+        except LeaseError:
+            return False
+        return True
+
+    def release_lease(self, job_id: str, lease_token: str) -> None:
+        """Release current worker lease without changing job status."""
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self._check_token(db, job_id, lease_token)
+            db.execute(
+                "UPDATE jobs SET lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,updated_at=? WHERE id=?",
+                (_stamp(_utc()), job_id),
+            )
+            db.commit()
+
+    def heartbeat_metadata(self, job_id: str) -> dict[str, str] | None:
+        """Return last heartbeat for black-box Supervisor observability."""
+        with self._connect() as db:
+            row = db.execute("SELECT owner,at FROM heartbeats WHERE job_id=?", (job_id,)).fetchone()
+        return None if row is None else {"owner": str(row["owner"]), "at": str(row["at"])}
+
     def transition(self, job_id: str, status: str, lease_token: str | None) -> str:
         if status not in JOB_STATUSES:
             raise ValueError(f"unknown job status: {status}")
@@ -364,8 +445,19 @@ class PipelineState:
             db.commit()
             return row["status"]
 
-    def record_step_success(self, job_id: str, step: str, lease_token: str, digest: str | None = None, size: int | None = None, *, path: str = "", artifact: object | None = None) -> None:
-        if step not in STEP_NAMES:
+    def record_step_success(
+        self,
+        job_id: str,
+        step: str,
+        lease_token: str,
+        digest: str | None = None,
+        size: int | None = None,
+        *,
+        path: str = "",
+        artifact: object | None = None,
+        duration_ms: int | None = None,
+    ) -> None:
+        if step not in ALL_STEP_NAMES:
             raise ValueError(f"unknown step: {step}")
         if not isinstance(artifact, Artifact) or not artifact.path.is_file():
             raise ValueError("step artifact must be a promoted Artifact")
@@ -385,11 +477,23 @@ class PipelineState:
             attempt = db.execute("SELECT attempt FROM steps WHERE job_id=? AND name=?", (job_id, step)).fetchone()["attempt"] + 1
             db.execute("UPDATE steps SET status='complete',attempt=attempt+1,artifact_digest=?,artifact_size=? WHERE job_id=? AND name=?", (digest, size, job_id, step))
             db.execute("INSERT OR REPLACE INTO artifacts(job_id,kind,path,digest,size,created_at) VALUES(?,?,?,?,?,?)", (job_id, step, path, digest, size, _stamp(_utc())))
-            db.execute("INSERT INTO step_attempts(job_id,step,attempt,status,lease_owner,started_at,finished_at,artifact_digest,artifact_size) VALUES(?,?,?,?,?,?,?,?,?)", (job_id, step, attempt, "complete", row["lease_owner"], _stamp(_utc()), _stamp(_utc()), digest, size))
+            db.execute("INSERT INTO step_attempts(job_id,step,attempt,status,lease_owner,started_at,finished_at,artifact_digest,artifact_size,duration_ms) VALUES(?,?,?,?,?,?,?,?,?,?)", (job_id, step, attempt, "complete", row["lease_owner"], _stamp(_utc()), _stamp(_utc()), digest, size, duration_ms if duration_ms is not None else 0))
             db.commit()
 
-    def record_step_attempt(self, job_id: str, step: str, lease_token: str, status: str, *, error: str | None = None, artifact: Artifact | None = None) -> int:
-        if step not in STEP_NAMES:
+    def record_step_attempt(
+        self,
+        job_id: str,
+        step: str,
+        lease_token: str,
+        status: str,
+        *,
+        error: str | None = None,
+        artifact: Artifact | None = None,
+        duration_ms: int | None = None,
+        error_type: str | None = None,
+        retryable: bool | None = None,
+    ) -> int:
+        if step not in ALL_STEP_NAMES:
             raise ValueError(f"unknown step: {step}")
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -397,8 +501,12 @@ class PipelineState:
             attempt = db.execute("SELECT attempt FROM steps WHERE job_id=? AND name=?", (job_id, step)).fetchone()["attempt"] + 1
             digest = artifact.digest if isinstance(artifact, Artifact) else None
             size = artifact.size if isinstance(artifact, Artifact) else None
-            db.execute("UPDATE steps SET attempt=? WHERE job_id=? AND name=?", (attempt, job_id, step))
-            db.execute("INSERT INTO step_attempts(job_id,step,attempt,status,lease_owner,started_at,finished_at,artifact_digest,artifact_size,error) VALUES(?,?,?,?,?,?,?,?,?,?)", (job_id, step, attempt, status, row["lease_owner"], _stamp(_utc()), _stamp(_utc()), digest, size, error))
+            step_status = "failed" if status == "failed" else ("cancelled" if status == "cancelled" else "missing")
+            db.execute(
+                "UPDATE steps SET attempt=?,status=?,artifact_digest=CASE WHEN ? IS NULL THEN artifact_digest ELSE ? END,artifact_size=CASE WHEN ? IS NULL THEN artifact_size ELSE ? END WHERE job_id=? AND name=?",
+                (attempt, step_status, digest, digest, size, size, job_id, step),
+            )
+            db.execute("INSERT INTO step_attempts(job_id,step,attempt,status,lease_owner,started_at,finished_at,artifact_digest,artifact_size,error,duration_ms,error_type,retryable) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", (job_id, step, attempt, status, row["lease_owner"], _stamp(_utc()), _stamp(_utc()), digest, size, error, duration_ms, error_type, None if retryable is None else int(retryable)))
             db.commit()
         return attempt
 
@@ -408,7 +516,11 @@ class PipelineState:
                 rows = db.execute("SELECT * FROM step_attempts WHERE job_id=? ORDER BY id", (job_id,)).fetchall()
             else:
                 rows = db.execute("SELECT * FROM step_attempts WHERE job_id=? AND step=? ORDER BY id", (job_id, step)).fetchall()
-        return [dict(row) for row in rows]
+        result = [dict(row) for row in rows]
+        for item in result:
+            if item.get("retryable") is not None:
+                item["retryable"] = bool(item["retryable"])
+        return result
 
     def step_artifact(self, job_id: str, step: str) -> dict[str, Any] | None:
         with self._connect() as db:
@@ -421,6 +533,60 @@ class PipelineState:
         with self._connect() as db:
             row = db.execute("SELECT path,digest,size FROM artifacts WHERE job_id=? AND kind=?", (job_id, kind)).fetchone()
         return dict(row) if row is not None else None
+
+    def ensure_processing_steps(self, job_id: str, lease_token: str) -> None:
+        """Add expanded worker rows to queues created by older releases."""
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self._check_token(db, job_id, lease_token)
+            db.executemany(
+                "INSERT OR IGNORE INTO steps(job_id,name,model_key) VALUES(?,?,?)",
+                [(job_id, name, None) for name in PROCESSING_STEP_NAMES],
+            )
+            db.commit()
+
+    def resume_step(self, job_id: str, lease_token: str) -> str | None:
+        """Validate checkpoints and clear earliest invalid suffix atomically."""
+        if self.artifact_store is None:
+            raise ValueError("PipelineState requires bound ArtifactStore for resume")
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self._check_token(db, job_id, lease_token)
+            rows = {
+                row["name"]: dict(row)
+                for row in db.execute(
+                    "SELECT name,status,artifact_digest,artifact_size FROM steps WHERE job_id=?",
+                    (job_id,),
+                ).fetchall()
+            }
+            earliest: str | None = None
+            for name in PROCESSING_STEP_NAMES:
+                row = rows.get(name)
+                valid = bool(row and row["status"] == "complete")
+                if valid:
+                    try:
+                        artifact = self.artifact_store.resolve(job_id, name)
+                        valid = bool(
+                            artifact
+                            and artifact.digest == row["artifact_digest"]
+                            and artifact.size == row["artifact_size"]
+                        )
+                    except (FileNotFoundError, ValueError, OSError):
+                        valid = False
+                if not valid and earliest is None:
+                    earliest = name
+            if earliest is not None:
+                suffix = PROCESSING_STEP_NAMES[PROCESSING_STEP_NAMES.index(earliest) :]
+                db.executemany(
+                    "UPDATE steps SET status='missing',artifact_digest=NULL,artifact_size=NULL WHERE job_id=? AND name=?",
+                    [(job_id, name) for name in suffix],
+                )
+                db.executemany(
+                    "DELETE FROM artifacts WHERE job_id=? AND kind=?",
+                    [(job_id, name) for name in suffix],
+                )
+            db.commit()
+        return earliest
 
     def next_step(self, job_id: str) -> str | None:
         """Return earliest step without a complete artifact for ordinary retry."""
@@ -446,14 +612,40 @@ class PipelineState:
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             self._check_token(db, job_id, lease_token)
-            index = STEP_NAMES.index(step)
-            downstream = STEP_NAMES[index:]
+            index = PROCESSING_STEP_NAMES.index(step)
+            downstream = PROCESSING_STEP_NAMES[index:]
             row = self._check_token(db, job_id, lease_token)
             selected = json.loads(row["selected_models"])
             selected[step] = model_key
             db.execute("UPDATE jobs SET selected_models=?,updated_at=?,revision=revision+1 WHERE id=?", (json.dumps(selected, sort_keys=True), _stamp(_utc()), job_id))
             db.executemany("UPDATE steps SET model_key=?,status='missing',artifact_digest=NULL,artifact_size=NULL WHERE job_id=? AND name=?", [(selected.get(name), job_id, name) for name in downstream])
             db.executemany("DELETE FROM artifacts WHERE job_id=? AND kind=?", [(job_id, name) for name in downstream])
+            db.commit()
+
+    def register_protected_artifact(
+        self,
+        job_id: str,
+        kind: str,
+        artifact: Artifact,
+        lease_token: str,
+    ) -> None:
+        """Record formal-root output only while current lease is held."""
+        if self.artifact_store is None:
+            raise ValueError("PipelineState requires bound ArtifactStore for artifact success")
+        self.artifact_store.validate_protected_artifact(artifact, job_id, kind)
+        actual = artifact.path.resolve()
+        content = actual.read_bytes()
+        digest = hashlib.sha256(content).hexdigest()
+        size = len(content)
+        if digest != artifact.digest or size != artifact.size:
+            raise ValueError("protected artifact metadata does not match file")
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self._check_token(db, job_id, lease_token)
+            db.execute(
+                "INSERT OR REPLACE INTO artifacts(job_id,kind,path,digest,size,created_at) VALUES(?,?,?,?,?,?)",
+                (job_id, kind, str(actual), digest, size, _stamp(_utc())),
+            )
             db.commit()
 
     def recover_expired(self, now: datetime | None = None) -> list[str]:
