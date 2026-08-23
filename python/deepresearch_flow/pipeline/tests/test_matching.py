@@ -1,0 +1,88 @@
+from pathlib import Path
+
+from deepresearch_flow.pipeline.artifacts import ArtifactStore
+from deepresearch_flow.pipeline.config import PipelineConfig
+from deepresearch_flow.pipeline.matching import BibTeXMatcher
+from deepresearch_flow.pipeline.state import PipelineState
+
+
+def test_matches_doi_then_title_then_key_and_reports_unmatched_in_job_order(tmp_path: Path) -> None:
+    state = PipelineState(tmp_path / "queue.sqlite3", artifact_store=ArtifactStore(tmp_path / "work", tmp_path / "formal"))
+    batch = state.create_batch()
+    jobs = [state.create_job(batch) for _ in range(4)]
+    state.set_job_input(jobs[0], "DOI paper.pdf", "sha0", 10)
+    state.set_job_input(jobs[1], "Title paper.pdf", "sha1", 10)
+    state.set_job_input(jobs[2], "key-name.pdf", "sha2", 10)
+    state.set_job_input(jobs[3], "missing.pdf", "sha3", 10)
+    matcher = BibTeXMatcher(state)
+    state.persist_bibtex_entries(batch, [
+        {"key": "doi-key", "doi": "10.1000/ABC", "title": "Other"},
+        {"key": "title-key", "title": "A Useful Title"},
+        {"key": "key-name", "title": "Elsewhere"},
+    ])
+
+    result = matcher.match_batch(
+        batch,
+        [
+            {"job_id": jobs[0], "doi": "10.1000/abc", "title": "Nope", "filename": "DOI paper.pdf"},
+            {"job_id": jobs[1], "doi": "", "title": "A useful: title", "filename": "Title paper.pdf"},
+            {"job_id": jobs[2], "doi": None, "title": "No title", "filename": "key-name.pdf"},
+            {"job_id": jobs[3], "doi": None, "title": "No match", "filename": "missing.pdf"},
+        ],
+    )
+
+    assert [item["entry_key"] for item in result.matches] == ["doi-key", "title-key", "key-name"]
+    assert result.matches[0]["reason"] == "doi"
+    assert result.matches[1]["reason"] == "title"
+    assert result.matches[2]["reason"] == "filename_stem"
+    assert [item["job_id"] for item in result.needs_attention] == [jobs[3]]
+
+
+def test_ambiguous_doi_title_and_key_are_needs_attention(tmp_path: Path) -> None:
+    state = PipelineState(tmp_path / "queue.sqlite3", artifact_store=ArtifactStore(tmp_path / "work", tmp_path / "formal"))
+    batch = state.create_batch()
+    job = state.create_job(batch)
+    state.set_job_input(job, "same.pdf", "digest", 1)
+    state.persist_bibtex_entries(batch, [
+        {"key": "a", "doi": "10.1/x", "title": "Same"},
+        {"key": "b", "doi": "10.1/x", "title": "Same"},
+    ])
+
+    result = BibTeXMatcher(state).match_batch(
+        batch, [{"job_id": job, "doi": "10.1/x", "title": "Same", "filename": "same.pdf"}]
+    )
+
+    assert result.matches == []
+    assert result.needs_attention[0]["reason"] == "ambiguous_doi"
+    assert result.needs_attention[0]["candidate_keys"] == ["a", "b"]
+
+
+def test_manual_binding_updates_revision_and_calls_preview_seam_only(tmp_path: Path) -> None:
+    state = PipelineState(tmp_path / "queue.sqlite3", artifact_store=ArtifactStore(tmp_path / "work", tmp_path / "formal"))
+    batch = state.create_batch()
+    job = state.create_job(batch)
+    state.persist_bibtex_entries(batch, [{"key": "ref", "title": "Paper"}])
+    lease = state.acquire_lease(job, "worker")
+    assert lease is not None
+    state.transition(job, "needs_attention", lease.token)
+    old_revision = state.get_job(job)["revision"]
+    calls: list[str] = []
+
+    binding = BibTeXMatcher(state).bind_manual(job, "ref", regenerate_preview=calls.append)
+
+    assert binding == {"job_id": job, "entry_key": "ref", "status": "review_ready"}
+    assert state.get_job(job)["revision"] == old_revision + 1
+    assert calls == [job]
+    assert state.get_job_bibtex_key(job) == "ref"
+
+
+def test_manual_no_bibtex_is_explicit_and_publishable(tmp_path: Path) -> None:
+    state = PipelineState(tmp_path / "queue.sqlite3", artifact_store=ArtifactStore(tmp_path / "work", tmp_path / "formal"))
+    job = state.create_job()
+    lease = state.acquire_lease(job, "worker")
+    assert lease is not None
+    state.transition(job, "needs_attention", lease.token)
+    result = BibTeXMatcher(state).bind_manual(job, None, regenerate_preview=lambda _: None)
+    assert result["entry_key"] is None
+    assert result["status"] == "review_ready"
+    assert state.get_job_bibtex_key(job) is None

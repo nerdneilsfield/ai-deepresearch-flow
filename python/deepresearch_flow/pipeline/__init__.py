@@ -2,6 +2,8 @@
 
 from .artifacts import ArtifactStore
 from .config import PipelineConfig, load_pipeline_config
+from .ingestion import BatchIngestor, IngestionResult, IngestionService, UploadIngestion, UploadPart
+from .matching import BibTeXMatcher, BibtexMatcher, MatchResult
 from .state import (
     JOB_STATUSES,
     STEP_NAMES,
@@ -17,4 +19,12 @@ __all__ = [
     "PipelineState",
     "STEP_NAMES",
     "load_pipeline_config",
+    "BatchIngestor",
+    "IngestionResult",
+    "UploadPart",
+    "IngestionService",
+    "UploadIngestion",
+    "BibTeXMatcher",
+    "BibtexMatcher",
+    "MatchResult",
 ]

@@ -111,6 +111,17 @@ class PipelineState:
                     started_at TEXT NOT NULL, finished_at TEXT, artifact_digest TEXT,
                     artifact_size INTEGER, error TEXT, FOREIGN KEY(job_id) REFERENCES jobs(id)
                 );
+                CREATE TABLE IF NOT EXISTS job_inputs (
+                    job_id TEXT PRIMARY KEY, filename TEXT NOT NULL, digest TEXT NOT NULL, size INTEGER NOT NULL,
+                    doi TEXT, title TEXT, FOREIGN KEY(job_id) REFERENCES jobs(id)
+                );
+                CREATE TABLE IF NOT EXISTS bibtex_entries (
+                    batch_id TEXT NOT NULL, entry_key TEXT NOT NULL, entry_json TEXT NOT NULL,
+                    PRIMARY KEY(batch_id, entry_key), FOREIGN KEY(batch_id) REFERENCES batches(id)
+                );
+                CREATE TABLE IF NOT EXISTS job_bibtex (
+                    job_id TEXT PRIMARY KEY, entry_key TEXT, FOREIGN KEY(job_id) REFERENCES jobs(id)
+                );
                 """
             )
 
@@ -143,6 +154,84 @@ class PipelineState:
             db.executemany("INSERT INTO steps(job_id,name,model_key) VALUES(?,?,?)", [(job_id, name, (selected_models or {}).get(name)) for name in STEP_NAMES])
             db.commit()
         return job_id
+
+    def list_batches(self) -> list[str]:
+        with self._connect() as db:
+            rows = db.execute("SELECT id FROM batches ORDER BY created_at, id").fetchall()
+        return [row["id"] for row in rows]
+
+    def set_job_input(
+        self, job_id: str, filename: str, digest: str, size: int, *, doi: str | None = None, title: str | None = None
+    ) -> None:
+        with self._connect() as db:
+            if db.execute("SELECT 1 FROM jobs WHERE id=?", (job_id,)).fetchone() is None:
+                raise KeyError(job_id)
+            db.execute(
+                "INSERT OR REPLACE INTO job_inputs(job_id,filename,digest,size,doi,title) VALUES(?,?,?,?,?,?)",
+                (job_id, filename, digest, int(size), doi, title),
+            )
+
+    def get_job_input(self, job_id: str) -> dict[str, Any]:
+        with self._connect() as db:
+            row = db.execute("SELECT filename,digest,size,doi,title FROM job_inputs WHERE job_id=?", (job_id,)).fetchone()
+        if row is None:
+            raise KeyError(job_id)
+        return dict(row)
+
+    def persist_bibtex_entries(self, batch_id: str, entries: list[dict[str, Any]]) -> None:
+        with self._connect() as db:
+            if db.execute("SELECT 1 FROM batches WHERE id=?", (batch_id,)).fetchone() is None:
+                raise KeyError(batch_id)
+            db.execute("DELETE FROM bibtex_entries WHERE batch_id=?", (batch_id,))
+            db.executemany(
+                "INSERT INTO bibtex_entries(batch_id,entry_key,entry_json) VALUES(?,?,?)",
+                [(batch_id, str(entry["key"]), json.dumps(entry, sort_keys=True)) for entry in entries],
+            )
+
+    def list_bibtex_entries(self, batch_id: str) -> list[dict[str, Any]]:
+        with self._connect() as db:
+            rows = db.execute("SELECT entry_json FROM bibtex_entries WHERE batch_id=? ORDER BY rowid", (batch_id,)).fetchall()
+        return [json.loads(row["entry_json"]) for row in rows]
+
+    def bind_job_bibtex(self, job_id: str, entry_key: str | None, *, status: str = "review_ready") -> dict[str, Any]:
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            job = db.execute("SELECT batch_id,status FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if job is None:
+                db.rollback()
+                raise KeyError(job_id)
+            if entry_key is not None and db.execute(
+                "SELECT 1 FROM bibtex_entries WHERE batch_id=? AND entry_key=?", (job["batch_id"], entry_key)
+            ).fetchone() is None:
+                db.rollback()
+                raise KeyError(entry_key)
+            if status not in JOB_STATUSES:
+                db.rollback()
+                raise ValueError(f"unknown job status: {status}")
+            db.execute("INSERT OR REPLACE INTO job_bibtex(job_id,entry_key) VALUES(?,?)", (job_id, entry_key))
+            db.execute("UPDATE jobs SET status=?,revision=revision+1,updated_at=? WHERE id=?", (status, _stamp(_utc()), job_id))
+            db.commit()
+        return {"job_id": job_id, "entry_key": entry_key, "status": status}
+
+    def get_job_bibtex_key(self, job_id: str) -> str | None:
+        with self._connect() as db:
+            row = db.execute("SELECT entry_key FROM job_bibtex WHERE job_id=?", (job_id,)).fetchone()
+        return None if row is None else row["entry_key"]
+
+    def discard_batch(self, batch_id: str) -> list[str]:
+        """Delete one incomplete batch and its jobs, preserving all other batches."""
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            jobs = [row["id"] for row in db.execute("SELECT id FROM jobs WHERE batch_id=?", (batch_id,)).fetchall()]
+            if db.execute("SELECT 1 FROM batches WHERE id=?", (batch_id,)).fetchone() is None:
+                db.rollback()
+                return []
+            for table, column in (("job_inputs", "job_id"), ("job_bibtex", "job_id"), ("steps", "job_id"), ("artifacts", "job_id"), ("heartbeats", "job_id"), ("step_attempts", "job_id"), ("jobs", "id")):
+                db.executemany(f"DELETE FROM {table} WHERE {column}=?", [(job_id,) for job_id in jobs])
+            db.execute("DELETE FROM bibtex_entries WHERE batch_id=?", (batch_id,))
+            db.execute("DELETE FROM batches WHERE id=?", (batch_id,))
+            db.commit()
+        return jobs
 
     def get_job(self, job_id: str) -> dict[str, Any]:
         with self._connect() as db:

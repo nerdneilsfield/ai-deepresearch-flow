@@ -36,9 +36,13 @@ class PendingArtifact:
         fd, name = tempfile.mkstemp(prefix=".artifact-", dir=self.directory)
         self._file = os.fdopen(fd, "wb")
         self._temporary = Path(name)
+        self._hasher = hashlib.sha256()
+        self._size = 0
 
     def write(self, data: bytes) -> None:
         self._file.write(data)
+        self._hasher.update(data)
+        self._size += len(data)
 
     def promote(self) -> Artifact:
         self._file.flush()
@@ -46,8 +50,8 @@ class PendingArtifact:
         self._file.close()
         target = self.directory / f"{self.kind}-{uuid.uuid4().hex}.artifact"
         os.replace(self._temporary, target)
-        digest = hashlib.sha256(target.read_bytes()).hexdigest()
-        return Artifact(self.job_id, self.kind, target, digest, target.stat().st_size, self.store.work_dir, self.directory)
+        digest = self._hasher.hexdigest()
+        return Artifact(self.job_id, self.kind, target, digest, self._size, self.store.work_dir, self.directory)
 
     def __del__(self) -> None:
         try:
@@ -177,3 +181,10 @@ class ArtifactStore:
             shutil.rmtree(directory)
             removed.append(job_id)
         return removed
+
+    def discard_job(self, job_id: str) -> None:
+        """Remove one incomplete job's work directory after failed ingestion."""
+        directory = self._job_directory(job_id)
+        self._assert_job_directory(directory)
+        if directory.exists():
+            shutil.rmtree(directory)
