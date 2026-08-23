@@ -8,7 +8,8 @@ import re
 import shutil
 import tempfile
 import uuid
-from dataclasses import dataclass
+from contextvars import ContextVar, Token
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Mapping
@@ -23,6 +24,53 @@ class Artifact:
     size: int
     root: Path | None = None
     job_directory: Path | None = None
+
+
+@dataclass
+class ProtectedArtifactScope:
+    """Context-local record of protected artifacts made by one callback.
+
+    A scope is deliberately tied to one job and optional binding generation.
+    ``ContextVar`` isolation keeps interleaved HTTP callbacks from sharing a
+    mutable artifact list.  The scope records exact ``protect`` results only;
+    it never discovers files by scanning a directory.
+    """
+
+    store: "ArtifactStore"
+    job_id: str
+    generation: str | None = None
+    _token: Token["ProtectedArtifactScope | None"] | None = field(
+        default=None, init=False, repr=False
+    )
+    _created: list[Artifact] = field(default_factory=list, init=False, repr=False)
+
+    def __enter__(self) -> "ProtectedArtifactScope":
+        if self._token is not None:
+            raise RuntimeError("protected artifact scope cannot be entered twice")
+        self._token = _ACTIVE_PROTECTED_SCOPE.set(self)
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        if self._token is None:
+            return
+        _ACTIVE_PROTECTED_SCOPE.reset(self._token)
+        self._token = None
+
+    @property
+    def artifacts(self) -> tuple[Artifact, ...]:
+        """Return exact immutable artifacts recorded in this scope."""
+        return tuple(self._created)
+
+    def _record(self, artifact: Artifact) -> None:
+        if artifact.job_id == self.job_id and all(
+            item.path != artifact.path for item in self._created
+        ):
+            self._created.append(artifact)
+
+
+_ACTIVE_PROTECTED_SCOPE: ContextVar[ProtectedArtifactScope | None] = ContextVar(
+    "deepresearch_flow_active_protected_scope", default=None
+)
 
 
 class PendingArtifact:
@@ -174,7 +222,15 @@ class ArtifactStore:
             temporary.unlink(missing_ok=True)
             raise
         digest = hashlib.sha256(content).hexdigest()
-        return Artifact(job_id, kind, target, digest, len(content), self.formal_root, directory)
+        artifact = Artifact(job_id, kind, target, digest, len(content), self.formal_root, directory)
+        scope = _ACTIVE_PROTECTED_SCOPE.get()
+        if scope is not None and scope.store is self and scope.job_id == job_id:
+            scope._record(artifact)
+        return artifact
+
+    def protected_scope(self, job_id: str, generation: str | None = None) -> ProtectedArtifactScope:
+        """Track exact protected outputs created by one callback context."""
+        return ProtectedArtifactScope(self, str(job_id), generation)
 
     def begin(self, job_id: str, kind: str) -> PendingArtifact:
         self._validate_kind(kind)

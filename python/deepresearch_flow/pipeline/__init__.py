@@ -1,6 +1,6 @@
 """Administrative research pipeline foundations."""
 
-from .artifacts import ArtifactStore
+from .artifacts import ArtifactStore, ProtectedArtifactScope
 from .config import PipelineConfig, load_pipeline_config
 from .ingestion import BatchIngestor, IngestionResult, IngestionService, UploadIngestion, UploadPart
 from .matching import BibTeXMatcher, BibtexMatcher, MatchResult
@@ -37,6 +37,7 @@ from .state import (
 
 __all__ = [
     "ArtifactStore",
+    "ProtectedArtifactScope",
     "JOB_STATUSES",
     "ALL_STEP_NAMES",
     "BatchMatchConflict",

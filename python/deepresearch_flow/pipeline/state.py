@@ -10,7 +10,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from .artifacts import Artifact, ArtifactStore
 from .steps import PreviewArtifacts
@@ -983,7 +983,11 @@ class PipelineState:
         return {"job_id": job_id, "status": "needs_attention", "preview_error": safe_error}
 
     def _validate_preview_result(
-        self, job_id: str, preview: PreviewArtifacts
+        self,
+        job_id: str,
+        preview: PreviewArtifacts,
+        *,
+        tracked_artifacts: Iterable[Artifact] | None = None,
     ) -> tuple[list[tuple[str, str, str, int]], str, int]:
         """Validate typed preview output and return DB-ready metadata.
 
@@ -996,6 +1000,21 @@ class PipelineState:
             raise ValueError("preview regenerator must return PreviewArtifacts")
         if self.artifact_store is None:
             raise ValueError("PipelineState requires bound ArtifactStore for preview regeneration")
+        tracked_paths: set[Path] | None = None
+        if tracked_artifacts is not None:
+            tracked_paths = set()
+            for tracked in tracked_artifacts:
+                if not isinstance(tracked, Artifact) or tracked.job_id != job_id:
+                    continue
+                try:
+                    if tracked.root is None or Path(tracked.root).resolve() != self.artifact_store.formal_root:
+                        continue
+                    self.artifact_store.validate_protected_artifact(
+                        tracked, job_id, tracked.kind
+                    )
+                    tracked_paths.add(tracked.path.resolve())
+                except (OSError, ValueError):
+                    continue
         protected = preview.protected
         if not isinstance(protected, tuple) or len(protected) != len(_PREVIEW_PROTECTED_KINDS):
             raise ValueError("preview regenerator must return exactly four protected artifacts")
@@ -1019,6 +1038,8 @@ class PipelineState:
                 raise ValueError("preview artifact root is invalid")
             self.artifact_store.validate_protected_artifact(artifact, job_id, artifact.kind)
             actual_path = artifact.path.resolve()
+            if tracked_paths is not None and actual_path not in tracked_paths:
+                raise ValueError("preview artifact was not created by this callback")
             if artifact.job_directory is None or Path(artifact.job_directory).resolve() != actual_path.parent:
                 raise ValueError("preview artifact job directory is invalid")
             if declared_paths[artifact.kind].resolve() != actual_path:
@@ -1063,6 +1084,7 @@ class PipelineState:
         *,
         expected_generation: str,
         expected_revision: int,
+        tracked_artifacts: Iterable[Artifact] | None = None,
     ) -> dict[str, Any]:
         """Atomically register validated preview output and mark review ready."""
         with self._connect() as db:
@@ -1078,7 +1100,11 @@ class PipelineState:
             if row["status"] not in {"needs_attention", "review_ready"}:
                 db.rollback()
                 raise ValueError("preview regeneration is not pending")
-            rows, aggregate, total_size = self._validate_preview_result(job_id, preview)
+            rows, aggregate, total_size = self._validate_preview_result(
+                job_id,
+                preview,
+                tracked_artifacts=tracked_artifacts,
+            )
             now = _stamp(_utc())
             db.execute(
                 "INSERT OR IGNORE INTO steps(job_id,name,model_key) VALUES(?,?,NULL)",
@@ -1117,7 +1143,7 @@ class PipelineState:
         }
 
     def discard_unregistered_preview_artifacts(
-        self, job_id: str, preview: PreviewArtifacts
+        self, job_id: str, artifacts: Iterable[Artifact] | PreviewArtifacts
     ) -> None:
         """Remove only exact callback files still absent from artifact metadata.
 
@@ -1125,10 +1151,14 @@ class PipelineState:
         already have registered the same path, so the SQLite lock and path
         check happen before unlinking; registered artifacts are never touched.
         """
-        if self.artifact_store is None or not isinstance(preview, PreviewArtifacts):
+        if self.artifact_store is None:
             return
+        if isinstance(artifacts, PreviewArtifacts):
+            tracked = artifacts.protected
+        else:
+            tracked = tuple(artifacts)
         candidates: list[Path] = []
-        for artifact in preview.protected:
+        for artifact in tracked:
             if not isinstance(artifact, Artifact) or artifact.job_id != job_id:
                 continue
             if artifact.kind not in _PREVIEW_PROTECTED_KINDS or artifact.root is None:
@@ -1153,7 +1183,10 @@ class PipelineState:
                     (job_id, str(path)),
                 ).fetchone()
                 if registered is None:
-                    path.unlink(missing_ok=True)
+                    try:
+                        path.unlink(missing_ok=True)
+                    except OSError:
+                        continue
             db.commit()
 
     def get_job_bibtex_key(self, job_id: str) -> str | None:

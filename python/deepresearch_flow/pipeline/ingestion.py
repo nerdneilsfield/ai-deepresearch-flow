@@ -22,9 +22,14 @@ class UploadPart:
 
 def safe_bibtex_key(value: object) -> str | None:
     """Return BibTeX key safe for admin projection and manual pairing."""
-    if value is None:
+    if not isinstance(value, str):
         return None
-    text = re.sub(r"[\x00-\x1f\x7f]", " ", str(value)).strip()
+    text = value
+    # Do not silently rewrite persisted keys.  A projected key must be the
+    # exact value accepted by ``job_bibtex.entry_key`` or manual pairing
+    # cannot round-trip from the public candidate DTO.
+    if text != text.strip() or re.search(r"[\x00-\x1f\x7f]", text):
+        return None
     if not text or len(text) > 200 or "/" in text or "\\" in text:
         return None
     if any(marker in text.casefold() for marker in ("secret", "token", "password", "api_key")):
@@ -149,9 +154,12 @@ class BatchIngestor:
         except Exception as exc:
             raise ValueError("BibTeX syntax is invalid") from exc
         result: list[dict[str, object]] = []
+        canonical_keys: set[str] = set()
         for key, entry in database.entries.items():
-            if safe_bibtex_key(key) is None:
+            canonical = safe_bibtex_key(key)
+            if canonical is None or canonical != key or canonical in canonical_keys:
                 raise ValueError("BibTeX key is invalid")
+            canonical_keys.add(canonical)
             fields = {str(name).lower(): str(value) for name, value in entry.fields.items()}
             authors = entry.persons.get("author", ())
             if authors:

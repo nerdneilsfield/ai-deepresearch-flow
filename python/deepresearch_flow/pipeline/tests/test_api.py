@@ -303,6 +303,50 @@ def test_job_and_batch_details_expose_only_safe_bibtex_candidates(tmp_path: Path
     assert batch.json()["batch"]["jobs"][0]["bibtex"]["candidates"][0]["key"] == "safe"
 
 
+def test_returned_bibtex_candidate_key_round_trips_through_manual_binding(tmp_path: Path) -> None:
+    app, state, artifacts = _make_app(tmp_path)
+    response = _upload(
+        app,
+        files=[
+            ("pdfs", ("a.pdf", b"%PDF-1.7 a", "application/pdf")),
+            ("bibtex", ("a.bib", b"@article{round-trip, title={A}}", "text/plain")),
+        ],
+    )
+    assert response.status_code == 200
+    job_id = response.json()["job_ids"][0]
+    lease = state.acquire_lease(job_id, "api-test")
+    assert lease is not None
+    state.transition(job_id, "needs_attention", lease.token)
+    app.state.preview_regenerator = lambda current_job: _valid_preview(artifacts, current_job)
+
+    detail = _request(app, "GET", f"/jobs/{job_id}", headers=_headers())
+    assert detail.status_code == 200
+    candidate_key = detail.json()["job"]["bibtex"]["candidates"][0]["key"]
+    binding = _request(
+        app,
+        "PUT",
+        f"/jobs/{job_id}/bibtex-match",
+        json={"entry_key": candidate_key},
+        headers=_headers(),
+    )
+    assert binding.status_code == 200
+    assert binding.json()["binding"]["entry_key"] == candidate_key
+
+
+def test_bibtex_key_that_requires_unsafe_normalization_is_rejected(tmp_path: Path) -> None:
+    app, state, _artifacts = _make_app(tmp_path)
+    response = _upload(
+        app,
+        files=[
+            ("pdfs", ("a.pdf", b"%PDF-1.7 a", "application/pdf")),
+            ("bibtex", ("unsafe.bib", b"@article{control\x7fkey, title={A}}", "text/plain")),
+        ],
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "invalid_upload"
+    assert state.list_batches() == []
+
+
 def test_manual_binding_requires_regenerator_and_invalidates_stale_preview(tmp_path: Path) -> None:
     app, state, artifacts = _make_app(tmp_path)
     response = _upload(

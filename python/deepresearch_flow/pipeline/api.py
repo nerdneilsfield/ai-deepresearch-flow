@@ -231,7 +231,10 @@ def _safe_bibtex_key(value: object) -> str | None:
 def _safe_bibtex_entry(entry: Mapping[str, Any]) -> dict[str, str]:
     """Project persisted BibTeX into review-safe bibliographic fields."""
     result: dict[str, str] = {}
-    key = _safe_bibtex_key(entry.get("key"))
+    raw_key = entry.get("key")
+    key = _safe_bibtex_key(raw_key)
+    if key is None or key != raw_key:
+        return result
     entry_type = _safe_bibtex_text(entry.get("type"), limit=64)
     if key is not None:
         result["key"] = key
@@ -276,11 +279,13 @@ def _safe_match_diagnostics(job_id: str, result: object, *, has_entries: bool) -
                 continue
             reason = _public_error_type(item.get("reason")) or "unmatched"
             keys = item.get("candidate_keys")
-            safe_keys = [
+            safe_keys = []
+            if isinstance(keys, list):
+                safe_keys = [
                     text
-                for raw in keys
-                if (text := _safe_bibtex_key(raw)) is not None
-            ] if isinstance(keys, list) else []
+                    for raw in keys
+                    if (text := _safe_bibtex_key(raw)) is not None
+                ]
             return {"reason": reason, "candidate_keys": safe_keys}
     return {"reason": "unmatched", "candidate_keys": []}
 
@@ -765,7 +770,7 @@ def _stale_binding_response(state: PipelineState, job_id: str) -> JSONResponse:
 
 
 async def _bibtex_match(request: Request) -> Response:
-    _config_value, state, _artifacts = _ctx(request)
+    _config_value, state, artifacts = _ctx(request)
     body_value = await _json_body(request)
     if isinstance(body_value, JSONResponse):
         return body_value
@@ -824,21 +829,23 @@ async def _bibtex_match(request: Request) -> Response:
     expected_generation = str(result["binding_generation"])
     expected_revision = int(result["revision"])
     regenerated: object = None
+    preview_scope = artifacts.protected_scope(job_id, expected_generation)
     try:
-        regenerated = callback(job_id)
-        if inspect.isawaitable(regenerated):
-            regenerated = await regenerated
-        if not isinstance(regenerated, PreviewArtifacts):
-            raise ValueError("preview regenerator returned invalid result")
-        state.mark_preview_regenerated(
-            job_id,
-            regenerated,
-            expected_generation=expected_generation,
-            expected_revision=expected_revision,
-        )
+        with preview_scope:
+            regenerated = callback(job_id)
+            if inspect.isawaitable(regenerated):
+                regenerated = await regenerated
+            if not isinstance(regenerated, PreviewArtifacts):
+                raise ValueError("preview regenerator returned invalid result")
+            state.mark_preview_regenerated(
+                job_id,
+                regenerated,
+                expected_generation=expected_generation,
+                expected_revision=expected_revision,
+                tracked_artifacts=preview_scope.artifacts,
+            )
     except PreviewGenerationConflict:
-        if isinstance(regenerated, PreviewArtifacts):
-            state.discard_unregistered_preview_artifacts(job_id, regenerated)
+        state.discard_unregistered_preview_artifacts(job_id, preview_scope.artifacts)
         return _stale_binding_response(state, job_id)
     except Exception:
         logger.exception("pipeline preview regeneration failed")
@@ -849,15 +856,14 @@ async def _bibtex_match(request: Request) -> Response:
                 expected_generation=expected_generation,
                 expected_revision=expected_revision,
             )
-            if isinstance(regenerated, PreviewArtifacts):
-                state.discard_unregistered_preview_artifacts(job_id, regenerated)
+            state.discard_unregistered_preview_artifacts(job_id, preview_scope.artifacts)
             job = state.get_job_details(job_id)
         except PreviewGenerationConflict:
-            if isinstance(regenerated, PreviewArtifacts):
-                state.discard_unregistered_preview_artifacts(job_id, regenerated)
+            state.discard_unregistered_preview_artifacts(job_id, preview_scope.artifacts)
             return _stale_binding_response(state, job_id)
         except Exception:
             logger.exception("pipeline preview failure state could not be persisted")
+            state.discard_unregistered_preview_artifacts(job_id, preview_scope.artifacts)
             return _json_error("internal_error", "preview regeneration failed", 500)
         entries = state.list_bibtex_entries(str(job.get("batch_id"))) if job.get("batch_id") else []
         job["bibtex_entries"] = entries
