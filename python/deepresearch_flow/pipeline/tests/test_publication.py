@@ -310,6 +310,34 @@ def test_snapshot_lock_is_released_before_indexing(tmp_path: Path) -> None:
     assert len(results) == 1
 
 
+def test_receipt_retry_releases_snapshot_lock_before_indexing(tmp_path: Path) -> None:
+    bundle = _bundle(tmp_path, job_id="receipt-slow-index")
+    second = _bundle(tmp_path, job_id="receipt-fast-index", title="Second paper")
+    db = tmp_path / "snapshot.sqlite3"
+    store = LocalFormalStore(tmp_path / "formal")
+    publish_bundle(bundle, db, store)
+    index_started = Event()
+    release_index = Event()
+
+    def slow_index(_: object) -> None:
+        index_started.set()
+        assert release_index.wait(timeout=3)
+
+    first_thread = Thread(
+        target=lambda: publish_bundle(bundle, db, store, indexer=slow_index),
+        daemon=True,
+    )
+    first_thread.start()
+    assert index_started.wait(timeout=3)
+    try:
+        publish_bundle(second, db, store)
+    finally:
+        release_index.set()
+        first_thread.join(timeout=3)
+
+    assert not first_thread.is_alive()
+
+
 def test_publish_queue_uses_expected_revision_cas(tmp_path: Path) -> None:
     from deepresearch_flow.pipeline import ArtifactStore, PipelineState
 
