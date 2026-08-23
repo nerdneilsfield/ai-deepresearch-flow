@@ -4,24 +4,24 @@ import asyncio
 import json
 import time
 from dataclasses import replace
-from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast, override
 
 import pytest
 
 from deepresearch_flow.pipeline import ArtifactStore, PipelineConfig
+from deepresearch_flow.pipeline.artifacts import Artifact
 from deepresearch_flow.pipeline.config import ModelAllowlist
 from deepresearch_flow.pipeline.ingestion import BatchIngestor, UploadPart
-from deepresearch_flow.pipeline.matching import BibTeXMatcher
-from deepresearch_flow.pipeline.state import PipelineState
+from deepresearch_flow.pipeline.state import LeaseError, PipelineState
 from deepresearch_flow.pipeline.worker import (
     PROCESSING_STEPS,
     PipelineWorker,
     build_production_adapters,
+    run_worker,
 )
 
 
@@ -284,9 +284,7 @@ def test_unique_bibtex_match_is_review_ready_and_bound(tmp_path: Path) -> None:
     assert state.get_job_bibtex_key(job_id) == "tiny-ref"
 
 
-def test_batch_bibtex_matches_each_job_once_without_cross_attention(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_batch_bibtex_matches_schema_names_without_cross_attention(tmp_path: Path) -> None:
     config, state, artifacts, _ = _setup(tmp_path)
     service = BatchIngestor(config, state, artifacts)
     ingested = service.ingest(
@@ -300,25 +298,67 @@ def test_batch_bibtex_matches_each_job_once_without_cross_attention(
     batch_id = state.get_job(jobs[0])["batch_id"]
     first_input = state.get_job_input(jobs[0])
     second_input = state.get_job_input(jobs[1])
-    state.set_job_input(jobs[0], first_input["filename"], first_input["digest"], first_input["size"], title="Tiny paper")
-    state.set_job_input(jobs[1], second_input["filename"], second_input["digest"], second_input["size"], title="Other paper")
+    state.set_job_input(jobs[0], first_input["filename"], first_input["digest"], first_input["size"])
+    state.set_job_input(jobs[1], second_input["filename"], second_input["digest"], second_input["size"])
     state.persist_bibtex_entries(
         batch_id,
         [{"key": "tiny-ref", "title": "Tiny paper"}, {"key": "other-ref", "title": "Other paper"}],
     )
-    calls = {"count": 0}
-    original = BibTeXMatcher.match_batch
+    class SchemaSummaryAdapters(FakeAdapters):
+        @override
+        def extract(self, markdown: str, model_key: str, **kwargs: object) -> dict[str, object]:
+            job = str(kwargs["job_id"])
+            return {
+                "paper_title": "Tiny paper" if job == jobs[0] else "Other paper",
+                "paper_doi": "10.1000/tiny" if job == jobs[0] else "10.1000/other",
+            }
 
-    def counted(self: BibTeXMatcher, batch: str, values: Iterable[dict[str, Any]]) -> Any:
-        calls["count"] += 1
-        return original(self, batch, values)
-
-    monkeypatch.setattr(BibTeXMatcher, "match_batch", counted)
-    results = PipelineWorker(config, state, artifacts, adapters=FakeAdapters(), concurrency=1).run_once(list(jobs))
+    results = PipelineWorker(
+        config, state, artifacts, adapters=SchemaSummaryAdapters(), concurrency=2
+    ).run_once(list(jobs))
 
     assert [item.status for item in results] == ["review_ready", "review_ready"]
     assert [state.get_job_bibtex_key(job) for job in jobs] == ["tiny-ref", "other-ref"]
-    assert calls["count"] == 1
+
+
+def test_batch_completion_is_restart_safe_after_concurrent_run(tmp_path: Path) -> None:
+    config, state, artifacts, _ = _setup(tmp_path)
+    service = BatchIngestor(config, state, artifacts)
+    ingested = service.ingest(
+        [
+            UploadPart("tiny.pdf", BytesIO(b"%PDF-1.7 tiny")),
+            UploadPart("other.pdf", BytesIO(b"%PDF-1.7 other")),
+        ],
+        selected_models={"ocr": "ocr-a", "extract": "extract-a", "translate": "translate-a"},
+    )
+    jobs = ingested.jobs
+    batch_id = state.get_job(jobs[0])["batch_id"]
+    first_input = state.get_job_input(jobs[0])
+    second_input = state.get_job_input(jobs[1])
+    state.set_job_input(jobs[0], first_input["filename"], first_input["digest"], first_input["size"])
+    state.set_job_input(jobs[1], second_input["filename"], second_input["digest"], second_input["size"])
+    state.persist_bibtex_entries(
+        batch_id,
+        [{"key": "tiny-ref", "title": "Tiny paper"}, {"key": "other-ref", "title": "Other paper"}],
+    )
+
+    class RestartableAdapters(FakeAdapters):
+        @override
+        def extract(self, markdown: str, model_key: str, **kwargs: object) -> dict[str, object]:
+            job = str(kwargs["job_id"])
+            return {"paper_title": "Tiny paper" if job == jobs[0] else "Other paper"}
+
+    first = PipelineWorker(
+        config, state, artifacts, adapters=RestartableAdapters(), concurrency=2
+    ).run_once(list(jobs))
+    assert [item.status for item in first] == ["review_ready", "review_ready"]
+    assert [state.get_job_bibtex_key(job) for job in jobs] == ["tiny-ref", "other-ref"]
+
+    second = PipelineWorker(
+        config, state, artifacts, adapters=RestartableAdapters(), concurrency=2
+    ).run_once(list(jobs))
+    assert [item.status for item in second] == ["review_ready", "review_ready"]
+    assert [state.get_job_bibtex_key(job) for job in jobs] == ["tiny-ref", "other-ref"]
 
 
 def test_worker_restart_after_completion_reuses_all_checkpoints(tmp_path: Path) -> None:
@@ -440,6 +480,73 @@ def test_production_builder_rejects_callable_injection(tmp_path: Path) -> None:
             paper_config_path=tmp_path / "paper.toml",
             extractor=lambda value: value,
         )
+
+
+def test_canonical_worker_entrypoint_constructs_production_adapters(tmp_path: Path) -> None:
+    config, state, artifacts, _ = _setup(tmp_path)
+    paper_config = _write_paper_config(tmp_path / "paper.toml")
+    ocr_config = tmp_path / "ocr.toml"
+    ocr_config.write_text(
+        """
+        [backend]
+        type = "paddle"
+        api_url = "https://example.invalid"
+        token = "runtime-token"
+        """,
+        encoding="utf-8",
+    )
+
+    assert run_worker(
+        config,
+        state,
+        artifacts,
+        paper_config_path=paper_config,
+        ocr_config_path=ocr_config,
+        job_ids=[],
+    ) == []
+    with pytest.raises(TypeError):
+        cast(Any, run_worker)(config, state, artifacts, adapters=FakeAdapters())
+
+
+def test_production_supporting_model_override_is_rejected(tmp_path: Path) -> None:
+    config, state, artifacts, _ = _setup(tmp_path)
+    adapters = build_production_adapters(
+        paper_config_path=_write_paper_config(tmp_path / "paper.toml"),
+        ocr_backend=object(),
+        ocr_model_map={"ocr-a": "openai/ocr-model"},
+    )
+
+    with pytest.raises(ValueError, match="test-only"):
+        PipelineWorker(
+            config,
+            state,
+            artifacts,
+            adapters=adapters,
+            _test_supporting_models={"repair": "untrusted/model"},
+        )
+
+
+def test_lease_exception_cleans_only_current_unreferenced_output(tmp_path: Path) -> None:
+    config, state, artifacts, job_id = _setup(tmp_path)
+    adapters = FakeAdapters()
+    promoted: dict[str, Path] = {}
+    takeover: dict[str, Path] = {}
+
+    def raise_lease(*args: object, **kwargs: object) -> bool:
+        artifact = args[3] if len(args) > 3 else kwargs["artifact"]
+        assert isinstance(artifact, Artifact)
+        promoted["path"] = artifact.path
+        pending = artifacts.begin(job_id, "ocr")
+        pending.write(b"takeover artifact")
+        takeover["path"] = pending.promote().path
+        raise LeaseError("stale lease")
+
+    setattr(state, "record_step_success_if_active", raise_lease)
+    result = PipelineWorker(config, state, artifacts, adapters=adapters, worker_id="lease-error").run_job(job_id)
+
+    assert result.status == "lease_lost"
+    assert not promoted["path"].exists()
+    assert takeover["path"].exists()
 
 
 def test_ocr_selection_must_map_to_provider_model(tmp_path: Path) -> None:

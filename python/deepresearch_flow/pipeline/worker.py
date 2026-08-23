@@ -2,8 +2,8 @@
 
 This module is deliberately independent of HTTP.  Supervisor can call
 ``run_worker`` from a process or schedule one ``PipelineWorker.run_once`` loop.
-External services are represented by injectable adapters; the production
-factory below wires the existing OCR/recognize/translator seams.
+Production entrypoints construct adapters from service configuration.  A
+separately named adapter seam remains available to black-box tests.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from typing import Any, Callable, Mapping
 from .adapters import ProductionAdapters, build_production_adapters
 from .artifacts import Artifact, ArtifactStore
 from .config import PipelineConfig
-from .matching import BibTeXMatcher, MatchResult
+from .matching import complete_batch
 from .steps import (
     AdapterProtocol,
     PipelineAdapters,
@@ -125,7 +125,6 @@ class PipelineWorker:
             raise ValueError("supporting model overrides are test-only")
         defaults.update(dict(_test_supporting_models or {}))
         self.supporting_models = defaults
-        self._batch_match_cache: dict[str, MatchResult] = {}
         if self.state.artifact_store is None:
             self.state.artifact_store = artifacts
 
@@ -190,6 +189,11 @@ class PipelineWorker:
             existing = self._load_existing(job_id, step)
             if existing is not None:
                 context[step] = self._decode_step(step, existing)
+                if step == "summary_repair":
+                    try:
+                        self.state.record_job_summary(job_id, context[step], token)
+                    except LeaseError as exc:
+                        raise LeaseLost() from exc
                 continue
 
             started = time.monotonic()
@@ -202,24 +206,35 @@ class PipelineWorker:
                     return WorkerResult(job_id, "cancelled", failed_step=step)
                 artifact = self._promote_step(job_id, step, output)
                 protected = output.protected if isinstance(output, PreviewArtifacts) else ()
-                committed = self.state.record_step_success_if_active(
-                    job_id,
-                    step,
-                    token,
-                    artifact=artifact,
-                    duration_ms=int((time.monotonic() - started) * 1000),
-                    protected_artifacts=protected,
-                )
+                try:
+                    committed = self.state.record_step_success_if_active(
+                        job_id,
+                        step,
+                        token,
+                        artifact=artifact,
+                        duration_ms=int((time.monotonic() - started) * 1000),
+                        protected_artifacts=protected,
+                    )
+                except LeaseError as exc:
+                    self._discard_uncommitted_output(artifact, protected)
+                    raise LeaseLost() from exc
                 if not committed:
                     self._discard_uncommitted_output(artifact, protected)
                     self._mark_cancelled(lease, step)
                     return WorkerResult(job_id, "cancelled", failed_step=step)
                 context[step] = output
+                if step == "summary_repair":
+                    try:
+                        self.state.record_job_summary(job_id, output, token)
+                    except LeaseError as exc:
+                        raise LeaseLost() from exc
                 if self.state.step_boundary(job_id, token) == "cancelled":
                     return WorkerResult(job_id, "cancelled", failed_step=step)
             except CancelledAtBoundary:
                 self._mark_cancelled(lease, step)
                 return WorkerResult(job_id, "cancelled", failed_step=step)
+            except LeaseError as exc:
+                raise LeaseLost() from exc
             except LeaseLost:
                 raise
             except Exception as exc:
@@ -229,6 +244,14 @@ class PipelineWorker:
         preview = context.get("preview")
         if not isinstance(preview, PreviewArtifacts):
             raise WorkerFailure("preview output unavailable", retryable=True)
+        job = self.state.get_job(job_id)
+        batch_id = job.get("batch_id")
+        if batch_id and self.state.list_bibtex_entries(str(batch_id)) and not self.state.batch_summary_ready(str(batch_id)):
+            try:
+                self.state.transition(job_id, "batch_waiting", token)
+            except LeaseError as exc:
+                raise LeaseLost() from exc
+            return WorkerResult(job_id, "batch_waiting")
         status, bibtex_status = self._completion_status(job_id, context.get("summary_repair"), token)
         if bibtex_status != preview.bibtex_status:
             preview = PreviewArtifacts(
@@ -450,33 +473,10 @@ class PipelineWorker:
         summary: Mapping[str, Any] | None = None,
         token: str | None = None,
     ) -> tuple[str, str]:
-        job = self.state.get_job(job_id)
-        batch_id = job.get("batch_id")
-        if not batch_id or not self.state.list_bibtex_entries(str(batch_id)):
-            return "review_ready", "not_provided"
-        batch_key = str(batch_id)
-        result = self._batch_match_cache.get(batch_key)
-        if result is None:
-            jobs = self.state.list_batch_job_inputs(batch_key)
-            current = next((item for item in jobs if item["job_id"] == job_id), None)
-            if current is None:
-                current = {"job_id": job_id, **self.state.get_job_input(job_id)}
-                jobs.append(current)
-            if isinstance(summary, Mapping):
-                for field in ("doi", "title"):
-                    value = summary.get(field)
-                    if isinstance(value, str) and value.strip():
-                        current[field] = value
-            result = BibTeXMatcher(self.state).match_batch(batch_key, jobs)
-            self._batch_match_cache[batch_key] = result
-        matches = [item for item in result.matches if item.get("job_id") == job_id]
-        attention = [item for item in result.needs_attention if item.get("job_id") == job_id]
-        if matches and not attention:
-            if token is None:
-                raise LeaseLost()
-            self.state.bind_worker_bibtex(job_id, str(matches[0]["entry_key"]), token)
-            return "review_ready", "matched"
-        return "needs_attention", "needs_attention"
+        try:
+            return complete_batch(self.state, job_id, token)
+        except LeaseError as exc:
+            raise LeaseLost() from exc
 
     def _discard_uncommitted_output(
         self, artifact: Artifact, protected: tuple[Artifact, ...]
@@ -520,14 +520,24 @@ class PipelineWorker:
             raise LeaseLost() from exc
 
     async def run_once_async(self, job_ids: list[str] | None = None) -> list[WorkerResult]:
-        ids = self.state.list_job_ids({"queued", "failed"}) if job_ids is None else list(job_ids)
+        ids = self.state.list_job_ids({"queued", "failed", "batch_waiting"}) if job_ids is None else list(job_ids)
         semaphore = asyncio.Semaphore(self.concurrency)
 
         async def run_one(job_id: str) -> WorkerResult:
             async with semaphore:
                 return await self.run_job_async(job_id)
 
-        return list(await asyncio.gather(*(run_one(job_id) for job_id in ids)))
+        if not ids:
+            return []
+        latest: dict[str, WorkerResult] = {}
+        pending = ids
+        for _ in range(len(ids) + 1):
+            results = list(await asyncio.gather(*(run_one(job_id) for job_id in pending)))
+            latest.update({result.job_id: result for result in results})
+            pending = [result.job_id for result in results if result.status == "batch_waiting"]
+            if not pending:
+                break
+        return [latest[job_id] for job_id in ids]
 
     def run_once(self, job_ids: list[str] | None = None) -> list[WorkerResult]:
         return asyncio.run(self.run_once_async(job_ids))
@@ -535,38 +545,19 @@ class PipelineWorker:
     run = run_once
 
 
-def run_worker(
-    config: PipelineConfig,
-    state: PipelineState,
-    artifacts: ArtifactStore,
-    *,
-    adapters: PipelineAdapters | object | None = None,
-    worker_id: str | None = None,
-    job_ids: list[str] | None = None,
-) -> list[WorkerResult]:
-    """Supervisor-callable synchronous module entrypoint."""
+def run_test_worker(config: PipelineConfig, state: PipelineState, artifacts: ArtifactStore, *, adapters: PipelineAdapters | object | None = None, worker_id: str | None = None, job_ids: list[str] | None = None) -> list[WorkerResult]:
+    """Black-box test seam with explicit adapter injection."""
     return PipelineWorker(config, state, artifacts, adapters=adapters, worker_id=worker_id).run_once(job_ids)
 
 
-def run_production_worker(
-    config: PipelineConfig,
-    state: PipelineState,
-    artifacts: ArtifactStore,
-    *,
-    paper_config_path: str | Path,
-    ocr_config_path: str | Path,
-    worker_id: str | None = None,
-    job_ids: list[str] | None = None,
-) -> list[WorkerResult]:
+def run_worker(config: PipelineConfig, state: PipelineState, artifacts: ArtifactStore, *, paper_config_path: str | Path, ocr_config_path: str | Path, worker_id: str | None = None, job_ids: list[str] | None = None) -> list[WorkerResult]:
+    """Canonical Supervisor entrypoint; always constructs real adapters."""
+    return run_production_worker(config, state, artifacts, paper_config_path=paper_config_path, ocr_config_path=ocr_config_path, worker_id=worker_id, job_ids=job_ids)
+
+
+def run_production_worker(config: PipelineConfig, state: PipelineState, artifacts: ArtifactStore, *, paper_config_path: str | Path, ocr_config_path: str | Path, worker_id: str | None = None, job_ids: list[str] | None = None) -> list[WorkerResult]:
     """Supervisor entrypoint building real adapters from config paths."""
-    worker = PipelineWorker.from_production_config(
-        config,
-        state,
-        artifacts,
-        paper_config_path=paper_config_path,
-        ocr_config_path=ocr_config_path,
-        worker_id=worker_id,
-    )
+    worker = PipelineWorker.from_production_config(config, state, artifacts, paper_config_path=paper_config_path, ocr_config_path=ocr_config_path, worker_id=worker_id)
     return worker.run_once(job_ids)
 
 
@@ -589,6 +580,7 @@ __all__ = [
     "PipelineWorker",
     "Worker",
     "run_worker",
+    "run_test_worker",
     "run_production_worker",
     "run_processing_worker",
     "worker_entrypoint",

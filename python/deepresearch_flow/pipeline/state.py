@@ -16,7 +16,7 @@ from .artifacts import Artifact, ArtifactStore
 
 JOB_STATUSES = frozenset(
     {
-        "queued", "running", "needs_attention", "review_ready", "failed", "cancelled",
+        "queued", "running", "batch_waiting", "needs_attention", "review_ready", "failed", "cancelled",
         "rejected", "publish_queued", "publishing", "indexing", "published",
         "published_with_warning",
     }
@@ -39,7 +39,8 @@ ALL_STEP_NAMES = tuple(dict.fromkeys((*STEP_NAMES, *PROCESSING_STEP_NAMES)))
 _TERMINAL = {"published", "published_with_warning", "rejected", "cancelled"}
 _TRANSITIONS: dict[str, set[str]] = {
     "queued": {"running", "cancelled", "rejected"},
-    "running": {"needs_attention", "review_ready", "failed", "cancelled", "publish_queued"},
+    "running": {"batch_waiting", "needs_attention", "review_ready", "failed", "cancelled", "publish_queued"},
+    "batch_waiting": {"running", "cancelled"},
     "needs_attention": {"running", "cancelled", "rejected"},
     "review_ready": {"publish_queued", "running", "cancelled", "rejected"},
     "failed": {"queued", "running", "cancelled"},
@@ -131,9 +132,17 @@ class PipelineState:
                     job_id TEXT PRIMARY KEY, filename TEXT NOT NULL, digest TEXT NOT NULL, size INTEGER NOT NULL,
                     doi TEXT, title TEXT, FOREIGN KEY(job_id) REFERENCES jobs(id)
                 );
+                CREATE TABLE IF NOT EXISTS job_summaries (
+                    job_id TEXT PRIMARY KEY, summary_json TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    FOREIGN KEY(job_id) REFERENCES jobs(id)
+                );
                 CREATE TABLE IF NOT EXISTS bibtex_entries (
                     batch_id TEXT NOT NULL, entry_key TEXT NOT NULL, entry_json TEXT NOT NULL,
                     PRIMARY KEY(batch_id, entry_key), FOREIGN KEY(batch_id) REFERENCES batches(id)
+                );
+                CREATE TABLE IF NOT EXISTS batch_match_results (
+                    batch_id TEXT PRIMARY KEY, result_json TEXT NOT NULL, created_at TEXT NOT NULL,
+                    FOREIGN KEY(batch_id) REFERENCES batches(id)
                 );
                 CREATE TABLE IF NOT EXISTS job_bibtex (
                     job_id TEXT PRIMARY KEY, entry_key TEXT, FOREIGN KEY(job_id) REFERENCES jobs(id)
@@ -232,11 +241,90 @@ class PipelineState:
             ).fetchall()
         return [dict(row) for row in rows if row["filename"] is not None]
 
+    def record_job_summary(
+        self, job_id: str, summary: dict[str, Any], lease_token: str
+    ) -> None:
+        """Persist one completed summary while its worker lease is current."""
+        payload = json.dumps(summary, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self._check_token(db, job_id, lease_token)
+            db.execute(
+                "INSERT OR REPLACE INTO job_summaries(job_id,summary_json,updated_at) VALUES(?,?,?)",
+                (job_id, payload, _stamp(_utc())),
+            )
+            db.commit()
+
+    def list_batch_summaries(self, batch_id: str) -> list[dict[str, Any]]:
+        """Return persisted summaries in deterministic batch job order."""
+        with self._connect() as db:
+            rows = db.execute(
+                """
+                SELECT jobs.id AS job_id, job_summaries.summary_json
+                FROM jobs JOIN job_summaries ON job_summaries.job_id = jobs.id
+                WHERE jobs.batch_id=? ORDER BY jobs.created_at, jobs.id
+                """,
+                (batch_id,),
+            ).fetchall()
+        return [
+            {"job_id": str(row["job_id"]), "summary": json.loads(row["summary_json"])}
+            for row in rows
+        ]
+
+    def batch_summary_ready(self, batch_id: str) -> bool:
+        """Report whether every job in batch has a persisted summary."""
+        with self._connect() as db:
+            row = db.execute(
+                """
+                SELECT COUNT(*) AS jobs, COUNT(job_summaries.job_id) AS summaries
+                FROM jobs LEFT JOIN job_summaries ON job_summaries.job_id = jobs.id
+                WHERE jobs.batch_id=?
+                """,
+                (batch_id,),
+            ).fetchone()
+        return bool(row and row["jobs"] > 0 and row["jobs"] == row["summaries"])
+
+    def get_batch_match_result(self, batch_id: str) -> dict[str, Any] | None:
+        """Read durable batch-wide matching result, if already computed."""
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT result_json FROM batch_match_results WHERE batch_id=?", (batch_id,)
+            ).fetchone()
+        return None if row is None else json.loads(row["result_json"])
+
+    def store_batch_match_result(
+        self,
+        batch_id: str,
+        job_id: str,
+        lease_token: str,
+        result: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Atomically publish one deterministic result; first writer wins."""
+        payload = json.dumps(result, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = self._check_token(db, job_id, lease_token)
+            if row["batch_id"] != batch_id:
+                db.rollback()
+                raise ValueError("job does not belong to batch")
+            db.execute(
+                "INSERT OR IGNORE INTO batch_match_results(batch_id,result_json,created_at) VALUES(?,?,?)",
+                (batch_id, payload, _stamp(_utc())),
+            )
+            stored = db.execute(
+                "SELECT result_json FROM batch_match_results WHERE batch_id=?", (batch_id,)
+            ).fetchone()
+            db.commit()
+        if stored is None:
+            raise RuntimeError("batch matching result was not stored")
+        return json.loads(stored["result_json"])
+
     def persist_bibtex_entries(self, batch_id: str, entries: list[dict[str, Any]]) -> None:
         with self._connect() as db:
             if db.execute("SELECT 1 FROM batches WHERE id=?", (batch_id,)).fetchone() is None:
                 raise KeyError(batch_id)
             db.execute("DELETE FROM bibtex_entries WHERE batch_id=?", (batch_id,))
+            db.execute("DELETE FROM batch_match_results WHERE batch_id=?", (batch_id,))
             db.executemany(
                 "INSERT INTO bibtex_entries(batch_id,entry_key,entry_json) VALUES(?,?,?)",
                 [(batch_id, str(entry["key"]), json.dumps(entry, sort_keys=True)) for entry in entries],
@@ -302,9 +390,10 @@ class PipelineState:
             if db.execute("SELECT 1 FROM batches WHERE id=?", (batch_id,)).fetchone() is None:
                 db.rollback()
                 return []
-            for table, column in (("job_inputs", "job_id"), ("job_bibtex", "job_id"), ("steps", "job_id"), ("artifacts", "job_id"), ("heartbeats", "job_id"), ("step_attempts", "job_id"), ("jobs", "id")):
+            for table, column in (("job_inputs", "job_id"), ("job_summaries", "job_id"), ("job_bibtex", "job_id"), ("steps", "job_id"), ("artifacts", "job_id"), ("heartbeats", "job_id"), ("step_attempts", "job_id"), ("jobs", "id")):
                 db.executemany(f"DELETE FROM {table} WHERE {column}=?", [(job_id,) for job_id in jobs])
             db.execute("DELETE FROM bibtex_entries WHERE batch_id=?", (batch_id,))
+            db.execute("DELETE FROM batch_match_results WHERE batch_id=?", (batch_id,))
             db.execute("DELETE FROM batches WHERE id=?", (batch_id,))
             db.commit()
         return jobs
@@ -347,7 +436,7 @@ class PipelineState:
             if row["status"] in _TERMINAL:
                 db.rollback()
                 return None
-            status = "running" if row["status"] in {"queued", "failed", "needs_attention"} else row["status"]
+            status = "running" if row["status"] in {"queued", "failed", "needs_attention", "batch_waiting"} else row["status"]
             db.execute(
                 "UPDATE jobs SET status=?,lease_owner=?,lease_token=?,lease_expires_at=?,updated_at=?,revision=revision+1 WHERE id=?",
                 (status, owner, token, _stamp(expiry), _stamp(now_value), job_id),
