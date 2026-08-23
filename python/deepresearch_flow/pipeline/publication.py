@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Mapping
+from contextlib import nullcontext
 import hashlib
 import inspect
 import json
@@ -151,10 +152,8 @@ def build_publication_bundle(
     if bib_for_paper is not None:
         normalized_paper["bibtex"] = bib_for_paper
 
-    # Snapshot's public embedding loader reads one JSON object per template
-    # from ``summary/<paper_id>/<template>.json``.  Preserve every template
-    # record, while retaining ``summary_json`` as a reference to preferred
-    # template for callers that only know semantic alias.
+    # Snapshot's publication rows point at immutable content-addressed summary
+    # resources.  The embedding loader retains legacy stable-path fallback.
     if summary_ref:
         summary_resource = resource_map.pop(summary_ref)
         payloads = _summary_template_payloads(
@@ -163,11 +162,11 @@ def build_publication_bundle(
         if payloads:
             preferred_tag = _preferred_summary_tag(normalized_paper, payloads)
             for template_tag, payload in payloads.items():
-                path = f"summary/{paper_id}/{template_tag}.json"
                 content = json.dumps(
                     payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
                 ).encode("utf-8")
                 digest = hashlib.sha256(content).hexdigest()
+                path = f"summary/{paper_id}/{template_tag}/{digest}.json"
                 resource_map[path] = PublicationResource(
                     relative_path=path,
                     content=content,
@@ -176,13 +175,13 @@ def build_publication_bundle(
                     media_type="application/json",
                 )
                 references[f"summary:{template_tag}"] = path
-            references["summary_json"] = f"summary/{paper_id}/{preferred_tag}.json"
+            references["summary_json"] = references[f"summary:{preferred_tag}"]
             aliases["summary_json"] = references["summary_json"]
         else:
             # Keep malformed preview payload available for review, but put it
             # on immutable paper/template layout rather than a replaceable
             # top-level metadata path.
-            path = f"summary/{paper_id}/simple.json"
+            path = f"summary/{paper_id}/simple/{summary_resource.digest}.json"
             resource = PublicationResource(
                 relative_path=path,
                 content=summary_resource.content,
@@ -198,11 +197,11 @@ def build_publication_bundle(
         if payloads:
             preferred_tag = _preferred_summary_tag(normalized_paper, payloads)
             for template_tag, payload in payloads.items():
-                path = f"summary/{paper_id}/{template_tag}.json"
                 content = json.dumps(
                     payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
                 ).encode("utf-8")
                 digest = hashlib.sha256(content).hexdigest()
+                path = f"summary/{paper_id}/{template_tag}/{digest}.json"
                 resource_map[path] = PublicationResource(
                     relative_path=path,
                     content=content,
@@ -211,7 +210,7 @@ def build_publication_bundle(
                     media_type="application/json",
                 )
                 references[f"summary:{template_tag}"] = path
-            references["summary_json"] = f"summary/{paper_id}/{preferred_tag}.json"
+            references["summary_json"] = references[f"summary:{preferred_tag}"]
             aliases["summary_json"] = references["summary_json"]
 
     payload = {
@@ -281,111 +280,119 @@ def publish_bundle(
     indexer: Callable[[PublicationBundle], Any] | None = None,
     lease_check: Callable[[], None] | None = None,
     cancel_check: Callable[[], bool] | None = None,
+    lease_guard: Callable[[], Any] | None = None,
 ) -> PublicationResult:
     """Publish formal resources, commit one Snapshot receipt, then index.
 
-    One serialized Snapshot transaction reserves paper identity before formal
-    writes.  It commits the receipt only after every formal write succeeds;
-    an orphaned content-addressed object is acceptable on later failure.
-    Matching receipts short-circuit formal writes and still run indexer.
+    Formal objects are written before the queue/Snapshot guard where safe;
+    content-addressed orphans are acceptable.  Definitive duplicate and
+    receipt checks happen inside the globally serialized Snapshot transaction.
+    A supplied queue guard is held through Snapshot commit and indexing.
     """
     db_path = Path(snapshot_db)
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    with _SNAPSHOT_COMMIT_LOCK:
+    _check_lease(lease_check)
+    _check_cancel(cancel_check)
+    for resource in bundle.resources:
         _check_lease(lease_check)
         _check_cancel(cancel_check)
-        conn = open_snapshot_connection(db_path)
         try:
-            _check_lease(lease_check)
-            conn.execute("BEGIN IMMEDIATE")
-            _check_lease(lease_check)
-            _check_cancel(cancel_check)
-            receipt = conn.execute(
-                "SELECT bundle_digest,paper_id FROM pipeline_publication_receipt WHERE job_id=?",
-                (bundle.job_id,),
-            ).fetchone()
-            if receipt is not None:
-                existing_digest = str(receipt["bundle_digest"])
-                existing_paper_id = str(receipt["paper_id"])
-                conn.rollback()
-                if existing_digest != bundle.bundle_digest:
-                    raise PublicationConflict(
-                        f"publication receipt for job {bundle.job_id} has conflicting bundle digest"
-                    )
-                conn.rollback()
-                return _run_indexer(
-                    bundle,
-                    paper_id=existing_paper_id,
-                    bundle_digest=existing_digest,
-                    already_published=True,
-                    indexer=indexer,
-                )
-
-            duplicate = conn.execute(
-                "SELECT paper_id FROM paper WHERE paper_id=?", (bundle.paper_id,)
-            ).fetchone()
-            if duplicate is not None:
-                raise PublicationConflict(
-                    f"paper {bundle.paper_id} already exists without matching publication receipt"
-                )
-
-            _check_cancel(cancel_check)
-            for resource in bundle.resources:
-                _check_lease(lease_check)
-                _check_cancel(cancel_check)
-                try:
-                    formal_store.put(resource.relative_path, resource.content)
-                except PublicationConflict:
-                    raise
-                except Exception as exc:
-                    raise PublicationError(
-                        f"formal resource write failed for {resource.relative_path}: {exc}"
-                    ) from exc
-
-            _check_lease(lease_check)
-            _check_cancel(cancel_check)
-            stats = InsertStats()
-            try:
-                insert_paper_metadata(conn, dict(plain(bundle.paper)), 0, stats, overwrite=False)
-            except Exception as exc:
-                raise PublicationError(f"Snapshot metadata commit failed: {exc}") from exc
-            if stats.errors:
-                raise PublicationError(f"Snapshot metadata commit failed: {stats.errors[0]['error']}")
-            if stats.skipped or not stats.paper_ids:
-                raise PublicationConflict(
-                    f"paper {bundle.paper_id} already exists without matching publication receipt"
-                )
-            paper_id = str(stats.paper_ids[0])
-            if paper_id != bundle.paper_id:
-                raise PublicationConflict(
-                    f"bundle paper_id {bundle.paper_id} does not match Snapshot paper_id {paper_id}"
-                )
-            _update_snapshot_static_references(conn, bundle, paper_id)
-            _check_lease(lease_check)
-            _check_cancel(cancel_check)
-            conn.execute(
-                "INSERT INTO pipeline_publication_receipt(job_id,bundle_digest,paper_id,published_at) VALUES(?,?,?,?)",
-                (bundle.job_id, bundle.bundle_digest, paper_id, _now_iso()),
-            )
-            recompute_paper_index(conn)
-            recompute_facet_counts(conn)
-            recompute_facet_edges(conn)
-            _check_lease(lease_check)
-            conn.commit()
-        except PublicationCancelled:
-            conn.rollback()
-            raise
+            formal_store.put(resource.relative_path, resource.content)
         except PublicationConflict:
-            conn.rollback()
-            raise
-        except PublicationError:
-            conn.rollback()
             raise
         except Exception as exc:
-            conn.rollback()
-            raise PublicationError(f"Snapshot commit failed: {exc}") from exc
-        finally:
-            conn.close()
+            raise PublicationError(
+                f"formal resource write failed for {resource.relative_path}: {exc}"
+            ) from exc
+
+    guard_context = lease_guard() if lease_guard is not None else nullcontext()
+    with guard_context as guard:
+        _guard_check(guard, lease_check)
+        _guard_cancel(guard, cancel_check)
+        with _SNAPSHOT_COMMIT_LOCK:
+            _guard_check(guard, lease_check)
+            conn = open_snapshot_connection(db_path)
+            try:
+                _guard_check(guard, lease_check)
+                conn.execute("BEGIN IMMEDIATE")
+                _guard_check(guard, lease_check)
+                _guard_cancel(guard, cancel_check)
+                receipt = conn.execute(
+                    "SELECT bundle_digest,paper_id FROM pipeline_publication_receipt WHERE job_id=?",
+                    (bundle.job_id,),
+                ).fetchone()
+                if receipt is not None:
+                    existing_digest = str(receipt["bundle_digest"])
+                    existing_paper_id = str(receipt["paper_id"])
+                    conn.rollback()
+                    if existing_digest != bundle.bundle_digest:
+                        raise PublicationConflict(
+                            f"publication receipt for job {bundle.job_id} has conflicting bundle digest"
+                        )
+                    return _run_indexer(
+                        bundle,
+                        paper_id=existing_paper_id,
+                        bundle_digest=existing_digest,
+                        already_published=True,
+                        indexer=indexer,
+                    )
+
+                duplicate = conn.execute(
+                    "SELECT paper_id FROM paper WHERE paper_id=?", (bundle.paper_id,)
+                ).fetchone()
+                if duplicate is not None:
+                    raise PublicationConflict(
+                        f"paper {bundle.paper_id} already exists without matching publication receipt"
+                    )
+
+                _guard_cancel(guard, cancel_check)
+                stats = InsertStats()
+                try:
+                    insert_paper_metadata(
+                        conn, dict(plain(bundle.paper)), 0, stats, overwrite=False
+                    )
+                except Exception as exc:
+                    raise PublicationError(f"Snapshot metadata commit failed: {exc}") from exc
+                if stats.errors:
+                    raise PublicationError(
+                        f"Snapshot metadata commit failed: {stats.errors[0]['error']}"
+                    )
+                if stats.skipped or not stats.paper_ids:
+                    raise PublicationConflict(
+                        f"paper {bundle.paper_id} already exists without matching publication receipt"
+                    )
+                paper_id = str(stats.paper_ids[0])
+                if paper_id != bundle.paper_id:
+                    raise PublicationConflict(
+                        f"bundle paper_id {bundle.paper_id} does not match Snapshot paper_id {paper_id}"
+                    )
+                _update_snapshot_summary_references(conn, bundle, paper_id)
+                _update_snapshot_static_references(conn, bundle, paper_id)
+                _guard_check(guard, lease_check)
+                _guard_cancel(guard, cancel_check)
+                conn.execute(
+                    "INSERT INTO pipeline_publication_receipt(job_id,bundle_digest,paper_id,published_at) VALUES(?,?,?,?)",
+                    (bundle.job_id, bundle.bundle_digest, paper_id, _now_iso()),
+                )
+                recompute_paper_index(conn)
+                recompute_facet_counts(conn)
+                recompute_facet_edges(conn)
+                _guard_check(guard, lease_check)
+                conn.commit()
+            except PublicationCancelled:
+                conn.rollback()
+                raise
+            except PublicationConflict:
+                conn.rollback()
+                raise
+            except PublicationError:
+                conn.rollback()
+                raise
+            except Exception as exc:
+                conn.rollback()
+                raise PublicationError(f"Snapshot commit failed: {exc}") from exc
+            finally:
+                conn.close()
 
         return _run_indexer(
             bundle,
@@ -474,9 +481,24 @@ def _check_lease(check: Callable[[], None] | None) -> None:
             raise PublicationError(f"publication lease lost: {exc}") from exc
 
 
+def _guard_check(guard: Any, check: Callable[[], None] | None) -> None:
+    if guard is not None:
+        guard.assert_current()
+    else:
+        _check_lease(check)
+
+
 def _check_cancel(check: Callable[[], bool] | None) -> None:
     if check is not None and check():
         raise PublicationCancelled("publication cancelled before Snapshot receipt")
+
+
+def _guard_cancel(guard: Any, check: Callable[[], bool] | None) -> None:
+    if guard is not None:
+        if bool(getattr(guard, "reject_cancel", False)) and guard.cancel_requested:
+            raise PublicationCancelled("publication cancelled before Snapshot receipt")
+    else:
+        _check_cancel(check)
 
 
 def _update_snapshot_static_references(
@@ -507,6 +529,23 @@ def _update_snapshot_static_references(
         "UPDATE paper_fts SET source=?,translated=? WHERE paper_id=?",
         (source_text, translated_text, paper_id),
     )
+
+
+def _update_snapshot_summary_references(
+    conn: sqlite3.Connection, bundle: PublicationBundle, paper_id: str
+) -> None:
+    for reference_name, relative_path in bundle.references.items():
+        if not str(reference_name).startswith("summary:"):
+            continue
+        template_tag = str(reference_name).split(":", 1)[1]
+        resource = bundle.resource_map.get(relative_path)
+        if resource is None:
+            continue
+        conn.execute(
+            "UPDATE paper_summary SET resource_path=?,content_hash=? "
+            "WHERE paper_id=? AND template_tag=?",
+            (resource.relative_path, resource.digest, paper_id, template_tag),
+        )
 
 
 def _reference(bundle: PublicationBundle, *names: str) -> str | None:

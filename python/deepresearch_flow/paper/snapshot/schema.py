@@ -62,6 +62,8 @@ def init_snapshot_db(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS paper_summary (
           paper_id TEXT NOT NULL,
           template_tag TEXT NOT NULL,
+          resource_path TEXT,
+          content_hash TEXT,
           PRIMARY KEY (paper_id, template_tag),
           FOREIGN KEY (paper_id) REFERENCES paper(paper_id) ON DELETE CASCADE
         );
@@ -236,6 +238,10 @@ def init_snapshot_db(conn: sqlite3.Connection) -> None:
     # Backward-compatible migrations for older snapshots.
     if not _column_exists(conn, "paper", "doi"):
         conn.execute("ALTER TABLE paper ADD COLUMN doi TEXT")
+    if not _column_exists(conn, "paper_summary", "resource_path"):
+        conn.execute("ALTER TABLE paper_summary ADD COLUMN resource_path TEXT")
+    if not _column_exists(conn, "paper_summary", "content_hash"):
+        conn.execute("ALTER TABLE paper_summary ADD COLUMN content_hash TEXT")
 
 
 def recompute_facet_counts(conn: sqlite3.Connection) -> None:

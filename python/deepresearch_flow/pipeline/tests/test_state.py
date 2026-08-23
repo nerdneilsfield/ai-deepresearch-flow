@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 import hashlib
 from pathlib import Path
+from threading import Event, Thread
 
 import pytest
 
@@ -268,3 +269,35 @@ def test_attempt_history_and_atomic_job_initialization(tmp_path: Path) -> None:
     attempts = state.list_attempts(job_id, "ocr")
     assert attempts[0]["status"] == "failed"
     assert attempts[0]["error"] == "OCR failed"
+
+
+def test_lease_guard_blocks_recovery_until_publication_boundary_finishes(
+    tmp_path: Path,
+) -> None:
+    state = PipelineState(tmp_path / "queue.sqlite3", lease_seconds=60)
+    job_id = state.create_job()
+    lease = state.acquire_lease(job_id, "publisher")
+    assert lease is not None
+    state.transition(job_id, "review_ready", lease.token)
+    state.admin_transition(job_id, "publish_queued")
+    lease = state.acquire_lease(job_id, "publisher-2")
+    assert lease is not None
+    state.transition(job_id, "publishing", lease.token)
+
+    finished = Event()
+    recovered: list[str] = []
+
+    def recover() -> None:
+        recovered.extend(
+            state.recover_expired(now=datetime.now(timezone.utc) + timedelta(days=1))
+        )
+        finished.set()
+
+    with state.lease_guard(job_id, lease.token):
+        thread = Thread(target=recover, daemon=True)
+        thread.start()
+        assert not finished.wait(timeout=0.2)
+
+    thread.join(timeout=3)
+    assert finished.is_set()
+    assert recovered == [job_id]

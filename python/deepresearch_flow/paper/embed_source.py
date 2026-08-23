@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -372,18 +373,45 @@ def load_from_snapshot(
                 )
                 doc = EmbedDocument(doc_id=paper_id, metadata=metadata)
 
-                for tmpl_row in conn.execute(
-                    "SELECT template_tag FROM paper_summary WHERE paper_id = ? ORDER BY template_tag",
-                    (paper_id,),
-                ).fetchall():
+                summary_columns = {
+                    str(column[1])
+                    for column in conn.execute("PRAGMA table_info(paper_summary)").fetchall()
+                }
+                if {"resource_path", "content_hash"}.issubset(summary_columns):
+                    summary_rows = conn.execute(
+                        "SELECT template_tag,resource_path,content_hash "
+                        "FROM paper_summary WHERE paper_id = ? ORDER BY template_tag",
+                        (paper_id,),
+                    ).fetchall()
+                else:
+                    summary_rows = conn.execute(
+                        "SELECT template_tag,NULL AS resource_path,NULL AS content_hash "
+                        "FROM paper_summary WHERE paper_id = ? ORDER BY template_tag",
+                        (paper_id,),
+                    ).fetchall()
+                for tmpl_row in summary_rows:
                     tag = str(tmpl_row["template_tag"])
-                    summary_path = static_export_dir / "summary" / paper_id / f"{tag}.json"
-                    if not summary_path.exists():
-                        continue
-                    summary_data = json.loads(summary_path.read_text(encoding="utf-8"))
-                    if isinstance(summary_data, dict):
-                        summary_data["title"] = metadata.title
-                        doc.template_records.setdefault(tag, []).append(summary_data)
+                    resource_path = str(tmpl_row["resource_path"] or "").strip()
+                    content_hash = str(tmpl_row["content_hash"] or "").strip().lower()
+                    candidates: list[Path] = []
+                    if resource_path:
+                        candidate = (static_export_dir / resource_path).resolve()
+                        if candidate.is_relative_to(static_export_dir.resolve()):
+                            candidates.append(candidate)
+                    # Existing CLI snapshots use stable per-paper/template
+                    # paths.  Keep fallback for migrated and legacy databases.
+                    candidates.append(static_export_dir / "summary" / paper_id / f"{tag}.json")
+                    for summary_path in candidates:
+                        if not summary_path.exists():
+                            continue
+                        raw_summary = summary_path.read_bytes()
+                        if content_hash and hashlib.sha256(raw_summary).hexdigest() != content_hash:
+                            continue
+                        summary_data = json.loads(raw_summary.decode("utf-8"))
+                        if isinstance(summary_data, dict):
+                            summary_data["title"] = metadata.title
+                            doc.template_records.setdefault(tag, []).append(summary_data)
+                            break
 
                 source_hash = _row_text(row, "source_md_content_hash")
                 if source_hash:

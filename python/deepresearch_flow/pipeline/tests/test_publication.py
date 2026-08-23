@@ -58,7 +58,11 @@ def test_bundle_is_normalized_content_addressed_and_deterministic(tmp_path: Path
     assert len(first.resource_map) == 4
     assert any(path.startswith("pdf/") and path.endswith(".pdf") for path in first.resource_map)
     assert any(path.startswith("md/") and path.endswith(".md") for path in first.resource_map)
-    assert "summary/" + first.paper_id + "/simple.json" in first.resource_map
+    assert any(
+        path.startswith("summary/" + first.paper_id + "/simple/")
+        and path.endswith(".json")
+        for path in first.resource_map
+    )
     assert any(path.startswith("md_translate/en/") for path in first.resource_map)
     assert first.references["pdf"].startswith("pdf/")
 
@@ -364,10 +368,16 @@ def test_stale_publication_worker_cannot_commit_after_lease_takeover_during_writ
     assert state.get_job(job_id)["status"] == "publish_queued"
     conn = sqlite3.connect(tmp_path / "snapshot.sqlite3")
     try:
-        assert conn.execute("SELECT COUNT(*) FROM paper").fetchone()[0] == 0
-        assert conn.execute(
-            "SELECT COUNT(*) FROM pipeline_publication_receipt"
-        ).fetchone()[0] == 0
+        tables = {
+            str(row[0])
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        if "paper" in tables:
+            assert conn.execute("SELECT COUNT(*) FROM paper").fetchone()[0] == 0
+        if "pipeline_publication_receipt" in tables:
+            assert conn.execute(
+                "SELECT COUNT(*) FROM pipeline_publication_receipt"
+            ).fetchone()[0] == 0
     finally:
         conn.close()
 
@@ -461,7 +471,12 @@ def test_cancellation_before_and_during_formal_writes_prevents_receipt(
     assert during.status == "cancelled"
     conn = sqlite3.connect(tmp_path / "during.sqlite3")
     try:
-        assert conn.execute("SELECT COUNT(*) FROM paper").fetchone()[0] == 0
+        tables = {
+            str(row[0])
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        if "paper" in tables:
+            assert conn.execute("SELECT COUNT(*) FROM paper").fetchone()[0] == 0
     finally:
         conn.close()
 
@@ -478,9 +493,13 @@ def test_cancellation_requested_after_receipt_does_not_undo_publication(
     state.admin_transition(job_id, "review_ready")
     queue_publication(state, job_id, int(state.get_job(job_id)["revision"]))
     bundle = _bundle(tmp_path, job_id=job_id)
+    cancellation_thread: list[Thread] = []
 
     def index(_: object) -> None:
-        state.request_cancel(job_id)
+        thread = Thread(target=lambda: state.request_cancel(job_id), daemon=True)
+        cancellation_thread.append(thread)
+        thread.start()
+        time.sleep(0.05)
 
     result = PublicationWorker(
         state,
@@ -493,6 +512,8 @@ def test_cancellation_requested_after_receipt_does_not_undo_publication(
     assert result.status == "published"
     assert state.get_job(job_id)["status"] == "published"
     assert state.get_job(job_id)["cancel_requested"] is False
+    cancellation_thread[0].join(timeout=3)
+    assert not cancellation_thread[0].is_alive()
 
 
 def test_summary_templates_are_read_by_snapshot_embed_loader(tmp_path: Path) -> None:
@@ -515,6 +536,44 @@ def test_summary_templates_are_read_by_snapshot_embed_loader(tmp_path: Path) -> 
     docs = load_from_snapshot(tmp_path / "snapshot.sqlite3", tmp_path / "formal")
     assert len(docs) == 1
     assert set(docs[0].template_records) == {"simple", "detailed"}
+    conn = sqlite3.connect(tmp_path / "snapshot.sqlite3")
+    try:
+        rows = conn.execute(
+            "SELECT template_tag,resource_path,content_hash FROM paper_summary "
+            "WHERE paper_id=? ORDER BY template_tag",
+            (bundle.paper_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    assert {row[0] for row in rows} == {"detailed", "simple"}
+    assert all(str(row[1]).startswith(f"summary/{bundle.paper_id}/") for row in rows)
+    assert all(len(str(row[2])) == 64 for row in rows)
+
+
+def test_snapshot_embed_loader_falls_back_to_legacy_summary_path(tmp_path: Path) -> None:
+    from deepresearch_flow.paper.embed_source import load_from_snapshot
+
+    bundle = _bundle(tmp_path, job_id="job-legacy-summary")
+    store = LocalFormalStore(tmp_path / "formal")
+    publish_bundle(bundle, tmp_path / "snapshot.sqlite3", store)
+    current_path = bundle.references["summary_json"]
+    current_content = (tmp_path / "formal" / current_path).read_bytes()
+    legacy_path = tmp_path / "formal" / "summary" / bundle.paper_id / "simple.json"
+    legacy_path.parent.mkdir(parents=True, exist_ok=True)
+    legacy_path.write_bytes(current_content)
+    conn = sqlite3.connect(tmp_path / "snapshot.sqlite3")
+    try:
+        conn.execute(
+            "UPDATE paper_summary SET resource_path=NULL,content_hash=NULL "
+            "WHERE paper_id=? AND template_tag='simple'",
+            (bundle.paper_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    docs = load_from_snapshot(tmp_path / "snapshot.sqlite3", tmp_path / "formal")
+    assert docs[0].template_records["simple"][0]["summary"] == "A short summary."
 
 
 def test_no_bibtex_input_removes_stale_metadata_value(tmp_path: Path) -> None:
@@ -590,6 +649,75 @@ def test_concurrent_duplicate_jobs_publish_one_snapshot_paper(tmp_path: Path) ->
         assert conn.execute("SELECT COUNT(*) FROM paper").fetchone()[0] == 1
         assert conn.execute(
             "SELECT COUNT(*) FROM pipeline_publication_receipt"
+        ).fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
+def test_queue_guard_blocks_takeover_until_snapshot_and_indexing_finish(
+    tmp_path: Path,
+) -> None:
+    from contextlib import contextmanager
+    from deepresearch_flow.pipeline import ArtifactStore, PipelineState
+
+    artifacts = ArtifactStore(tmp_path / "work", tmp_path / "formal")
+    state = PipelineState(tmp_path / "queue.sqlite3", artifact_store=artifacts)
+    job_id = state.create_job()
+    initial = state.acquire_lease(job_id, "publisher")
+    assert initial is not None
+    state.transition(job_id, "review_ready", initial.token)
+    state.admin_transition(job_id, "publish_queued")
+    lease = state.acquire_lease(job_id, "publisher")
+    assert lease is not None
+    state.transition(job_id, "publishing", lease.token)
+    bundle = _bundle(tmp_path, job_id=job_id)
+    takeover_started = Event()
+    takeover_finished = Event()
+    snapshot_committed = Event()
+    recovered: list[str] = []
+    takeover_thread: list[Thread] = []
+
+    def attempt_takeover() -> None:
+        takeover_started.set()
+        recovered.extend(
+            state.recover_expired(now=datetime.now(timezone.utc) + timedelta(days=1))
+        )
+        takeover_finished.set()
+
+    @contextmanager
+    def guarded() -> object:
+        with state.lease_guard(
+            job_id, lease.token, owner=lease.owner, reject_cancel=True
+        ) as guard:
+            thread = Thread(target=attempt_takeover, daemon=True)
+            takeover_thread.append(thread)
+            thread.start()
+            assert takeover_started.wait(timeout=2)
+            assert not takeover_finished.wait(timeout=0.2)
+            yield guard
+
+    def index(_: object) -> None:
+        snapshot_committed.set()
+        assert not takeover_finished.wait(timeout=0.2)
+
+    result = publish_bundle(
+        bundle,
+        tmp_path / "snapshot.sqlite3",
+        LocalFormalStore(tmp_path / "formal"),
+        indexer=index,
+        lease_guard=guarded,
+    )
+    takeover_thread[0].join(timeout=3)
+
+    assert result.paper_id == bundle.paper_id
+    assert snapshot_committed.is_set()
+    assert takeover_finished.is_set()
+    assert recovered == [job_id]
+    conn = sqlite3.connect(tmp_path / "snapshot.sqlite3")
+    try:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM pipeline_publication_receipt WHERE job_id=?",
+            (job_id,),
         ).fetchone()[0] == 1
     finally:
         conn.close()

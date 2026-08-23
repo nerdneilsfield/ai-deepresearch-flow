@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 from collections.abc import Callable
+from contextlib import contextmanager
 from pathlib import Path
 from threading import Event, Thread
 from typing import Any
@@ -66,10 +67,14 @@ class PublicationWorker:
             daemon=True,
         )
         heartbeat_thread.start()
+        active_guard: Any = None
 
         def check_lease() -> None:
             if lease_lost.is_set():
                 raise PublicationError(f"publication lease lost for job {job_id}")
+            if active_guard is not None:
+                active_guard.assert_current()
+                return
             valid = getattr(self.state, "lease_valid", None)
             if callable(valid) and not valid(job_id, lease.token):
                 lease_lost.set()
@@ -98,10 +103,32 @@ class PublicationWorker:
             check_lease()
             self.state.set_digests(job_id, bundle_digest=bundle.bundle_digest, lease_token=lease.token)
 
+            @contextmanager
+            def publication_guard() -> Any:
+                nonlocal active_guard
+                guard_method = getattr(self.state, "lease_guard", None)
+                if not callable(guard_method):
+                    yield None
+                    return
+                with guard_method(
+                    job_id,
+                    lease.token,
+                    owner=lease.owner,
+                    reject_cancel=current == "publish_queued",
+                ) as guard:
+                    active_guard = guard
+                    try:
+                        yield guard
+                    finally:
+                        active_guard = None
+
             def index_after_snapshot(value: PublicationBundle) -> Any:
-                if str(self.state.get_job(job_id)["status"]) == "publishing":
-                    check_lease()
-                    self.state.transition(job_id, "indexing", lease.token)
+                if current == "publish_queued":
+                    if active_guard is not None:
+                        active_guard.transition("indexing")
+                    else:
+                        check_lease()
+                        self.state.transition(job_id, "indexing", lease.token)
                 if self.indexer is None:
                     return None
                 return self.indexer(value)
@@ -116,7 +143,8 @@ class PublicationWorker:
                 self.formal_store,
                 indexer=index_after_snapshot,
                 lease_check=check_lease,
-                cancel_check=cancellation_requested,
+                cancel_check=cancellation_requested if current == "publish_queued" else None,
+                lease_guard=publication_guard,
             )
             final_status = "published_with_warning" if publication.index_warning else "published"
             check_lease()

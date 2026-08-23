@@ -68,6 +68,122 @@ class Lease:
     expires_at: datetime
 
 
+class LeaseGuard:
+    """Queue write transaction held across one irreversible boundary.
+
+    Guard acquisition and all queue takeover/recovery writes use
+    ``BEGIN IMMEDIATE``.  Holding this transaction prevents a stale-worker
+    takeover from crossing the separately committed Snapshot or vector write.
+    """
+
+    def __init__(
+        self,
+        state: PipelineState,
+        job_id: str,
+        lease_token: str,
+        *,
+        owner: str | None = None,
+        reject_cancel: bool = False,
+    ) -> None:
+        self._state = state
+        self.job_id = job_id
+        self.lease_token = lease_token
+        self.owner = owner
+        self.reject_cancel = reject_cancel
+        self._connection: sqlite3.Connection | None = None
+
+    def __enter__(self) -> LeaseGuard:
+        if self._connection is not None:
+            raise RuntimeError("lease guard cannot be entered twice")
+        connection = self._state._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = self._state._check_token(connection, self.job_id, self.lease_token)
+            if self.owner is not None and row["lease_owner"] != self.owner:
+                raise LeaseError(f"lease owner rejected for job {self.job_id}")
+            self._connection = connection
+            self._refresh_locked()
+            return self
+        except BaseException:
+            connection.rollback()
+            connection.close()
+            raise
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        connection = self._connection
+        if connection is None:
+            return
+        try:
+            if exc_type is None:
+                self._refresh_locked()
+                connection.commit()
+            else:
+                connection.rollback()
+        finally:
+            connection.close()
+            self._connection = None
+
+    @property
+    def cancel_requested(self) -> bool:
+        row = self._row_locked()
+        return bool(row["cancel_requested"])
+
+    def assert_current(self) -> None:
+        """Validate immutable token/owner and extend guarded lease expiry."""
+        self._row_locked()
+        self._refresh_locked()
+
+    def transition(self, status: str) -> str:
+        """Apply one worker transition on guard-owned queue connection."""
+        if status not in JOB_STATUSES:
+            raise ValueError(f"unknown job status: {status}")
+        connection = self._require_connection()
+        row = self._row_locked()
+        if status not in _TRANSITIONS[row["status"]]:
+            raise ValueError(f"invalid transition {row['status']} -> {status}")
+        terminal = _stamp(_utc()) if status in _TERMINAL else None
+        clear = status not in {"running", "publishing", "indexing"}
+        connection.execute(
+            "UPDATE jobs SET status=?,terminal_at=?,cancel_requested=CASE WHEN ? THEN 0 ELSE cancel_requested END,lease_owner=CASE WHEN ? THEN NULL ELSE lease_owner END,lease_token=CASE WHEN ? THEN NULL ELSE lease_token END,lease_expires_at=CASE WHEN ? THEN NULL ELSE lease_expires_at END,updated_at=?,revision=revision+1 WHERE id=?",
+            (
+                status,
+                terminal,
+                status in {"published", "published_with_warning"},
+                clear,
+                clear,
+                clear,
+                _stamp(_utc()),
+                self.job_id,
+            ),
+        )
+        return status
+
+    def _require_connection(self) -> sqlite3.Connection:
+        if self._connection is None:
+            raise RuntimeError("lease guard is not active")
+        return self._connection
+
+    def _row_locked(self) -> sqlite3.Row:
+        connection = self._require_connection()
+        row = connection.execute("SELECT * FROM jobs WHERE id=?", (self.job_id,)).fetchone()
+        if row is None:
+            raise KeyError(self.job_id)
+        if row["lease_token"] != self.lease_token:
+            raise LeaseError(f"lease token rejected for job {self.job_id}")
+        if self.owner is not None and row["lease_owner"] != self.owner:
+            raise LeaseError(f"lease owner rejected for job {self.job_id}")
+        return row
+
+    def _refresh_locked(self) -> None:
+        connection = self._require_connection()
+        now = _utc()
+        expiry = now + timedelta(seconds=self._state.lease_seconds)
+        connection.execute(
+            "UPDATE jobs SET lease_expires_at=?,updated_at=? WHERE id=? AND lease_token=?",
+            (_stamp(expiry), _stamp(now), self.job_id, self.lease_token),
+        )
+
+
 def _utc(value: datetime | None = None) -> datetime:
     value = value or datetime.now(timezone.utc)
     if value.tzinfo is None:
@@ -680,6 +796,27 @@ class PipelineState:
         except LeaseError:
             return False
         return True
+
+    def lease_guard(
+        self,
+        job_id: str,
+        lease_token: str,
+        *,
+        owner: str | None = None,
+        reject_cancel: bool = False,
+    ) -> LeaseGuard:
+        """Open queue guard for one immutable lease token.
+
+        Caller holds returned context through Snapshot commit or vector
+        mutation.  Queue takeover/recovery waits on the same SQLite write lock.
+        """
+        return LeaseGuard(
+            self,
+            job_id,
+            lease_token,
+            owner=owner,
+            reject_cancel=reject_cancel,
+        )
 
     def release_lease(self, job_id: str, lease_token: str) -> None:
         """Release current worker lease without changing job status."""

@@ -30,6 +30,7 @@ from .state import (
     PROCESSING_STEP_NAMES,
     STEP_NAMES,
     Lease,
+    LeaseGuard,
     PipelineState,
 )
 
@@ -39,6 +40,7 @@ __all__ = [
     "ALL_STEP_NAMES",
     "BatchMatchConflict",
     "Lease",
+    "LeaseGuard",
     "PipelineConfig",
     "PipelineState",
     "STEP_NAMES",
