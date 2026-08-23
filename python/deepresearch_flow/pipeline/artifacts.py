@@ -38,26 +38,49 @@ class PendingArtifact:
         self._temporary = Path(name)
         self._hasher = hashlib.sha256()
         self._size = 0
+        self._aborted = False
+        self._promoted = False
 
     def write(self, data: bytes) -> None:
+        if self._aborted or self._promoted:
+            raise ValueError("pending artifact is no longer writable")
         self._file.write(data)
         self._hasher.update(data)
         self._size += len(data)
 
     def promote(self) -> Artifact:
+        if self._aborted:
+            raise ValueError("pending artifact was aborted")
+        if self._promoted:
+            raise ValueError("pending artifact was already promoted")
         self._file.flush()
         os.fsync(self._file.fileno())
         self._file.close()
         target = self.directory / f"{self.kind}-{uuid.uuid4().hex}.artifact"
         os.replace(self._temporary, target)
+        self._promoted = True
         digest = self._hasher.hexdigest()
         return Artifact(self.job_id, self.kind, target, digest, self._size, self.store.work_dir, self.directory)
 
+    def abort(self) -> None:
+        """Close and remove incomplete temporary output; safe to call repeatedly."""
+        if self._aborted or self._promoted:
+            return
+        self._aborted = True
+        if not self._file.closed:
+            self._file.close()
+        self._temporary.unlink(missing_ok=True)
+
+    def __enter__(self) -> "PendingArtifact":
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        if exc_type is not None:
+            self.abort()
+
     def __del__(self) -> None:
         try:
-            if not self._file.closed:
-                self._file.close()
-            self._temporary.unlink(missing_ok=True)
+            self.abort()
         except (AttributeError, OSError):
             pass
 

@@ -44,6 +44,7 @@ class BatchIngestor:
         jobs: list[str] = []
         seen: set[str] = set()
         total = 0
+        pending = None
         try:
             for index, part in enumerate(pdfs):
                 if index >= self.config.pdfs_per_batch:
@@ -79,6 +80,7 @@ class BatchIngestor:
                     raise ValueError("duplicate PDF content")
                 seen.add(digest.hexdigest())
                 pending.promote()
+                pending = None
                 self.state.set_job_input(job_id, part.filename, digest.hexdigest(), size)
             if not jobs:
                 raise ValueError("PDF count must be positive")
@@ -90,6 +92,8 @@ class BatchIngestor:
                 bibtex_status = "provided"
             return IngestionResult(batch_id, tuple(jobs), bibtex_status)
         except Exception:
+            if pending is not None:
+                pending.abort()
             for job_id in jobs:
                 self.artifacts.discard_job(job_id)
             self.state.discard_batch(batch_id)
@@ -134,7 +138,7 @@ class BatchIngestor:
         result: list[dict[str, object]] = []
         for key, entry in database.entries.items():
             fields = {str(name).lower(): str(value) for name, value in entry.fields.items()}
-            result.append({"key": key, "type": entry.type, "fields": fields, **fields})
+            result.append({**fields, "fields": fields, "key": key, "type": entry.type})
         if not result:
             raise ValueError("BibTeX syntax is invalid")
         return result

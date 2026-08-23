@@ -200,6 +200,13 @@ class PipelineState:
             if job is None:
                 db.rollback()
                 raise KeyError(job_id)
+            if job["status"] not in {"needs_attention", "review_ready"}:
+                db.rollback()
+                raise ValueError("manual binding only allowed for needs_attention or review_ready jobs")
+            lease = db.execute("SELECT lease_token FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if lease["lease_token"] is not None:
+                db.rollback()
+                raise ValueError("manual binding requires no active lease")
             if entry_key is not None and db.execute(
                 "SELECT 1 FROM bibtex_entries WHERE batch_id=? AND entry_key=?", (job["batch_id"], entry_key)
             ).fetchone() is None:

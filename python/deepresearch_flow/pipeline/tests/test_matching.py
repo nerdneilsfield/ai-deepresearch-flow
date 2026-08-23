@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from deepresearch_flow.pipeline.artifacts import ArtifactStore
 from deepresearch_flow.pipeline.config import PipelineConfig
 from deepresearch_flow.pipeline.matching import BibTeXMatcher
@@ -36,6 +38,36 @@ def test_matches_doi_then_title_then_key_and_reports_unmatched_in_job_order(tmp_
     assert result.matches[1]["reason"] == "title"
     assert result.matches[2]["reason"] == "filename_stem"
     assert [item["job_id"] for item in result.needs_attention] == [jobs[3]]
+
+
+def test_absent_bibtex_does_not_create_attention_items(tmp_path: Path) -> None:
+    state = PipelineState(tmp_path / "queue.sqlite3", artifact_store=ArtifactStore(tmp_path / "work", tmp_path / "formal"))
+    batch = state.create_batch()
+    job = state.create_job(batch)
+
+    result = BibTeXMatcher(state).match_batch(batch, [{"job_id": job, "doi": "10.1/missing", "title": "Paper"}])
+
+    assert result.matches == []
+    assert result.needs_attention == []
+    assert result.unmatched_entries == []
+
+
+def test_one_bibtex_entry_can_bind_only_one_job_automatically(tmp_path: Path) -> None:
+    state = PipelineState(tmp_path / "queue.sqlite3", artifact_store=ArtifactStore(tmp_path / "work", tmp_path / "formal"))
+    batch = state.create_batch()
+    first, second = state.create_job(batch), state.create_job(batch)
+    state.persist_bibtex_entries(batch, [{"key": "same", "title": "One Paper"}])
+
+    result = BibTeXMatcher(state).match_batch(
+        batch,
+        [
+            {"job_id": first, "title": "One Paper", "filename": "first.pdf"},
+            {"job_id": second, "title": "One Paper", "filename": "second.pdf"},
+        ],
+    )
+
+    assert result.matches == [{"job_id": first, "entry_key": "same", "reason": "title"}]
+    assert result.needs_attention == [{"job_id": second, "reason": "unmatched", "candidate_keys": []}]
 
 
 def test_ambiguous_doi_title_and_key_are_needs_attention(tmp_path: Path) -> None:
@@ -86,3 +118,31 @@ def test_manual_no_bibtex_is_explicit_and_publishable(tmp_path: Path) -> None:
     assert result["entry_key"] is None
     assert result["status"] == "review_ready"
     assert state.get_job_bibtex_key(job) is None
+
+
+def test_manual_binding_is_restricted_to_attention_and_review_states(tmp_path: Path) -> None:
+    state = PipelineState(tmp_path / "queue.sqlite3", artifact_store=ArtifactStore(tmp_path / "work", tmp_path / "formal"))
+    batch = state.create_batch()
+    state.persist_bibtex_entries(batch, [{"key": "ref", "title": "Paper"}])
+    matcher = BibTeXMatcher(state)
+
+    queued = state.create_job(batch)
+    with pytest.raises(ValueError, match="manual binding"):
+        matcher.bind_manual(queued, "ref", regenerate_preview=lambda _: None)
+
+    running = state.create_job(batch)
+    lease = state.acquire_lease(running, "worker")
+    assert lease is not None
+    with pytest.raises(ValueError, match="manual binding"):
+        matcher.bind_manual(running, "ref", regenerate_preview=lambda _: None)
+
+    rejected = state.create_job(batch)
+    state.admin_transition(rejected, "rejected")
+    with pytest.raises(ValueError, match="manual binding"):
+        matcher.bind_manual(rejected, "ref", regenerate_preview=lambda _: None)
+
+    review = state.create_job(batch)
+    review_lease = state.acquire_lease(review, "worker")
+    assert review_lease is not None
+    state.transition(review, "review_ready", review_lease.token)
+    assert matcher.bind_manual(review, "ref", regenerate_preview=lambda _: None)["status"] == "review_ready"

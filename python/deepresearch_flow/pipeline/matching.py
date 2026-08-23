@@ -42,6 +42,8 @@ class BibTeXMatcher:
 
     def match_batch(self, batch_id: str, jobs: Iterable[dict[str, Any]]) -> MatchResult:
         entries = self.state.list_bibtex_entries(batch_id)
+        if not entries:
+            return MatchResult([], [], [])
         by_doi: dict[str, list[dict[str, Any]]] = {}
         by_title: dict[str, list[dict[str, Any]]] = {}
         by_key: dict[str, list[dict[str, Any]]] = {}
@@ -61,7 +63,7 @@ class BibTeXMatcher:
         used: set[str] = set()
         for supplied in jobs:
             job_id = str(supplied["job_id"])
-            candidate, reason, diagnostic = self._choose(supplied, by_doi, by_title, by_key)
+            candidate, reason, diagnostic = self._choose(supplied, by_doi, by_title, by_key, used)
             if candidate is None:
                 details = {"job_id": job_id, "reason": reason, "candidate_keys": diagnostic}
                 needs_attention.append(details)
@@ -93,27 +95,31 @@ class BibTeXMatcher:
         by_doi: dict[str, list[dict[str, Any]]],
         by_title: dict[str, list[dict[str, Any]]],
         by_key: dict[str, list[dict[str, Any]]],
+        used: set[str],
     ) -> tuple[dict[str, Any] | None, str, list[str]]:
         doi = normalize_doi(supplied.get("doi"))
         if doi and doi in by_doi:
-            candidates = by_doi[doi]
-            if len(candidates) == 1:
-                return candidates[0], "doi", []
-            return None, "ambiguous_doi", [str(item["key"]) for item in candidates]
+            candidates = [item for item in by_doi[doi] if str(item["key"]) not in used]
+            if candidates:
+                if len(candidates) == 1:
+                    return candidates[0], "doi", []
+                return None, "ambiguous_doi", [str(item["key"]) for item in candidates]
         title = normalize_title(supplied.get("title"))
         if title and title in by_title:
-            candidates = by_title[title]
-            if len(candidates) == 1:
-                return candidates[0], "title", []
-            return None, "ambiguous_title", [str(item["key"]) for item in candidates]
+            candidates = [item for item in by_title[title] if str(item["key"]) not in used]
+            if candidates:
+                if len(candidates) == 1:
+                    return candidates[0], "title", []
+                return None, "ambiguous_title", [str(item["key"]) for item in candidates]
         filename = str(supplied.get("filename", ""))
         stem = PurePath(filename).stem
         key = normalize_key(stem)
         if key and key in by_key:
-            candidates = by_key[key]
-            if len(candidates) == 1:
-                return candidates[0], "filename_stem", []
-            return None, "ambiguous_filename_stem", [str(item["key"]) for item in candidates]
+            candidates = [item for item in by_key[key] if str(item["key"]) not in used]
+            if candidates:
+                if len(candidates) == 1:
+                    return candidates[0], "filename_stem", []
+                return None, "ambiguous_filename_stem", [str(item["key"]) for item in candidates]
         return None, "unmatched", []
 
 

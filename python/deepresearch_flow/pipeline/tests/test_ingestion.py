@@ -22,6 +22,18 @@ class TinyChunks:
         return chunk
 
 
+class FailingStream:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def read(self, size: int = -1, /) -> bytes:
+        del size
+        self.calls += 1
+        if self.calls == 1:
+            return b"%PDF-partial"
+        raise OSError("stream failed")
+
+
 def build_ingestor(
     tmp_path: Path,
     *,
@@ -140,6 +152,21 @@ def test_rejects_invalid_or_oversized_bibtex(tmp_path: Path) -> None:
         service.ingest([UploadPart("paper.pdf", BytesIO(b"%PDF-1.7"))], bibtex=UploadPart("refs.bib", BytesIO(b"bad")))
     assert state.list_batches() == []
 
+
+def test_bibtex_structural_key_and_type_are_authoritative(tmp_path: Path) -> None:
+    service, state, _ = build_ingestor(tmp_path)
+    result = service.ingest(
+        [UploadPart("paper.pdf", BytesIO(b"%PDF-1.7"))],
+        bibtex=UploadPart(
+            "refs.bib",
+            BytesIO(b"@article{actual, key={forged}, type={forged}, title={Paper}}"),
+        ),
+    )
+
+    entry = state.list_bibtex_entries(result.batch_id)[0]
+    assert entry["key"] == "actual"
+    assert entry["type"] == "article"
+
     service, state, _ = build_ingestor(tmp_path / "large", bibtex_max_bytes=40)
     with pytest.raises(ValueError, match="BibTeX"):
         service.ingest(
@@ -154,3 +181,18 @@ def test_rejects_model_outside_configured_allowlist(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="allowlist"):
         service.ingest([UploadPart("paper.pdf", BytesIO(b"%PDF-1.7"))], selected_models={"ocr": "other"})
     assert state.list_batches() == []
+
+
+def test_stream_failure_aborts_partial_artifact_and_abort_is_idempotent(tmp_path: Path) -> None:
+    service, state, artifacts = build_ingestor(tmp_path)
+    with pytest.raises(OSError, match="stream failed"):
+        service.ingest([UploadPart("paper.pdf", cast(BinaryIO, FailingStream()))])
+    assert state.list_batches() == []
+    assert list((tmp_path / "work").iterdir()) == []
+
+    job = state.create_job()
+    pending = artifacts.begin(job, "pdf")
+    pending.write(b"%PDF-partial")
+    pending.abort()
+    pending.abort()
+    assert artifacts.resolve(job, "pdf") is None
