@@ -9,9 +9,9 @@ factory below wires the existing OCR/recognize/translator seams.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
-import re
 import time
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -19,7 +19,7 @@ from typing import Any, Callable, Mapping
 from .adapters import ProductionAdapters, build_production_adapters
 from .artifacts import Artifact, ArtifactStore
 from .config import PipelineConfig
-from .matching import BibTeXMatcher
+from .matching import BibTeXMatcher, MatchResult
 from .steps import (
     AdapterProtocol,
     PipelineAdapters,
@@ -36,6 +36,9 @@ from .state import (
     LeaseError,
     PipelineState,
 )
+from .worker_support import error_type as _error_type
+from .worker_support import retryable as _retryable
+from .worker_support import safe_error as _safe_error
 
 
 # Public alias makes the immutable sequence easy for Supervisor and tests to
@@ -75,29 +78,6 @@ class CancelledAtBoundary(WorkerFailure):
         super().__init__("job cancellation observed at step boundary", retryable=False, error_type="cancelled")
 
 
-def _safe_error(exc: BaseException) -> str:
-    """Keep diagnostics useful while excluding credentials, bodies, and paths."""
-    raw = str(exc).strip() or "step execution failed"
-    raw = re.sub(r"(?i)(api[_ -]?key|token|password|secret|authorization)\s*[:=]\s*[^\s,;]+", r"\1=[redacted]", raw)
-    raw = re.sub(r"(?i)(request|body|payload)\s*[:=]\s*.+", r"\1=[redacted]", raw)
-    raw = re.sub(r"(?:[A-Za-z]:)?/(?:[^\s/]+/)+[^\s]+", "[path]", raw)
-    # Provider exception reprs sometimes include quoted JSON credentials.
-    raw = re.sub(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]+", "Bearer [redacted]", raw)
-    return raw[:500]
-
-
-def _retryable(exc: BaseException) -> bool:
-    value = getattr(exc, "retryable", None)
-    return bool(value) if isinstance(value, bool) else not isinstance(exc, (ValueError, TypeError, ValidationFailure, ModelInvalidation))
-
-
-def _error_type(exc: BaseException) -> str:
-    value = getattr(exc, "error_type", None)
-    if isinstance(value, str) and value:
-        return value
-    return type(exc).__name__.lower()
-
-
 class PipelineWorker:
     @classmethod
     def from_production_config(
@@ -108,25 +88,18 @@ class PipelineWorker:
         *,
         paper_config_path: str | Path | None = None,
         ocr_config_path: str | Path | None = None,
-        ocr_backend: Any | None = None,
-        extractor: Callable[..., Any] | None = None,
-        translator: Callable[..., Any] | None = None,
-        validation: Callable[..., Any] | None = None,
         worker_id: str | None = None,
     ) -> "PipelineWorker":
         """Construct worker with real OCR/provider seams for Supervisor."""
         adapters = build_production_adapters(
             paper_config_path=paper_config_path,
             ocr_config_path=ocr_config_path,
-            ocr_backend=ocr_backend,
-            extractor=extractor,
-            translator=translator,
-            validation=validation,
             staging_root=config.work_dir,
             extract_template=config.extract_templates[0]
             if config.extract_templates
             else None,
             output_language=config.translation_language,
+            ocr_model_map=config.ocr_model_map,
         )
         return cls(config, state, artifacts, adapters=adapters, worker_id=worker_id)
 
@@ -139,7 +112,7 @@ class PipelineWorker:
         adapters: PipelineAdapters | object | None = None,
         worker_id: str | None = None,
         concurrency: int | None = None,
-        supporting_models: Mapping[str, str] | None = None,
+        _test_supporting_models: Mapping[str, str] | None = None,
     ) -> None:
         self.config = config
         self.state = state
@@ -148,8 +121,11 @@ class PipelineWorker:
         self.worker_id = worker_id or f"worker-{id(self):x}"
         self.concurrency = max(1, int(concurrency or config.max_concurrent_jobs))
         defaults = dict(config.supporting_models)
-        defaults.update(dict(supporting_models or {}))
+        if _test_supporting_models is not None and isinstance(self.adapters, ProductionAdapters):
+            raise ValueError("supporting model overrides are test-only")
+        defaults.update(dict(_test_supporting_models or {}))
         self.supporting_models = defaults
+        self._batch_match_cache: dict[str, MatchResult] = {}
         if self.state.artifact_store is None:
             self.state.artifact_store = artifacts
 
@@ -170,7 +146,7 @@ class PipelineWorker:
                 return WorkerResult(job_id, "lease_lost", failed_step=None, error_type="lease_lost", retryable=True)
         finally:
             heartbeat_task.cancel()
-            with contextlib_suppress(asyncio.CancelledError):
+            with contextlib.suppress(asyncio.CancelledError):
                 await heartbeat_task
 
     async def _heartbeat_loop(self, lease: Lease, failed: asyncio.Event) -> None:
@@ -218,33 +194,29 @@ class PipelineWorker:
 
             started = time.monotonic()
             try:
-                output = await self._execute_step(step, context, job_id)
+                output = await self._execute_step(step, context, job_id, token)
                 if heartbeat_failed.is_set() or not self.state.lease_valid(job_id, token):
                     raise LeaseLost()
                 if self.state.cancel_requested(job_id):
                     self._mark_cancelled(lease, step)
                     return WorkerResult(job_id, "cancelled", failed_step=step)
                 artifact = self._promote_step(job_id, step, output)
-                if self.state.cancel_requested(job_id):
-                    # A cancellation can race the pre-promotion check.  Keep
-                    # no metadata and mark boundary; work artifact is harmless.
-                    self._mark_cancelled(lease, step)
-                    return WorkerResult(job_id, "cancelled", failed_step=step)
-                self.state.record_step_success(
+                protected = output.protected if isinstance(output, PreviewArtifacts) else ()
+                committed = self.state.record_step_success_if_active(
                     job_id,
                     step,
                     token,
                     artifact=artifact,
                     duration_ms=int((time.monotonic() - started) * 1000),
+                    protected_artifacts=protected,
                 )
+                if not committed:
+                    self._discard_uncommitted_output(artifact, protected)
+                    self._mark_cancelled(lease, step)
+                    return WorkerResult(job_id, "cancelled", failed_step=step)
                 context[step] = output
-                if step == "preview":
-                    preview = output
-                else:
-                    preview = None
                 if self.state.step_boundary(job_id, token) == "cancelled":
                     return WorkerResult(job_id, "cancelled", failed_step=step)
-                del preview
             except CancelledAtBoundary:
                 self._mark_cancelled(lease, step)
                 return WorkerResult(job_id, "cancelled", failed_step=step)
@@ -257,9 +229,17 @@ class PipelineWorker:
         preview = context.get("preview")
         if not isinstance(preview, PreviewArtifacts):
             raise WorkerFailure("preview output unavailable", retryable=True)
-        status, bibtex_status = self._completion_status(job_id, context.get("summary_repair"))
+        status, bibtex_status = self._completion_status(job_id, context.get("summary_repair"), token)
         if bibtex_status != preview.bibtex_status:
-            preview = PreviewArtifacts(preview.pdf, preview.source_markdown, preview.summary_json, preview.translated_markdown, preview.digest, bibtex_status)
+            preview = PreviewArtifacts(
+                preview.pdf,
+                preview.source_markdown,
+                preview.summary_json,
+                preview.translated_markdown,
+                preview.digest,
+                bibtex_status,
+                preview.protected,
+            )
             context["preview"] = preview
         if self.state.cancel_requested(job_id):
             self._mark_cancelled(lease, "preview")
@@ -290,6 +270,18 @@ class PipelineWorker:
         artifact = self.artifacts.resolve(job_id, "pdf")
         if artifact is None:
             raise WorkerFailure("input PDF artifact is missing", retryable=False, error_type="input_missing")
+        try:
+            expected = self.state.get_job_input(job_id)
+        except KeyError as exc:
+            raise WorkerFailure("input PDF artifact is missing", retryable=False, error_type="input_missing") from exc
+        content = artifact.path.read_bytes()
+        digest = hashlib.sha256(content).hexdigest()
+        if digest != str(expected["digest"]) or len(content) != int(expected["size"]):
+            raise WorkerFailure(
+                "input PDF does not match uploaded source",
+                retryable=False,
+                error_type="input_tampered",
+            )
         return artifact.path
 
     def _load_existing(self, job_id: str, step: str) -> Any | None:
@@ -354,7 +346,7 @@ class PipelineWorker:
         }
         return self.supporting_models.get(step) or self.supporting_models.get(aliases.get(step, ""))
 
-    async def _execute_step(self, step: str, context: dict[str, Any], job_id: str) -> Any:
+    async def _execute_step(self, step: str, context: dict[str, Any], job_id: str, token: str) -> Any:
         if step == "ocr":
             func = self._adapter("ocr")
             return _as_markdown(await _invoke(func, context["pdf"], self._model_key(job_id, step), model_key=self._model_key(job_id, step), supporting_models=self.supporting_models))
@@ -365,7 +357,16 @@ class PipelineWorker:
         if step == "organize":
             return _as_markdown(await _invoke(self._adapter(step), context["math_repair"], model_key=self._model_key(job_id, step), supporting_models=self.supporting_models))
         if step == "extract":
-            return _as_summary(await _invoke(self._adapter(step), context["organize"], self._model_key(job_id, step), model_key=self._model_key(job_id, step), templates=self.config.extract_templates))
+            return _as_summary(
+                await _invoke(
+                    self._adapter(step),
+                    context["organize"],
+                    self._model_key(job_id, step),
+                    model_key=self._model_key(job_id, step),
+                    templates=self.config.extract_templates,
+                    job_id=job_id,
+                )
+            )
         if step == "validation":
             summary = context["extract"]
             limit = max(1, int(self.config.validation_retry_limit))
@@ -378,7 +379,7 @@ class PipelineWorker:
                 last = str(result.get("message", last)) if isinstance(result, Mapping) else last
                 if attempt < limit:
                     try:
-                        self.state.record_step_attempt(job_id, step, self.state.get_job(job_id)["lease_token"], "retrying", error=_safe_error(ValueError(last)), error_type="validation_retry", retryable=True)
+                        self.state.record_step_attempt(job_id, step, token, "retrying", error=_safe_error(ValueError(last)), error_type="validation_retry", retryable=True)
                     except LeaseError as exc:
                         raise LeaseLost() from exc
             raise ValidationFailure(last)
@@ -389,7 +390,7 @@ class PipelineWorker:
         if step == "translation_repair":
             return _as_markdown(await _invoke(self._adapter(step), context["translate"], model_key=self._model_key(job_id, step), supporting_models=self.supporting_models))
         if step == "preview":
-            return self._make_preview(job_id, context)
+            return self._make_preview(job_id, context, token)
         raise ValueError(f"unknown processing step: {step}")
 
     def _adapter(self, name: str) -> Callable[..., Any]:
@@ -415,7 +416,9 @@ class PipelineWorker:
             pending.abort()
             raise
 
-    def _make_preview(self, job_id: str, context: dict[str, Any]) -> PreviewArtifacts:
+    def _make_preview(self, job_id: str, context: dict[str, Any], token: str) -> PreviewArtifacts:
+        if not self.state.lease_valid(job_id, token):
+            raise LeaseLost()
         if self.state.cancel_requested(job_id):
             raise CancelledAtBoundary()
         pdf = self._input_pdf(job_id).read_bytes()
@@ -426,32 +429,62 @@ class PipelineWorker:
         contents = (pdf, source, summary, translated)
         try:
             protected = [self.artifacts.protect(job_id, name, value) for name, value in zip(names, contents, strict=True)]
-            for artifact in protected:
-                # Registration occurs under current lease in _process_job after
-                # the worker has checked cancellation immediately before promotion.
-                self.state.register_protected_artifact(job_id, artifact.kind, artifact, self.state.get_job(job_id)["lease_token"])
         except BaseException:
-            self.artifacts.discard_protected(job_id)
+            for artifact in locals().get("protected", []):
+                self.artifacts.discard_artifact(artifact)
             raise
         digest = hashlib.sha256(b"".join(artifact.digest.encode("ascii") for artifact in protected)).hexdigest()
-        return PreviewArtifacts(protected[0].path, protected[1].path, protected[2].path, protected[3].path, digest, "not_provided")
+        return PreviewArtifacts(
+            protected[0].path,
+            protected[1].path,
+            protected[2].path,
+            protected[3].path,
+            digest,
+            "not_provided",
+            tuple(protected),
+        )
 
-    def _completion_status(self, job_id: str, summary: Mapping[str, Any] | None = None) -> tuple[str, str]:
+    def _completion_status(
+        self,
+        job_id: str,
+        summary: Mapping[str, Any] | None = None,
+        token: str | None = None,
+    ) -> tuple[str, str]:
         job = self.state.get_job(job_id)
         batch_id = job.get("batch_id")
         if not batch_id or not self.state.list_bibtex_entries(str(batch_id)):
             return "review_ready", "not_provided"
-        input_data = self.state.get_job_input(job_id)
-        if isinstance(summary, Mapping):
-            for field in ("doi", "title"):
-                value = summary.get(field)
-                if isinstance(value, str) and value.strip():
-                    input_data[field] = value
-        result = BibTeXMatcher(self.state).match_batch(str(batch_id), [{"job_id": job_id, **input_data}])
-        if result.matches and not result.needs_attention and not result.unmatched_entries:
-            self.state.bind_worker_bibtex(job_id, str(result.matches[0]["entry_key"]), self.state.get_job(job_id)["lease_token"])
+        batch_key = str(batch_id)
+        result = self._batch_match_cache.get(batch_key)
+        if result is None:
+            jobs = self.state.list_batch_job_inputs(batch_key)
+            current = next((item for item in jobs if item["job_id"] == job_id), None)
+            if current is None:
+                current = {"job_id": job_id, **self.state.get_job_input(job_id)}
+                jobs.append(current)
+            if isinstance(summary, Mapping):
+                for field in ("doi", "title"):
+                    value = summary.get(field)
+                    if isinstance(value, str) and value.strip():
+                        current[field] = value
+            result = BibTeXMatcher(self.state).match_batch(batch_key, jobs)
+            self._batch_match_cache[batch_key] = result
+        matches = [item for item in result.matches if item.get("job_id") == job_id]
+        attention = [item for item in result.needs_attention if item.get("job_id") == job_id]
+        if matches and not attention:
+            if token is None:
+                raise LeaseLost()
+            self.state.bind_worker_bibtex(job_id, str(matches[0]["entry_key"]), token)
             return "review_ready", "matched"
         return "needs_attention", "needs_attention"
+
+    def _discard_uncommitted_output(
+        self, artifact: Artifact, protected: tuple[Artifact, ...]
+    ) -> None:
+        self.artifacts.validate_artifact(artifact, artifact.job_id, artifact.kind)
+        artifact.path.unlink(missing_ok=True)
+        for protected_artifact in protected:
+            self.artifacts.discard_artifact(protected_artifact)
 
     async def _fail(self, lease: Lease, step: str, exc: BaseException, *, duration_ms: int | None = None) -> WorkerResult:
         token = lease.token
@@ -483,13 +516,11 @@ class PipelineWorker:
                 retryable=False,
             )
             self._abort_cancel(lease)
-            if self.state.get_job(lease.job_id).get("preview_digest") is None:
-                self.artifacts.discard_protected(lease.job_id)
         except LeaseError as exc:
             raise LeaseLost() from exc
 
     async def run_once_async(self, job_ids: list[str] | None = None) -> list[WorkerResult]:
-        ids = job_ids or self.state.list_job_ids({"queued", "failed"})
+        ids = self.state.list_job_ids({"queued", "failed"}) if job_ids is None else list(job_ids)
         semaphore = asyncio.Semaphore(self.concurrency)
 
         async def run_one(job_id: str) -> WorkerResult:
@@ -502,19 +533,6 @@ class PipelineWorker:
         return asyncio.run(self.run_once_async(job_ids))
 
     run = run_once
-
-
-class contextlib_suppress:
-    """Tiny local suppress helper avoids widening imports in worker hot path."""
-
-    def __init__(self, *exceptions: type[BaseException]) -> None:
-        self.exceptions = exceptions
-
-    def __enter__(self) -> "contextlib_suppress":
-        return self
-
-    def __exit__(self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: Any) -> bool:
-        return exc_type is not None and any(issubclass(exc_type, item) for item in self.exceptions)
 
 
 def run_worker(

@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
+from dataclasses import replace
+from collections.abc import Iterable
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,6 +16,7 @@ import pytest
 from deepresearch_flow.pipeline import ArtifactStore, PipelineConfig
 from deepresearch_flow.pipeline.config import ModelAllowlist
 from deepresearch_flow.pipeline.ingestion import BatchIngestor, UploadPart
+from deepresearch_flow.pipeline.matching import BibTeXMatcher
 from deepresearch_flow.pipeline.state import PipelineState
 from deepresearch_flow.pipeline.worker import (
     PROCESSING_STEPS,
@@ -22,7 +27,7 @@ from deepresearch_flow.pipeline.worker import (
 
 class FakeAdapters:
     def __init__(self) -> None:
-        self.calls: list[tuple[str, str | None]] = []
+        self.calls: list[tuple[str, Any]] = []
 
     def ocr(self, pdf_path: Path, model_key: str) -> str:
         assert pdf_path.read_bytes().startswith(b"%PDF-")
@@ -99,6 +104,7 @@ def test_worker_runs_fixed_steps_and_emits_protected_preview(tmp_path: Path) -> 
         "translate-a",
     ]
     assert all(model is None for name, model in adapters.calls if name not in {"ocr", "extract", "translate"})
+    assert result.preview is not None
     assert result.preview.source_markdown.read_text(encoding="utf-8").startswith("# Tiny paper")
     assert json.loads(result.preview.summary_json.read_text(encoding="utf-8"))["title"] == "Tiny paper"
     assert result.preview.translated_markdown.read_text(encoding="utf-8").startswith("翻译：")
@@ -116,7 +122,7 @@ def test_worker_failure_is_public_safe_and_retry_resumes_failed_step(tmp_path: P
         adapters.calls.append(("source_repair", kwargs.get("model_key")))
         raise RuntimeError("provider token=secret-token body={secret} /tmp/private.pdf")
 
-    adapters.source_repair = fail_source  # type: ignore[method-assign]
+    setattr(adapters, "source_repair", fail_source)
     failed = PipelineWorker(config, state, artifacts, adapters=adapters, worker_id="first").run_job(job_id)
 
     assert failed.status == "failed"
@@ -127,7 +133,7 @@ def test_worker_failure_is_public_safe_and_retry_resumes_failed_step(tmp_path: P
     assert "secret-token" not in str(attempt["error"])
     assert "/tmp/private.pdf" not in str(attempt["error"])
 
-    adapters.source_repair = original  # type: ignore[method-assign]
+    setattr(adapters, "source_repair", original)
     resumed = PipelineWorker(config, state, artifacts, adapters=adapters, worker_id="second").run_job(job_id)
 
     assert resumed.status == "review_ready"
@@ -182,7 +188,7 @@ def test_validation_retry_is_bounded_and_visible(tmp_path: Path) -> None:
         calls.append(attempt)
         return False
 
-    adapters.validate = invalid
+    setattr(adapters, "validate", invalid)
     result = PipelineWorker(config, state, artifacts, adapters=adapters, worker_id="validator").run_job(job_id)
 
     assert result.status == "failed"
@@ -203,7 +209,7 @@ def test_cancelled_remote_result_is_not_promoted(tmp_path: Path) -> None:
         await asyncio.sleep(0)
         return "must not be promoted"
 
-    adapters.ocr = cancel_in_ocr
+    setattr(adapters, "ocr", cancel_in_ocr)
     result = PipelineWorker(config, state, artifacts, adapters=adapters, worker_id="cancel").run_job(job_id)
 
     assert result.status == "cancelled"
@@ -215,6 +221,27 @@ def test_cancelled_remote_result_is_not_promoted(tmp_path: Path) -> None:
     assert state.list_attempts(job_id, "ocr")[-1]["status"] == "cancelled"
 
 
+def test_cancellation_winning_success_cas_discards_promoted_result(tmp_path: Path) -> None:
+    config, state, artifacts, job_id = _setup(tmp_path)
+    adapters = FakeAdapters()
+    original = state.record_step_success_if_active
+
+    def cancel_before_cas(*args: Any, **kwargs: Any) -> bool:
+        state.request_cancel(job_id)
+        return original(*args, **kwargs)
+
+    setattr(state, "record_step_success_if_active", cancel_before_cas)
+    result = PipelineWorker(config, state, artifacts, adapters=adapters, worker_id="cancel-cas").run_job(job_id)
+
+    assert result.status == "cancelled"
+    try:
+        assert artifacts.resolve(job_id, "ocr") is None
+    except FileNotFoundError:
+        pass
+    assert state.step_artifact(job_id, "ocr") is None
+    assert state.artifact_metadata(job_id, "preview_pdf") is None
+
+
 def test_heartbeat_is_written_during_remote_call(tmp_path: Path) -> None:
     config, state, artifacts, job_id = _setup(tmp_path, heartbeat_seconds=1)
     adapters = FakeAdapters()
@@ -223,12 +250,13 @@ def test_heartbeat_is_written_during_remote_call(tmp_path: Path) -> None:
         await asyncio.sleep(1.1)
         return "# slow"
 
-    adapters.ocr = slow_ocr
+    setattr(adapters, "ocr", slow_ocr)
     result = PipelineWorker(config, state, artifacts, adapters=adapters, worker_id="heartbeat").run_job(job_id)
 
     assert result.status == "review_ready"
-    assert state.heartbeat_metadata(job_id) is not None
-    assert state.heartbeat_metadata(job_id)["owner"] == "heartbeat"  # type: ignore[index]
+    heartbeat = state.heartbeat_metadata(job_id)
+    assert heartbeat is not None
+    assert heartbeat["owner"] == "heartbeat"
 
 
 def test_ambiguous_bibtex_requires_attention_but_absent_is_review_ready(tmp_path: Path) -> None:
@@ -251,8 +279,46 @@ def test_unique_bibtex_match_is_review_ready_and_bound(tmp_path: Path) -> None:
     result = PipelineWorker(config, state, artifacts, adapters=FakeAdapters(), worker_id="unique").run_job(job_id)
 
     assert result.status == "review_ready"
+    assert result.preview is not None
     assert result.preview.bibtex_status == "matched"
     assert state.get_job_bibtex_key(job_id) == "tiny-ref"
+
+
+def test_batch_bibtex_matches_each_job_once_without_cross_attention(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, state, artifacts, _ = _setup(tmp_path)
+    service = BatchIngestor(config, state, artifacts)
+    ingested = service.ingest(
+        [
+            UploadPart("tiny.pdf", BytesIO(b"%PDF-1.7 tiny")),
+            UploadPart("other.pdf", BytesIO(b"%PDF-1.7 other")),
+        ],
+        selected_models={"ocr": "ocr-a", "extract": "extract-a", "translate": "translate-a"},
+    )
+    jobs = ingested.jobs
+    batch_id = state.get_job(jobs[0])["batch_id"]
+    first_input = state.get_job_input(jobs[0])
+    second_input = state.get_job_input(jobs[1])
+    state.set_job_input(jobs[0], first_input["filename"], first_input["digest"], first_input["size"], title="Tiny paper")
+    state.set_job_input(jobs[1], second_input["filename"], second_input["digest"], second_input["size"], title="Other paper")
+    state.persist_bibtex_entries(
+        batch_id,
+        [{"key": "tiny-ref", "title": "Tiny paper"}, {"key": "other-ref", "title": "Other paper"}],
+    )
+    calls = {"count": 0}
+    original = BibTeXMatcher.match_batch
+
+    def counted(self: BibTeXMatcher, batch: str, values: Iterable[dict[str, Any]]) -> Any:
+        calls["count"] += 1
+        return original(self, batch, values)
+
+    monkeypatch.setattr(BibTeXMatcher, "match_batch", counted)
+    results = PipelineWorker(config, state, artifacts, adapters=FakeAdapters(), concurrency=1).run_once(list(jobs))
+
+    assert [item.status for item in results] == ["review_ready", "review_ready"]
+    assert [state.get_job_bibtex_key(job) for job in jobs] == ["tiny-ref", "other-ref"]
+    assert calls["count"] == 1
 
 
 def test_worker_restart_after_completion_reuses_all_checkpoints(tmp_path: Path) -> None:
@@ -271,12 +337,7 @@ def test_worker_restart_after_completion_reuses_all_checkpoints(tmp_path: Path) 
 
 def test_changed_configuration_fails_before_remote_model_call(tmp_path: Path) -> None:
     config, state, artifacts, job_id = _setup(tmp_path)
-    changed = config.__class__(
-        **{
-            **config.__dict__,
-            "ocr": ModelAllowlist(("ocr-new",), "ocr-new"),
-        }
-    )
+    changed = replace(config, ocr=ModelAllowlist(("ocr-new",), "ocr-new"))
     adapters = FakeAdapters()
 
     result = PipelineWorker(changed, state, artifacts, adapters=adapters, worker_id="invalidated").run_job(job_id)
@@ -298,11 +359,110 @@ def test_lease_loss_does_not_promote_inflight_result(tmp_path: Path) -> None:
         state.request_cancel(job_id)
         return "stale result"
 
-    adapters.ocr = lose_lease
+    setattr(adapters, "ocr", lose_lease)
     result = PipelineWorker(config, state, artifacts, adapters=adapters, worker_id="lost").run_job(job_id)
 
     assert result.status == "cancelled"
     assert state.step_artifact(job_id, "ocr") is None
+
+
+def test_takeover_token_fences_stale_worker_without_touching_new_lease(tmp_path: Path) -> None:
+    config, state, artifacts, job_id = _setup(tmp_path)
+    adapters = FakeAdapters()
+    takeover: dict[str, str] = {}
+
+    def stale_ocr(pdf_path: Path, model_key: str) -> str:
+        now = datetime.now(timezone.utc)
+        takeover_now = now + timedelta(days=1)
+        state.recover_expired(now=takeover_now)
+        lease = state.acquire_lease(job_id, "takeover", now=takeover_now)
+        assert lease is not None
+        takeover["token"] = lease.token
+        return "stale result"
+
+    setattr(adapters, "ocr", stale_ocr)
+    result = PipelineWorker(config, state, artifacts, adapters=adapters, worker_id="stale").run_job(job_id)
+
+    assert result.status == "lease_lost"
+    assert state.get_job(job_id)["lease_token"] == takeover["token"]
+    assert state.step_artifact(job_id, "ocr") is None
+    try:
+        assert artifacts.resolve(job_id, "ocr") is None
+    except FileNotFoundError:
+        pass
+
+
+def test_empty_job_selection_runs_no_jobs(tmp_path: Path) -> None:
+    config, state, artifacts, job_id = _setup(tmp_path)
+    adapters = FakeAdapters()
+
+    result = PipelineWorker(config, state, artifacts, adapters=adapters).run_once([])
+
+    assert result == []
+    assert state.get_job(job_id)["status"] == "queued"
+    assert adapters.calls == []
+
+
+def test_source_pdf_digest_tamper_fails_before_adapter_call(tmp_path: Path) -> None:
+    config, state, artifacts, job_id = _setup(tmp_path)
+    pdf = artifacts.resolve(job_id, "pdf")
+    assert pdf is not None
+    pdf.path.write_bytes(b"%PDF-1.7 tampered")
+    adapters = FakeAdapters()
+
+    result = PipelineWorker(config, state, artifacts, adapters=adapters).run_job(job_id)
+
+    assert result.status == "failed"
+    assert result.error_type == "input_tampered"
+    assert adapters.calls == []
+
+
+def test_sync_adapter_does_not_block_heartbeat(tmp_path: Path) -> None:
+    config, state, artifacts, job_id = _setup(tmp_path, heartbeat_seconds=1)
+    adapters = FakeAdapters()
+
+    def slow_ocr(pdf_path: Path, model_key: str) -> str:
+        time.sleep(1.1)
+        return "# slow"
+
+    setattr(adapters, "ocr", slow_ocr)
+    result = PipelineWorker(config, state, artifacts, adapters=adapters, worker_id="sync-heartbeat").run_job(job_id)
+
+    assert result.status == "review_ready"
+    heartbeat = state.heartbeat_metadata(job_id)
+    assert heartbeat is not None
+    assert heartbeat["owner"] == "sync-heartbeat"
+
+
+def test_production_builder_rejects_callable_injection(tmp_path: Path) -> None:
+    with pytest.raises(TypeError):
+        build_production_adapters(
+            paper_config_path=tmp_path / "paper.toml",
+            extractor=lambda value: value,
+        )
+
+
+def test_ocr_selection_must_map_to_provider_model(tmp_path: Path) -> None:
+    class RecordingOcr:
+        def __init__(self) -> None:
+            self.models: list[str | None] = []
+
+        def ocr(self, path: Path, *, model: str | None = None) -> str:
+            self.models.append(model)
+            return "# OCR"
+
+    backend = RecordingOcr()
+    adapters = build_production_adapters(
+        paper_config_path=_write_paper_config(tmp_path / "paper.toml"),
+        ocr_backend=backend,
+        ocr_model_map={"ocr-a": "openai/ocr-model"},
+    )
+
+    assert callable(adapters.ocr)
+    assert asyncio.run(adapters.ocr(tmp_path / "input.pdf", "ocr-a")) == "# OCR"
+    assert backend.models == ["openai/ocr-model"]
+    with pytest.raises(ValueError, match="cannot be mapped"):
+        asyncio.run(adapters.ocr(tmp_path / "input.pdf", "ocr-unmapped"))
 
 
 def _write_paper_config(path: Path) -> Path:
@@ -342,8 +502,9 @@ def test_production_builder_loads_paper_config_and_constructs_provider_adapters(
     paper_config_path = _write_paper_config(tmp_path / "paper.toml")
 
     class FakeOcrBackend:
-        def ocr(self, path: Path) -> str:
+        def ocr(self, path: Path, *, model: str | None = None) -> str:
             assert path.read_bytes().startswith(b"%PDF-")
+            assert model == "ocr-model"
             return "# OCR"
 
     extract_call: dict[str, Any] = {}
@@ -376,9 +537,12 @@ def test_production_builder_loads_paper_config_and_constructs_provider_adapters(
         paper_config_path=paper_config_path,
         ocr_backend=FakeOcrBackend(),
         staging_root=tmp_path / "staging",
+        ocr_model_map={"ocr-model": "ocr-model"},
     )
 
-    assert asyncio.run(adapters.ocr(input_pdf, "ocr-model")) == "# OCR"
+    assert callable(adapters.ocr)
+    assert callable(adapters.extract)
+    assert callable(adapters.translate)
     summary = asyncio.run(adapters.extract("markdown", "openai/extract-model"))
     translated = asyncio.run(adapters.translate("markdown", "openai/translate-model"))
 

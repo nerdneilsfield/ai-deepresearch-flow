@@ -140,6 +140,24 @@ def test_unpromoted_or_mismatched_artifact_cannot_be_recorded(tmp_path: Path) ->
         state.record_step_success(job_id, "ocr", lease.token, artifact=artifact.__class__(job_id, "ocr", artifact.path, "bad", artifact.size))
 
 
+def test_step_success_cas_rejects_cancelled_job_without_metadata(tmp_path: Path) -> None:
+    artifacts = ArtifactStore(tmp_path / "work", tmp_path / "formal")
+    state = PipelineState(tmp_path / "queue.sqlite3", artifact_store=artifacts)
+    job_id = state.create_job()
+    lease = state.acquire_lease(job_id, "worker")
+    assert lease is not None
+    pending = artifacts.begin(job_id, "ocr")
+    pending.write(b"cancelled")
+    artifact = pending.promote()
+    state.request_cancel(job_id)
+
+    committed = state.record_step_success_if_active(job_id, "ocr", lease.token, artifact=artifact)
+
+    assert committed is False
+    assert state.step_artifact(job_id, "ocr") is None
+    assert state.artifact_metadata(job_id, "ocr") is None
+
+
 def test_step_success_rejects_cross_job_wrong_kind_and_external_artifacts(tmp_path: Path) -> None:
     artifacts = ArtifactStore(tmp_path / "work", tmp_path / "formal")
     state = PipelineState(tmp_path / "queue.sqlite3", artifact_store=artifacts)

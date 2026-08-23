@@ -264,3 +264,8 @@ class ArtifactStore:
             raise ValueError("protected artifact directory must not be a symlink")
         if directory.exists():
             shutil.rmtree(directory)
+
+    def discard_artifact(self, artifact: Artifact) -> None:
+        """Remove one exact protected artifact without touching siblings."""
+        self.validate_protected_artifact(artifact, artifact.job_id, artifact.kind)
+        artifact.path.unlink(missing_ok=True)

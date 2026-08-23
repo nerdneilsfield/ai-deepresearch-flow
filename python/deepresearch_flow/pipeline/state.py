@@ -218,6 +218,20 @@ class PipelineState:
             raise KeyError(job_id)
         return dict(row)
 
+    def list_batch_job_inputs(self, batch_id: str) -> list[dict[str, Any]]:
+        """Return all persisted inputs in batch for one deterministic match."""
+        with self._connect() as db:
+            rows = db.execute(
+                """
+                SELECT jobs.id AS job_id, job_inputs.filename, job_inputs.digest,
+                       job_inputs.size, job_inputs.doi, job_inputs.title
+                FROM jobs LEFT JOIN job_inputs ON job_inputs.job_id = jobs.id
+                WHERE jobs.batch_id=? ORDER BY jobs.created_at, jobs.id
+                """,
+                (batch_id,),
+            ).fetchall()
+        return [dict(row) for row in rows if row["filename"] is not None]
+
     def persist_bibtex_entries(self, batch_id: str, entries: list[dict[str, Any]]) -> None:
         with self._connect() as db:
             if db.execute("SELECT 1 FROM batches WHERE id=?", (batch_id,)).fetchone() is None:
@@ -457,6 +471,35 @@ class PipelineState:
         artifact: object | None = None,
         duration_ms: int | None = None,
     ) -> None:
+        self.record_step_success_if_active(
+            job_id,
+            step,
+            lease_token,
+            digest=digest,
+            size=size,
+            path=path,
+            artifact=artifact,
+            duration_ms=duration_ms,
+        )
+
+    def record_step_success_if_active(
+        self,
+        job_id: str,
+        step: str,
+        lease_token: str,
+        digest: str | None = None,
+        size: int | None = None,
+        *,
+        path: str = "",
+        artifact: object | None = None,
+        duration_ms: int | None = None,
+        protected_artifacts: tuple[Artifact, ...] = (),
+    ) -> bool:
+        """CAS step success with lease and cancellation in one transaction.
+
+        Returns ``False`` when cancellation won the transaction.  In that
+        case no step or protected-artifact metadata is registered.
+        """
         if step not in ALL_STEP_NAMES:
             raise ValueError(f"unknown step: {step}")
         if not isinstance(artifact, Artifact) or not artifact.path.is_file():
@@ -471,14 +514,39 @@ class PipelineState:
             raise ValueError("artifact metadata does not match promoted artifact")
         path = str(actual_path)
         digest, size = actual_digest, actual_size
+        protected: list[tuple[str, str, str, int]] = []
+        for protected_artifact in protected_artifacts:
+            self.artifact_store.validate_protected_artifact(
+                protected_artifact, job_id, protected_artifact.kind
+            )
+            protected_path = protected_artifact.path.resolve()
+            protected_content = protected_path.read_bytes()
+            protected_digest = hashlib.sha256(protected_content).hexdigest()
+            protected_size = len(protected_content)
+            if protected_digest != protected_artifact.digest or protected_size != protected_artifact.size:
+                raise ValueError("protected artifact metadata does not match file")
+            protected.append(
+                (protected_artifact.kind, str(protected_path), protected_digest, protected_size)
+            )
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             row = self._check_token(db, job_id, lease_token)
+            if row["cancel_requested"]:
+                db.rollback()
+                return False
             attempt = db.execute("SELECT attempt FROM steps WHERE job_id=? AND name=?", (job_id, step)).fetchone()["attempt"] + 1
             db.execute("UPDATE steps SET status='complete',attempt=attempt+1,artifact_digest=?,artifact_size=? WHERE job_id=? AND name=?", (digest, size, job_id, step))
             db.execute("INSERT OR REPLACE INTO artifacts(job_id,kind,path,digest,size,created_at) VALUES(?,?,?,?,?,?)", (job_id, step, path, digest, size, _stamp(_utc())))
             db.execute("INSERT INTO step_attempts(job_id,step,attempt,status,lease_owner,started_at,finished_at,artifact_digest,artifact_size,duration_ms) VALUES(?,?,?,?,?,?,?,?,?,?)", (job_id, step, attempt, "complete", row["lease_owner"], _stamp(_utc()), _stamp(_utc()), digest, size, duration_ms if duration_ms is not None else 0))
+            db.executemany(
+                "INSERT OR REPLACE INTO artifacts(job_id,kind,path,digest,size,created_at) VALUES(?,?,?,?,?,?)",
+                [
+                    (job_id, kind, protected_path, protected_digest, protected_size, _stamp(_utc()))
+                    for kind, protected_path, protected_digest, protected_size in protected
+                ],
+            )
             db.commit()
+        return True
 
     def record_step_attempt(
         self,
@@ -647,6 +715,13 @@ class PipelineState:
                 (job_id, kind, str(actual), digest, size, _stamp(_utc())),
             )
             db.commit()
+
+    def discard_artifact(self, artifact: Artifact) -> None:
+        """Remove one exact protected artifact after an uncommitted result."""
+        if self.artifact_store is None:
+            raise ValueError("PipelineState requires bound ArtifactStore for artifact cleanup")
+        self.artifact_store.validate_protected_artifact(artifact, artifact.job_id, artifact.kind)
+        artifact.path.unlink(missing_ok=True)
 
     def recover_expired(self, now: datetime | None = None) -> list[str]:
         stamp = _stamp(_utc(now))

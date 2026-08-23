@@ -8,11 +8,13 @@ files.  Tests may still pass :class:`PipelineAdapters` directly.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
+import shutil
+import uuid
 from dataclasses import replace
 from pathlib import Path
-from tempfile import TemporaryDirectory
-from typing import Any, Callable
+from typing import Any, Mapping
 
 from .steps import PipelineAdapters, as_markdown, as_summary, invoke
 
@@ -27,28 +29,21 @@ class ProductionAdapters(PipelineAdapters):
         paper_config_path: str | Path | None = None,
         ocr_config_path: str | Path | None = None,
         ocr_backend: Any | None = None,
-        extractor: Callable[..., Any] | None = None,
-        translator: Callable[..., Any] | None = None,
-        validation: Callable[..., Any] | None = None,
         staging_root: str | Path | None = None,
         extract_template: str | None = None,
         output_language: str = "en",
+        ocr_model_map: Mapping[str, str] | tuple[tuple[str, str], ...] = (),
     ) -> "ProductionAdapters":
-        """Build adapters without requiring Supervisor to inject callables.
+        """Build real adapters from service configuration paths.
 
-        ``extractor`` and ``translator`` remain optional compatibility seams
-        for tests and old integrations.  When omitted, ``paper_config_path``
-        is mandatory and the existing public paper/translator APIs are wired.
+        Test doubles may replace ``ocr_backend``; extraction and translation
+        always use existing public provider APIs and never caller callables.
         """
-        paper_config = None
-        if paper_config_path is not None:
-            from deepresearch_flow.paper.config import load_config
+        if paper_config_path is None:
+            raise ValueError("production adapters require paper_config_path")
+        from deepresearch_flow.paper.config import load_config
 
-            paper_config = load_config(str(paper_config_path))
-        elif extractor is None or translator is None:
-            raise ValueError(
-                "production adapters require paper_config_path when extractor/translator are not supplied"
-            )
+        paper_config = load_config(str(paper_config_path))
 
         if ocr_backend is None:
             if ocr_config_path is None:
@@ -59,6 +54,7 @@ class ProductionAdapters(PipelineAdapters):
             ocr_backend = create_backend(load_ocr_config(Path(ocr_config_path)).backend)
 
         staging_path = Path(staging_root) if staging_root is not None else None
+        model_mapping = dict(ocr_model_map)
 
         schema_for_worker = None
         if paper_config is not None:
@@ -76,8 +72,23 @@ class ProductionAdapters(PipelineAdapters):
             worker_validator = None
 
         async def ocr(pdf_path: Path, model_key: str | None = None, **_: Any) -> str:
-            del model_key
-            return as_markdown(await invoke(ocr_backend.ocr, pdf_path))
+            selected_model = _resolve_ocr_model(model_key, model_mapping)
+            method = ocr_backend.ocr
+            try:
+                parameters = inspect.signature(method).parameters
+            except (TypeError, ValueError):
+                parameters = {}
+            accepts_model = "model" in parameters or any(
+                parameter.kind == inspect.Parameter.VAR_KEYWORD
+                for parameter in parameters.values()
+            )
+            model_parameter = "model" if accepts_model else "model_key" if "model_key" in parameters else None
+            if model_parameter is None:
+                configured_model = getattr(ocr_backend, "_model", getattr(ocr_backend, "model", None))
+                if configured_model != selected_model:
+                    raise ValueError("OCR backend cannot accept selected model")
+                return as_markdown(await invoke(method, pdf_path))
+            return as_markdown(await invoke(method, pdf_path, **{model_parameter: selected_model}))
 
         async def source_repair(markdown: str, **_: Any) -> str:
             from deepresearch_flow.recognize.organize import fix_markdown_text
@@ -123,10 +134,6 @@ class ProductionAdapters(PipelineAdapters):
             )
 
         async def extract(markdown: str, model_key: str | None = None, **kwargs: Any) -> dict[str, Any]:
-            if extractor is not None and paper_config is None:
-                return as_summary(await invoke(extractor, markdown, model_key, **kwargs))
-            if paper_config is None:
-                raise ValueError("paper config unavailable for extraction adapter")
             selector, provider, model_name = _resolve_model(
                 paper_config, model_key, "extract"
             )
@@ -142,9 +149,17 @@ class ProductionAdapters(PipelineAdapters):
             )
             validator = validate_schema(schema)
             root = staging_path or Path.cwd() / ".pipeline-staging"
+            job_key = _safe_job_key(str(kwargs.get("job_id") or "standalone"))
             root.mkdir(parents=True, exist_ok=True)
-            with TemporaryDirectory(prefix="extract-", dir=root) as directory:
-                stage = Path(directory)
+            if root.is_symlink():
+                raise ValueError("extraction staging root must not be a symlink")
+            root = root.resolve()
+            job_directory = root / job_key
+            if job_directory.exists() and job_directory.is_symlink():
+                raise ValueError("extraction staging job directory must not be a symlink")
+            stage = job_directory / "extract"
+            stage.mkdir(parents=True, exist_ok=True)
+            try:
                 input_path = stage / "source.md"
                 output_path = stage / "paper_infos.json"
                 errors_path = stage / "paper_errors.json"
@@ -192,16 +207,17 @@ class ProductionAdapters(PipelineAdapters):
                 if not isinstance(papers, list) or len(papers) != 1:
                     raise ValueError("paper extraction returned no single-job summary")
                 return as_summary(papers[0])
+            finally:
+                if stage.exists() and not stage.is_symlink() and stage.parent == job_directory:
+                    shutil.rmtree(stage)
+                    if job_directory.exists() and not job_directory.is_symlink() and not any(job_directory.iterdir()):
+                        job_directory.rmdir()
 
         async def translate(
             markdown: str,
             model_key: str | None = None,
             **kwargs: Any,
         ) -> str:
-            if translator is not None and paper_config is None:
-                return as_markdown(await invoke(translator, markdown, model_key, **kwargs))
-            if paper_config is None:
-                raise ValueError("paper config unavailable for translation adapter")
             selector, provider, model_name = _resolve_model(
                 paper_config, model_key, "translate"
             )
@@ -266,8 +282,8 @@ class ProductionAdapters(PipelineAdapters):
             math_repair=math_repair,
             organize=organize,
             extract=extract,
-            validate=validation or default_validate,
-            validation=validation or default_validate,
+            validate=default_validate,
+            validation=default_validate,
             summary_repair=summary_repair,
             translate=translate,
             translation_repair=translation_repair,
@@ -282,6 +298,24 @@ def _first_template(value: Any) -> str | None:
             if isinstance(item, str) and item:
                 return item
     return None
+
+
+def _safe_job_key(job_id: str) -> str:
+    try:
+        return str(uuid.UUID(job_id))
+    except ValueError:
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, f"deepresearch-flow:{job_id}"))
+
+
+def _resolve_ocr_model(model_key: str | None, mapping: Mapping[str, str]) -> str:
+    if not isinstance(model_key, str) or not model_key:
+        raise ValueError("OCR model selection is required")
+    if "/" in model_key:
+        return model_key
+    selected = mapping.get(model_key)
+    if not selected:
+        raise ValueError("OCR model selection cannot be mapped")
+    return selected
 
 
 def _resolve_model(

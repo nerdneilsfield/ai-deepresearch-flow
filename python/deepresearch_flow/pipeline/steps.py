@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol
+
+from .artifacts import Artifact
 
 
 class AdapterProtocol(Protocol):
@@ -39,6 +43,7 @@ class PreviewArtifacts:
     translated_markdown: Path
     digest: str
     bibtex_status: str
+    protected: tuple[Artifact, ...] = ()
 
     @property
     def preview_digest(self) -> str:
@@ -127,7 +132,31 @@ async def invoke(func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         accepted_kwargs = kwargs
         call_args = args
 
-    result = func(*call_args, **accepted_kwargs)
+    # Synchronous OCR/extraction/provider adapters must not occupy event-loop
+    # thread: heartbeat task needs run while remote call is in flight.
+    if inspect.iscoroutinefunction(func):
+        result = func(*call_args, **accepted_kwargs)
+    else:
+        # A daemon thread keeps synchronous provider I/O off event loop.  The
+        # result is polled instead of using executor callbacks: Supervisor's
+        # short-lived event loops may otherwise block after file I/O.
+        outcome: dict[str, Any] = {}
+        finished = threading.Event()
+
+        def run_sync() -> None:
+            try:
+                outcome["value"] = func(*call_args, **accepted_kwargs)
+            except BaseException as exc:  # propagate provider failure on loop
+                outcome["error"] = exc
+            finally:
+                finished.set()
+
+        threading.Thread(target=run_sync, name="pipeline-adapter", daemon=True).start()
+        while not finished.is_set():
+            await asyncio.sleep(0.01)
+        if "error" in outcome:
+            raise outcome["error"]
+        result = outcome.get("value")
     if inspect.isawaitable(result):
         return await result
     return result

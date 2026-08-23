@@ -43,6 +43,17 @@ def _model_group(raw: dict[str, Any], name: str) -> tuple[tuple[str, ...], str |
     return tuple(allowed), default
 
 
+def _model_map(value: Any, name: str) -> tuple[tuple[str, str], ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, Mapping) or any(
+        not isinstance(key, str) or not isinstance(model, str) or not key or not model
+        for key, model in value.items()
+    ):
+        raise ValueError(f"pipeline {name} model map must be a table of strings")
+    return tuple(sorted((str(key), str(model)) for key, model in value.items()))
+
+
 @dataclass(frozen=True)
 class ModelAllowlist:
     allowlist: tuple[str, ...] = ()
@@ -72,12 +83,15 @@ class PipelineConfig:
     heartbeat_seconds: int = 30
     validation_retry_limit: int = 2
     supporting_models: tuple[tuple[str, str], ...] = ()
+    ocr_model_map: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         # Accept mapping-shaped construction from service settings while
         # retaining a hash-stable immutable representation.
         if isinstance(self.supporting_models, Mapping):
             object.__setattr__(self, "supporting_models", tuple(sorted(self.supporting_models.items())))
+        if isinstance(self.ocr_model_map, Mapping):
+            object.__setattr__(self, "ocr_model_map", tuple(sorted(self.ocr_model_map.items())))
 
     @property
     def lease_duration_seconds(self) -> int:
@@ -146,6 +160,11 @@ def load_pipeline_config(path: str | Path) -> PipelineConfig:
         for key, value in supporting_raw.items()
     ):
         raise ValueError("pipeline supporting models must be a table of strings")
+    ocr_group = models.get("ocr", {})
+    ocr_map_raw = raw.get("ocr_model_map")
+    if ocr_map_raw is None and isinstance(ocr_group, dict):
+        ocr_map_raw = ocr_group.get("mapping", ocr_group.get("model_map"))
+    ocr_model_map = _model_map(ocr_map_raw, "ocr")
     # A selected model can also be specified independently of nested defaults.
     selected = raw.get("selected_models", {})
     if isinstance(selected, dict):
@@ -195,4 +214,5 @@ def load_pipeline_config(path: str | Path) -> PipelineConfig:
         heartbeat_seconds=_positive(raw.get("heartbeat_seconds", raw.get("heartbeat_interval_seconds")), "heartbeat_seconds", 30),
         validation_retry_limit=_positive(raw.get("validation_retry_limit"), "validation_retry_limit", 2),
         supporting_models=tuple(sorted(supporting_raw.items())),
+        ocr_model_map=ocr_model_map,
     )
