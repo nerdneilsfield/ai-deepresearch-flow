@@ -359,6 +359,163 @@ class PipelineState:
             rows = db.execute("SELECT id FROM batches ORDER BY created_at, id").fetchall()
         return [row["id"] for row in rows]
 
+    def list_batches_page(self, *, offset: int = 0, limit: int = 20) -> tuple[list[dict[str, Any]], int]:
+        """Return a stable, read-only batch page for administrative clients."""
+        if offset < 0 or limit <= 0:
+            raise ValueError("offset must be non-negative and limit must be positive")
+        with self._connect() as db:
+            total_row = db.execute("SELECT COUNT(*) AS count FROM batches").fetchone()
+            rows = db.execute(
+                "SELECT id,created_at,revision FROM batches "
+                "ORDER BY created_at,id LIMIT ? OFFSET ?",
+                (int(limit), int(offset)),
+            ).fetchall()
+            result: list[dict[str, Any]] = []
+            for row in rows:
+                jobs = self._batch_job_rows(db, str(row["id"]))
+                result.append(
+                    {
+                        "id": str(row["id"]),
+                        "created_at": str(row["created_at"]),
+                        "revision": int(row["revision"]),
+                        "jobs": jobs,
+                    }
+                )
+        return result, int(total_row["count"] if total_row else 0)
+
+    @staticmethod
+    def _batch_job_rows(db: sqlite3.Connection, batch_id: str) -> list[dict[str, Any]]:
+        rows = db.execute(
+            "SELECT id,batch_id,status,revision,created_at,updated_at,terminal_at,"
+            "preview_digest,bundle_digest,cancel_requested,selected_models FROM jobs "
+            "WHERE batch_id=? ORDER BY created_at,id",
+            (batch_id,),
+        ).fetchall()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            job = dict(row)
+            job["selected_models"] = json.loads(job["selected_models"])
+            job["cancel_requested"] = bool(job["cancel_requested"])
+            input_row = db.execute(
+                "SELECT filename,size FROM job_inputs WHERE job_id=?", (job["id"],)
+            ).fetchone()
+            job["input"] = dict(input_row) if input_row is not None else None
+            bib_row = db.execute(
+                "SELECT entry_key FROM job_bibtex WHERE job_id=?", (job["id"],)
+            ).fetchone()
+            job["bibtex_entry_key"] = None if bib_row is None else bib_row["entry_key"]
+            job["bibtex_entries"] = int(
+                db.execute(
+                    "SELECT COUNT(*) AS count FROM bibtex_entries WHERE batch_id=?", (batch_id,)
+                ).fetchone()["count"]
+            )
+            job["steps"] = [
+                dict(step)
+                for step in db.execute(
+                    "SELECT name,status FROM steps WHERE job_id=? ORDER BY rowid", (job["id"],)
+                ).fetchall()
+            ]
+            job["attempts"] = [
+                dict(attempt)
+                for attempt in db.execute(
+                    "SELECT step,status,error,error_type,retryable FROM step_attempts "
+                    "WHERE job_id=? ORDER BY id", (job["id"],)
+                ).fetchall()
+            ]
+            result.append(job)
+        return result
+
+    def get_batch(self, batch_id: str) -> dict[str, Any]:
+        """Return one batch and its jobs, or raise ``KeyError``."""
+        with self._connect() as db:
+            batch = db.execute(
+                "SELECT id,created_at,revision FROM batches WHERE id=?", (batch_id,)
+            ).fetchone()
+            if batch is None:
+                raise KeyError(batch_id)
+            jobs = self._batch_job_rows(db, batch_id)
+        return {
+            "id": str(batch["id"]),
+            "created_at": str(batch["created_at"]),
+            "revision": int(batch["revision"]),
+            "jobs": jobs,
+        }
+
+    def get_job_details(self, job_id: str) -> dict[str, Any]:
+        """Return job details needed by the protected admin review API."""
+        with self._connect() as db:
+            row = db.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if row is None:
+                raise KeyError(job_id)
+            input_row = db.execute(
+                "SELECT filename,digest,size,doi,title FROM job_inputs WHERE job_id=?",
+                (job_id,),
+            ).fetchone()
+            bib_row = db.execute(
+                "SELECT entry_key FROM job_bibtex WHERE job_id=?", (job_id,)
+            ).fetchone()
+            steps = db.execute(
+                "SELECT name,attempt,status,artifact_digest,artifact_size,model_key "
+                "FROM steps WHERE job_id=? ORDER BY rowid",
+                (job_id,),
+            ).fetchall()
+            attempts = db.execute(
+                "SELECT step,attempt,status,error,duration_ms,error_type,retryable,"
+                "started_at,finished_at FROM step_attempts WHERE job_id=? ORDER BY id",
+                (job_id,),
+            ).fetchall()
+            artifacts = db.execute(
+                "SELECT kind,path,digest,size,created_at FROM artifacts WHERE job_id=? ORDER BY kind",
+                (job_id,),
+            ).fetchall()
+            summary = db.execute(
+                "SELECT summary_json FROM job_summaries WHERE job_id=?", (job_id,)
+            ).fetchone()
+            bibtex_entries = db.execute(
+                "SELECT COUNT(*) AS count FROM bibtex_entries WHERE batch_id=?",
+                (row["batch_id"],),
+            ).fetchone()
+        result = dict(row)
+        result["selected_models"] = json.loads(result["selected_models"])
+        result["cancel_requested"] = bool(result["cancel_requested"])
+        result["input"] = dict(input_row) if input_row is not None else None
+        result["bibtex_entry_key"] = None if bib_row is None else bib_row["entry_key"]
+        result["bibtex_entries"] = int(bibtex_entries["count"] if bibtex_entries else 0)
+        result["steps"] = [dict(item) for item in steps]
+        result["attempts"] = [dict(item) for item in attempts]
+        result["artifacts"] = [dict(item) for item in artifacts]
+        result["summary"] = None if summary is None else json.loads(summary["summary_json"])
+        return result
+
+    def worker_status_snapshot(self, *, offline_after_seconds: float | None = None) -> dict[str, Any]:
+        """Summarize persisted heartbeats without exposing lease credentials."""
+        now = _utc()
+        with self._connect() as db:
+            heartbeat = db.execute("SELECT MAX(at) AS at FROM heartbeats").fetchone()
+            active = db.execute(
+                "SELECT COUNT(*) AS count FROM jobs WHERE status IN ('running','publishing','indexing')"
+            ).fetchone()
+        raw = heartbeat["at"] if heartbeat is not None else None
+        age: float | None = None
+        if raw:
+            try:
+                age = max(0.0, (now - _utc(datetime.fromisoformat(str(raw)))).total_seconds())
+            except ValueError:
+                age = None
+        threshold = float(offline_after_seconds) if offline_after_seconds is not None else float(self.heartbeat_seconds * 2)
+        if age is None:
+            status = "offline"
+        elif age > threshold:
+            status = "degraded" if int(active["count"] if active else 0) else "offline"
+        else:
+            status = "online"
+        return {
+            "status": status,
+            "last_heartbeat_at": str(raw) if raw else None,
+            "age_seconds": age,
+            "active_jobs": int(active["count"] if active else 0),
+        }
+
     def list_job_ids(self, statuses: set[str] | frozenset[str] | None = None) -> list[str]:
         """List jobs for Supervisor scheduling in stable creation order."""
         with self._connect() as db:
@@ -900,6 +1057,54 @@ class PipelineState:
             db.execute("UPDATE jobs SET status=?,terminal_at=?,lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,updated_at=?,revision=revision+1 WHERE id=?", (status, terminal, _stamp(_utc()), job_id))
             db.commit()
         return status
+
+    def retry_job(
+        self, job_id: str, *, selected_models: dict[str, str] | None = None
+    ) -> dict[str, Any]:
+        """Requeue one review/failed job, optionally invalidating changed models."""
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if row is None:
+                db.rollback()
+                raise KeyError(job_id)
+            if row["status"] not in {"failed", "needs_attention", "review_ready"}:
+                db.rollback()
+                raise ValueError("job is not retryable")
+            if row["lease_token"] is not None:
+                db.rollback()
+                raise ValueError("job is currently owned by a worker")
+            previous = json.loads(row["selected_models"])
+            next_models = dict(previous)
+            if selected_models is not None:
+                next_models.update({str(key): str(value) for key, value in selected_models.items()})
+            changed = [
+                name
+                for name in STEP_NAMES
+                if str(previous.get(name, "")) != str(next_models.get(name, ""))
+            ]
+            for name in changed:
+                start = PROCESSING_STEP_NAMES.index(name)
+                suffix = PROCESSING_STEP_NAMES[start:]
+                db.executemany(
+                    "UPDATE steps SET model_key=?,status='missing',artifact_digest=NULL,artifact_size=NULL "
+                    "WHERE job_id=? AND name=?",
+                    [(next_models.get(step), job_id, step) for step in suffix],
+                )
+                db.executemany(
+                    "DELETE FROM artifacts WHERE job_id=? AND kind=?",
+                    [(job_id, step) for step in suffix],
+                )
+                if name in {"ocr", "extract"} and row["batch_id"]:
+                    self._invalidate_batch_matching(db, str(row["batch_id"]))
+            db.execute(
+                "UPDATE jobs SET selected_models=?,status='queued',terminal_at=NULL,"
+                "cancel_requested=0,lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,"
+                "updated_at=?,revision=revision+1 WHERE id=?",
+                (json.dumps(next_models, sort_keys=True), _stamp(_utc()), job_id),
+            )
+            db.commit()
+        return {"job_id": job_id, "status": "queued", "selected_models": next_models}
 
     def queue_publication(self, job_id: str, expected_revision: int) -> dict[str, Any]:
         """CAS a reviewed Job into the durable publication queue.

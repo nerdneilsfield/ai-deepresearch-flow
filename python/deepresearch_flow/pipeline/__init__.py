@@ -90,6 +90,7 @@ from .worker import (
     Worker,
     worker_entrypoint,
 )
+from .api import create_admin_pipeline_app, create_pipeline_admin_app
 
 __all__ += [
     "FIXED_STEP_SEQUENCE",
@@ -107,4 +108,6 @@ __all__ += [
     "run_processing_worker",
     "STEP_SEQUENCE",
     "worker_entrypoint",
+    "create_pipeline_admin_app",
+    "create_admin_pipeline_app",
 ]

@@ -1452,6 +1452,11 @@ def create_app(
     admin_token: str | None = None,
     admin_embed_db: Path | None = None,
     admin_embed_dimensions: int | None = None,
+    pipeline_config: Any | None = None,
+    pipeline_state: Any | None = None,
+    pipeline_artifacts: Any | None = None,
+    pipeline_worker_status: Any | None = None,
+    pipeline_preview_regenerator: Any | None = None,
     advanced_config: Any | None = None,
 ) -> Starlette:
     cfg = SnapshotApiConfig(
@@ -1558,6 +1563,39 @@ def create_app(
     ]
     routes.append(Mount("/mcp", app=mcp_apps["bearer-streamable-http"]))
     routes.append(Mount("/mcp-sse", app=mcp_apps["bearer-sse"]))
+
+    # Keep optional pipeline routes physically absent unless both the feature
+    # and existing admin authentication are configured.  Importing and
+    # constructing queue services is intentionally lazy for public installs.
+    if admin_token and pipeline_config is not None and bool(getattr(pipeline_config, "enabled", False)):
+        from deepresearch_flow.pipeline.api import create_pipeline_admin_app
+        from deepresearch_flow.pipeline.artifacts import ArtifactStore
+        from deepresearch_flow.pipeline.state import PipelineState
+
+        if pipeline_artifacts is None:
+            pipeline_artifacts = ArtifactStore(
+                pipeline_config.work_dir,
+                pipeline_config.static_root,
+                retention_days=pipeline_config.retention_days,
+            )
+        if pipeline_state is None:
+            pipeline_state = PipelineState(
+                pipeline_config.queue_db,
+                lease_seconds=pipeline_config.lease_seconds,
+                heartbeat_seconds=pipeline_config.heartbeat_seconds,
+                artifact_store=pipeline_artifacts,
+            )
+        pipeline_app = create_pipeline_admin_app(
+            config=pipeline_config,
+            state=pipeline_state,
+            artifacts=pipeline_artifacts,
+            admin_token=admin_token,
+            worker_status_provider=pipeline_worker_status,
+            preview_regenerator=pipeline_preview_regenerator,
+        )
+        # This mount precedes the legacy /api/v1/admin mount: Starlette
+        # considers a matching Mount terminal even when its child returns 404.
+        routes.append(Mount("/api/v1/admin/pipeline", app=pipeline_app))
 
     if admin_token:
         from deepresearch_flow.paper.snapshot.admin import create_admin_app
