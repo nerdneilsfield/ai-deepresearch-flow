@@ -291,6 +291,66 @@ def test_load_from_snapshot_reads_source_and_translation(tmp_path: Path) -> None
     assert doc.translations == {"ja": "snapshot translation"}
 
 
+def test_load_from_snapshot_ignores_traversal_in_legacy_summary_keys(
+    tmp_path: Path,
+) -> None:
+    snapshot_db = tmp_path / "snapshot.db"
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    (static_dir / "summary").mkdir()
+    (static_dir / "outside").mkdir()
+    outside = tmp_path / "escape.json"
+    outside.write_text(json.dumps({"summary": "must not load"}), encoding="utf-8")
+
+    conn = sqlite3.connect(snapshot_db)
+    try:
+        init_snapshot_db(conn)
+        conn.execute(
+            """
+            INSERT INTO paper (
+              paper_id, paper_key, paper_key_type, doi, title, year, month,
+              publication_date, venue, preferred_summary_template, summary_preview,
+              paper_index, source_hash, output_language, provider, model,
+              prompt_template, extracted_at, pdf_content_hash, source_md_content_hash
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "../outside",
+                "legacy-key",
+                "title",
+                None,
+                "Unsafe paper",
+                "2024",
+                "",
+                "2024",
+                "ACL",
+                "simple",
+                "",
+                0,
+                None,
+                "en",
+                "provider",
+                "model",
+                "simple",
+                "2024-01-01T00:00:00Z",
+                None,
+                None,
+            ),
+        )
+        conn.execute(
+            "INSERT INTO paper_summary(paper_id, template_tag) VALUES (?, ?)",
+            ("../outside", "../../escape"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    docs = load_from_snapshot(snapshot_db, static_dir)
+
+    assert len(docs) == 1
+    assert docs[0].template_records == {}
+
+
 def test_load_from_snapshot_keeps_documents_when_artifacts_are_missing(tmp_path: Path) -> None:
     snapshot_db = tmp_path / "snapshot.db"
     static_dir = tmp_path / "static"

@@ -49,15 +49,21 @@ class PublicationWorker:
 
         stop_heartbeat = Event()
         lease_lost = Event()
+        active_guard: Any = None
+        guard_active = Event()
         heartbeat_interval = max(
             0.1, float(getattr(self.state, "heartbeat_seconds", 30))
         )
 
         def maintain_lease() -> None:
             while not stop_heartbeat.wait(heartbeat_interval):
+                if guard_active.is_set():
+                    continue
                 try:
                     self.state.heartbeat(job_id, lease.token)
                 except Exception:
+                    if guard_active.is_set():
+                        continue
                     lease_lost.set()
                     return
 
@@ -67,7 +73,6 @@ class PublicationWorker:
             daemon=True,
         )
         heartbeat_thread.start()
-        active_guard: Any = None
 
         def check_lease() -> None:
             if lease_lost.is_set():
@@ -110,17 +115,19 @@ class PublicationWorker:
                 if not callable(guard_method):
                     yield None
                     return
-                with guard_method(
-                    job_id,
-                    lease.token,
-                    owner=lease.owner,
-                    reject_cancel=current == "publish_queued",
-                ) as guard:
-                    active_guard = guard
-                    try:
+                try:
+                    with guard_method(
+                        job_id,
+                        lease.token,
+                        owner=lease.owner,
+                        reject_cancel=current == "publish_queued",
+                    ) as guard:
+                        active_guard = guard
+                        guard_active.set()
                         yield guard
-                    finally:
-                        active_guard = None
+                finally:
+                    guard_active.clear()
+                    active_guard = None
 
             def index_after_snapshot(value: PublicationBundle) -> Any:
                 if current == "publish_queued":

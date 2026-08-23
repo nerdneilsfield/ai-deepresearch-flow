@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+import hashlib
 from pathlib import Path
 import sqlite3
 from threading import Event, Thread
@@ -15,6 +16,7 @@ from deepresearch_flow.pipeline.publication import (
     PublicationBundle,
     PublicationConflict,
     PublicationError,
+    PublicationResource,
     PublicationWorker,
     WebDavFormalStore,
     build_publication_bundle,
@@ -191,6 +193,121 @@ def test_indexing_failure_returns_warning_and_retry_only_indexes(tmp_path: Path)
     assert recovered.already_published is True
     assert recovered.index_warning is None
     assert calls == ["fail", "ok"]
+
+
+def test_matching_receipt_retry_skips_formal_store_writes(tmp_path: Path) -> None:
+    bundle = _bundle(tmp_path)
+    db = tmp_path / "snapshot.sqlite3"
+    store = LocalFormalStore(tmp_path / "formal")
+    publish_bundle(bundle, db, store)
+
+    writes: list[str] = []
+
+    class UnavailableStore:
+        def put(self, relative_path: str, data: bytes) -> None:
+            writes.append(relative_path)
+            raise OSError("formal store unavailable")
+
+    result = publish_bundle(
+        bundle,
+        db,
+        UnavailableStore(),
+        indexer=lambda _: None,
+    )
+
+    assert result.already_published is True
+    assert writes == []
+
+
+def test_conflicting_receipt_fails_before_formal_store_writes(tmp_path: Path) -> None:
+    first = _bundle(tmp_path, job_id="receipt-owner")
+    conflicting = _bundle(tmp_path, job_id="receipt-owner", title="Different paper")
+    db = tmp_path / "snapshot.sqlite3"
+    publish_bundle(first, db, LocalFormalStore(tmp_path / "formal"))
+    writes: list[str] = []
+
+    class RecordingStore:
+        def put(self, relative_path: str, data: bytes) -> None:
+            writes.append(relative_path)
+
+    with pytest.raises(PublicationConflict):
+        publish_bundle(conflicting, db, RecordingStore())
+
+    assert writes == []
+
+
+def test_non_content_addressed_bundle_is_rejected_before_webdav_write(
+    tmp_path: Path,
+) -> None:
+    source = _bundle(tmp_path, job_id="source-bundle")
+    resource = PublicationResource(
+        relative_path="custom/stable.json",
+        content=b"immutable content",
+        digest=hashlib.sha256(b"immutable content").hexdigest(),
+        size=len(b"immutable content"),
+        media_type="application/json",
+    )
+    bundle = PublicationBundle(
+        job_id="custom-bundle",
+        paper_id=source.paper_id,
+        paper=source.paper,
+        bibtex=source.bibtex,
+        resource_map={resource.relative_path: resource},
+        references={},
+        bundle_digest="f" * 64,
+    )
+
+    class Storage:
+        def __init__(self) -> None:
+            self.uploads: list[tuple[str, bytes]] = []
+
+        def upload(self, path: str, data: bytes) -> None:
+            self.uploads.append((path, data))
+
+    storage = Storage()
+    with pytest.raises(ValueError, match="content-addressed"):
+        publish_bundle(
+            bundle,
+            tmp_path / "snapshot.sqlite3",
+            WebDavFormalStore(storage),
+        )
+
+    assert storage.uploads == []
+
+
+def test_snapshot_lock_is_released_before_indexing(tmp_path: Path) -> None:
+    first = _bundle(tmp_path, job_id="slow-index")
+    second = _bundle(tmp_path, job_id="fast-index", title="Second paper")
+    db = tmp_path / "snapshot.sqlite3"
+    store = LocalFormalStore(tmp_path / "formal")
+    index_started = Event()
+    release_index = Event()
+    second_snapshot_committed = Event()
+    results: list[object] = []
+
+    def slow_index(_: object) -> None:
+        index_started.set()
+        assert release_index.wait(timeout=3)
+
+    def publish_first() -> None:
+        results.append(publish_bundle(first, db, store, indexer=slow_index))
+
+    first_thread = Thread(target=publish_first, daemon=True)
+    first_thread.start()
+    assert index_started.wait(timeout=3)
+    try:
+        publish_bundle(
+            second,
+            db,
+            store,
+            indexer=lambda _: second_snapshot_committed.set(),
+        )
+        assert second_snapshot_committed.is_set()
+    finally:
+        release_index.set()
+        first_thread.join(timeout=3)
+
+    assert len(results) == 1
 
 
 def test_publish_queue_uses_expected_revision_cas(tmp_path: Path) -> None:
@@ -423,6 +540,50 @@ def test_publication_worker_heartbeat_keeps_blocking_indexer_lease_alive(
     thread.join(timeout=8)
 
     assert result and result[0].status == "published"
+    assert state.get_job(job_id)["status"] == "published"
+
+
+def test_guarded_index_ignores_heartbeat_lock_contention(
+    tmp_path: Path,
+) -> None:
+    from deepresearch_flow.pipeline import ArtifactStore, PipelineState
+
+    heartbeat_blocked = Event()
+
+    class GuardContentionState(PipelineState):
+        def heartbeat(self, job_id: str, lease_token: str, now=None):  # noqa: ANN001
+            if heartbeat_blocked.is_set():
+                raise sqlite3.OperationalError("database is locked")
+            return super().heartbeat(job_id, lease_token, now=now)
+
+    artifacts = ArtifactStore(tmp_path / "work", tmp_path / "formal")
+    state = GuardContentionState(
+        tmp_path / "queue.sqlite3",
+        artifact_store=artifacts,
+        heartbeat_seconds=1.0,
+    )
+    job_id = state.create_job()
+    state.admin_transition(job_id, "running")
+    state.admin_transition(job_id, "review_ready")
+    queue_publication(state, job_id, int(state.get_job(job_id)["revision"]))
+    bundle = _bundle(tmp_path, job_id=job_id)
+    started = Event()
+
+    def blocking_index(_: object) -> None:
+        heartbeat_blocked.set()
+        started.set()
+        time.sleep(1.3)
+
+    result = PublicationWorker(
+        state,
+        tmp_path / "snapshot.sqlite3",
+        LocalFormalStore(tmp_path / "formal"),
+        bundle_builder=lambda _: bundle,
+        indexer=blocking_index,
+    ).run_once()
+
+    assert started.is_set()
+    assert result[0].status == "published"
     assert state.get_job(job_id)["status"] == "published"
 
 

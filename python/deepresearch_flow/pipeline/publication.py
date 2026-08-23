@@ -16,7 +16,7 @@ import hashlib
 import inspect
 import json
 import mimetypes
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import sqlite3
 from datetime import datetime, timezone
@@ -69,8 +69,8 @@ def build_publication_bundle(
 
     ``resources`` accepts semantic names (``pdf``, ``source_markdown``,
     ``summary_json``, ``translated_markdown``) or already relative formal
-    paths.  The former become content-addressed paths; the latter are checked
-    for safe containment and retained.  ``Path`` and Task-3 ``Artifact``
+    paths.  The former become content-addressed paths; the latter must already
+    end in their verified content digest.  ``Path`` and Task-3 ``Artifact``
     values are read only from the configured work area when ``work_dir`` is
     supplied.
     """
@@ -213,6 +213,8 @@ def build_publication_bundle(
             references["summary_json"] = references[f"summary:{preferred_tag}"]
             aliases["summary_json"] = references["summary_json"]
 
+    _validate_publication_resources(resource_map, references)
+
     payload = {
         "job_id": normalized_job_id,
         "paper_id": paper_id,
@@ -289,26 +291,35 @@ def publish_bundle(
     receipt checks happen inside the globally serialized Snapshot transaction.
     A supplied queue guard is held through Snapshot commit and indexing.
     """
+    _validate_publication_resources(bundle.resource_map, bundle.references)
     db_path = Path(snapshot_db)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     _check_lease(lease_check)
-    _check_cancel(cancel_check)
-    for resource in bundle.resources:
-        _check_lease(lease_check)
+    receipt_hint = _read_publication_receipt(db_path, bundle.job_id)
+    if receipt_hint is not None and receipt_hint[0] != bundle.bundle_digest:
+        raise PublicationConflict(
+            f"publication receipt for job {bundle.job_id} has conflicting bundle digest"
+        )
+    if receipt_hint is None:
         _check_cancel(cancel_check)
-        try:
-            formal_store.put(resource.relative_path, resource.content)
-        except PublicationConflict:
-            raise
-        except Exception as exc:
-            raise PublicationError(
-                f"formal resource write failed for {resource.relative_path}: {exc}"
-            ) from exc
+        for resource in bundle.resources:
+            _check_lease(lease_check)
+            _check_cancel(cancel_check)
+            try:
+                formal_store.put(resource.relative_path, resource.content)
+            except PublicationConflict:
+                raise
+            except Exception as exc:
+                raise PublicationError(
+                    f"formal resource write failed for {resource.relative_path}: {exc}"
+                ) from exc
 
     guard_context = lease_guard() if lease_guard is not None else nullcontext()
+    already_published = False
+    published_paper_id = bundle.paper_id
+    published_bundle_digest = bundle.bundle_digest
     with guard_context as guard:
         _guard_check(guard, lease_check)
-        _guard_cancel(guard, cancel_check)
         with _SNAPSHOT_COMMIT_LOCK:
             _guard_check(guard, lease_check)
             conn = open_snapshot_connection(db_path)
@@ -316,7 +327,6 @@ def publish_bundle(
                 _guard_check(guard, lease_check)
                 conn.execute("BEGIN IMMEDIATE")
                 _guard_check(guard, lease_check)
-                _guard_cancel(guard, cancel_check)
                 receipt = conn.execute(
                     "SELECT bundle_digest,paper_id FROM pipeline_publication_receipt WHERE job_id=?",
                     (bundle.job_id,),
@@ -329,56 +339,60 @@ def publish_bundle(
                         raise PublicationConflict(
                             f"publication receipt for job {bundle.job_id} has conflicting bundle digest"
                         )
-                    return _run_indexer(
-                        bundle,
-                        paper_id=existing_paper_id,
-                        bundle_digest=existing_digest,
-                        already_published=True,
-                        indexer=indexer,
-                    )
+                    already_published = True
+                    published_paper_id = existing_paper_id
+                    published_bundle_digest = existing_digest
+                else:
+                    if receipt_hint is not None:
+                        raise PublicationError(
+                            f"publication receipt for job {bundle.job_id} disappeared"
+                        )
+                    _guard_cancel(guard, cancel_check)
 
-                duplicate = conn.execute(
-                    "SELECT paper_id FROM paper WHERE paper_id=?", (bundle.paper_id,)
-                ).fetchone()
-                if duplicate is not None:
-                    raise PublicationConflict(
-                        f"paper {bundle.paper_id} already exists without matching publication receipt"
-                    )
+                if not already_published:
+                    duplicate = conn.execute(
+                        "SELECT paper_id FROM paper WHERE paper_id=?", (bundle.paper_id,)
+                    ).fetchone()
+                    if duplicate is not None:
+                        raise PublicationConflict(
+                            f"paper {bundle.paper_id} already exists without matching publication receipt"
+                        )
 
-                _guard_cancel(guard, cancel_check)
-                stats = InsertStats()
-                try:
-                    insert_paper_metadata(
-                        conn, dict(plain(bundle.paper)), 0, stats, overwrite=False
+                if not already_published:
+                    _guard_cancel(guard, cancel_check)
+                    stats = InsertStats()
+                    try:
+                        insert_paper_metadata(
+                            conn, dict(plain(bundle.paper)), 0, stats, overwrite=False
+                        )
+                    except Exception as exc:
+                        raise PublicationError(f"Snapshot metadata commit failed: {exc}") from exc
+                    if stats.errors:
+                        raise PublicationError(
+                            f"Snapshot metadata commit failed: {stats.errors[0]['error']}"
+                        )
+                    if stats.skipped or not stats.paper_ids:
+                        raise PublicationConflict(
+                            f"paper {bundle.paper_id} already exists without matching publication receipt"
+                        )
+                    paper_id = str(stats.paper_ids[0])
+                    if paper_id != bundle.paper_id:
+                        raise PublicationConflict(
+                            f"bundle paper_id {bundle.paper_id} does not match Snapshot paper_id {paper_id}"
+                        )
+                    _update_snapshot_summary_references(conn, bundle, paper_id)
+                    _update_snapshot_static_references(conn, bundle, paper_id)
+                    _guard_check(guard, lease_check)
+                    _guard_cancel(guard, cancel_check)
+                    conn.execute(
+                        "INSERT INTO pipeline_publication_receipt(job_id,bundle_digest,paper_id,published_at) VALUES(?,?,?,?)",
+                        (bundle.job_id, bundle.bundle_digest, paper_id, _now_iso()),
                     )
-                except Exception as exc:
-                    raise PublicationError(f"Snapshot metadata commit failed: {exc}") from exc
-                if stats.errors:
-                    raise PublicationError(
-                        f"Snapshot metadata commit failed: {stats.errors[0]['error']}"
-                    )
-                if stats.skipped or not stats.paper_ids:
-                    raise PublicationConflict(
-                        f"paper {bundle.paper_id} already exists without matching publication receipt"
-                    )
-                paper_id = str(stats.paper_ids[0])
-                if paper_id != bundle.paper_id:
-                    raise PublicationConflict(
-                        f"bundle paper_id {bundle.paper_id} does not match Snapshot paper_id {paper_id}"
-                    )
-                _update_snapshot_summary_references(conn, bundle, paper_id)
-                _update_snapshot_static_references(conn, bundle, paper_id)
-                _guard_check(guard, lease_check)
-                _guard_cancel(guard, cancel_check)
-                conn.execute(
-                    "INSERT INTO pipeline_publication_receipt(job_id,bundle_digest,paper_id,published_at) VALUES(?,?,?,?)",
-                    (bundle.job_id, bundle.bundle_digest, paper_id, _now_iso()),
-                )
-                recompute_paper_index(conn)
-                recompute_facet_counts(conn)
-                recompute_facet_edges(conn)
-                _guard_check(guard, lease_check)
-                conn.commit()
+                    recompute_paper_index(conn)
+                    recompute_facet_counts(conn)
+                    recompute_facet_edges(conn)
+                    _guard_check(guard, lease_check)
+                    conn.commit()
             except PublicationCancelled:
                 conn.rollback()
                 raise
@@ -396,9 +410,9 @@ def publish_bundle(
 
         return _run_indexer(
             bundle,
-            paper_id=bundle.paper_id,
-            bundle_digest=bundle.bundle_digest,
-            already_published=False,
+            paper_id=published_paper_id,
+            bundle_digest=published_bundle_digest,
+            already_published=already_published,
             indexer=indexer,
         )
 
@@ -469,6 +483,64 @@ def _run_indexer(
         already_published=already_published,
         indexed=True,
     )
+
+
+def _read_publication_receipt(
+    db_path: Path, job_id: str
+) -> tuple[str, str] | None:
+    """Read receipt hint without mutating Snapshot or taking commit lock."""
+    if not db_path.is_file():
+        return None
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = sqlite3.connect(db_path, timeout=30)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA busy_timeout=30000")
+        row = connection.execute(
+            "SELECT bundle_digest,paper_id FROM pipeline_publication_receipt WHERE job_id=?",
+            (job_id,),
+        ).fetchone()
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower():
+            return None
+        raise PublicationError(f"publication receipt precheck failed: {exc}") from exc
+    finally:
+        if connection is not None:
+            connection.close()
+    if row is None:
+        return None
+    return str(row["bundle_digest"]), str(row["paper_id"])
+
+
+def _validate_publication_resources(
+    resource_map: Mapping[str, PublicationResource],
+    references: Mapping[str, str],
+) -> None:
+    """Reject paths that cannot be immutable without a WebDAV HEAD."""
+    map_paths = {str(path) for path in resource_map}
+    for map_path, resource in resource_map.items():
+        if not isinstance(resource, PublicationResource):
+            raise ValueError("publication resource has invalid type")
+        try:
+            normalized_path = safe_relative_path(resource.relative_path)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("publication resource path is unsafe") from exc
+        if normalized_path != str(map_path):
+            raise ValueError("publication resource map path does not match resource path")
+        if not isinstance(resource.content, bytes):
+            raise ValueError("publication resource content must be bytes")
+        digest = hashlib.sha256(resource.content).hexdigest()
+        if resource.digest != digest or resource.size != len(resource.content):
+            raise ValueError("publication resource digest does not match content")
+        if PurePosixPath(normalized_path).stem != digest:
+            raise ValueError(
+                "publication resource path must be content-addressed by digest"
+            )
+    missing = sorted(
+        str(path) for path in references.values() if str(path) not in map_paths
+    )
+    if missing:
+        raise ValueError("publication resource reference is missing from resource map")
 
 
 def _check_lease(check: Callable[[], None] | None) -> None:

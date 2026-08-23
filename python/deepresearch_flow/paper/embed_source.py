@@ -317,6 +317,7 @@ def load_from_snapshot(
 ) -> list[EmbedDocument]:
     conn = sqlite3.connect(str(snapshot_db))
     conn.row_factory = sqlite3.Row
+    static_root = static_export_dir.resolve()
     try:
         rows = conn.execute(
             """
@@ -395,12 +396,22 @@ def load_from_snapshot(
                     content_hash = str(tmpl_row["content_hash"] or "").strip().lower()
                     candidates: list[Path] = []
                     if resource_path:
-                        candidate = (static_export_dir / resource_path).resolve()
-                        if candidate.is_relative_to(static_export_dir.resolve()):
+                        candidate = (static_root / resource_path).resolve()
+                        if candidate.is_relative_to(static_root):
                             candidates.append(candidate)
                     # Existing CLI snapshots use stable per-paper/template
                     # paths.  Keep fallback for migrated and legacy databases.
-                    candidates.append(static_export_dir / "summary" / paper_id / f"{tag}.json")
+                    legacy_paper_id = _legacy_component(paper_id)
+                    legacy_tag = _legacy_component(tag)
+                    if legacy_paper_id and legacy_tag:
+                        legacy_path = _contained_path(
+                            static_root,
+                            "summary",
+                            legacy_paper_id,
+                            f"{legacy_tag}.json",
+                        )
+                        if legacy_path is not None:
+                            candidates.append(legacy_path)
                     for summary_path in candidates:
                         if not summary_path.exists():
                             continue
@@ -415,8 +426,8 @@ def load_from_snapshot(
 
                 source_hash = _row_text(row, "source_md_content_hash")
                 if source_hash:
-                    source_path = static_export_dir / "md" / f"{source_hash}.md"
-                    if source_path.exists():
+                    source_path = _contained_path(static_root, "md", f"{source_hash}.md")
+                    if source_path is not None and source_path.exists():
                         doc.source_md = source_path.read_text(encoding="utf-8")
 
                 for tr_row in conn.execute(
@@ -427,8 +438,10 @@ def load_from_snapshot(
                     md_hash = str(tr_row["md_content_hash"]).strip()
                     if not lang or not md_hash:
                         continue
-                    trans_path = static_export_dir / "md_translate" / lang / f"{md_hash}.md"
-                    if trans_path.exists():
+                    trans_path = _contained_path(
+                        static_root, "md_translate", lang, f"{md_hash}.md"
+                    )
+                    if trans_path is not None and trans_path.exists():
                         doc.translations[lang] = trans_path.read_text(encoding="utf-8")
 
                 docs.append(doc)
@@ -436,3 +449,16 @@ def load_from_snapshot(
         return docs
     finally:
         conn.close()
+
+
+def _contained_path(root: Path, *parts: str) -> Path | None:
+    candidate = (root.joinpath(*parts)).resolve()
+    return candidate if candidate.is_relative_to(root) else None
+
+
+def _legacy_component(value: str) -> str | None:
+    raw = str(value).strip()
+    if not raw or raw in {".", ".."} or "/" in raw or "\\" in raw:
+        return None
+    canonical = re.sub(r"[^A-Za-z0-9._-]+", "_", raw).strip("._")
+    return canonical or None
