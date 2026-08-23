@@ -138,6 +138,9 @@ class BatchIngestor:
         result: list[dict[str, object]] = []
         for key, entry in database.entries.items():
             fields = {str(name).lower(): str(value) for name, value in entry.fields.items()}
+            authors = entry.persons.get("author", ())
+            if authors:
+                fields["author"] = ", ".join(str(person) for person in authors)
             result.append({**fields, "fields": fields, "key": key, "type": entry.type})
         if not result:
             raise ValueError("BibTeX syntax is invalid")

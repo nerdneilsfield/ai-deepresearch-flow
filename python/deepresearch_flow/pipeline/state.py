@@ -38,6 +38,9 @@ PROCESSING_STEP_NAMES = (
 _MATCHING_STEP_NAMES = PROCESSING_STEP_NAMES[: PROCESSING_STEP_NAMES.index("summary_repair") + 1]
 ALL_STEP_NAMES = tuple(dict.fromkeys((*STEP_NAMES, *PROCESSING_STEP_NAMES)))
 _TERMINAL = {"published", "published_with_warning", "rejected", "cancelled"}
+_PREVIEW_ARTIFACT_KINDS = frozenset(
+    {"preview", "preview_pdf", "preview_source_md", "preview_summary_json", "preview_translated_md"}
+)
 _TRANSITIONS: dict[str, set[str]] = {
     "queued": {"running", "cancelled", "rejected"},
     "running": {"batch_waiting", "needs_attention", "review_ready", "failed", "cancelled", "publish_queued"},
@@ -224,7 +227,8 @@ class PipelineState:
                     id TEXT PRIMARY KEY, batch_id TEXT, status TEXT NOT NULL, created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL, terminal_at TEXT, lease_owner TEXT, lease_token TEXT, lease_expires_at TEXT,
                     cancel_requested INTEGER NOT NULL DEFAULT 0, revision INTEGER NOT NULL DEFAULT 0,
-                    preview_digest TEXT, bundle_digest TEXT, selected_models TEXT NOT NULL DEFAULT '{}',
+                    preview_digest TEXT, bundle_digest TEXT, preview_error TEXT,
+                    selected_models TEXT NOT NULL DEFAULT '{}',
                     config_fingerprint TEXT NOT NULL DEFAULT '',
                     FOREIGN KEY(batch_id) REFERENCES batches(id)
                 );
@@ -278,6 +282,9 @@ class PipelineState:
                 db.execute("ALTER TABLE step_attempts ADD COLUMN error_type TEXT")
             if "retryable" not in columns:
                 db.execute("ALTER TABLE step_attempts ADD COLUMN retryable INTEGER")
+            job_columns = {row["name"] for row in db.execute("PRAGMA table_info(jobs)").fetchall()}
+            if "preview_error" not in job_columns:
+                db.execute("ALTER TABLE jobs ADD COLUMN preview_error TEXT")
             result_columns = {row["name"] for row in db.execute("PRAGMA table_info(batch_match_results)").fetchall()}
             if "revision" not in result_columns:
                 db.execute("ALTER TABLE batch_match_results ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
@@ -814,6 +821,156 @@ class PipelineState:
             db.commit()
         return {"job_id": job_id, "entry_key": entry_key, "status": status}
 
+    def prepare_manual_bibtex(self, job_id: str, entry_key: str | None) -> dict[str, Any]:
+        """Persist manual binding while making every old preview unavailable.
+
+        The binding is deliberately left in ``needs_attention`` until the
+        caller's preview-regenerator seam reports success.  This makes a
+        failed filesystem/provider operation visible and repeatable instead
+        of returning a successful response with stale metadata.
+        """
+        stale_artifacts: list[dict[str, Any]] = []
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            job = db.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if job is None:
+                db.rollback()
+                raise KeyError(job_id)
+            if job["status"] not in {"needs_attention", "review_ready"}:
+                db.rollback()
+                raise ValueError("manual binding only allowed for needs_attention or review_ready jobs")
+            if job["lease_token"] is not None:
+                db.rollback()
+                raise ValueError("manual binding requires no active lease")
+            if entry_key is not None and db.execute(
+                "SELECT 1 FROM bibtex_entries WHERE batch_id=? AND entry_key=?",
+                (job["batch_id"], entry_key),
+            ).fetchone() is None:
+                db.rollback()
+                raise KeyError(entry_key)
+            stale_artifacts = [
+                dict(row)
+                for row in db.execute(
+                    "SELECT kind,path,digest,size FROM artifacts WHERE job_id=? AND kind IN (?,?,?,?,?)",
+                    (job_id, *_PREVIEW_ARTIFACT_KINDS),
+                ).fetchall()
+            ]
+            db.execute(
+                "INSERT OR REPLACE INTO job_bibtex(job_id,entry_key) VALUES(?,?)",
+                (job_id, entry_key),
+            )
+            db.executemany(
+                "UPDATE steps SET status='missing',artifact_digest=NULL,artifact_size=NULL "
+                "WHERE job_id=? AND name=?",
+                [(job_id, "preview")],
+            )
+            db.execute("DELETE FROM artifacts WHERE job_id=? AND kind IN (?,?,?,?,?)", (job_id, *_PREVIEW_ARTIFACT_KINDS))
+            db.execute(
+                "UPDATE jobs SET status='needs_attention',terminal_at=NULL,preview_digest=NULL," 
+                "bundle_digest=NULL,preview_error=?,cancel_requested=0,revision=revision+1,updated_at=? "
+                "WHERE id=?",
+                ("preview regeneration pending", _stamp(_utc()), job_id),
+            )
+            if job["batch_id"]:
+                self._invalidate_batch_matching(db, str(job["batch_id"]))
+            db.commit()
+        self._remove_preview_files(stale_artifacts, job_id)
+        return {
+            "job_id": job_id,
+            "entry_key": entry_key,
+            "status": "needs_attention",
+            "preview_invalidated": True,
+        }
+
+    def _remove_preview_files(self, artifacts: list[dict[str, Any]], job_id: str) -> None:
+        """Best-effort cleanup after metadata invalidation.
+
+        Metadata is deleted first, so a cleanup failure can leave only an
+        unreferenced file; it can never leave a stale protected preview
+        readable through the API.
+        """
+        if self.artifact_store is None:
+            return
+        for item in artifacts:
+            kind = str(item.get("kind") or "")
+            path_value = item.get("path")
+            if kind not in _PREVIEW_ARTIFACT_KINDS or not isinstance(path_value, str):
+                continue
+            try:
+                path = Path(path_value)
+                artifact = Artifact(
+                    job_id,
+                    kind,
+                    path,
+                    str(item.get("digest") or ""),
+                    int(item.get("size") or 0),
+                    self.artifact_store.formal_root,
+                )
+                if kind == "preview":
+                    self.artifact_store.validate_artifact(artifact, job_id, kind)
+                else:
+                    self.artifact_store.validate_protected_artifact(artifact, job_id, kind)
+                path.unlink(missing_ok=True)
+            except (OSError, ValueError):
+                continue
+
+    def mark_preview_regeneration_failed(self, job_id: str, error: str) -> dict[str, Any]:
+        """Keep binding visible while recording recoverable preview failure."""
+        safe_error = str(error).strip()[:500] or "preview regeneration failed"
+        stale_artifacts: list[dict[str, Any]] = []
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT status,lease_token FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if row is None:
+                db.rollback()
+                raise KeyError(job_id)
+            if row["lease_token"] is not None:
+                db.rollback()
+                raise ValueError("preview regeneration requires no active lease")
+            stale_artifacts = [
+                dict(item)
+                for item in db.execute(
+                    "SELECT kind,path,digest,size FROM artifacts WHERE job_id=? AND kind IN (?,?,?,?,?)",
+                    (job_id, *_PREVIEW_ARTIFACT_KINDS),
+                ).fetchall()
+            ]
+            db.execute(
+                "UPDATE steps SET status='missing',artifact_digest=NULL,artifact_size=NULL "
+                "WHERE job_id=? AND name='preview'",
+                (job_id,),
+            )
+            db.execute("DELETE FROM artifacts WHERE job_id=? AND kind IN (?,?,?,?,?)", (job_id, *_PREVIEW_ARTIFACT_KINDS))
+            db.execute(
+                "UPDATE jobs SET status='needs_attention',preview_error=?,preview_digest=NULL," 
+                "bundle_digest=NULL,terminal_at=NULL,updated_at=?,revision=revision+1 WHERE id=?",
+                (safe_error, _stamp(_utc()), job_id),
+            )
+            db.commit()
+        self._remove_preview_files(stale_artifacts, job_id)
+        return {"job_id": job_id, "status": "needs_attention", "preview_error": safe_error}
+
+    def mark_preview_regenerated(self, job_id: str) -> dict[str, Any]:
+        """Mark pending manual binding reviewable after regenerator success."""
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT status,lease_token FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if row is None:
+                db.rollback()
+                raise KeyError(job_id)
+            if row["lease_token"] is not None:
+                db.rollback()
+                raise ValueError("preview regeneration requires no active lease")
+            if row["status"] not in {"needs_attention", "review_ready"}:
+                db.rollback()
+                raise ValueError("preview regeneration is not pending")
+            db.execute(
+                "UPDATE jobs SET status='review_ready',preview_error=NULL,terminal_at=NULL," 
+                "updated_at=?,revision=revision+1 WHERE id=?",
+                (_stamp(_utc()), job_id),
+            )
+            db.commit()
+        return {"job_id": job_id, "status": "review_ready"}
+
     def get_job_bibtex_key(self, job_id: str) -> str | None:
         with self._connect() as db:
             row = db.execute("SELECT entry_key FROM job_bibtex WHERE job_id=?", (job_id,)).fetchone()
@@ -1100,7 +1257,7 @@ class PipelineState:
             db.execute(
                 "UPDATE jobs SET selected_models=?,status='queued',terminal_at=NULL,"
                 "cancel_requested=0,lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,"
-                "updated_at=?,revision=revision+1 WHERE id=?",
+                "preview_error=NULL,updated_at=?,revision=revision+1 WHERE id=?",
                 (json.dumps(next_models, sort_keys=True), _stamp(_utc()), job_id),
             )
             db.commit()
@@ -1146,13 +1303,16 @@ class PipelineState:
             if row is None:
                 db.rollback()
                 raise KeyError(job_id)
+            changed = False
             if row["status"] == "queued":
                 self._invalidate_batch_matching(db, str(row["batch_id"]) if row["batch_id"] else None)
                 db.execute("UPDATE jobs SET status='cancelled',terminal_at=?,cancel_requested=1,updated_at=? WHERE id=?", (_stamp(_utc()), _stamp(_utc()), job_id))
+                changed = True
             elif row["status"] not in _TERMINAL:
                 db.execute("UPDATE jobs SET cancel_requested=1,updated_at=? WHERE id=?", (_stamp(_utc()), job_id))
+                changed = not bool(row["cancel_requested"])
             db.commit()
-        return True
+        return changed
 
     def retry_indexing(self, job_id: str, expected_revision: int | None = None) -> dict[str, Any]:
         """Requeue only vector indexing after a published warning.

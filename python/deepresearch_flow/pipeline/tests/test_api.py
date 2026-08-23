@@ -17,16 +17,26 @@ from deepresearch_flow.paper.snapshot.api import create_app as create_snapshot_a
 TOKEN = "admin-token"
 
 
-def _make_app(tmp_path: Path, *, enabled: bool = True):
+def _make_app(
+    tmp_path: Path,
+    *,
+    enabled: bool = True,
+    worker_status_provider=None,
+    preview_regenerator=None,
+    max_pdf_bytes: int = 64,
+    max_batch_bytes: int = 128,
+    pdfs_per_batch: int = 3,
+    bibtex_max_bytes: int = 512,
+):
     config = PipelineConfig(
         enabled=enabled,
         work_dir=str(tmp_path / "work"),
         static_root=str(tmp_path / "formal"),
         queue_db=str(tmp_path / "queue.sqlite3"),
-        pdfs_per_batch=3,
-        max_pdf_bytes=64,
-        max_batch_bytes=128,
-        bibtex_max_bytes=512,
+        pdfs_per_batch=pdfs_per_batch,
+        max_pdf_bytes=max_pdf_bytes,
+        max_batch_bytes=max_batch_bytes,
+        bibtex_max_bytes=bibtex_max_bytes,
         ocr=ModelAllowlist(("ocr-a",), "ocr-a"),
         extract=ModelAllowlist(("extract-a",), "extract-a"),
         translate=ModelAllowlist(("translate-a",), "translate-a"),
@@ -34,7 +44,12 @@ def _make_app(tmp_path: Path, *, enabled: bool = True):
     artifacts = ArtifactStore(config.work_dir, config.static_root)
     state = PipelineState(config.queue_db, artifact_store=artifacts)
     app = create_pipeline_admin_app(
-        config=config, state=state, artifacts=artifacts, admin_token=TOKEN
+        config=config,
+        state=state,
+        artifacts=artifacts,
+        admin_token=TOKEN,
+        worker_status_provider=worker_status_provider,
+        preview_regenerator=preview_regenerator,
     )
     return app, state, artifacts
 
@@ -114,8 +129,8 @@ def test_multipart_upload_returns_public_batch_and_jobs(tmp_path: Path) -> None:
 def test_upload_validation_and_model_allowlist_are_http_errors(tmp_path: Path) -> None:
     app, state, _artifacts = _make_app(tmp_path)
     bad = _upload(app, files=[("pdfs", ("bad.pdf", b"not-pdf", "application/pdf"))])
-    assert bad.status_code == 400
-    assert bad.json()["error"] == "bad_request"
+    assert bad.status_code == 422
+    assert bad.json()["error"]["code"] == "invalid_upload"
     assert state.list_batches() == []
 
     duplicate = _upload(
@@ -125,7 +140,7 @@ def test_upload_validation_and_model_allowlist_are_http_errors(tmp_path: Path) -
             ("pdfs", ("b.pdf", b"%PDF-1.7 same", "application/pdf")),
         ],
     )
-    assert duplicate.status_code == 400
+    assert duplicate.status_code == 422
     assert state.list_batches() == []
 
     invalid_model = _upload(
@@ -133,12 +148,13 @@ def test_upload_validation_and_model_allowlist_are_http_errors(tmp_path: Path) -
         files=[("pdfs", ("a.pdf", b"%PDF-1.7 same", "application/pdf"))],
         data={"ocr_model": "unlisted"},
     )
-    assert invalid_model.status_code == 400
+    assert invalid_model.status_code == 422
+    assert invalid_model.json()["error"]["code"] == "invalid_model"
     assert state.list_batches() == []
 
 
 def test_publish_requires_current_revision_and_batch_is_partial(tmp_path: Path) -> None:
-    app, state, _artifacts = _make_app(tmp_path)
+    app, state, _artifacts = _make_app(tmp_path, preview_regenerator=lambda _job_id: True)
     response = _upload(
         app,
         files=[
@@ -182,7 +198,7 @@ def test_publish_requires_current_revision_and_batch_is_partial(tmp_path: Path) 
 
 
 def test_job_actions_and_manual_bibtex_binding_are_authenticated(tmp_path: Path) -> None:
-    app, state, _artifacts = _make_app(tmp_path)
+    app, state, _artifacts = _make_app(tmp_path, preview_regenerator=lambda _job_id: True)
     response = _upload(
         app,
         files=[
@@ -212,6 +228,230 @@ def test_job_actions_and_manual_bibtex_binding_are_authenticated(tmp_path: Path)
     cancel = _request(app, "POST", f"/jobs/{job_id}/cancel", headers=_headers())
     assert cancel.status_code == 200
     assert cancel.json()["job"]["status"] == "cancelled"
+
+
+def test_job_and_batch_details_expose_only_safe_bibtex_candidates(tmp_path: Path) -> None:
+    app, _state, _artifacts = _make_app(tmp_path)
+    response = _upload(
+        app,
+        files=[
+            ("pdfs", ("a.pdf", b"%PDF-1.7 a", "application/pdf")),
+            (
+                "bibtex",
+                (
+                    "papers.bib",
+                    b"@article{safe, title={Safe title}, author={Doe, Jane}, doi={10.1/abc}, api_key={never-show}, url={file:///secret/path}}",
+                    "text/plain",
+                ),
+            ),
+        ],
+    )
+    assert response.status_code == 200
+    batch_id = response.json()["batch_id"]
+    job_id = response.json()["job_ids"][0]
+
+    job = _request(app, "GET", f"/jobs/{job_id}", headers=_headers())
+    assert job.status_code == 200
+    candidates = job.json()["job"]["bibtex"]["candidates"]
+    assert candidates[0]["key"] == "safe"
+    assert candidates[0]["title"] == "Safe title"
+    assert candidates[0]["doi"] == "10.1/abc"
+    assert candidates[0]["author"] == "Doe, Jane"
+    assert "api_key" not in candidates[0]
+    assert "url" not in candidates[0]
+    assert "/secret" not in job.text
+
+    batch = _request(app, "GET", f"/batches/{batch_id}", headers=_headers())
+    assert batch.status_code == 200
+    assert batch.json()["batch"]["jobs"][0]["bibtex"]["candidates"][0]["key"] == "safe"
+
+
+def test_manual_binding_requires_regenerator_and_invalidates_stale_preview(tmp_path: Path) -> None:
+    app, state, artifacts = _make_app(tmp_path)
+    response = _upload(
+        app,
+        files=[
+            ("pdfs", ("a.pdf", b"%PDF-1.7 a", "application/pdf")),
+            ("bibtex", ("a.bib", b"@article{key, title={A}}", "text/plain")),
+        ],
+    )
+    job_id = response.json()["job_ids"][0]
+    lease = state.acquire_lease(job_id, "api-test")
+    assert lease is not None
+    old_preview = artifacts.protect(job_id, "preview_pdf", b"%PDF-1.7 old")
+    state.register_protected_artifact(job_id, "preview_pdf", old_preview, lease.token)
+    state.transition(job_id, "needs_attention", lease.token)
+
+    unavailable = _request(
+        app,
+        "PUT",
+        f"/jobs/{job_id}/bibtex-match",
+        json={"entry_key": "key"},
+        headers=_headers(),
+    )
+    assert unavailable.status_code == 409
+    assert unavailable.json()["error"]["code"] == "preview_regeneration_unavailable"
+    assert unavailable.json()["job"]["status"] == "needs_attention"
+    assert unavailable.json()["job"]["bibtex"]["entry_key"] is None
+
+    artifact = _request(app, "GET", f"/jobs/{job_id}/artifacts/pdf", headers=_headers())
+    assert artifact.status_code == 200
+
+
+def test_failed_preview_regeneration_is_recoverable_and_repeatable(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    def fail(job_id: str) -> bool:
+        calls.append(job_id)
+        raise RuntimeError("preview provider failed")
+
+    app, state, artifacts = _make_app(tmp_path, preview_regenerator=fail)
+    response = _upload(
+        app,
+        files=[
+            ("pdfs", ("a.pdf", b"%PDF-1.7 a", "application/pdf")),
+            ("bibtex", ("a.bib", b"@article{key, title={A}}", "text/plain")),
+        ],
+    )
+    job_id = response.json()["job_ids"][0]
+    lease = state.acquire_lease(job_id, "api-test")
+    assert lease is not None
+    old_preview = artifacts.protect(job_id, "preview_pdf", b"%PDF-1.7 old")
+    state.register_protected_artifact(job_id, "preview_pdf", old_preview, lease.token)
+    state.transition(job_id, "needs_attention", lease.token)
+
+    failed = _request(
+        app,
+        "PUT",
+        f"/jobs/{job_id}/bibtex-match",
+        json={"entry_key": "key"},
+        headers=_headers(),
+    )
+    assert failed.status_code == 409
+    assert failed.json()["error"]["code"] == "preview_regeneration_failed"
+    assert failed.json()["job"]["status"] == "needs_attention"
+    assert failed.json()["job"]["bibtex"]["entry_key"] == "key"
+    assert failed.json()["job"]["preview_digest"] is None
+    stale = _request(app, "GET", f"/jobs/{job_id}/artifacts/pdf", headers=_headers())
+    assert stale.status_code == 404
+
+    app.state.preview_regenerator = lambda current_job: calls.append(current_job) or True
+    retried = _request(
+        app,
+        "PUT",
+        f"/jobs/{job_id}/bibtex-match",
+        json={"entry_key": "key"},
+        headers=_headers(),
+    )
+    assert retried.status_code == 200
+    assert retried.json()["job"]["status"] == "review_ready"
+    assert retried.json()["job"]["bibtex"]["entry_key"] == "key"
+    assert calls == [job_id, job_id]
+
+
+def test_upload_and_body_error_taxonomy_is_stable(tmp_path: Path) -> None:
+    app, _state, _artifacts = _make_app(tmp_path, max_pdf_bytes=8, max_batch_bytes=16, pdfs_per_batch=1)
+
+    oversized = _upload(app, files=[("pdfs", ("large.pdf", b"%PDF-1.7 large", "application/pdf"))])
+    assert oversized.status_code == 413
+    assert oversized.json()["error"]["code"] == "payload_too_large"
+
+    too_many = _upload(
+        app,
+        files=[
+            ("pdfs", ("a.pdf", b"%PDF-a", "application/pdf")),
+            ("pdfs", ("b.pdf", b"%PDF-b", "application/pdf")),
+        ],
+    )
+    assert too_many.status_code == 413
+    assert too_many.json()["error"]["code"] == "payload_too_large"
+
+    invalid_bib = _upload(
+        app,
+        files=[
+            ("pdfs", ("a.pdf", b"%PDF-a", "application/pdf")),
+            ("bibtex", ("a.bib", b"not bibtex", "text/plain")),
+        ],
+    )
+    assert invalid_bib.status_code == 422
+    assert invalid_bib.json()["error"]["code"] == "invalid_upload"
+
+    malformed = _request(app, "POST", "/jobs/nope/publish", content=b"{", headers=_headers())
+    assert malformed.status_code == 422
+    assert malformed.json()["error"]["code"] == "invalid_body"
+
+    missing = _request(app, "GET", "/jobs/no-such-job", headers=_headers())
+    assert missing.status_code == 404
+    assert missing.json()["error"]["code"] == "not_found"
+
+
+def test_persisted_heartbeat_is_authoritative_over_provider_diagnostics(tmp_path: Path) -> None:
+    app, state, _artifacts = _make_app(
+        tmp_path,
+        worker_status_provider=lambda: {"status": "online", "active_jobs": 99},
+    )
+    before = _request(app, "GET", "/config", headers=_headers())
+    assert before.json()["worker"]["status"] == "offline"
+    job = _upload(app, files=[("pdfs", ("a.pdf", b"%PDF-a", "application/pdf"))]).json()["job_ids"][0]
+    lease = state.acquire_lease(job, "api-test")
+    assert lease is not None
+    after = _request(app, "GET", "/config", headers=_headers())
+    assert after.json()["worker"]["status"] == "online"
+    assert after.json()["worker"]["active_jobs"] == 1
+    assert after.json()["worker"]["diagnostics"]["active_jobs"] == 99
+
+
+def test_terminal_cancel_reports_conflict_or_explicit_noop(tmp_path: Path) -> None:
+    app, state, _artifacts = _make_app(tmp_path)
+    response = _upload(
+        app,
+        files=[
+            ("pdfs", ("published.pdf", b"%PDF-published", "application/pdf")),
+            ("pdfs", ("rejected.pdf", b"%PDF-rejected", "application/pdf")),
+            ("pdfs", ("cancelled.pdf", b"%PDF-cancelled", "application/pdf")),
+        ],
+    )
+    published, rejected, cancelled = response.json()["job_ids"]
+    state.admin_transition(published, "running")
+    state.admin_transition(published, "review_ready")
+    state.admin_transition(published, "publish_queued")
+    state.admin_transition(published, "publishing")
+    state.admin_transition(published, "indexing")
+    state.admin_transition(published, "published")
+    state.admin_transition(rejected, "rejected")
+    state.request_cancel(cancelled)
+
+    published_response = _request(app, "POST", f"/jobs/{published}/cancel", headers=_headers())
+    assert published_response.status_code == 409
+    assert published_response.json()["error"]["code"] == "terminal_state"
+    rejected_response = _request(app, "POST", f"/jobs/{rejected}/cancel", headers=_headers())
+    assert rejected_response.status_code == 409
+    cancelled_response = _request(app, "POST", f"/jobs/{cancelled}/cancel", headers=_headers())
+    assert cancelled_response.status_code == 200
+    assert cancelled_response.json()["cancel"]["no_op"] is True
+    assert cancelled_response.json()["job"]["status"] == "cancelled"
+
+
+def test_every_pipeline_route_requires_admin_authentication(tmp_path: Path) -> None:
+    app, _state, _artifacts = _make_app(tmp_path)
+    requests = [
+        ("GET", "/config"),
+        ("POST", "/batches"),
+        ("GET", "/batches"),
+        ("GET", "/batches/nope"),
+        ("POST", "/batches/nope/publish-ready"),
+        ("POST", "/batches/nope/cancel"),
+        ("GET", "/jobs/nope"),
+        ("POST", "/jobs/nope/retry"),
+        ("POST", "/jobs/nope/cancel"),
+        ("POST", "/jobs/nope/reject"),
+        ("POST", "/jobs/nope/publish"),
+        ("PUT", "/jobs/nope/bibtex-match"),
+        ("GET", "/jobs/nope/artifacts/pdf"),
+    ]
+    for method, path in requests:
+        response = _request(app, method, path)
+        assert response.status_code == 401, (method, path, response.text)
 
 
 def test_artifact_response_is_allowlisted_and_containment_safe(tmp_path: Path) -> None:

@@ -13,7 +13,7 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, cast
 
 from starlette.applications import Starlette
 from starlette.datastructures import UploadFile
@@ -66,8 +66,13 @@ _ARTIFACTS: dict[str, tuple[str, str, str]] = {
 }
 
 
-def _json_error(error: str, detail: str, status: int) -> JSONResponse:
-    return JSONResponse({"error": error, "detail": detail}, status_code=status)
+def _json_error(code: str, message: str, status: int) -> JSONResponse:
+    """Return one stable public error shape.
+
+    Internal exception text never crosses this boundary; callers choose a
+    short public message and machine-readable code.
+    """
+    return JSONResponse({"error": {"code": code, "message": message}}, status_code=status)
 
 
 def _authorized(request: Request, token: str) -> bool:
@@ -82,7 +87,9 @@ def _authorized(request: Request, token: str) -> bool:
 
 def _auth_error() -> JSONResponse:
     return JSONResponse(
-        {"error": "unauthorized"}, status_code=401, headers={"WWW-Authenticate": "Bearer"}
+        {"error": {"code": "unauthorized", "message": "authentication required"}},
+        status_code=401,
+        headers={"WWW-Authenticate": "Bearer"},
     )
 
 
@@ -108,39 +115,47 @@ def _parse_page(request: Request) -> tuple[int, int] | JSONResponse:
         page = int(raw_page or "1")
         page_size = int(raw_size or str(_PAGE_DEFAULT))
     except ValueError:
-        return _json_error("bad_request", "page and page_size must be integers", 400)
+        return _json_error("invalid_query", "page and page_size must be integers", 422)
     if page <= 0 or page_size <= 0:
-        return _json_error("bad_request", "page and page_size must be positive", 400)
+        return _json_error("invalid_query", "page and page_size must be positive", 422)
     if page_size > _PAGE_MAX:
-        return _json_error("bad_request", f"page_size exceeds limit ({_PAGE_MAX})", 400)
+        return _json_error("invalid_query", f"page_size exceeds limit ({_PAGE_MAX})", 422)
     return page, page_size
 
 
 def _public_worker_status(request: Request) -> dict[str, Any]:
-    provider = getattr(request.app.state, "worker_status_provider", None)
-    if callable(provider):
-        try:
-            value = provider()
-            if isinstance(value, Mapping):
-                status = str(value.get("status") or "offline")
-                if status not in {"online", "degraded", "offline"}:
-                    status = "offline"
-                return {
-                    "status": status,
-                    "last_heartbeat_at": value.get("last_heartbeat_at"),
-                    "age_seconds": value.get("age_seconds"),
-                    "active_jobs": value.get("active_jobs", 0),
-                }
-        except Exception:
-            logger.exception("pipeline worker status provider failed")
     state: PipelineState = request.app.state.pipeline_state
     try:
-        return state.worker_status_snapshot(
+        # Persisted heartbeat is authoritative.  Provider data is optional
+        # diagnostics only and cannot manufacture an online worker.
+        status = state.worker_status_snapshot(
             offline_after_seconds=float(request.app.state.pipeline_config.heartbeat_seconds * 2)
         )
     except Exception:
         logger.exception("pipeline worker heartbeat status unavailable")
-        return {"status": "offline", "last_heartbeat_at": None, "age_seconds": None, "active_jobs": 0}
+        status = {"status": "offline", "last_heartbeat_at": None, "age_seconds": None, "active_jobs": 0}
+    provider = getattr(request.app.state, "worker_status_provider", None)
+    diagnostics: dict[str, Any] = {}
+    if callable(provider):
+        try:
+            value = provider()
+            if isinstance(value, Mapping):
+                reported = str(value.get("status") or "unknown")
+                diagnostics = {
+                    "reported_status": reported
+                    if reported in {"online", "degraded", "offline"}
+                    else "unknown",
+                    "active_jobs": int(value.get("active_jobs", 0))
+                    if isinstance(value.get("active_jobs", 0), (int, float))
+                    and not isinstance(value.get("active_jobs", 0), bool)
+                    else 0,
+                }
+        except Exception:
+            logger.warning("pipeline worker status provider failed")
+            diagnostics = {"reported_status": "unavailable", "active_jobs": 0}
+    if diagnostics:
+        status = {**status, "diagnostics": diagnostics}
+    return status
 
 
 def _display_filename(value: object) -> str | None:
@@ -179,6 +194,101 @@ def _public_error_type(value: object) -> str | None:
     return candidate
 
 
+_SAFE_BIBTEX_FIELDS = frozenset(
+    {
+        "title",
+        "author",
+        "doi",
+        "year",
+        "month",
+        "journal",
+        "booktitle",
+        "publisher",
+        "volume",
+        "number",
+        "pages",
+        "edition",
+        "institution",
+        "school",
+        "series",
+        "chapter",
+    }
+)
+
+
+def _safe_bibtex_text(value: object, *, limit: int = 2000) -> str | None:
+    if value is None:
+        return None
+    text = re.sub(r"[\x00-\x1f\x7f]", " ", str(value)).strip()
+    return text[:limit] or None
+
+
+def _safe_bibtex_key(value: object) -> str | None:
+    key = _safe_bibtex_text(value, limit=200)
+    if key is None or "/" in key or "\\" in key:
+        return None
+    if any(marker in key.casefold() for marker in ("secret", "token", "password", "api_key")):
+        return None
+    return key
+
+
+def _safe_bibtex_entry(entry: Mapping[str, Any]) -> dict[str, str]:
+    """Project persisted BibTeX into review-safe bibliographic fields."""
+    result: dict[str, str] = {}
+    key = _safe_bibtex_key(entry.get("key"))
+    entry_type = _safe_bibtex_text(entry.get("type"), limit=64)
+    if key is not None:
+        result["key"] = key
+    if entry_type is not None:
+        result["type"] = entry_type
+    raw_fields = entry.get("fields")
+    fields: Mapping[str, Any] = raw_fields if isinstance(raw_fields, Mapping) else entry
+    for name in sorted(_SAFE_BIBTEX_FIELDS):
+        value = fields.get(name)
+        if value is None and fields is not entry:
+            value = entry.get(name)
+        safe = _safe_bibtex_text(value)
+        if safe is not None:
+            result[name] = safe
+    return result
+
+
+def _safe_bibtex_candidates(entries: object) -> list[dict[str, str]]:
+    if not isinstance(entries, list):
+        return []
+    result: list[dict[str, str]] = []
+    for raw_entry in entries:
+        if not isinstance(raw_entry, Mapping):
+            continue
+        entry = _safe_bibtex_entry(cast(Mapping[str, Any], raw_entry))
+        if entry.get("key"):
+            result.append(entry)
+    return result
+
+
+def _safe_match_diagnostics(job_id: str, result: object, *, has_entries: bool) -> dict[str, Any]:
+    if not has_entries:
+        return {"reason": "not_provided", "candidate_keys": []}
+    if not isinstance(result, Mapping):
+        return {"reason": "unmatched", "candidate_keys": []}
+    for name in ("matches", "needs_attention"):
+        values = result.get(name)
+        if not isinstance(values, list):
+            continue
+        for item in values:
+            if not isinstance(item, Mapping) or str(item.get("job_id")) != job_id:
+                continue
+            reason = _public_error_type(item.get("reason")) or "unmatched"
+            keys = item.get("candidate_keys")
+            safe_keys = [
+                    text
+                for raw in keys
+                if (text := _safe_bibtex_key(raw)) is not None
+            ] if isinstance(keys, list) else []
+            return {"reason": reason, "candidate_keys": safe_keys}
+    return {"reason": "unmatched", "candidate_keys": []}
+
+
 def _public_config(config: PipelineConfig, worker_status: dict[str, Any]) -> dict[str, Any]:
     """Return allowlists and limits, excluding all configured paths."""
     return {
@@ -214,8 +324,9 @@ def _job_summary(job: Mapping[str, Any]) -> dict[str, Any]:
     steps = job.get("steps") or []
     completed = sum(1 for item in steps if str(item.get("status")) == "complete")
     entries = job.get("bibtex_entries")
+    entry_count = len(entries) if isinstance(entries, list) else int(entries or 0)
     entry_key = job.get("bibtex_entry_key")
-    if not entries:
+    if not entry_count:
         bibtex_status = "not_provided"
     elif entry_key:
         bibtex_status = "matched"
@@ -243,9 +354,15 @@ def _job_summary(job: Mapping[str, Any]) -> dict[str, Any]:
             if not isinstance(failed, Mapping) or failed.get("retryable") is None
             else bool(failed.get("retryable"))
         ),
-        "bibtex": {"status": bibtex_status, "entry_key": entry_key},
+        "bibtex": {
+            "status": bibtex_status,
+            "entry_key": entry_key,
+            "candidates": list(job.get("bibtex_candidates") or []),
+            "diagnostics": dict(job.get("bibtex_diagnostics") or {}),
+        },
         "preview_digest": job.get("preview_digest"),
         "bundle_digest": job.get("bundle_digest"),
+        "preview_error": _public_error(job.get("preview_error")),
         "cancel_requested": bool(job.get("cancel_requested")),
     }
 
@@ -306,8 +423,24 @@ def _public_artifact_kind(internal_kind: str) -> str | None:
     return None
 
 
-def _batch_dto(batch: Mapping[str, Any]) -> dict[str, Any]:
-    jobs = [_job_summary(job) for job in batch.get("jobs") or []]
+def _batch_dto(
+    batch: Mapping[str, Any],
+    *,
+    bibtex_entries: object = None,
+    match_result: object = None,
+) -> dict[str, Any]:
+    candidates = _safe_bibtex_candidates(bibtex_entries)
+    jobs_for_dto: list[dict[str, Any]] = []
+    for raw_job in batch.get("jobs") or []:
+        if not isinstance(raw_job, Mapping):
+            continue
+        job = dict(raw_job)
+        job["bibtex_candidates"] = candidates
+        job["bibtex_diagnostics"] = _safe_match_diagnostics(
+            str(job.get("id")), match_result, has_entries=bool(candidates)
+        )
+        jobs_for_dto.append(job)
+    jobs = [_job_summary(job) for job in jobs_for_dto]
     status_counts: dict[str, int] = {}
     for job in jobs:
         status = str(job["status"])
@@ -355,10 +488,27 @@ async def _json_body(request: Request, *, allow_empty: bool = False) -> dict[str
             return {}
         value = json.loads(raw)
     except (json.JSONDecodeError, ValueError):
-        return _json_error("bad_request", "invalid JSON body", 400)
+        return _json_error("invalid_body", "invalid JSON body", 422)
     if not isinstance(value, dict):
-        return _json_error("bad_request", "JSON body must be an object", 400)
+        return _json_error("invalid_body", "JSON body must be an object", 422)
     return {str(key): item for key, item in value.items()}
+
+
+def _upload_error(exc: BaseException) -> JSONResponse:
+    """Map parser/ingestor failures to stable upload-facing taxonomy."""
+    message = str(exc).casefold()
+    if any(
+        marker in message
+        for marker in (
+            "exceeds limit",
+            "too many files",
+            "maximum size",
+            "payload too large",
+            "part exceeded",
+        )
+    ):
+        return _json_error("payload_too_large", "upload exceeds configured limit", 413)
+    return _json_error("invalid_upload", "uploaded PDF, BibTeX, or form fields are invalid", 422)
 
 
 async def _config(request: Request) -> Response:
@@ -377,13 +527,13 @@ async def _create_batch(request: Request) -> Response:
             pdf_values = form.getlist("pdfs[]") + form.getlist("pdfs")
             pdfs = [value for value in pdf_values if isinstance(value, UploadFile)]
             if len(pdfs) != len(pdf_values):
-                return _json_error("bad_request", "pdfs must be uploaded files", 400)
+                return _json_error("invalid_upload", "pdfs must be uploaded files", 422)
             bib_value = form.get("bibtex")
             if bib_value is None:
                 bib_value = form.get("bib")
             bibtex = bib_value if isinstance(bib_value, UploadFile) else None
             if bib_value is not None and bibtex is None:
-                return _json_error("bad_request", "bibtex must be an uploaded file", 400)
+                return _json_error("invalid_upload", "bibtex must be an uploaded file", 422)
             values: dict[str, Any] = {}
             for name in ("ocr", "extract", "translate"):
                 for field in (f"{name}_model", f"{name}_model_key", name):
@@ -391,16 +541,19 @@ async def _create_batch(request: Request) -> Response:
                     if isinstance(candidate, str) and candidate.strip():
                         values[name] = candidate.strip()
                         break
-            models = _safe_model_selection(config, values)
+            try:
+                models = _safe_model_selection(config, values)
+            except ValueError:
+                return _json_error("invalid_model", "model selection is outside allowlist", 422)
             if not pdfs:
-                return _json_error("bad_request", "at least one PDF is required", 400)
+                return _json_error("invalid_upload", "at least one PDF is required", 422)
             result = BatchIngestor(config, state, artifacts).ingest(
                 [UploadPart(str(file.filename or ""), file.file) for file in pdfs],
                 bibtex=(UploadPart(str(bibtex.filename or ""), bibtex.file) if bibtex else None),
                 selected_models=models,
             )
     except (ValueError, MultiPartException) as exc:
-        return _json_error("bad_request", str(exc), 400)
+        return _upload_error(exc)
     except Exception:
         logger.exception("pipeline batch ingestion failed")
         return _json_error("internal_error", "batch ingestion failed", 500)
@@ -411,7 +564,11 @@ async def _create_batch(request: Request) -> Response:
         return _json_error("internal_error", "batch creation failed", 500)
     return JSONResponse(
         {
-            "batch": _batch_dto(batch),
+            "batch": _batch_dto(
+                batch,
+                bibtex_entries=state.list_bibtex_entries(result.batch_id),
+                match_result=state.get_batch_match_result(result.batch_id),
+            ),
             "batch_id": result.batch_id,
             "job_ids": list(result.jobs),
             "bibtex": {"status": result.bibtex_status},
@@ -437,28 +594,51 @@ async def _list_batches(request: Request) -> Response:
             "page_size": page_size,
             "total": total,
             "has_more": page * page_size < total,
-            "items": [_batch_dto(batch) for batch in batches],
+            "items": [
+                _batch_dto(
+                    batch,
+                    bibtex_entries=state.list_bibtex_entries(str(batch["id"])),
+                    match_result=state.get_batch_match_result(str(batch["id"])),
+                )
+                for batch in batches
+            ],
         }
     )
 
 
 async def _get_batch(request: Request) -> Response:
     _config_value, state, _artifacts = _ctx(request)
+    batch_id = str(request.path_params["batch_id"])
     try:
-        batch = state.get_batch(str(request.path_params["batch_id"]))
+        batch = state.get_batch(batch_id)
+        entries = state.list_bibtex_entries(batch_id)
+        match_result = state.get_batch_match_result(batch_id)
     except KeyError:
         return _json_error("not_found", "batch not found", 404)
     except Exception:
         logger.exception("pipeline batch detail lookup failed")
         return _json_error("internal_error", "batch lookup failed", 500)
-    return JSONResponse({"batch": _batch_dto(batch)})
+    return JSONResponse(
+        {"batch": _batch_dto(batch, bibtex_entries=entries, match_result=match_result)}
+    )
 
 
 async def _get_job(request: Request) -> Response:
     _config_value, state, _artifacts = _ctx(request)
+    job_id = str(request.path_params["job_id"])
     try:
-        job = state.get_job_details(str(request.path_params["job_id"]))
-        job["bibtex_entries"] = state.list_bibtex_entries(str(job.get("batch_id"))) if job.get("batch_id") else []
+        job = state.get_job_details(job_id)
+        entries = state.list_bibtex_entries(str(job.get("batch_id"))) if job.get("batch_id") else []
+        job["bibtex_entries"] = entries
+        job["bibtex_candidates"] = _safe_bibtex_candidates(entries)
+        match_result = (
+            state.get_batch_match_result(str(job.get("batch_id")))
+            if job.get("batch_id")
+            else None
+        )
+        job["bibtex_diagnostics"] = _safe_match_diagnostics(
+            job_id, match_result, has_entries=bool(job["bibtex_candidates"])
+        )
     except KeyError:
         return _json_error("not_found", "job not found", 404)
     except Exception:
@@ -474,6 +654,9 @@ async def _retry_job(request: Request) -> Response:
         return body_value
     try:
         models = _safe_model_selection(config, body_value)
+    except ValueError:
+        return _json_error("invalid_model", "model selection is outside allowlist", 422)
+    try:
         job_id = str(request.path_params["job_id"])
         current = state.get_job(job_id)
         if str(current.get("status")) == "published_with_warning":
@@ -481,7 +664,7 @@ async def _retry_job(request: Request) -> Response:
             if expected_revision is not None and (
                 isinstance(expected_revision, bool) or not isinstance(expected_revision, int)
             ):
-                return _json_error("bad_request", "expected_revision must be an integer", 400)
+                return _json_error("invalid_body", "expected_revision must be an integer", 422)
             if models:
                 return _json_error("conflict", "published warning can only retry indexing", 409)
             result = state.retry_indexing(job_id, expected_revision=expected_revision)
@@ -500,9 +683,19 @@ async def _retry_job(request: Request) -> Response:
 
 async def _cancel_job(request: Request) -> Response:
     _config_value, state, _artifacts = _ctx(request)
+    job_id = str(request.path_params["job_id"])
     try:
-        state.request_cancel(str(request.path_params["job_id"]))
-        job = state.get_job_details(str(request.path_params["job_id"]))
+        current = state.get_job(job_id)
+        current_status = str(current.get("status"))
+        if current_status in {"published", "published_with_warning", "rejected"}:
+            return _json_error("terminal_state", "job cannot be cancelled from terminal state", 409)
+        if current_status == "cancelled":
+            job = state.get_job_details(job_id)
+            return JSONResponse(
+                {"job": _job_dto(job), "cancel": {"requested": False, "no_op": True}}
+            )
+        changed = state.request_cancel(job_id)
+        job = state.get_job_details(job_id)
     except KeyError:
         return _json_error("not_found", "job not found", 404)
     except ValueError as exc:
@@ -510,7 +703,9 @@ async def _cancel_job(request: Request) -> Response:
     except Exception:
         logger.exception("pipeline cancellation failed")
         return _json_error("internal_error", "cancellation failed", 500)
-    return JSONResponse({"job": _job_dto(job)})
+    return JSONResponse(
+        {"job": _job_dto(job), "cancel": {"requested": bool(changed), "no_op": not bool(changed)}}
+    )
 
 
 async def _reject_job(request: Request) -> Response:
@@ -535,7 +730,7 @@ async def _publish_job(request: Request) -> Response:
         return body_value
     revision = body_value.get("expected_revision")
     if isinstance(revision, bool) or not isinstance(revision, int):
-        return _json_error("bad_request", "expected_revision must be an integer", 400)
+        return _json_error("invalid_body", "expected_revision must be an integer", 422)
     try:
         result = state.queue_publication(str(request.path_params["job_id"]), revision)
         job = state.get_job_details(str(request.path_params["job_id"]))
@@ -557,31 +752,83 @@ async def _bibtex_match(request: Request) -> Response:
     has_key = "entry_key" in body_value or "bibtex_key" in body_value
     explicit_none = body_value.get("no_bibtex") is True
     if not has_key and not explicit_none:
-        return _json_error("bad_request", "entry_key or no_bibtex is required", 400)
+        return _json_error("invalid_body", "entry_key or no_bibtex is required", 422)
     raw_key = body_value.get("entry_key", body_value.get("bibtex_key"))
     if explicit_none:
         raw_key = None
     if raw_key is not None and (not isinstance(raw_key, str) or not raw_key.strip()):
-        return _json_error("bad_request", "entry_key must be a non-empty string or null", 400)
+        return _json_error("invalid_body", "entry_key must be a non-empty string or null", 422)
+    job_id = str(request.path_params["job_id"])
     try:
-        result = state.bind_job_bibtex(
-            str(request.path_params["job_id"]), None if raw_key is None else raw_key.strip()
+        current = state.get_job_details(job_id)
+    except KeyError:
+        return _json_error("not_found", "job not found", 404)
+    callback = getattr(request.app.state, "preview_regenerator", None)
+    if not callable(callback):
+        return JSONResponse(
+            {
+                "error": {
+                    "code": "preview_regeneration_unavailable",
+                    "message": "preview regeneration is not configured",
+                },
+                "job": _job_dto(
+                    {
+                        **current,
+                        "bibtex_candidates": _safe_bibtex_candidates(
+                            state.list_bibtex_entries(str(current.get("batch_id")))
+                            if current.get("batch_id")
+                            else []
+                        ),
+                        "bibtex_diagnostics": {"reason": "unmatched", "candidate_keys": []},
+                    }
+                ),
+            },
+            status_code=409,
         )
-        callback = getattr(request.app.state, "preview_regenerator", None)
-        if callable(callback):
-            regenerated = callback(str(request.path_params["job_id"]))
-            if inspect.isawaitable(regenerated):
-                await regenerated
-        job = state.get_job_details(str(request.path_params["job_id"]))
-    except KeyError as exc:
-        if str(exc).strip("'") == str(request.path_params["job_id"]):
-            return _json_error("not_found", "job not found", 404)
-        return _json_error("bad_request", "BibTeX entry not found", 400)
+    try:
+        result = state.prepare_manual_bibtex(job_id, None if raw_key is None else raw_key.strip())
+    except KeyError:
+        return _json_error("invalid_bibtex_match", "BibTeX entry not found", 422)
     except ValueError as exc:
         return _json_error("conflict", str(exc), 409)
     except Exception:
-        logger.exception("pipeline BibTeX binding failed")
+        logger.exception("pipeline BibTeX binding preparation failed")
         return _json_error("internal_error", "BibTeX binding failed", 500)
+    try:
+        regenerated = callback(job_id)
+        if inspect.isawaitable(regenerated):
+            regenerated = await regenerated
+        if regenerated is False:
+            raise RuntimeError("preview regeneration failed")
+        state.mark_preview_regenerated(job_id)
+    except Exception:
+        logger.exception("pipeline preview regeneration failed")
+        try:
+            state.mark_preview_regeneration_failed(job_id, "preview regeneration failed")
+            job = state.get_job_details(job_id)
+        except Exception:
+            logger.exception("pipeline preview failure state could not be persisted")
+            return _json_error("internal_error", "preview regeneration failed", 500)
+        entries = state.list_bibtex_entries(str(job.get("batch_id"))) if job.get("batch_id") else []
+        job["bibtex_entries"] = entries
+        job["bibtex_candidates"] = _safe_bibtex_candidates(entries)
+        job["bibtex_diagnostics"] = {"reason": "manual", "candidate_keys": []}
+        return JSONResponse(
+            {
+                "error": {
+                    "code": "preview_regeneration_failed",
+                    "message": "preview regeneration failed; retry this binding",
+                },
+                "job": _job_dto(job),
+            },
+            status_code=409,
+        )
+    job = state.get_job_details(job_id)
+    entries = state.list_bibtex_entries(str(job.get("batch_id"))) if job.get("batch_id") else []
+    job["bibtex_entries"] = entries
+    job["bibtex_candidates"] = _safe_bibtex_candidates(entries)
+    job["bibtex_diagnostics"] = {"reason": "manual", "candidate_keys": []}
+    result = {**result, "status": "review_ready"}
     return JSONResponse({"job": _job_dto(job), "binding": result})
 
 
@@ -594,7 +841,7 @@ async def _publish_ready(request: Request) -> Response:
     if items is None:
         items = body_value.get("jobs")
     if not isinstance(items, list):
-        return _json_error("bad_request", "items must be an array", 400)
+        return _json_error("invalid_body", "items must be an array", 422)
     batch_id = str(request.path_params["batch_id"])
     try:
         batch = state.get_batch(batch_id)
@@ -604,26 +851,61 @@ async def _publish_ready(request: Request) -> Response:
     outcomes: list[dict[str, Any]] = []
     for item in items:
         if not isinstance(item, Mapping):
-            outcomes.append({"status": "bad_request", "error": "item must be an object"})
+            outcomes.append(
+                {
+                    "status": "invalid",
+                    "error": {"code": "invalid_body", "message": "item must be an object"},
+                }
+            )
             continue
         job_id = str(item.get("job_id") or "")
         revision = item.get("expected_revision")
         if job_id not in membership:
-            outcomes.append({"job_id": job_id, "status": "not_found", "error": "job is not in batch"})
+            outcomes.append(
+                {
+                    "job_id": job_id,
+                    "status": "not_found",
+                    "error": {"code": "not_found", "message": "job is not in batch"},
+                }
+            )
             continue
         if isinstance(revision, bool) or not isinstance(revision, int):
-            outcomes.append({"job_id": job_id, "status": "bad_request", "error": "expected_revision must be an integer"})
+            outcomes.append(
+                {
+                    "job_id": job_id,
+                    "status": "invalid",
+                    "error": {"code": "invalid_body", "message": "expected_revision must be an integer"},
+                }
+            )
             continue
         try:
             result = state.queue_publication(job_id, revision)
             outcomes.append({"job_id": job_id, "status": "queued", "result": result})
         except KeyError:
-            outcomes.append({"job_id": job_id, "status": "not_found", "error": "job not found"})
-        except ValueError as exc:
-            outcomes.append({"job_id": job_id, "status": "conflict", "error": str(exc)})
+            outcomes.append(
+                {
+                    "job_id": job_id,
+                    "status": "not_found",
+                    "error": {"code": "not_found", "message": "job not found"},
+                }
+            )
+        except ValueError:
+            outcomes.append(
+                {
+                    "job_id": job_id,
+                    "status": "conflict",
+                    "error": {"code": "conflict", "message": "job state or revision conflict"},
+                }
+            )
         except Exception:
             logger.exception("pipeline batch publication item failed")
-            outcomes.append({"job_id": job_id, "status": "internal_error", "error": "publication queueing failed"})
+            outcomes.append(
+                {
+                    "job_id": job_id,
+                    "status": "internal_error",
+                    "error": {"code": "internal_error", "message": "publication queueing failed"},
+                }
+            )
     return JSONResponse({"batch_id": batch_id, "outcomes": outcomes})
 
 
@@ -638,11 +920,62 @@ async def _cancel_batch(request: Request) -> Response:
     for job in batch.get("jobs") or []:
         job_id = str(job["id"])
         try:
-            state.request_cancel(job_id)
-            outcomes.append({"job_id": job_id, "status": "cancel_requested"})
+            current = state.get_job(job_id)
+            current_status = str(current.get("status"))
+            if current_status in {"published", "published_with_warning", "rejected"}:
+                outcomes.append(
+                    {
+                        "job_id": job_id,
+                        "status": "conflict",
+                        "actual_status": current_status,
+                        "error": {
+                            "code": "terminal_state",
+                            "message": "job cannot be cancelled from terminal state",
+                        },
+                    }
+                )
+                continue
+            if current_status == "cancelled":
+                outcomes.append(
+                    {"job_id": job_id, "status": "no_op", "actual_status": "cancelled", "no_op": True}
+                )
+                continue
+            changed = state.request_cancel(job_id)
+            latest = state.get_job(job_id)
+            actual = str(latest.get("status"))
+            outcomes.append(
+                {
+                    "job_id": job_id,
+                    "status": "cancelled" if actual == "cancelled" else "cancel_requested",
+                    "actual_status": actual,
+                    "no_op": not bool(changed),
+                }
+            )
+        except KeyError:
+            outcomes.append(
+                {
+                    "job_id": job_id,
+                    "status": "not_found",
+                    "error": {"code": "not_found", "message": "job not found"},
+                }
+            )
+        except ValueError:
+            outcomes.append(
+                {
+                    "job_id": job_id,
+                    "status": "conflict",
+                    "error": {"code": "conflict", "message": "job state conflict"},
+                }
+            )
         except Exception:
             logger.exception("pipeline batch cancellation item failed")
-            outcomes.append({"job_id": job_id, "status": "internal_error", "error": "cancellation failed"})
+            outcomes.append(
+                {
+                    "job_id": job_id,
+                    "status": "internal_error",
+                    "error": {"code": "internal_error", "message": "cancellation failed"},
+                }
+            )
     return JSONResponse({"batch_id": batch_id, "outcomes": outcomes})
 
 
