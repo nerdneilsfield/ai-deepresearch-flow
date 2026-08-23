@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from pathlib import Path
 
 import httpx
 
 from deepresearch_flow.pipeline.api import create_pipeline_admin_app
-from deepresearch_flow.pipeline.artifacts import ArtifactStore
+from deepresearch_flow.pipeline.artifacts import Artifact, ArtifactStore
 from deepresearch_flow.pipeline.config import ModelAllowlist, PipelineConfig
+from deepresearch_flow.pipeline.steps import PreviewArtifacts
 from deepresearch_flow.pipeline.state import PipelineState
 from deepresearch_flow.paper.snapshot.api import create_app as create_snapshot_app
 
@@ -65,6 +67,37 @@ def _request(app, method: str, path: str, **kwargs) -> httpx.Response:
 
 def _headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {TOKEN}"}
+
+
+def _valid_preview(artifacts: ArtifactStore, job_id: str) -> PreviewArtifacts:
+    names = (
+        "preview_pdf",
+        "preview_source_md",
+        "preview_summary_json",
+        "preview_translated_md",
+    )
+    contents = (
+        b"%PDF-1.7 regenerated",
+        b"# regenerated source",
+        b'{"summary":"regenerated"}',
+        b"# regenerated translation",
+    )
+    protected = tuple(
+        artifacts.protect(job_id, name, content)
+        for name, content in zip(names, contents, strict=True)
+    )
+    digest = hashlib.sha256(
+        b"".join(item.digest.encode("ascii") for item in protected)
+    ).hexdigest()
+    return PreviewArtifacts(
+        protected[0].path,
+        protected[1].path,
+        protected[2].path,
+        protected[3].path,
+        digest,
+        "manual",
+        protected,
+    )
 
 
 def _upload(app, *, files, data=None):
@@ -154,7 +187,7 @@ def test_upload_validation_and_model_allowlist_are_http_errors(tmp_path: Path) -
 
 
 def test_publish_requires_current_revision_and_batch_is_partial(tmp_path: Path) -> None:
-    app, state, _artifacts = _make_app(tmp_path, preview_regenerator=lambda _job_id: True)
+    app, state, _artifacts = _make_app(tmp_path)
     response = _upload(
         app,
         files=[
@@ -198,7 +231,8 @@ def test_publish_requires_current_revision_and_batch_is_partial(tmp_path: Path) 
 
 
 def test_job_actions_and_manual_bibtex_binding_are_authenticated(tmp_path: Path) -> None:
-    app, state, _artifacts = _make_app(tmp_path, preview_regenerator=lambda _job_id: True)
+    app, state, artifacts = _make_app(tmp_path)
+    app.state.preview_regenerator = lambda job_id: _valid_preview(artifacts, job_id)
     response = _upload(
         app,
         files=[
@@ -335,7 +369,11 @@ def test_failed_preview_regeneration_is_recoverable_and_repeatable(tmp_path: Pat
     stale = _request(app, "GET", f"/jobs/{job_id}/artifacts/pdf", headers=_headers())
     assert stale.status_code == 404
 
-    app.state.preview_regenerator = lambda current_job: calls.append(current_job) or True
+    def regenerate(current_job: str) -> PreviewArtifacts:
+        calls.append(current_job)
+        return _valid_preview(artifacts, current_job)
+
+    app.state.preview_regenerator = regenerate
     retried = _request(
         app,
         "PUT",
@@ -347,6 +385,149 @@ def test_failed_preview_regeneration_is_recoverable_and_repeatable(tmp_path: Pat
     assert retried.json()["job"]["status"] == "review_ready"
     assert retried.json()["job"]["bibtex"]["entry_key"] == "key"
     assert calls == [job_id, job_id]
+
+
+def test_preview_regenerator_requires_four_integrity_checked_artifacts(tmp_path: Path) -> None:
+    invalid_results = (None, True, {"preview_pdf": "incomplete"})
+    for index, invalid in enumerate(invalid_results):
+        case_dir = tmp_path / f"invalid-{index}"
+        app, state, artifacts = _make_app(case_dir, preview_regenerator=lambda _job_id, value=invalid: value)
+        response = _upload(
+            app,
+            files=[
+                ("pdfs", ("a.pdf", b"%PDF-1.7 a", "application/pdf")),
+                ("bibtex", ("a.bib", b"@article{key, title={A}}", "text/plain")),
+            ],
+        )
+        job_id = response.json()["job_ids"][0]
+        lease = state.acquire_lease(job_id, "api-test")
+        assert lease is not None
+        state.transition(job_id, "needs_attention", lease.token)
+
+        failed = _request(
+            app,
+            "PUT",
+            f"/jobs/{job_id}/bibtex-match",
+            json={"entry_key": "key"},
+            headers=_headers(),
+        )
+        assert failed.status_code == 409
+        assert failed.json()["error"]["code"] == "preview_regeneration_failed"
+        assert failed.json()["job"]["status"] == "needs_attention"
+        assert failed.json()["job"]["preview_digest"] is None
+
+    wrong_root_dir = tmp_path / "wrong-root"
+    app, state, artifacts = _make_app(wrong_root_dir)
+    response = _upload(
+        app,
+        files=[
+            ("pdfs", ("a.pdf", b"%PDF-1.7 a", "application/pdf")),
+            ("bibtex", ("a.bib", b"@article{key, title={A}}", "text/plain")),
+        ],
+    )
+    job_id = response.json()["job_ids"][0]
+    lease = state.acquire_lease(job_id, "api-test")
+    assert lease is not None
+    state.transition(job_id, "needs_attention", lease.token)
+    valid = _valid_preview(artifacts, job_id)
+    outside = tmp_path / "outside-preview.artifact"
+    outside.write_bytes(b"%PDF-1.7 outside")
+    wrong_pdf = Artifact(
+        job_id,
+        "preview_pdf",
+        outside,
+        hashlib.sha256(outside.read_bytes()).hexdigest(),
+        outside.stat().st_size,
+        artifacts.formal_root,
+        outside.parent,
+    )
+    wrong = PreviewArtifacts(
+        wrong_pdf.path,
+        valid.source_markdown,
+        valid.summary_json,
+        valid.translated_markdown,
+        valid.digest,
+        valid.bibtex_status,
+        (wrong_pdf, *valid.protected[1:]),
+    )
+    app.state.preview_regenerator = lambda _job_id: wrong
+    failed = _request(
+        app,
+        "PUT",
+        f"/jobs/{job_id}/bibtex-match",
+        json={"entry_key": "key"},
+        headers=_headers(),
+    )
+    assert failed.status_code == 409
+    assert failed.json()["error"]["code"] == "preview_regeneration_failed"
+
+    tampered_dir = tmp_path / "tampered"
+    app, state, artifacts = _make_app(tampered_dir)
+    response = _upload(
+        app,
+        files=[
+            ("pdfs", ("a.pdf", b"%PDF-1.7 a", "application/pdf")),
+            ("bibtex", ("a.bib", b"@article{key, title={A}}", "text/plain")),
+        ],
+    )
+    job_id = response.json()["job_ids"][0]
+    lease = state.acquire_lease(job_id, "api-test")
+    assert lease is not None
+    state.transition(job_id, "needs_attention", lease.token)
+    tampered = _valid_preview(artifacts, job_id)
+    tampered.protected[0].path.write_bytes(b"tampered")
+    app.state.preview_regenerator = lambda _job_id: tampered
+    failed = _request(
+        app,
+        "PUT",
+        f"/jobs/{job_id}/bibtex-match",
+        json={"entry_key": "key"},
+        headers=_headers(),
+    )
+    assert failed.status_code == 409
+    assert failed.json()["error"]["code"] == "preview_regeneration_failed"
+
+
+def test_valid_preview_regenerator_registers_all_artifacts_and_enables_publish(tmp_path: Path) -> None:
+    app, state, artifacts = _make_app(tmp_path)
+    app.state.preview_regenerator = lambda job_id: _valid_preview(artifacts, job_id)
+    response = _upload(
+        app,
+        files=[
+            ("pdfs", ("a.pdf", b"%PDF-1.7 a", "application/pdf")),
+            ("bibtex", ("a.bib", b"@article{key, title={A}}", "text/plain")),
+        ],
+    )
+    job_id = response.json()["job_ids"][0]
+    lease = state.acquire_lease(job_id, "api-test")
+    assert lease is not None
+    state.transition(job_id, "needs_attention", lease.token)
+
+    binding = _request(
+        app,
+        "PUT",
+        f"/jobs/{job_id}/bibtex-match",
+        json={"entry_key": "key"},
+        headers=_headers(),
+    )
+    assert binding.status_code == 200
+    job = binding.json()["job"]
+    assert job["status"] == "review_ready"
+    assert isinstance(job["preview_digest"], str)
+    assert len(job["preview_digest"]) == 64
+    for kind in ("pdf", "source_markdown", "summary_json", "translated_markdown"):
+        artifact = _request(app, "GET", f"/jobs/{job_id}/artifacts/{kind}", headers=_headers())
+        assert artifact.status_code == 200
+
+    published = _request(
+        app,
+        "POST",
+        f"/jobs/{job_id}/publish",
+        json={"expected_revision": job["revision"]},
+        headers=_headers(),
+    )
+    assert published.status_code == 200
+    assert published.json()["job"]["status"] == "publish_queued"
 
 
 def test_upload_and_body_error_taxonomy_is_stable(tmp_path: Path) -> None:

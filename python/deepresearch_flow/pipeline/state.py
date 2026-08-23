@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .artifacts import Artifact, ArtifactStore
+from .steps import PreviewArtifacts
 
 JOB_STATUSES = frozenset(
     {
@@ -40,6 +41,12 @@ ALL_STEP_NAMES = tuple(dict.fromkeys((*STEP_NAMES, *PROCESSING_STEP_NAMES)))
 _TERMINAL = {"published", "published_with_warning", "rejected", "cancelled"}
 _PREVIEW_ARTIFACT_KINDS = frozenset(
     {"preview", "preview_pdf", "preview_source_md", "preview_summary_json", "preview_translated_md"}
+)
+_PREVIEW_PROTECTED_KINDS = (
+    "preview_pdf",
+    "preview_source_md",
+    "preview_summary_json",
+    "preview_translated_md",
 )
 _TRANSITIONS: dict[str, set[str]] = {
     "queued": {"running", "cancelled", "rejected"},
@@ -949,8 +956,72 @@ class PipelineState:
         self._remove_preview_files(stale_artifacts, job_id)
         return {"job_id": job_id, "status": "needs_attention", "preview_error": safe_error}
 
-    def mark_preview_regenerated(self, job_id: str) -> dict[str, Any]:
-        """Mark pending manual binding reviewable after regenerator success."""
+    def _validate_preview_result(
+        self, job_id: str, preview: PreviewArtifacts
+    ) -> tuple[list[tuple[str, str, str, int]], str, int]:
+        """Validate typed preview output and return DB-ready metadata.
+
+        Validation covers the result's declared four artifacts, their exact
+        formal-root containment, ownership/kind, and bytes on disk.  The
+        aggregate digest follows the same stable kind order used by the
+        worker's preview loader.
+        """
+        if not isinstance(preview, PreviewArtifacts):
+            raise ValueError("preview regenerator must return PreviewArtifacts")
+        if self.artifact_store is None:
+            raise ValueError("PipelineState requires bound ArtifactStore for preview regeneration")
+        protected = preview.protected
+        if not isinstance(protected, tuple) or len(protected) != len(_PREVIEW_PROTECTED_KINDS):
+            raise ValueError("preview regenerator must return exactly four protected artifacts")
+        declared_paths: dict[str, Path] = {}
+        try:
+            declared_paths = {
+                "preview_pdf": Path(preview.pdf),
+                "preview_source_md": Path(preview.source_markdown),
+                "preview_summary_json": Path(preview.summary_json),
+                "preview_translated_md": Path(preview.translated_markdown),
+            }
+        except (TypeError, ValueError) as exc:
+            raise ValueError("preview artifact paths are invalid") from exc
+        by_kind: dict[str, Artifact] = {}
+        for artifact in protected:
+            if not isinstance(artifact, Artifact) or artifact.kind in by_kind:
+                raise ValueError("preview regenerator returned invalid artifact metadata")
+            if artifact.kind not in _PREVIEW_PROTECTED_KINDS or artifact.job_id != job_id:
+                raise ValueError("preview artifact ownership or kind is invalid")
+            if artifact.root is None or Path(artifact.root).resolve() != self.artifact_store.formal_root:
+                raise ValueError("preview artifact root is invalid")
+            self.artifact_store.validate_protected_artifact(artifact, job_id, artifact.kind)
+            actual_path = artifact.path.resolve()
+            if artifact.job_directory is None or Path(artifact.job_directory).resolve() != actual_path.parent:
+                raise ValueError("preview artifact job directory is invalid")
+            if declared_paths[artifact.kind].resolve() != actual_path:
+                raise ValueError("preview artifact path metadata is inconsistent")
+            try:
+                content = actual_path.read_bytes()
+            except OSError as exc:
+                raise ValueError("preview artifact is unavailable") from exc
+            actual_digest = hashlib.sha256(content).hexdigest()
+            if artifact.digest != actual_digest or artifact.size != len(content):
+                raise ValueError("preview artifact metadata does not match file")
+            by_kind[artifact.kind] = artifact
+        if set(by_kind) != set(_PREVIEW_PROTECTED_KINDS):
+            raise ValueError("preview regenerator must return exactly four protected artifacts")
+        aggregate = hashlib.sha256(
+            b"".join(by_kind[kind].digest.encode("ascii") for kind in _PREVIEW_PROTECTED_KINDS)
+        ).hexdigest()
+        if not isinstance(preview.digest, str) or preview.digest != aggregate:
+            raise ValueError("preview aggregate digest does not match artifacts")
+        rows = [
+            (kind, str(by_kind[kind].path.resolve()), by_kind[kind].digest, by_kind[kind].size)
+            for kind in _PREVIEW_PROTECTED_KINDS
+        ]
+        return rows, aggregate, sum(item[3] for item in rows)
+
+    def mark_preview_regenerated(
+        self, job_id: str, preview: PreviewArtifacts
+    ) -> dict[str, Any]:
+        """Atomically register validated preview output and mark review ready."""
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute("SELECT status,lease_token FROM jobs WHERE id=?", (job_id,)).fetchone()
@@ -963,13 +1034,43 @@ class PipelineState:
             if row["status"] not in {"needs_attention", "review_ready"}:
                 db.rollback()
                 raise ValueError("preview regeneration is not pending")
+            rows, aggregate, total_size = self._validate_preview_result(job_id, preview)
+            now = _stamp(_utc())
             db.execute(
-                "UPDATE jobs SET status='review_ready',preview_error=NULL,terminal_at=NULL,"
-                "updated_at=?,revision=revision+1 WHERE id=?",
-                (_stamp(_utc()), job_id),
+                "INSERT OR IGNORE INTO steps(job_id,name,model_key) VALUES(?,?,NULL)",
+                (job_id, "preview"),
+            )
+            attempt_row = db.execute(
+                "SELECT attempt FROM steps WHERE job_id=? AND name='preview'", (job_id,)
+            ).fetchone()
+            attempt = int(attempt_row["attempt"] if attempt_row is not None else 0) + 1
+            db.execute(
+                "UPDATE steps SET status='complete',attempt=?,artifact_digest=?,artifact_size=? "
+                "WHERE job_id=? AND name='preview'",
+                (attempt, aggregate, total_size, job_id),
+            )
+            db.executemany(
+                "INSERT OR REPLACE INTO artifacts(job_id,kind,path,digest,size,created_at) "
+                "VALUES(?,?,?,?,?,?)",
+                [(job_id, kind, path, digest, size, now) for kind, path, digest, size in rows],
+            )
+            db.execute(
+                "INSERT INTO step_attempts(job_id,step,attempt,status,lease_owner,started_at,finished_at,"
+                "artifact_digest,artifact_size,duration_ms) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (job_id, "preview", attempt, "complete", None, now, now, aggregate, total_size, 0),
+            )
+            db.execute(
+                "UPDATE jobs SET status='review_ready',preview_digest=?,bundle_digest=?,preview_error=NULL,"
+                "terminal_at=NULL,cancel_requested=0,updated_at=?,revision=revision+1 WHERE id=?",
+                (aggregate, aggregate, now, job_id),
             )
             db.commit()
-        return {"job_id": job_id, "status": "review_ready"}
+        return {
+            "job_id": job_id,
+            "status": "review_ready",
+            "preview_digest": aggregate,
+            "artifact_kinds": list(_PREVIEW_PROTECTED_KINDS),
+        }
 
     def get_job_bibtex_key(self, job_id: str) -> str | None:
         with self._connect() as db:

@@ -13,7 +13,7 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import Any, Callable, Mapping, cast
+from typing import Any, Awaitable, Callable, Mapping, cast
 
 from starlette.applications import Starlette
 from starlette.datastructures import UploadFile
@@ -28,6 +28,7 @@ from .artifacts import Artifact, ArtifactStore
 from .config import PipelineConfig
 from .ingestion import BatchIngestor, UploadPart
 from .state import PipelineState
+from .steps import PreviewArtifacts
 
 logger = logging.getLogger(__name__)
 
@@ -798,9 +799,9 @@ async def _bibtex_match(request: Request) -> Response:
         regenerated = callback(job_id)
         if inspect.isawaitable(regenerated):
             regenerated = await regenerated
-        if regenerated is False:
-            raise RuntimeError("preview regeneration failed")
-        state.mark_preview_regenerated(job_id)
+        if not isinstance(regenerated, PreviewArtifacts):
+            raise ValueError("preview regenerator returned invalid result")
+        state.mark_preview_regenerated(job_id, regenerated)
     except Exception:
         logger.exception("pipeline preview regeneration failed")
         try:
@@ -1037,7 +1038,7 @@ def create_pipeline_admin_app(
     artifacts: ArtifactStore,
     admin_token: str,
     worker_status_provider: Callable[[], Mapping[str, Any]] | None = None,
-    preview_regenerator: Callable[[str], Any] | None = None,
+    preview_regenerator: Callable[[str], PreviewArtifacts | Awaitable[PreviewArtifacts]] | None = None,
 ) -> Starlette:
     """Create routes mounted beneath ``/api/v1/admin/pipeline``."""
     if not config.enabled:
