@@ -444,6 +444,30 @@ def parse_tag_list(text: str) -> list[str]:
     return [str(item) for item in parsed]
 
 
+def load_api_pipeline_config(
+    config_path: str | Path,
+    admin_token: str | None,
+) -> Any | None:
+    """Load enabled pipeline settings for API startup, or return ``None``.
+
+    This small public seam keeps deployment startup policy testable without
+    coupling tests to Starlette construction.  Disabled/missing sections keep
+    legacy API startup unchanged.
+    """
+
+    from deepresearch_flow.pipeline.config import load_pipeline_config
+
+    path = Path(config_path)
+    if not path.is_file():
+        return None
+    parsed = load_pipeline_config(path)
+    if not parsed.enabled:
+        return None
+    if not str(admin_token or "").strip():
+        raise ValueError("PAPER_DB_ADMIN_TOKEN is required when [pipeline].enabled is true")
+    return parsed
+
+
 def register_db_commands(db_group: click.Group) -> None:
     @db_group.group("snapshot")
     def snapshot_group() -> None:
@@ -1232,7 +1256,6 @@ def register_db_commands(db_group: click.Group) -> None:
         import uvicorn
 
         from deepresearch_flow.paper.snapshot.api import ApiLimits, create_app
-
         static_base_url_value = (
             static_base_url
             or os.getenv("PAPER_DB_STATIC_BASE")
@@ -1258,6 +1281,10 @@ def register_db_commands(db_group: click.Group) -> None:
         )
         advanced_ctx = None
         paper_config = load_config(config_path)
+        try:
+            pipeline_config = load_api_pipeline_config(config_path, admin_token)
+        except (OSError, ValueError) as exc:
+            raise click.ClickException(str(exc)) from exc
         startup_embed_db = None
         if embed_db:
             startup_embed_db = Path(embed_db)
@@ -1391,10 +1418,12 @@ def register_db_commands(db_group: click.Group) -> None:
             admin_token=admin_token,
             admin_embed_db=admin_embed_db,
             admin_embed_dimensions=admin_embed_dimensions,
+            pipeline_config=pipeline_config,
             advanced_config=advanced_ctx,
         )
         click.echo(f"Serving API on http://{host}:{port} (Ctrl+C to stop)")
         uvicorn.run(app, host=host, port=port, log_level="info")
+
 
     @api_group.command("push")
     @click.option(

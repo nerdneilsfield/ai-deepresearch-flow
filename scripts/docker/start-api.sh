@@ -4,6 +4,21 @@ set -euo pipefail
 snapshot_db="${PAPER_DB_SNAPSHOT_DB:-/db/papers.db}"
 advanced_env_count=0
 mcp_access_token="${MCP_ACCESS_TOKEN:-}"
+pipeline_bridge="${PAPER_PIPELINE_ENABLED:-}"
+
+case "$pipeline_bridge" in
+  ""|0|false|no|off|1|true|yes|on) ;;
+  *)
+    echo "[ERROR] PAPER_PIPELINE_ENABLED must be 0 or 1." >&2
+    exit 1
+    ;;
+esac
+if [[ "$pipeline_bridge" == "1" || "$pipeline_bridge" == "true" || "$pipeline_bridge" == "yes" || "$pipeline_bridge" == "on" ]]; then
+  if [[ -z "${PAPER_DB_CONFIG:-}" ]]; then
+    echo "[ERROR] PAPER_DB_CONFIG is required when PAPER_PIPELINE_ENABLED=1." >&2
+    exit 1
+  fi
+fi
 
 if [[ "${MCP_PUBLIC_UNSAFE:-}" != "1" ]]; then
   if [[ -z "$mcp_access_token" || "$mcp_access_token" == "your-mcp-token" ]]; then
@@ -59,7 +74,7 @@ if [[ "$has_cors_origin" -eq 0 ]]; then
   exit 1
 fi
 
-if [[ "$advanced_env_count" -eq 1 ]]; then
+if [[ "$advanced_env_count" -eq 1 && ! ( "$pipeline_bridge" == "1" || "$pipeline_bridge" == "true" || "$pipeline_bridge" == "yes" || "$pipeline_bridge" == "on" ) ]]; then
   echo \
     "[ERROR] Partial advanced Docker configuration detected. " \
     "Set at least two of PAPER_DB_EMBED_DB, PAPER_DB_CONFIG, SEARCH_ACCESS_TOKEN " \
@@ -67,7 +82,7 @@ if [[ "$advanced_env_count" -eq 1 ]]; then
   exit 1
 fi
 
-if [[ "$advanced_env_count" -ge 2 ]]; then
+if [[ "$advanced_env_count" -ge 2 || ( "$pipeline_bridge" == "1" || "$pipeline_bridge" == "true" || "$pipeline_bridge" == "yes" || "$pipeline_bridge" == "on" ) ]]; then
   if [[ -n "${PAPER_DB_EMBED_DB:-}" ]]; then
     cmd+=(--embed-db "${PAPER_DB_EMBED_DB}")
   fi

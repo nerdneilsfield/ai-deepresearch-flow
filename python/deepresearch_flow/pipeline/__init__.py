@@ -94,6 +94,13 @@ from .worker import (
     worker_entrypoint,
 )
 from .api import create_admin_pipeline_app, create_pipeline_admin_app
+from .runtime import (
+    PipelineEnvironment,
+    WorkerLoopResult,
+    run_production_worker_forever,
+    run_worker_until_stopped,
+    validate_pipeline_environment,
+)
 
 __all__ += [
     "FIXED_STEP_SEQUENCE",
@@ -113,4 +120,9 @@ __all__ += [
     "worker_entrypoint",
     "create_pipeline_admin_app",
     "create_admin_pipeline_app",
+    "PipelineEnvironment",
+    "WorkerLoopResult",
+    "run_production_worker_forever",
+    "run_worker_until_stopped",
+    "validate_pipeline_environment",
 ]

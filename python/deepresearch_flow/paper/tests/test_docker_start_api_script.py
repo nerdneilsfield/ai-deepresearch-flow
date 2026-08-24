@@ -143,3 +143,18 @@ def test_start_api_script_uses_embedded_mode_with_multiple_advanced_envs(tmp_pat
     assert "--config" in args
     assert "/app/config.toml" in args
     assert (tmp_path / "token.txt").read_text(encoding="utf-8") == "docker-token"
+
+
+def test_start_api_allows_pipeline_config_without_semantic_search(tmp_path: Path) -> None:
+    result = _run_start_api(
+        tmp_path,
+        PAPER_DB_CONFIG="/app/config.toml",
+        PAPER_PIPELINE_ENABLED="1",
+        PAPER_DB_ADMIN_TOKEN="admin-token",
+    )
+
+    assert result.returncode == 0
+    args = (tmp_path / "args.txt").read_text(encoding="utf-8").splitlines()
+    assert "--config" in args
+    assert "/app/config.toml" in args
+    assert "--embed-db" not in args

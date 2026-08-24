@@ -180,3 +180,54 @@ keyword_top_k = 30
 hybrid = true
 # access_token = "env:SEARCH_ACCESS_TOKEN"
 # Browser auth mode is configured at API startup with SEARCH_AUTH_MODE=static|github-oauth|both.
+
+# BEGIN ADMIN PIPELINE EXAMPLE (optional; disabled by default)
+# Optional administrator PDF/BibTeX processing pipeline. Disabled by default.
+# The API reads this section from same config passed with PAPER_DB_CONFIG. The
+# Worker is materialized only when PAPER_PIPELINE_ENABLED=1 also agrees with
+# enabled=true; keep this bridge unset for existing deployments.
+# [pipeline]
+# enabled = false
+# pdfs_per_batch = 20
+# max_pdf_bytes = 104857600       # 100 MiB per PDF
+# max_batch_bytes = 524288000     # 500 MiB multipart batch
+# bibtex_max_bytes = 1048576      # 1 MiB
+# max_concurrent_jobs = 2
+# retention_days = 7
+# work_dir = "/data/pipeline-work"       # private uploads/intermediates
+# queue_db = "/data/pipeline-work/queue.sqlite3"
+# snapshot_root = "/data/pipeline-snapshot"
+# static_root = "/data/pipeline-static"  # formal content-addressed output
+# webdav_url = "https://dav.example.test/papers" # endpoint only; no credentials
+# extract_templates = ["simple"]
+# translation_language = "en"
+# lease_seconds = 300
+# heartbeat_seconds = 30
+# validation_retry_limit = 2
+#
+# Selectable uploader model keys. Every default must be in its allowlist.
+# [pipeline.models.ocr]
+# allowlist = ["paddle/default"]
+# default = "paddle/default"
+# mapping = { paddle = "PaddleOCR-VL-1.6" }
+# [pipeline.models.extract]
+# allowlist = ["openai/gpt-4o-mini", "openai/gpt-4.1-mini"]
+# default = "openai/gpt-4o-mini"
+# [pipeline.models.translate]
+# allowlist = ["openai/gpt-4o-mini", "claude/claude-sonnet-4-5-20250929"]
+# default = "openai/gpt-4o-mini"
+#
+# Supporting repair/validation model defaults are server-controlled and are
+# included only as nonsecret configuration fingerprints.
+# [pipeline.models.supporting]
+# repair = "openai/gpt-4o-mini"
+# markdown = "openai/gpt-4o-mini"
+# validation = "openai/gpt-4o-mini"
+# summary = "openai/gpt-4o-mini"
+# translation_repair = "openai/gpt-4o-mini"
+#
+# Credentials never belong in TOML or the queue. For local WebDAV set
+# PAPER_PIPELINE_WEBDAV_USERNAME and PAPER_PIPELINE_WEBDAV_PASSWORD through
+# the container secret mechanism. The nonsecret fingerprint contains paths and
+# endpoint metadata; review it as operational data before publishing.
+# END ADMIN PIPELINE EXAMPLE

@@ -257,6 +257,9 @@ class PipelineState:
                 CREATE TABLE IF NOT EXISTS heartbeats (
                     job_id TEXT PRIMARY KEY, owner TEXT NOT NULL, at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS worker_heartbeats (
+                    worker_id TEXT PRIMARY KEY, at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS step_attempts (
                     id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL, step TEXT NOT NULL,
                     attempt INTEGER NOT NULL, status TEXT NOT NULL, lease_owner TEXT,
@@ -512,7 +515,10 @@ class PipelineState:
         """Summarize persisted heartbeats without exposing lease credentials."""
         now = _utc()
         with self._connect() as db:
-            heartbeat = db.execute("SELECT MAX(at) AS at FROM heartbeats").fetchone()
+            heartbeat = db.execute(
+                "SELECT MAX(at) AS at FROM "
+                "(SELECT at FROM heartbeats UNION ALL SELECT at FROM worker_heartbeats)"
+            ).fetchone()
             active = db.execute(
                 "SELECT COUNT(*) AS count FROM jobs WHERE status IN ('running','publishing','indexing')"
             ).fetchone()
@@ -536,6 +542,48 @@ class PipelineState:
             "age_seconds": age,
             "active_jobs": int(active["count"] if active else 0),
         }
+
+    def worker_heartbeat(self, worker_id: str, now: datetime | None = None) -> dict[str, str]:
+        """Persist an idle/active worker heartbeat without claiming a Job."""
+        normalized = str(worker_id).strip()
+        if not normalized:
+            raise ValueError("worker_id must not be empty")
+        stamp = _stamp(_utc(now))
+        with self._connect() as db:
+            db.execute(
+                "INSERT INTO worker_heartbeats(worker_id,at) VALUES(?,?) "
+                "ON CONFLICT(worker_id) DO UPDATE SET at=excluded.at",
+                (normalized, stamp),
+            )
+            db.commit()
+        return {"worker_id": normalized, "at": stamp}
+
+    def worker_heartbeat_metadata(self, worker_id: str) -> dict[str, str] | None:
+        """Return one worker heartbeat for operational black-box checks."""
+        normalized = str(worker_id).strip()
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT worker_id,at FROM worker_heartbeats WHERE worker_id=?",
+                (normalized,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {"worker_id": str(row["worker_id"]), "at": str(row["at"])}
+
+    def cleanup_expired_artifacts(self, now: datetime | None = None) -> list[str]:
+        """Remove only expired terminal work artifacts through bound store."""
+        if self.artifact_store is None:
+            return []
+        with self._connect() as db:
+            rows = db.execute(
+                "SELECT id,status,terminal_at FROM jobs "
+                "WHERE status IN ('published','published_with_warning','rejected','cancelled')"
+            ).fetchall()
+        jobs = {
+            str(row["id"]): {"status": str(row["status"]), "terminal_at": row["terminal_at"]}
+            for row in rows
+        }
+        return self.artifact_store.cleanup(jobs, now=now)
 
     def list_job_ids(self, statuses: set[str] | frozenset[str] | None = None) -> list[str]:
         """List jobs for Supervisor scheduling in stable creation order."""

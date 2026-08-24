@@ -365,3 +365,83 @@ docker compose -f scripts/docker/docker-compose.example.yml --profile local-stat
 - `start-api.sh` auto-detects advanced mode by checking whether `PAPER_DB_EMBED_DB`, `PAPER_DB_CONFIG`, and `SEARCH_ACCESS_TOKEN` are set.
 - Set `MCP_ACCESS_TOKEN` before deploying. `MCP_PUBLIC_UNSAFE=1` is intended for isolated local testing only.
 - `PAPER_DB_NGINX_TEMPLATE=prefix` is only needed for sub-path deployments. The default (`root`) works for dedicated domains.
+
+## 6. Optional Admin PDF pipeline
+
+The upload/review workflow is opt-in. Existing containers remain API + Nginx
+only until both `config.toml` and the process bridge enable it:
+
+```toml
+[pipeline]
+enabled = true
+work_dir = "/data/pipeline-work"
+queue_db = "/data/pipeline-work/queue.sqlite3"
+static_root = "/data/pipeline-static"
+```
+
+Use the commented `[pipeline]` example in `config.example.toml` for limits,
+allowlisted OCR/Extract/Translate model keys, fixed extract templates,
+translation language, lease/heartbeat, retry, retention, and supporting-model
+fingerprints. A selected model must be in its corresponding allowlist. Only
+nonsecret identifiers, paths, endpoints, and configuration fingerprints are
+stored in the queue; provider keys and WebDAV passwords stay in environment
+variables or the container secret mechanism.
+
+Set all of the following when enabling the deployment image:
+
+```bash
+-e PAPER_DB_CONFIG=/app/config.toml \
+-e PAPER_OCR_CONFIG=/app/ocr.toml \
+-e PAPER_DB_ADMIN_TOKEN="$(openssl rand -hex 32)" \
+-e PAPER_PIPELINE_ENABLED=1 \
+-v "$(pwd)/config.toml:/app/config.toml:ro" \
+-v "$(pwd)/ocr.toml:/app/ocr.toml:ro" \
+-v "$(pwd)/pipeline-work:/data/pipeline-work" \
+-v "$(pwd)/pipeline-static:/data/pipeline-static"
+```
+
+The same `PAPER_DB_CONFIG`, queue DB, work root, Snapshot DB, and formal static
+root are used by API and Worker. `PAPER_PIPELINE_ENABLED=1` is only a
+Supervisor materialization bridge: it cannot turn on a TOML-disabled pipeline,
+and disagreement fails closed. `PAPER_DB_ADMIN_TOKEN` is required when TOML
+enables the feature. Keep `pipeline-work` private; it contains uploads and
+intermediate artifacts and is never an Nginx alias. Protected previews are
+served only through authenticated Admin artifact routes, never from `/static`.
+
+Nginx accepts multipart uploads up to `500m` by default. Override with a
+validated positive Nginx size such as `PAPER_DB_NGINX_BODY_LIMIT=1g`; the
+protected Admin pipeline location has long upload/preview timeouts. The
+frontend keeps the Admin token only in `sessionStorage` and validates it
+against `/api/v1/admin/pipeline/config`.
+
+Supervisor starts one durable Worker only when the bridge and TOML agree. It
+polls processing and queued publication jobs, uses SQLite WAL leases, writes
+idle and active heartbeats, recovers expired `running`/`publishing`/`indexing`
+leases after restart, and stops between processing step boundaries on `TERM`.
+The Admin config endpoint reports `online`, `degraded`, or `offline` from the
+heartbeat age. Review each protected PDF/source/summary/translation, resolve
+BibTeX ambiguity (or explicitly choose no BibTeX), then retry, reject, publish,
+or batch-publish ready jobs. A publish action is revision-aware and returns a
+conflict for stale UI data.
+
+Terminal work artifacts for `published`, `published_with_warning`, `rejected`,
+and `cancelled` jobs are retained for seven days by default. Cleanup never
+touches formal published resources, failed/review-ready work, or WebDAV
+objects. To discard an unwanted terminal upload immediately, use the
+authenticated reject/cancel action and run the bounded local cleanup task (or
+remove only its UUID work directory after confirming status in the Admin API);
+never delete the formal static root by hand.
+
+Publication writes immutable content-addressed files to the configured local
+formal root or WebDAV, then commits a Snapshot publication receipt before
+incremental LanceDB indexing. WebDAV upload success is sufficient; no HEAD
+probe is required. A crash after the receipt is safe to retry. If embedding
+fails, the paper remains published as `published_with_warning`; retry indexing
+only after fixing vector configuration. Formal local/WebDAV files are separate
+from private pipeline work and are not automatically collected.
+
+To disable or roll back, stop the container, set `PAPER_PIPELINE_ENABLED` unset
+or `0`, and use a config with `[pipeline].enabled = false`. Existing public
+search/API routes and CLI Snapshot behavior remain unchanged. Keep the queue
+and work volumes when recovering; restart Worker with the same paths so lease
+expiry and heartbeat recovery can proceed.

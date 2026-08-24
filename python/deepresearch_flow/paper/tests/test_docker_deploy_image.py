@@ -12,3 +12,11 @@ def test_deploy_dockerfile_has_api_healthcheck() -> None:
 
     assert "HEALTHCHECK" in content
     assert "http://127.0.0.1:8899/api/v1/config" in content
+
+
+def test_deploy_dockerfile_contains_conditional_pipeline_worker_runtime() -> None:
+    content = DOCKERFILE.read_text(encoding="utf-8")
+
+    assert "start-pipeline-worker.sh" in content
+    assert "start-supervisor.sh" in content
+    assert "ENTRYPOINT [\"/usr/local/bin/start-supervisor.sh\"]" in content

@@ -99,6 +99,64 @@ default = "translate-a"
     assert config.public_snapshot()["webdav_url"] == "https://dav.example.test/library"
 
 
+def test_commented_config_example_can_be_enabled_and_loaded_by_public_loader(
+    tmp_path: Path,
+) -> None:
+    example = Path(__file__).resolve().parents[4] / "config.example.toml"
+    selected_prefixes = (
+        "[pipeline",
+        "enabled =",
+        "pdfs_per_batch =",
+        "max_pdf_bytes =",
+        "max_batch_bytes =",
+        "bibtex_max_bytes =",
+        "max_concurrent_jobs =",
+        "retention_days =",
+        "work_dir =",
+        "queue_db =",
+        "snapshot_root =",
+        "static_root =",
+        "webdav_url =",
+        "extract_templates =",
+        "translation_language =",
+        "lease_seconds =",
+        "heartbeat_seconds =",
+        "validation_retry_limit =",
+        "allowlist =",
+        "default =",
+        "mapping =",
+        "repair =",
+        "markdown =",
+        "validation =",
+        "summary =",
+        "translation_repair =",
+    )
+    uncommented: list[str] = []
+    in_example = False
+    for raw_line in example.read_text(encoding="utf-8").splitlines():
+        if raw_line == "# BEGIN ADMIN PIPELINE EXAMPLE (optional; disabled by default)":
+            in_example = True
+            continue
+        if raw_line == "# END ADMIN PIPELINE EXAMPLE":
+            in_example = False
+            continue
+        if not in_example:
+            continue
+        if not raw_line.startswith("# "):
+            continue
+        line = raw_line[2:]
+        if line.startswith(selected_prefixes):
+            uncommented.append(line.replace("enabled = false", "enabled = true", 1))
+    path = tmp_path / "enabled-example.toml"
+    path.write_text("\n".join(uncommented) + "\n", encoding="utf-8")
+
+    config = load_pipeline_config(path)
+
+    assert config.enabled is True
+    assert config.ocr.default == "paddle/default"
+    assert config.ocr_model_map == (("paddle", "PaddleOCR-VL-1.6"),)
+
+
 def test_enabled_pipeline_requires_complete_nonempty_model_allowlists(tmp_path: Path) -> None:
     path = tmp_path / "service.toml"
     path.write_text("[pipeline]\nenabled = true\n", encoding="utf-8")
