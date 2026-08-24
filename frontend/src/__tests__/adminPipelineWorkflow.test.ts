@@ -305,6 +305,7 @@ describe('admin pipeline batch and review workflow', () => {
       ...previewResponses(),
       responseJson({ error: { code: 'conflict', message: 'publication revision is stale' } }, 409),
       responseJson({ job: stale, worker: configPayload().worker }),
+      ...previewResponses(),
     ])
     const { default: AdminPipelineJobView } = await import('@/views/AdminPipelineJobView.vue')
     const wrapper = mount(AdminPipelineJobView)
@@ -316,6 +317,35 @@ describe('admin pipeline batch and review workflow', () => {
     expect(wrapper.find('[data-testid="stale-revision"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('Stale revision')
     expect(wrapper.text()).toContain('updated.pdf')
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('/artifacts/')).length).toBe(8)
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:job-preview')
+    wrapper.unmount()
+  })
+
+  it('refreshes indexing retry conflicts before enabling actions again', async () => {
+    routeState.params = { jobId: 'job-1' }
+    const current = jobPayload({ revision: 12, status: 'published_with_warning' })
+    const fresh = jobPayload({ revision: 13, status: 'published_with_warning', filename: 'fresh-index.pdf' })
+    const fetchMock = installResponses([
+      responseJson(configPayload()),
+      responseJson({ job: current, worker: configPayload().worker }),
+      ...previewResponses(),
+      responseJson({ error: { code: 'conflict', message: 'indexing revision is stale' } }, 409),
+      responseJson({ job: fresh, worker: configPayload().worker }),
+      ...previewResponses(),
+    ])
+    const { default: AdminPipelineJobView } = await import('@/views/AdminPipelineJobView.vue')
+    const wrapper = mount(AdminPipelineJobView)
+    await flushPromises()
+    await wrapper.get('[data-testid="job-retry"]').trigger('click')
+
+    expect(wrapper.get('[data-testid="job-retry"]').attributes('disabled')).toBeDefined()
+    await flushPromises()
+    expect(wrapper.text()).toContain('fresh-index.pdf')
+    expect(wrapper.find('[data-testid="stale-revision"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="job-retry"]').attributes('disabled')).toBeUndefined()
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('/artifacts/')).length).toBe(8)
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:job-preview')
     wrapper.unmount()
   })
 

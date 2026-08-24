@@ -26,6 +26,8 @@ const loading = ref(true)
 const actionLoading = ref(false)
 const errorMessage = ref('')
 const staleRevision = ref(false)
+const conflictRefreshing = ref(false)
+const conflictRefreshFailed = ref(false)
 const selectedBib = ref('')
 const selectedModels = ref({ ocr: '', extract: '', translate: '' })
 let routeGeneration = 0
@@ -33,8 +35,8 @@ let routeGeneration = 0
 const config = computed(() => admin.config)
 const workerOffline = computed(() => isPipelineWorkerUnavailable(admin.worker))
 const canBindBib = computed(() => job.value?.status === 'needs_attention' || job.value?.status === 'review_ready')
-const canPublish = computed(() => job.value?.status === 'review_ready')
-const canRetry = computed(() => Boolean(job.value && ['failed', 'needs_attention', 'review_ready', 'published_with_warning'].includes(job.value.status)))
+const canPublish = computed(() => job.value?.status === 'review_ready' && !conflictRefreshing.value && !conflictRefreshFailed.value)
+const canRetry = computed(() => Boolean(job.value && ['failed', 'needs_attention', 'review_ready', 'published_with_warning'].includes(job.value.status) && !conflictRefreshing.value && !conflictRefreshFailed.value))
 const candidates = computed(() => job.value?.bibtex.candidates ?? [])
 const isIndexingRetry = computed(() => job.value?.status === 'published_with_warning')
 const pdfObjectUrl = computed(() => preview.pdfUrl.value)
@@ -50,11 +52,6 @@ function displayError(error: unknown, fallback: string): string {
   }
   if (error instanceof AdminPipelineError && error.status === 409) {
     staleRevision.value = true
-    const payload = error.payload
-    if (payload && typeof payload === 'object' && 'job' in payload) {
-      job.value = (payload as { job: PipelineJob }).job
-      selectedBib.value = job.value.bibtex.entry_key ?? '__none__'
-    }
     return 'This job changed elsewhere. Refresh before trying the action again.'
   }
   return error instanceof Error && error.message ? error.message : fallback
@@ -95,6 +92,8 @@ async function loadJob(generation = routeGeneration): Promise<void> {
     setJob(result.job)
     if (result.worker) admin.config = admin.config ? { ...admin.config, worker: result.worker } : admin.config
     staleRevision.value = false
+    conflictRefreshing.value = false
+    conflictRefreshFailed.value = false
     await preview.load(result.job.id, admin.token)
   } catch (error) {
     if (generation === routeGeneration && jobId === String(route.params.jobId || '')) {
@@ -106,20 +105,41 @@ async function loadJob(generation = routeGeneration): Promise<void> {
 }
 
 async function refreshJobAfterConflict(generation: number, jobId: string): Promise<void> {
+  conflictRefreshing.value = true
+  conflictRefreshFailed.value = false
+  preview.dispose()
   const token = admin.token
   if (!token) {
     handleAuthLoss()
+    conflictRefreshFailed.value = true
+    conflictRefreshing.value = false
     return
   }
+  let refreshed = false
   try {
     const result = await getPipelineJob(token, jobId)
     if (generation !== routeGeneration || jobId !== String(route.params.jobId || '')) return
     setJob(result.job)
     if (result.worker) admin.config = admin.config ? { ...admin.config, worker: result.worker } : admin.config
-    if (!admin.token || !admin.authenticated) handleAuthLoss()
+    if (!admin.token || !admin.authenticated) {
+      handleAuthLoss()
+      return
+    }
+    await preview.load(result.job.id, token)
+    if (generation !== routeGeneration || jobId !== String(route.params.jobId || '')) return
+    if (preview.error.value) {
+      errorMessage.value = 'Current job previews could not be refreshed.'
+    } else {
+      refreshed = true
+    }
   } catch (error) {
     if (generation === routeGeneration && jobId === String(route.params.jobId || '')) {
       errorMessage.value = displayError(error, 'Current job could not be refreshed.')
+    }
+  } finally {
+    if (generation === routeGeneration && jobId === String(route.params.jobId || '')) {
+      conflictRefreshFailed.value = !refreshed
+      conflictRefreshing.value = false
     }
   }
 }
@@ -131,6 +151,8 @@ async function loadForRoute(): Promise<void> {
   actionLoading.value = false
   errorMessage.value = ''
   staleRevision.value = false
+  conflictRefreshing.value = false
+  conflictRefreshFailed.value = false
   selectedBib.value = ''
   selectedModels.value = { ocr: '', extract: '', translate: '' }
   preview.dispose()
@@ -142,15 +164,19 @@ async function loadForRoute(): Promise<void> {
 }
 
 async function bindBibtex(): Promise<void> {
-  if (!admin.token || !job.value || !canBindBib.value) return
+  if (!admin.token || !job.value || !canBindBib.value || conflictRefreshing.value || conflictRefreshFailed.value) return
+  const generation = routeGeneration
+  const jobId = job.value.id
   actionLoading.value = true
   errorMessage.value = ''
   try {
     const result = await bindPipelineBibtex(admin.token, job.value.id, selectedBib.value === '__none__' ? null : selectedBib.value || null)
+    if (generation !== routeGeneration || jobId !== String(route.params.jobId || '')) return
     setJob(result.job)
     await preview.load(result.job.id, admin.token)
   } catch (error) {
     errorMessage.value = displayError(error, 'BibTeX binding failed.')
+    if (error instanceof AdminPipelineError && error.status === 409) await refreshJobAfterConflict(generation, jobId)
   } finally {
     actionLoading.value = false
   }
@@ -158,18 +184,25 @@ async function bindBibtex(): Promise<void> {
 
 async function retry(): Promise<void> {
   if (!admin.token || !job.value || !canRetry.value) return
+  const generation = routeGeneration
+  const jobId = job.value.id
+  const expectedRevision = job.value.revision
   actionLoading.value = true
   errorMessage.value = ''
   try {
     const result = await retryPipelineJob(
       admin.token,
-      job.value.id,
+      jobId,
       isIndexingRetry.value ? undefined : selectedModels.value,
-      isIndexingRetry.value ? job.value.revision : undefined,
+      isIndexingRetry.value ? expectedRevision : undefined,
     )
+    if (generation !== routeGeneration || jobId !== String(route.params.jobId || '')) return
     setJob(result.job)
+    staleRevision.value = false
+    conflictRefreshFailed.value = false
   } catch (error) {
     errorMessage.value = displayError(error, 'Retry could not be queued.')
+    if (error instanceof AdminPipelineError && error.status === 409) await refreshJobAfterConflict(generation, jobId)
   } finally {
     actionLoading.value = false
   }
@@ -177,13 +210,17 @@ async function retry(): Promise<void> {
 
 async function reject(): Promise<void> {
   if (!admin.token || !job.value) return
+  const generation = routeGeneration
+  const jobId = job.value.id
   actionLoading.value = true
   errorMessage.value = ''
   try {
     const result = await rejectPipelineJob(admin.token, job.value.id)
+    if (generation !== routeGeneration || jobId !== String(route.params.jobId || '')) return
     setJob(result.job)
   } catch (error) {
     errorMessage.value = displayError(error, 'Job could not be rejected.')
+    if (error instanceof AdminPipelineError && error.status === 409) await refreshJobAfterConflict(generation, jobId)
   } finally {
     actionLoading.value = false
   }
@@ -200,6 +237,7 @@ async function publish(): Promise<void> {
     const result = await publishPipelineJob(admin.token, jobId, expectedRevision)
     setJob(result.job)
     staleRevision.value = false
+    conflictRefreshFailed.value = false
   } catch (error) {
     errorMessage.value = displayError(error, 'Publish could not be queued.')
     if (error instanceof AdminPipelineError && error.status === 409) {
@@ -253,7 +291,7 @@ watch(() => String(route.params.jobId || ''), () => {
           <div class="flex flex-wrap gap-2">
             <button data-testid="job-publish" class="rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground disabled:cursor-not-allowed disabled:opacity-50" type="button" :disabled="!canPublish || actionLoading" @click="publish">Publish</button>
             <button data-testid="job-retry" class="rounded-md border border-border px-3 py-2 text-sm hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50" type="button" :disabled="!canRetry || actionLoading" @click="retry">{{ isIndexingRetry ? 'Retry indexing' : 'Retry' }}</button>
-            <button data-testid="job-reject" class="rounded-md border border-destructive/50 px-3 py-2 text-sm text-destructive hover:bg-destructive/5 disabled:opacity-50" type="button" :disabled="actionLoading || ['published', 'published_with_warning', 'rejected'].includes(job.status)" @click="reject">Reject</button>
+            <button data-testid="job-reject" class="rounded-md border border-destructive/50 px-3 py-2 text-sm text-destructive hover:bg-destructive/5 disabled:opacity-50" type="button" :disabled="actionLoading || conflictRefreshing || conflictRefreshFailed || ['published', 'published_with_warning', 'rejected'].includes(job.status)" @click="reject">Reject</button>
           </div>
         </div>
         <p v-if="job.failed_step" class="mt-4 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive" role="alert">Failed step: {{ job.failed_step }}<span v-if="job.error"> — {{ job.error }}</span></p>
@@ -273,7 +311,7 @@ watch(() => String(route.params.jobId || ''), () => {
             </select>
             <p v-if="job.bibtex.diagnostics.reason" class="text-xs text-muted-foreground">Reason: {{ job.bibtex.diagnostics.reason }}<span v-if="job.bibtex.diagnostics.candidate_keys?.length"> · candidates {{ job.bibtex.diagnostics.candidate_keys.join(', ') }}</span></p>
           </div>
-          <button data-testid="bibtex-bind" class="h-10 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground disabled:opacity-50" type="button" :disabled="actionLoading" @click="bindBibtex">Save pairing</button>
+            <button data-testid="bibtex-bind" class="h-10 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground disabled:opacity-50" type="button" :disabled="actionLoading || conflictRefreshing || conflictRefreshFailed" @click="bindBibtex">Save pairing</button>
         </div>
       </section>
 

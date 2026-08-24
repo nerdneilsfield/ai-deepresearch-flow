@@ -55,6 +55,7 @@ export const useAdminPipelineStore = defineStore('admin-pipeline', () => {
   const authLoading = ref(false)
   const authError = ref('')
   const lastValidatedAt = ref<number | null>(null)
+  let authOperation = 0
 
   const authenticated = computed(() => Boolean(token.value && config.value?.enabled))
   const worker = computed<PipelineWorkerStatus | null>(() => config.value?.worker ?? null)
@@ -75,61 +76,72 @@ export const useAdminPipelineStore = defineStore('admin-pipeline', () => {
   }
 
   async function login(candidate: string): Promise<boolean> {
+    const operation = ++authOperation
     authLoading.value = true
     authError.value = ''
     const value = candidate.trim()
     if (!value) {
       authError.value = 'Admin token is required.'
-      authLoading.value = false
+      if (operation === authOperation) authLoading.value = false
       return false
     }
     setAdminToken(value)
     try {
       const next = await validate(value)
+      if (operation !== authOperation) return false
       token.value = value
       config.value = next
       lastValidatedAt.value = Date.now()
       return true
     } catch (error) {
+      if (operation !== authOperation) return false
       clearSession()
       authError.value = error instanceof Error ? error.message : 'Admin token could not be validated.'
       return false
     } finally {
-      authLoading.value = false
+      if (operation === authOperation) authLoading.value = false
     }
   }
 
   async function restore(): Promise<boolean> {
+    const operation = ++authOperation
     const saved = getAdminToken()
     if (!saved) {
       clearSession()
+      authLoading.value = false
       return false
     }
     authLoading.value = true
     authError.value = ''
     try {
       const next = await validate(saved)
+      if (operation !== authOperation) return false
       token.value = saved
       config.value = next
       lastValidatedAt.value = Date.now()
       return true
     } catch (error) {
+      if (operation !== authOperation) return false
       clearSession()
       authError.value = error instanceof Error ? error.message : 'Admin token could not be validated.'
       return false
     } finally {
-      authLoading.value = false
+      if (operation === authOperation) authLoading.value = false
     }
   }
 
   async function refreshConfig(): Promise<PipelineConfig | null> {
-    if (!token.value) return null
+    const currentToken = token.value
+    if (!currentToken) return null
+    const operation = ++authOperation
     try {
-      const next = await validate(token.value)
+      const next = await validate(currentToken)
+      if (operation !== authOperation || token.value !== currentToken) return null
       config.value = next
       lastValidatedAt.value = Date.now()
       return next
     } catch (error) {
+      if (operation !== authOperation || token.value !== currentToken) return null
       if (error instanceof AdminPipelineError && (error.status === 401 || error.status === 404)) {
         clearSession()
       }
@@ -138,6 +150,7 @@ export const useAdminPipelineStore = defineStore('admin-pipeline', () => {
   }
 
   function logout(): void {
+    authOperation += 1
     clearSession()
     authError.value = ''
   }

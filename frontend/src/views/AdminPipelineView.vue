@@ -17,6 +17,7 @@ const errorMessage = ref('')
 const successMessage = ref('')
 const inputElement = ref<HTMLInputElement | null>(null)
 const bibInputElement = ref<HTMLInputElement | null>(null)
+const pdfSelectionTouched = ref(false)
 
 const config = computed(() => admin.config)
 const workerOffline = computed(() => isPipelineWorkerUnavailable(config.value?.worker))
@@ -25,11 +26,13 @@ const pdfCountInvalid = computed(() => Boolean(config.value && pdfFiles.value.le
 const aggregateInvalid = computed(() => Boolean(config.value && totalBytes.value > config.value.limits.max_batch_bytes))
 const sizeInvalid = computed(() => Boolean(config.value && pdfFiles.value.some((file) => file.size > config.value!.limits.max_pdf_bytes)))
 const pdfTypeInvalid = computed(() => pdfFiles.value.some((file) => !file.name.toLowerCase().endsWith('.pdf')))
+const emptyPdfInvalid = computed(() => pdfSelectionTouched.value && pdfFiles.value.length === 0)
 const bibtexInvalid = computed(() => Boolean(config.value && bibtexFile.value && bibtexFile.value.size > config.value.limits.bibtex_max_bytes))
 const bibtexTypeInvalid = computed(() => Boolean(bibtexFile.value && !bibtexFile.value.name.toLowerCase().endsWith('.bib')))
-const pdfValidationError = computed(() => pdfCountInvalid.value || aggregateInvalid.value || sizeInvalid.value || pdfTypeInvalid.value)
+const pdfValidationError = computed(() => emptyPdfInvalid.value || pdfCountInvalid.value || aggregateInvalid.value || sizeInvalid.value || pdfTypeInvalid.value)
 const bibtexValidationError = computed(() => bibtexInvalid.value || bibtexTypeInvalid.value)
 const uploadInvalid = computed(() => pdfFiles.value.length === 0 || pdfCountInvalid.value || aggregateInvalid.value || sizeInvalid.value || pdfTypeInvalid.value || bibtexInvalid.value || bibtexTypeInvalid.value)
+const hasUploadValidationError = computed(() => pdfValidationError.value || bibtexValidationError.value)
 
 function modelDefault(name: 'ocr' | 'extract' | 'translate'): string {
   return config.value?.models[name].default ?? ''
@@ -48,6 +51,7 @@ function applyDefaults(): void {
 }
 
 function setPdfFiles(event: Event): void {
+  pdfSelectionTouched.value = true
   const files = Array.from((event.target as HTMLInputElement).files ?? [])
   pdfFiles.value = files
   errorMessage.value = ''
@@ -61,6 +65,7 @@ function setBibtex(event: Event): void {
 function clearUpload(): void {
   pdfFiles.value = []
   bibtexFile.value = null
+  pdfSelectionTouched.value = true
   if (inputElement.value) inputElement.value.value = ''
   if (bibInputElement.value) bibInputElement.value.value = ''
 }
@@ -210,6 +215,7 @@ onMounted(async () => {
             </div>
             <div v-if="pdfValidationError || bibtexValidationError" id="upload-validation-error" class="space-y-1 rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive" role="alert" aria-live="assertive" data-testid="upload-validation-error">
               <div v-if="pdfValidationError" id="pdf-upload-error">
+                <p v-if="emptyPdfInvalid">Select at least one PDF before uploading.</p>
                 <p v-if="pdfCountInvalid">Too many PDFs for one batch.</p>
                 <p v-if="aggregateInvalid">Combined PDF size exceeds batch limit.</p>
                 <p v-if="sizeInvalid">One or more PDFs exceed per-file limit.</p>
@@ -233,7 +239,7 @@ onMounted(async () => {
           </div>
         </div>
         <div class="mt-5 flex items-center justify-end">
-          <button data-testid="upload-submit" class="inline-flex h-10 items-center justify-center rounded-md bg-primary px-5 text-sm font-medium text-primary-foreground disabled:cursor-not-allowed disabled:opacity-50" type="button" :aria-describedby="uploadInvalid ? 'upload-validation-error' : undefined" :title="uploadInvalid ? 'Resolve upload validation errors before submitting.' : undefined" :disabled="uploadInvalid || uploadLoading" @click="upload">
+          <button data-testid="upload-submit" class="inline-flex h-10 items-center justify-center rounded-md bg-primary px-5 text-sm font-medium text-primary-foreground disabled:cursor-not-allowed disabled:opacity-50" type="button" :aria-describedby="hasUploadValidationError ? 'upload-validation-error' : undefined" :title="uploadInvalid ? 'Resolve upload validation errors before submitting.' : undefined" :disabled="uploadInvalid || uploadLoading" @click="upload">
             {{ uploadLoading ? 'Uploading…' : 'Upload and process' }}
           </button>
         </div>

@@ -108,6 +108,27 @@ describe('admin pipeline upload view', () => {
     expect(wrapper.get('[data-testid="upload-submit"]').attributes('disabled')).toBeDefined()
   })
 
+  it('announces empty PDF selection after chooser interaction and associates the live error', async () => {
+    ;(globalThis.fetch as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(new Response(JSON.stringify(configPayload()), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ page: 1, page_size: 20, total: 0, has_more: false, items: [] }), { status: 200 }))
+
+    const { default: AdminPipelineView } = await import('@/views/AdminPipelineView.vue')
+    const wrapper = mount(AdminPipelineView)
+    await wrapper.get('[data-testid="admin-token-input"]').setValue('session-secret')
+    await wrapper.get('form').trigger('submit')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await nextTick()
+
+    const pdfInput = wrapper.get('[data-testid="pdf-input"]')
+    Object.defineProperty(pdfInput.element, 'files', { value: [] })
+    await pdfInput.trigger('change')
+
+    expect(wrapper.get('[data-testid="upload-validation-error"]').text()).toContain('Select at least one PDF')
+    expect(pdfInput.attributes('aria-describedby')).toBe('pdf-upload-error')
+    expect(wrapper.get('[data-testid="upload-submit"]').attributes('aria-describedby')).toBe('upload-validation-error')
+  })
+
   it('clears an invalid session token before exposing admin navigation state', async () => {
     sessionStorage.setItem('paper-db-admin-pipeline-token', 'expired-secret')
     ;(globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
