@@ -39,6 +39,21 @@ const router = createRouter({
       component: () => import('../views/HelpView.vue'),
     },
     {
+      path: '/admin/pipeline',
+      name: 'admin-pipeline',
+      component: () => import('../views/AdminPipelineView.vue'),
+    },
+    {
+      path: '/admin/pipeline/batches/:batchId',
+      name: 'admin-pipeline-batch',
+      component: () => import('../views/AdminPipelineBatchView.vue'),
+    },
+    {
+      path: '/admin/pipeline/jobs/:jobId',
+      name: 'admin-pipeline-job',
+      component: () => import('../views/AdminPipelineJobView.vue'),
+    },
+    {
       path: '/stats/:facet/:value',
       name: 'facet-stats',
       component: () => import('../views/FacetStatsView.vue'),

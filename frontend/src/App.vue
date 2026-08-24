@@ -21,6 +21,7 @@ import ErrorBoundary from '@/components/ErrorBoundary.vue'
 import { useOnline, useWindowScroll } from '@vueuse/core'
 import { Github, ArrowUp, Sun, Moon, Monitor, Library } from 'lucide-vue-next'
 import { useTheme } from '@/composables/useTheme'
+import { useAdminPipelineStore } from '@/stores/admin-pipeline'
 
 const route = useRoute()
 const router = useRouter()
@@ -31,6 +32,17 @@ const ui = useUiStore()
 const isOnline = useOnline()
 const { y: scrollY } = useWindowScroll()
 const { themeMode, setTheme } = useTheme()
+
+// App is also mounted by lightweight public-page tests without Pinia. Keep
+// optional admin state isolated so public navigation remains usable there.
+const adminPipeline = (() => {
+  try {
+    return useAdminPipelineStore()
+  } catch {
+    return null
+  }
+})()
+const adminIsAuthenticated = computed(() => Boolean(adminPipeline?.authenticated))
 
 const activeRoute = computed(() => String(route.name || ''))
 const scrolled = computed(() => scrollY.value > 8)
@@ -56,6 +68,7 @@ function scrollToTop() {
 onMounted(() => {
   selection.init()
   favorites.init()
+  if (adminPipeline?.token && !adminPipeline.authenticated) void adminPipeline.restore()
 })
 </script>
 
@@ -128,6 +141,16 @@ onMounted(() => {
             >
               {{ t('help') }}
             </button>
+            <button
+              v-if="adminIsAuthenticated"
+              class="rounded-md px-3 py-1.5 font-medium transition-colors"
+              :class="activeRoute.startsWith('admin-pipeline') ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'"
+              :aria-current="activeRoute.startsWith('admin-pipeline') ? 'page' : undefined"
+              type="button"
+              @click="goto('/admin/pipeline')"
+            >
+              Admin
+            </button>
           </nav>
         </div>
 
@@ -185,6 +208,7 @@ onMounted(() => {
                 <Button variant="ghost" @click="goto('/favorites')">{{ t('favorites', { count: favorites.count }) }}</Button>
                 <Button variant="ghost" @click="goto('/sync')">{{ t('sync') }}</Button>
                 <Button variant="ghost" @click="goto('/help')">{{ t('help') }}</Button>
+                <Button v-if="adminIsAuthenticated" variant="ghost" @click="goto('/admin/pipeline')">Admin</Button>
               </nav>
             </SheetContent>
           </Sheet>
