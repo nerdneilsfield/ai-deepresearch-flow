@@ -9,9 +9,10 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import secrets
 import tempfile
 from threading import RLock
-from typing import Any
+from typing import Any, Protocol
 
 from .publication_models import FormalStore, PublicationConflict, PublicationError
 
@@ -22,6 +23,7 @@ PUBLICATION_SERIALIZATION_LOCK = RLock()
 
 
 _CONTENT_DIGEST = re.compile(r"[0-9a-f]{64}")
+_LOCAL_CURSOR_PREFIX = "v1l."
 _WEBDAV_CURSOR_PREFIX = "v1w."
 
 
@@ -32,6 +34,28 @@ class FormalStorePage:
     items: tuple[str, ...] = ()
     next_cursor: str | None = None
     inspected: int = 0
+
+
+class FormalStoreCursorError(PublicationError):
+    """A local listing cursor cannot be resumed safely."""
+
+
+class _DirectoryEntries(Protocol):
+    def __next__(self) -> os.DirEntry[str]: ...
+
+    def close(self) -> None: ...
+
+
+@dataclass
+class _LocalPageFrame:
+    relative: str
+    entries: _DirectoryEntries
+
+
+@dataclass
+class _LocalPageTraversal:
+    minimum: str | None
+    frames: list[_LocalPageFrame]
 
 
 def content_addressed_digest(relative_path: str) -> str | None:
@@ -69,6 +93,9 @@ class LocalFormalStore:
     def __init__(self, root: str | Path):
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
+        self._page_scope = secrets.token_urlsafe(18)
+        self._page_states: dict[str, _LocalPageTraversal] = {}
+        self._page_lock = RLock()
 
     def put(self, relative_path: str, data: bytes) -> None:
         rel = safe_relative_path(relative_path)
@@ -133,6 +160,192 @@ class LocalFormalStore:
                 result.add(relative)
         ordered = sorted(result)
         return tuple(ordered if max_items is None else ordered[:max_items])
+
+    def list_content_addressed_page(
+        self,
+        *,
+        max_items: int | None = None,
+        after: str | None = None,
+        content_addressed_only: bool = False,
+        inspection_limit: int | None = None,
+    ) -> FormalStorePage:
+        """List one bounded DFS page using a resumable live directory stack.
+
+        ``os.scandir`` iterators stay attached to one store instance.  The
+        opaque cursor never contains paths supplied by its caller; after a
+        process restart, its live iterator is unavailable and GC resets the
+        cursor with a warning instead of falling back to an unbounded scan.
+        """
+        if max_items is not None and max_items < 0:
+            raise ValueError("formal listing page size must not be negative")
+        if inspection_limit is None:
+            inspection_limit = max(1, max_items or 1)
+        if inspection_limit < 0:
+            raise ValueError("formal listing inspection limit must not be negative")
+
+        with self._page_lock:
+            traversal, previous_token = self._take_page_traversal(after)
+            try:
+                items, inspected = self._consume_page(
+                    traversal,
+                    max_items=max_items,
+                    content_addressed_only=content_addressed_only,
+                    inspection_limit=inspection_limit,
+                )
+                if traversal.frames:
+                    token = secrets.token_urlsafe(18)
+                    self._page_states[token] = traversal
+                    next_cursor = self._encode_page_cursor(token)
+                else:
+                    self._close_page_traversal(traversal)
+                    next_cursor = None
+                del previous_token
+                return FormalStorePage(tuple(items), next_cursor, inspected)
+            except BaseException:
+                self._close_page_traversal(traversal)
+                raise
+
+    def _take_page_traversal(
+        self, cursor: str | None
+    ) -> tuple[_LocalPageTraversal, str | None]:
+        if cursor is None:
+            self._reset_page_states()
+            return self._new_page_traversal(None), None
+        if not isinstance(cursor, str):
+            self._reset_page_states()
+            raise FormalStoreCursorError("formal listing cursor cannot be resumed safely")
+        if not cursor.startswith(_LOCAL_CURSOR_PREFIX):
+            self._reset_page_states()
+            try:
+                minimum = safe_relative_path(cursor)
+            except (TypeError, ValueError) as exc:
+                raise FormalStoreCursorError(
+                    "formal listing cursor cannot be resumed safely"
+                ) from exc
+            return self._new_page_traversal(minimum), None
+        try:
+            token = self._decode_page_cursor(cursor)
+        except FormalStoreCursorError:
+            self._reset_page_states()
+            raise
+        traversal = self._page_states.pop(token, None)
+        if traversal is None:
+            self._reset_page_states()
+            raise FormalStoreCursorError("formal listing cursor cannot be resumed safely")
+        return traversal, token
+
+    def _reset_page_states(self) -> None:
+        states = tuple(self._page_states.values())
+        self._page_states.clear()
+        for traversal in states:
+            self._close_page_traversal(traversal)
+
+    def _new_page_traversal(self, minimum: str | None) -> _LocalPageTraversal:
+        frame = self._open_page_frame("")
+        return _LocalPageTraversal(minimum, [] if frame is None else [frame])
+
+    def _open_page_frame(self, relative: str) -> _LocalPageFrame | None:
+        path = self.root if not relative else self.root / PurePosixPath(relative)
+        try:
+            if path.is_symlink():
+                return None
+            resolved = path.resolve(strict=True)
+            if not resolved.is_relative_to(self.root) or not resolved.is_dir():
+                return None
+            return _LocalPageFrame(relative, os.scandir(resolved))
+        except OSError:
+            return None
+
+    def _consume_page(
+        self,
+        traversal: _LocalPageTraversal,
+        *,
+        max_items: int | None,
+        content_addressed_only: bool,
+        inspection_limit: int,
+    ) -> tuple[list[str], int]:
+        items: list[str] = []
+        inspected = 0
+        while traversal.frames and inspected < inspection_limit and (
+            max_items is None or len(items) < max_items
+        ):
+            frame = traversal.frames[-1]
+            try:
+                entry = next(frame.entries)
+            except (StopIteration, OSError):
+                self._close_page_frame(traversal.frames.pop())
+                continue
+            inspected += 1
+            try:
+                if entry.is_symlink():
+                    continue
+                raw_relative = (
+                    f"{frame.relative}/{entry.name}" if frame.relative else entry.name
+                )
+                relative = safe_relative_path(raw_relative)
+                if relative != raw_relative:
+                    continue
+                if entry.is_dir(follow_symlinks=False):
+                    child = self._open_page_frame(relative)
+                    if child is not None:
+                        traversal.frames.append(child)
+                    continue
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                candidate = Path(entry.path)
+                if candidate.is_symlink():
+                    continue
+                resolved = candidate.resolve(strict=True)
+                if not resolved.is_relative_to(self.root):
+                    continue
+                normalized = resolved.relative_to(self.root).as_posix()
+                if normalized != relative:
+                    continue
+                if traversal.minimum is not None and normalized <= traversal.minimum:
+                    continue
+                if content_addressed_only and content_addressed_digest(normalized) is None:
+                    continue
+            except (OSError, TypeError, ValueError):
+                continue
+            items.append(normalized)
+        return items, inspected
+
+    def _close_page_frame(self, frame: _LocalPageFrame) -> None:
+        try:
+            frame.entries.close()
+        except OSError:
+            pass
+
+    def _close_page_traversal(self, traversal: _LocalPageTraversal) -> None:
+        while traversal.frames:
+            self._close_page_frame(traversal.frames.pop())
+
+    def _encode_page_cursor(self, token: str) -> str:
+        payload = {"v": 1, "scope": self._page_scope, "token": token}
+        encoded = base64.urlsafe_b64encode(
+            json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        ).decode("ascii").rstrip("=")
+        return _LOCAL_CURSOR_PREFIX + encoded
+
+    def _decode_page_cursor(self, cursor: str) -> str:
+        try:
+            if len(cursor) > 4096:
+                raise ValueError
+            encoded = cursor[len(_LOCAL_CURSOR_PREFIX) :]
+            encoded += "=" * (-len(encoded) % 4)
+            payload = json.loads(base64.urlsafe_b64decode(encoded).decode("utf-8"))
+            if not isinstance(payload, dict) or payload.get("v") != 1:
+                raise ValueError
+            if payload.get("scope") != self._page_scope:
+                raise ValueError
+            token = payload.get("token")
+            if not isinstance(token, str) or not token:
+                raise ValueError
+            return token
+        except (ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError, binascii.Error) as exc:
+            raise FormalStoreCursorError(
+                "formal listing cursor cannot be resumed safely"
+            ) from exc
 
     def read(self, relative_path: str) -> bytes:
         rel = safe_relative_path(relative_path)
@@ -399,6 +612,7 @@ def safe_relative_path(value: str) -> str:
 __all__ = [
     "FormalStore",
     "FormalStorePage",
+    "FormalStoreCursorError",
     "LocalFormalStore",
     "MirroredFormalStore",
     "WebDavFormalStore",

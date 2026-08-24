@@ -15,6 +15,7 @@ import sqlite3
 from typing import Any
 
 from .publication_store import (
+    FormalStoreCursorError,
     MirroredFormalStore,
     PUBLICATION_SERIALIZATION_LOCK,
     content_addressed_digest,
@@ -309,6 +310,8 @@ def _collect_one(
             inspection_limit=inspection_limit,
             cursor=cursor,
         )
+    except FormalStoreCursorError as exc:
+        return FormalGcResult(warning=str(exc), next_cursor=None)
     except PublicationError as exc:
         return FormalGcResult(warning=str(exc), next_cursor=cursor)
     except Exception:

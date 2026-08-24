@@ -13,6 +13,7 @@ from deepresearch_flow.pipeline.publication_store import (
     MirroredFormalStore,
     WebDavFormalStore,
 )
+from deepresearch_flow.pipeline.publication_models import PublicationError
 from deepresearch_flow.pipeline.state import PipelineState
 from deepresearch_flow.paper.snapshot.publication import open_snapshot_connection
 
@@ -99,6 +100,187 @@ def test_formal_gc_removes_only_unreferenced_content_addressed_files_with_bound(
     assert not (store.root / orphan_b_path).exists()
     assert not (store.root / orphan_summary_path).exists()
     assert unrelated.exists()
+
+
+def test_local_formal_store_page_is_budgeted_resumable_and_symlink_safe(
+    tmp_path: Path,
+) -> None:
+    store = LocalFormalStore(tmp_path / "formal")
+    expected: set[str] = set()
+    for index in range(5):
+        data = f"page-orphan-{index}".encode()
+        relative = f"pdf/{hashlib.sha256(data).hexdigest()}.pdf"
+        store.put(relative, data)
+        expected.add(relative)
+    outside = tmp_path / "outside.pdf"
+    outside.write_bytes(b"outside")
+    link = store.root / "pdf" / "link.pdf"
+    link.symlink_to(outside)
+
+    cursor: str | None = None
+    observed: set[str] = set()
+    for _ in range(30):
+        page = store.list_content_addressed_page(
+            max_items=1,
+            after=cursor,
+            content_addressed_only=True,
+            inspection_limit=2,
+        )
+        assert page.inspected <= 2
+        assert len(page.items) <= 1
+        observed.update(page.items)
+        cursor = page.next_cursor
+        if cursor is None:
+            break
+
+    assert observed == expected
+    with pytest.raises(PublicationError):
+        store.list_content_addressed_page(after="v1l.invalid")
+
+
+def test_local_formal_gc_resets_unrecoverable_cursor_after_store_restart(
+    tmp_path: Path,
+) -> None:
+    store = LocalFormalStore(tmp_path / "formal")
+    data = [b"first restart orphan", b"second restart orphan"]
+    paths = tuple(
+        f"pdf/{hashlib.sha256(value).hexdigest()}.pdf" for value in data
+    )
+    for path, value in zip(paths, data):
+        store.put(path, value)
+    snapshot = tmp_path / "snapshot.sqlite3"
+    _empty_snapshot(snapshot)
+
+    first = collect_unreferenced_formal_resources(
+        store, snapshot_db=snapshot, limit=1, grace_seconds=0
+    )
+    assert len(first.deleted) == 1
+    assert first.next_cursor is not None
+
+    restarted = LocalFormalStore(store.root)
+    recovered = collect_unreferenced_formal_resources(
+        restarted,
+        snapshot_db=snapshot,
+        limit=1,
+        grace_seconds=0,
+        cursor=first.next_cursor,
+    )
+
+    assert recovered.deleted == ()
+    assert recovered.warning is not None
+    assert recovered.next_cursor is None
+    assert any((restarted.root / path).exists() for path in paths)
+
+
+def test_local_formal_store_page_converges_after_directory_changes(
+    tmp_path: Path,
+) -> None:
+    store = LocalFormalStore(tmp_path / "formal")
+    removed_data = b"removed during listing"
+    retained_data = b"retained during listing"
+    removed = f"pdf/{hashlib.sha256(removed_data).hexdigest()}.pdf"
+    retained = f"pdf/{hashlib.sha256(retained_data).hexdigest()}.pdf"
+    store.put(removed, removed_data)
+    store.put(retained, retained_data)
+    disappearing = store.root / "gone" / "nested"
+    disappearing.mkdir(parents=True)
+    (disappearing / "note.txt").write_text("gone", encoding="utf-8")
+
+    first = store.list_content_addressed_page(
+        max_items=1,
+        content_addressed_only=True,
+        inspection_limit=2,
+    )
+    assert first.next_cursor is not None
+    removed_path = store.root / removed
+    removed_path.unlink()
+    (disappearing / "note.txt").unlink()
+    disappearing.rmdir()
+    (store.root / "gone").rmdir()
+    added_data = b"added during listing"
+    added = f"pdf/{hashlib.sha256(added_data).hexdigest()}.pdf"
+    store.put(added, added_data)
+
+    observed = set(first.items)
+    cursor = first.next_cursor
+    for _ in range(30):
+        page = store.list_content_addressed_page(
+            max_items=1,
+            after=cursor,
+            content_addressed_only=True,
+            inspection_limit=2,
+        )
+        observed.update(page.items)
+        cursor = page.next_cursor
+        if cursor is None:
+            break
+
+    assert retained in observed
+    assert removed not in observed
+
+    fresh_observed: set[str] = set()
+    fresh_cursor: str | None = None
+    for _ in range(30):
+        page = store.list_content_addressed_page(
+            max_items=1,
+            after=fresh_cursor,
+            content_addressed_only=True,
+            inspection_limit=2,
+        )
+        fresh_observed.update(page.items)
+        fresh_cursor = page.next_cursor
+        if fresh_cursor is None:
+            break
+    assert added in fresh_observed
+
+
+def test_local_formal_store_new_scan_abandons_previous_cursor_safely(
+    tmp_path: Path,
+) -> None:
+    store = LocalFormalStore(tmp_path / "formal")
+    for index in range(3):
+        data = f"abandoned-page-{index}".encode()
+        store.put(f"pdf/{hashlib.sha256(data).hexdigest()}.pdf", data)
+
+    abandoned = store.list_content_addressed_page(
+        max_items=1,
+        content_addressed_only=True,
+        inspection_limit=2,
+    )
+    assert abandoned.next_cursor is not None
+    restarted_scan = store.list_content_addressed_page(
+        max_items=1,
+        content_addressed_only=True,
+        inspection_limit=2,
+    )
+
+    with pytest.raises(PublicationError):
+        store.list_content_addressed_page(
+            max_items=1,
+            after=abandoned.next_cursor,
+            content_addressed_only=True,
+            inspection_limit=2,
+        )
+    assert restarted_scan.items
+
+
+def test_local_formal_store_invalid_cursor_discards_active_scan_safely(
+    tmp_path: Path,
+) -> None:
+    store = LocalFormalStore(tmp_path / "formal")
+    payload = b"invalid cursor cleanup"
+    store.put(f"pdf/{hashlib.sha256(payload).hexdigest()}.pdf", payload)
+    page = store.list_content_addressed_page(
+        max_items=1,
+        content_addressed_only=True,
+        inspection_limit=1,
+    )
+    assert page.next_cursor is not None
+
+    with pytest.raises(PublicationError):
+        store.list_content_addressed_page(after="v1l.invalid")
+    with pytest.raises(PublicationError):
+        store.list_content_addressed_page(after=page.next_cursor)
 
 
 def test_webdav_formal_gc_uses_explicit_list_read_delete_capability(
@@ -497,6 +679,8 @@ def test_snapshot_hash_and_resource_columns_protect_current_resources(tmp_path: 
 
 def test_bounded_gc_cursor_converges_past_large_referenced_prefix(tmp_path: Path) -> None:
     class PagedStore(LocalFormalStore):
+        list_content_addressed_page = None
+
         def list_content_addressed_files(
             self, *, max_items: int | None = None, after: str | None = None
         ) -> tuple[str, ...]:
@@ -560,8 +744,9 @@ def test_gc_cursor_advances_only_through_inspected_objects(tmp_path: Path) -> No
         store, snapshot_db=snapshot, limit=1, grace_seconds=0
     )
 
-    assert result.deleted == (paths[0],)
-    assert result.next_cursor == paths[0]
+    assert result.deleted and result.deleted[0] in paths
+    assert result.next_cursor is not None
+    assert result.next_cursor.startswith("v1l.")
 
 
 def test_gc_clears_cursor_after_reaching_end_of_short_page(tmp_path: Path) -> None:
@@ -594,12 +779,21 @@ def test_gc_clears_cursor_after_reaching_end_of_short_page(tmp_path: Path) -> No
     connection.commit()
     connection.close()
 
-    result = collect_unreferenced_formal_resources(
+    first = collect_unreferenced_formal_resources(
         store, snapshot_db=snapshot, limit=1, grace_seconds=0
     )
 
-    assert result.deleted == ()
-    assert result.next_cursor is None
+    assert first.deleted == ()
+    assert first.next_cursor is not None
+    second = collect_unreferenced_formal_resources(
+        store,
+        snapshot_db=snapshot,
+        limit=1,
+        grace_seconds=0,
+        cursor=first.next_cursor,
+    )
+    assert second.deleted == ()
+    assert second.next_cursor is None
 
 
 def test_gc_clears_cursor_after_deleting_only_object_on_short_page(tmp_path: Path) -> None:
@@ -610,12 +804,21 @@ def test_gc_clears_cursor_after_deleting_only_object_on_short_page(tmp_path: Pat
     snapshot = tmp_path / "snapshot.sqlite3"
     _empty_snapshot(snapshot)
 
-    result = collect_unreferenced_formal_resources(
+    first = collect_unreferenced_formal_resources(
         store, snapshot_db=snapshot, limit=1, grace_seconds=0
     )
 
-    assert result.deleted == (relative,)
-    assert result.next_cursor is None
+    assert first.deleted == (relative,)
+    assert first.next_cursor is not None
+    second = collect_unreferenced_formal_resources(
+        store,
+        snapshot_db=snapshot,
+        limit=1,
+        grace_seconds=0,
+        cursor=first.next_cursor,
+    )
+    assert second.deleted == ()
+    assert second.next_cursor is None
 
 
 def test_gc_filters_unrelated_files_before_inspection_page_limit(tmp_path: Path) -> None:
