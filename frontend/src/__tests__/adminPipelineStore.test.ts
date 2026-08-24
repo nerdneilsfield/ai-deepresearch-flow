@@ -47,4 +47,42 @@ describe('admin pipeline authentication state', () => {
     expect(sessionStorage.getItem('paper-db-admin-pipeline-token')).toBe('second-secret')
     expect(store.authenticated).toBe(true)
   })
+
+  it('coalesces concurrent restore calls into one validation request', async () => {
+    sessionStorage.setItem('paper-db-admin-pipeline-token', 'session-secret')
+    const responses: Array<(response: Response) => void> = []
+    const fetchMock = vi.fn(() => new Promise<Response>((resolve) => {
+      responses.push(resolve)
+    }))
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+    const store = useAdminPipelineStore()
+
+    const firstRestore = store.restore()
+    const secondRestore = store.restore()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    responses[0]?.(new Response(JSON.stringify(configPayload('ocr-a')), { status: 200 }))
+
+    await expect(firstRestore).resolves.toBe(true)
+    await expect(secondRestore).resolves.toBe(true)
+    expect(store.authLoading).toBe(false)
+  })
+
+  it('lets latest refresh operation release auth loading after stale restore', async () => {
+    sessionStorage.setItem('paper-db-admin-pipeline-token', 'session-secret')
+    const responses: Array<(response: Response) => void> = []
+    globalThis.fetch = vi.fn(() => new Promise<Response>((resolve) => {
+      responses.push(resolve)
+    })) as unknown as typeof fetch
+    const store = useAdminPipelineStore()
+
+    const restore = store.restore()
+    const refresh = store.refreshConfig()
+    responses[1]?.(new Response(JSON.stringify(configPayload('ocr-refresh')), { status: 200 }))
+    await expect(refresh).resolves.toMatchObject({ models: { ocr: { default: 'ocr-refresh' } } })
+    expect(store.authLoading).toBe(false)
+    responses[0]?.(new Response(JSON.stringify(configPayload('ocr-restore')), { status: 200 }))
+    await expect(restore).resolves.toBe(false)
+    expect(store.config?.models.ocr.default).toBe('ocr-refresh')
+    expect(store.authLoading).toBe(false)
+  })
 })

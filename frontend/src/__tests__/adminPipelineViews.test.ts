@@ -1,7 +1,8 @@
 import { nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
+import { useAdminPipelineStore } from '@/stores/admin-pipeline'
 
 const routerPush = vi.fn()
 const routerReplace = vi.fn()
@@ -55,6 +56,84 @@ describe('admin pipeline upload view', () => {
     expect(wrapper.find('[data-testid="pdf-input"]').exists()).toBe(true)
     expect(wrapper.get('#ocr-model').element).toHaveProperty('value', 'ocr-a')
     expect(wrapper.get('#extract-model').element).toHaveProperty('value', 'extract-a')
+  })
+
+  it('coalesces app and view restore calls and initializes direct-route batches', async () => {
+    sessionStorage.setItem('paper-db-admin-pipeline-token', 'session-secret')
+    const pending: Array<(response: Response) => void> = []
+    globalThis.fetch = vi.fn(() => new Promise<Response>((resolve) => {
+      pending.push(resolve)
+    })) as unknown as typeof fetch
+    const store = useAdminPipelineStore()
+    const appRestore = store.restore()
+    const { default: AdminPipelineView } = await import('@/views/AdminPipelineView.vue')
+    const wrapper = mount(AdminPipelineView)
+
+    expect(pending).toHaveLength(1)
+    pending[0]?.(new Response(JSON.stringify(configPayload()), { status: 200 }))
+    await appRestore
+    await flushPromises()
+    expect(pending).toHaveLength(2)
+    pending[1]?.(new Response(JSON.stringify({
+      page: 1,
+      page_size: 20,
+      total: 1,
+      has_more: false,
+      items: [{ id: 'batch-direct', job_count: 1, status_counts: { review_ready: 1 } }],
+    }), { status: 200 }))
+    await flushPromises()
+
+    expect(wrapper.get('#ocr-model').element).toHaveProperty('value', 'ocr-a')
+    expect(wrapper.text()).toContain('batch-direct')
+    wrapper.unmount()
+  })
+
+  it('reinitializes once across login logout relogin without overwriting selection on config refresh', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(configPayload()), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        page: 1,
+        page_size: 20,
+        total: 1,
+        has_more: false,
+        items: [{ id: 'batch-first', job_count: 1, status_counts: { queued: 1 } }],
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(configPayload()), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(configPayload()), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        page: 1,
+        page_size: 20,
+        total: 1,
+        has_more: false,
+        items: [{ id: 'batch-second', job_count: 1, status_counts: { review_ready: 1 } }],
+      }), { status: 200 }))
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    const { default: AdminPipelineView } = await import('@/views/AdminPipelineView.vue')
+    const wrapper = mount(AdminPipelineView)
+    await wrapper.get('[data-testid="admin-token-input"]').setValue('session-secret')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    await wrapper.get('#ocr-model').setValue('ocr-b')
+
+    const store = useAdminPipelineStore()
+    await store.refreshConfig()
+    await flushPromises()
+    expect(wrapper.get('#ocr-model').element).toHaveProperty('value', 'ocr-b')
+
+    const signOut = wrapper.findAll('button').find((button) => button.text() === 'Sign out')
+    expect(signOut).toBeDefined()
+    await signOut?.trigger('click')
+    expect(wrapper.find('[data-testid="admin-token-input"]').exists()).toBe(true)
+    await wrapper.get('[data-testid="admin-token-input"]').setValue('session-secret')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('batch-second')
+    expect(wrapper.text()).not.toContain('batch-first')
+    expect(wrapper.get('#ocr-model').element).toHaveProperty('value', 'ocr-a')
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/batches?page=1&page_size=20'))).toHaveLength(2)
+    wrapper.unmount()
   })
 
   it('shows aggregate validation before upload', async () => {

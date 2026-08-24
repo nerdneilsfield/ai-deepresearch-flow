@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { AdminPipelineError, createPipelineBatch, listPipelineBatches, type PipelineBatch } from '@/lib/admin-pipeline'
 import { formatPipelineBytes, useAdminPipelineStore, isPipelineWorkerUnavailable } from '@/stores/admin-pipeline'
@@ -18,6 +18,10 @@ const successMessage = ref('')
 const inputElement = ref<HTMLInputElement | null>(null)
 const bibInputElement = ref<HTMLInputElement | null>(null)
 const pdfSelectionTouched = ref(false)
+let authViewGeneration = 0
+let initializedToken: string | null = null
+let batchLoadPromise: Promise<void> | null = null
+let batchLoadToken: string | null = null
 
 const config = computed(() => admin.config)
 const workerOffline = computed(() => isPipelineWorkerUnavailable(config.value?.worker))
@@ -44,9 +48,9 @@ function modelOptions(name: 'ocr' | 'extract' | 'translate'): string[] {
 
 function applyDefaults(): void {
   selectedModels.value = {
-    ocr: modelDefault('ocr'),
-    extract: modelDefault('extract'),
-    translate: modelDefault('translate'),
+    ocr: selectedModels.value.ocr || modelDefault('ocr'),
+    extract: selectedModels.value.extract || modelDefault('extract'),
+    translate: selectedModels.value.translate || modelDefault('translate'),
   }
 }
 
@@ -84,22 +88,37 @@ async function login(): Promise<void> {
   if (!valid) errorMessage.value = admin.authError || 'Admin token could not be validated.'
   else {
     tokenDraft.value = ''
-    applyDefaults()
-    await loadBatches()
   }
 }
 
-async function loadBatches(): Promise<void> {
-  if (!admin.token) return
+async function loadBatches(token = admin.token, generation = authViewGeneration): Promise<void> {
+  if (!token) return
+  if (batchLoadPromise && batchLoadToken === token && generation === authViewGeneration) return batchLoadPromise
   loadingBatches.value = true
-  try {
-    const result = await listPipelineBatches(admin.token, 1, 20)
-    batches.value = result.items
-  } catch (error) {
-    errorMessage.value = displayError(error, 'Batches could not be loaded.')
-  } finally {
-    loadingBatches.value = false
-  }
+  batchLoadToken = token
+  let request!: Promise<void>
+  request = (async () => {
+    try {
+      const result = await listPipelineBatches(token, 1, 20)
+      if (generation === authViewGeneration && admin.authenticated && admin.token === token) batches.value = result.items
+    } catch (error) {
+      if (generation === authViewGeneration && admin.authenticated && admin.token === token) {
+        errorMessage.value = displayError(error, 'Batches could not be loaded.')
+      }
+    } finally {
+      if (generation === authViewGeneration && admin.token === token) loadingBatches.value = false
+      if (batchLoadPromise === request) {
+        batchLoadPromise = null
+        batchLoadToken = null
+      }
+    }
+  })()
+  batchLoadPromise = request
+  return request
+}
+
+function refreshBatches(): void {
+  void loadBatches()
 }
 
 async function upload(): Promise<void> {
@@ -124,20 +143,39 @@ async function upload(): Promise<void> {
 
 function logout(): void {
   admin.logout()
-  batches.value = []
-  selectedModels.value = { ocr: '', extract: '', translate: '' }
 }
 
 function openBatch(batchId: string): void {
   void router.push(`/admin/pipeline/batches/${encodeURIComponent(batchId)}`)
 }
 
-onMounted(async () => {
-  if (admin.token && !admin.authenticated) await admin.restore()
-  if (admin.authenticated) {
-    if (!selectedModels.value.ocr) applyDefaults()
-    await loadBatches()
-  }
+watch(
+  [() => admin.authenticated, () => admin.config, () => admin.token],
+  ([authenticated, nextConfig, token]) => {
+    if (!authenticated || !nextConfig || !token) {
+      if (initializedToken !== null || batches.value.length > 0) {
+        initializedToken = null
+        authViewGeneration += 1
+        batches.value = []
+        selectedModels.value = { ocr: '', extract: '', translate: '' }
+        loadingBatches.value = false
+      }
+      return
+    }
+    if (initializedToken === token) {
+      applyDefaults()
+      return
+    }
+    initializedToken = token
+    authViewGeneration += 1
+    applyDefaults()
+    void loadBatches(token, authViewGeneration)
+  },
+  { immediate: true },
+)
+
+onMounted(() => {
+  if (admin.token && !admin.authenticated) void admin.restore()
 })
 </script>
 
@@ -248,7 +286,7 @@ onMounted(async () => {
       <section class="space-y-3" aria-labelledby="recent-batches-title">
         <div class="flex items-center justify-between gap-3">
           <h2 id="recent-batches-title" class="text-xl font-semibold">Recent batches</h2>
-          <button class="rounded-md border border-border px-3 py-2 text-sm hover:bg-muted disabled:opacity-50" type="button" :disabled="loadingBatches" @click="loadBatches">Refresh</button>
+          <button class="rounded-md border border-border px-3 py-2 text-sm hover:bg-muted disabled:opacity-50" type="button" :disabled="loadingBatches" @click="refreshBatches">Refresh</button>
         </div>
         <div v-if="loadingBatches" class="rounded-xl border border-border/60 p-6 text-sm text-muted-foreground" role="status">Loading batches…</div>
         <div v-else-if="batches.length === 0" class="rounded-xl border border-dashed border-border p-8 text-center text-sm text-muted-foreground">No batches yet.</div>
