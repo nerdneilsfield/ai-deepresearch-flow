@@ -421,6 +421,62 @@ def test_publish_queue_uses_expected_revision_cas(tmp_path: Path) -> None:
         queue_publication(state, job_id, revision)
 
 
+def test_publication_indexing_does_not_block_unrelated_queue_mutation(
+    tmp_path: Path,
+) -> None:
+    from deepresearch_flow.pipeline import ArtifactStore, PipelineState
+
+    artifacts = ArtifactStore(tmp_path / "work", tmp_path / "formal")
+    state = PipelineState(tmp_path / "queue.sqlite3", artifact_store=artifacts)
+    first_job = state.create_job()
+    second_job = state.create_job()
+    for job_id in (first_job, second_job):
+        state.admin_transition(job_id, "running")
+        state.admin_transition(job_id, "review_ready")
+    queue_publication(state, first_job, int(state.get_job(first_job)["revision"]))
+
+    index_started = Event()
+    release_index = Event()
+    worker_results: list[object] = []
+
+    def blocking_indexer(_: object) -> None:
+        index_started.set()
+        assert release_index.wait(timeout=3)
+
+    worker = PublicationWorker(
+        state,
+        tmp_path / "snapshot.sqlite3",
+        LocalFormalStore(tmp_path / "formal"),
+        bundle_builder=lambda job_id: _bundle(tmp_path, job_id=job_id),
+        indexer=blocking_indexer,
+    )
+    worker_thread = Thread(
+        target=lambda: worker_results.extend(worker.run_once([first_job])),
+        daemon=True,
+    )
+    worker_thread.start()
+    assert index_started.wait(timeout=3)
+
+    mutation_done = Event()
+    mutation_result: list[bool] = []
+
+    def mutate_other_job() -> None:
+        mutation_result.append(state.request_cancel(second_job))
+        mutation_done.set()
+
+    mutation_thread = Thread(target=mutate_other_job, daemon=True)
+    mutation_thread.start()
+    completed_while_indexing = mutation_done.wait(timeout=0.5)
+    release_index.set()
+    worker_thread.join(timeout=3)
+    mutation_thread.join(timeout=3)
+
+    assert completed_while_indexing
+    assert mutation_result == [True]
+    assert state.get_job(second_job)["cancel_requested"] is True
+    assert worker_results and worker_results[0].status == "published"
+
+
 def test_publication_worker_commits_receipt_before_index_and_reports_warning(tmp_path: Path) -> None:
     from deepresearch_flow.pipeline import ArtifactStore, PipelineState
 

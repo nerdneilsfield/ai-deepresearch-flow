@@ -445,7 +445,7 @@ def test_publication_receipt_recovery_reindexes_once_without_duplicate_static_or
     )
     with pytest.raises(KeyboardInterrupt, match="simulated process crash"):
         crashing.run_once()
-    assert state.get_job(job_id)["status"] == "publishing"
+    assert state.get_job(job_id)["status"] == "indexing"
     formal_before = {
         path.relative_to(Path(config.static_root)): path.read_bytes()
         for path in Path(config.static_root).rglob("*")

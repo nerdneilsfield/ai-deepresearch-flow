@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import sqlite3
 from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
@@ -63,6 +64,13 @@ class PublicationWorker:
                     continue
                 try:
                     self.state.heartbeat(job_id, lease.token)
+                except sqlite3.OperationalError as exc:
+                    if "locked" in str(exc).lower():
+                        continue
+                    if guard_active.is_set():
+                        continue
+                    lease_lost.set()
+                    return
                 except Exception:
                     if guard_active.is_set():
                         continue
@@ -140,16 +148,13 @@ class PublicationWorker:
                     guard_active.clear()
                     active_guard = None
 
-            def index_after_snapshot(value: PublicationBundle) -> Any:
+            def transition_to_indexing() -> None:
                 if current == "publish_queued":
                     if active_guard is not None:
                         active_guard.transition("indexing")
                     else:
                         check_lease()
                         self.state.transition(job_id, "indexing", lease.token)
-                if self.indexer is None:
-                    return None
-                return self.indexer(value)
 
             # Import at call time keeps publication.py facade import-compatible
             # while this worker remains independently testable.
@@ -159,10 +164,11 @@ class PublicationWorker:
                 bundle,
                 self.snapshot_db,
                 self.formal_store,
-                indexer=index_after_snapshot,
+                indexer=self.indexer,
                 lease_check=check_lease,
                 cancel_check=cancellation_requested if current == "publish_queued" else None,
                 lease_guard=publication_guard,
+                indexing_transition=transition_to_indexing,
             )
             final_status = "published_with_warning" if publication.index_warning else "published"
             check_lease()

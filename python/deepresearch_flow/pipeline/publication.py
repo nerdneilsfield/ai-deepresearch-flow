@@ -384,13 +384,15 @@ def publish_bundle(
     lease_check: Callable[[], None] | None = None,
     cancel_check: Callable[[], bool] | None = None,
     lease_guard: Callable[[], Any] | None = None,
+    indexing_transition: Callable[[], None] | None = None,
 ) -> PublicationResult:
     """Publish formal resources, commit one Snapshot receipt, then index.
 
-    A supplied queue guard is acquired before formal writes and held through
-    Snapshot commit and indexing.  Formal writes and the receipt transaction
-    share one serialization primitive, so reference GC cannot cross that
-    boundary.  Content-addressed orphans remain recoverable after failures.
+    A supplied queue guard is held through Snapshot commit and the durable
+    indexing transition, then released before a potentially slow indexer.
+    Formal writes and the receipt transaction share one serialization
+    primitive, so reference GC cannot cross that boundary. Content-addressed
+    orphans remain recoverable after failures.
     """
     _validate_publication_resources(bundle.resource_map, bundle.references)
     db_path = Path(snapshot_db)
@@ -511,17 +513,19 @@ def publish_bundle(
             finally:
                 conn.close()
 
+            if indexing_transition is not None:
+                indexing_transition()
             # GC must not cross formal writes and Snapshot receipt commit, but
             # indexing may proceed after that shared lock is released.
             _SNAPSHOT_COMMIT_LOCK.release()
             lock_held = False
-            return _run_indexer(
-                bundle,
-                paper_id=published_paper_id,
-                bundle_digest=published_bundle_digest,
-                already_published=already_published,
-                indexer=indexer,
-            )
+        return _run_indexer(
+            bundle,
+            paper_id=published_paper_id,
+            bundle_digest=published_bundle_digest,
+            already_published=already_published,
+            indexer=indexer,
+        )
     finally:
         if lock_held:
             _SNAPSHOT_COMMIT_LOCK.release()
