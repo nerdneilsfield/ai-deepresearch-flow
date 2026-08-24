@@ -283,6 +283,50 @@ def test_local_formal_store_invalid_cursor_discards_active_scan_safely(
         store.list_content_addressed_page(after=page.next_cursor)
 
 
+def test_local_formal_gc_resumes_opaque_cursor_across_content_kinds(
+    tmp_path: Path,
+) -> None:
+    store = LocalFormalStore(tmp_path / "formal")
+    payloads = {
+        "md": [b"md orphan 0", b"md orphan 1"],
+        "pdf": [b"pdf orphan 0", b"pdf orphan 1"],
+        "summary": [b"summary orphan 0", b"summary orphan 1"],
+    }
+    expected: set[str] = set()
+    for kind, values in payloads.items():
+        for index, value in enumerate(values):
+            digest = hashlib.sha256(value).hexdigest()
+            if kind == "summary":
+                relative = f"summary/paper-{index}/simple/{digest}.json"
+            else:
+                relative = f"{kind}/{digest}.{kind}"
+            store.put(relative, value)
+            expected.add(relative)
+
+    snapshot = tmp_path / "snapshot.sqlite3"
+    _empty_snapshot(snapshot)
+    cursor: str | None = None
+    deleted: set[str] = set()
+    for _ in range(20):
+        result = collect_unreferenced_formal_resources(
+            store,
+            snapshot_db=snapshot,
+            limit=1,
+            grace_seconds=0,
+            cursor=cursor,
+        )
+        if not result.deleted and result.next_cursor is None:
+            break
+        assert result.deleted
+        deleted.update(result.deleted)
+        cursor = result.next_cursor
+        if cursor is None:
+            break
+
+    assert deleted == expected
+    assert store.list_content_addressed_files(content_addressed_only=True) == ()
+
+
 def test_webdav_formal_gc_uses_explicit_list_read_delete_capability(
     tmp_path: Path,
 ) -> None:

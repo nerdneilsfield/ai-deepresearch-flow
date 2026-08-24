@@ -36,6 +36,11 @@ class FormalGcResult:
 
 
 _MIRROR_CURSOR_PREFIX = "v1."
+_OPAQUE_FORMAL_CURSOR_PREFIXES = ("v1l.", "v1w.")
+
+
+def _is_opaque_formal_cursor(cursor: str | None) -> bool:
+    return isinstance(cursor, str) and cursor.startswith(_OPAQUE_FORMAL_CURSOR_PREFIXES)
 
 
 def _snapshot_references(snapshot_db: str | Path) -> tuple[set[str], set[str], str | None]:
@@ -275,7 +280,7 @@ def _store_candidates(
                 values = listing()
         for value in values:
             relative = safe_relative_path(str(value))
-            if cursor is not None and relative <= cursor:
+            if cursor is not None and not _is_opaque_formal_cursor(cursor) and relative <= cursor:
                 continue
             if _candidate_name(relative) is not None:
                 result.append(relative)
@@ -286,7 +291,7 @@ def _store_candidates(
     result = []
     for value in values:
         relative = safe_relative_path(str(value))
-        if cursor is not None and not cursor.startswith("v1w.") and relative <= cursor:
+        if cursor is not None and not _is_opaque_formal_cursor(cursor) and relative <= cursor:
             continue
         if _candidate_name(relative) is not None:
             result.append(relative)
