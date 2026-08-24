@@ -106,7 +106,9 @@ class WebDavStorage:
         resp.raise_for_status()
         return b""  # pragma: no cover - raise_for_status always raises here
 
-    def list(self, remote_path: str = "") -> tuple[str, ...]:
+    def list(
+        self, remote_path: str = "", *, max_items: int | None = None
+    ) -> tuple[str, ...]:
         """List one WebDAV collection using bounded ``Depth: 1`` PROPFIND.
 
         Returned paths are relative to configured WebDAV endpoint and include
@@ -157,6 +159,8 @@ class WebDavStorage:
                 for child in parent
             )
             entries.append(relative.rstrip("/") + ("/" if is_collection else ""))
+            if max_items is not None and len(entries) >= max_items:
+                break
         return tuple(sorted(set(entries)))
 
     def delete(self, remote_path: str) -> None:

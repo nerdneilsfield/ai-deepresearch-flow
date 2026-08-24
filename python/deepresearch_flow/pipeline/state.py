@@ -162,7 +162,7 @@ class LeaseGuard:
         terminal = _stamp(_utc()) if status in _TERMINAL else None
         clear = status not in {"running", "publishing", "indexing"}
         connection.execute(
-            "UPDATE jobs SET status=?,terminal_at=?,cleanup_completed_at=NULL,cancel_requested=CASE WHEN ? THEN 0 ELSE cancel_requested END,lease_owner=CASE WHEN ? THEN NULL ELSE lease_owner END,lease_token=CASE WHEN ? THEN NULL ELSE lease_token END,lease_expires_at=CASE WHEN ? THEN NULL ELSE lease_expires_at END,updated_at=?,revision=revision+1 WHERE id=?",
+            "UPDATE jobs SET status=?,terminal_at=?,cleanup_completed_at=NULL,cleanup_next_attempt_at=NULL,cleanup_error=NULL,cancel_requested=CASE WHEN ? THEN 0 ELSE cancel_requested END,lease_owner=CASE WHEN ? THEN NULL ELSE lease_owner END,lease_token=CASE WHEN ? THEN NULL ELSE lease_token END,lease_expires_at=CASE WHEN ? THEN NULL ELSE lease_expires_at END,updated_at=?,revision=revision+1 WHERE id=?",
             (
                 status,
                 terminal,
@@ -257,6 +257,7 @@ class PipelineState:
                     cancel_requested INTEGER NOT NULL DEFAULT 0, revision INTEGER NOT NULL DEFAULT 0,
                     preview_digest TEXT, bundle_digest TEXT, preview_error TEXT,
                     publication_manifest_json TEXT, cleanup_completed_at TEXT,
+                    cleanup_next_attempt_at TEXT, cleanup_error TEXT,
                     preview_generation TEXT,
                     selected_models TEXT NOT NULL DEFAULT '{}',
                     config_fingerprint TEXT NOT NULL DEFAULT '',
@@ -277,6 +278,9 @@ class PipelineState:
                 );
                 CREATE TABLE IF NOT EXISTS worker_heartbeats (
                     worker_id TEXT PRIMARY KEY, at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS maintenance_state (
+                    key TEXT PRIMARY KEY, value TEXT
                 );
                 CREATE TABLE IF NOT EXISTS step_attempts (
                     id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL, step TEXT NOT NULL,
@@ -324,6 +328,10 @@ class PipelineState:
                 db.execute("ALTER TABLE jobs ADD COLUMN publication_manifest_json TEXT")
             if "cleanup_completed_at" not in job_columns:
                 db.execute("ALTER TABLE jobs ADD COLUMN cleanup_completed_at TEXT")
+            if "cleanup_next_attempt_at" not in job_columns:
+                db.execute("ALTER TABLE jobs ADD COLUMN cleanup_next_attempt_at TEXT")
+            if "cleanup_error" not in job_columns:
+                db.execute("ALTER TABLE jobs ADD COLUMN cleanup_error TEXT")
             result_columns = {row["name"] for row in db.execute("PRAGMA table_info(batch_match_results)").fetchall()}
             if "revision" not in result_columns:
                 db.execute("ALTER TABLE batch_match_results ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
@@ -348,104 +356,160 @@ class PipelineState:
         if len(content) != int(size) or hashlib.sha256(content).hexdigest() != str(digest):
             raise ValueError("legacy preview metadata does not match file")
 
+    @staticmethod
+    def _fsync_directory(path: Path) -> None:
+        try:
+            descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+        except OSError as exc:
+            raise ValueError("legacy preview migration durability check failed") from exc
+
+    @classmethod
+    def _scan_legacy_preview_orphans(
+        cls, legacy: Path, registered_paths: set[Path]
+    ) -> None:
+        """Reject only crash-shaped preview files before anonymous serving."""
+        if not legacy.exists():
+            return
+        if legacy.is_symlink() or not legacy.is_dir():
+            raise ValueError("legacy preview root is unsafe")
+        for job_directory in legacy.iterdir():
+            if job_directory.is_symlink():
+                try:
+                    uuid.UUID(job_directory.name)
+                except ValueError:
+                    continue
+                raise ValueError("legacy preview orphan is unsafe")
+            if not job_directory.is_dir():
+                continue
+            try:
+                uuid.UUID(job_directory.name)
+            except ValueError:
+                continue
+            for candidate in job_directory.iterdir():
+                if candidate.is_symlink():
+                    if any(
+                        cls._preview_filename_is_valid(candidate, kind)
+                        for kind in _PREVIEW_PROTECTED_KINDS
+                    ):
+                        raise ValueError("legacy preview orphan is unsafe")
+                    continue
+                if not candidate.is_file():
+                    continue
+                if any(
+                    cls._preview_filename_is_valid(candidate, kind)
+                    for kind in _PREVIEW_PROTECTED_KINDS
+                ) and candidate.resolve(strict=False) not in registered_paths:
+                    raise ValueError("legacy preview orphan is not registered")
+
     def migrate_legacy_previews(self, legacy_root: str | Path) -> list[str]:
         """Move registered previews from historical static root to private root.
 
-        This is an allow-listed, registration-driven migration.  It never
-        scans or deletes static content, and it rejects an ambiguous row before
-        serving or processing can continue.  A copied destination plus the
+        This is an allow-listed, registration-driven migration.  It scans only
+        exact UUID preview artifact paths for unregistered crash orphans,
+        rejects ambiguity before serving or processing can continue, and never
+        deletes unrelated static content.  A copied destination plus the
         original registration is intentionally recoverable on restart.
         """
         if self.artifact_store is None:
             return []
         legacy = Path(legacy_root).expanduser().resolve(strict=False)
         private = self.artifact_store.preview_root
-        if legacy == private:
-            # Compatibility callers that have not split preview/static roots
-            # yet already keep protected files under this private directory.
-            return []
-        if legacy.is_relative_to(private) or private.is_relative_to(legacy):
-            raise ValueError("legacy preview root must be separate from private preview root")
         with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
             rows = db.execute(
                 "SELECT job_id,kind,path,digest,size FROM artifacts "
                 "WHERE kind IN (?,?,?,?) ORDER BY job_id,kind",
                 _PREVIEW_PROTECTED_KINDS,
             ).fetchall()
-
-        plans: list[tuple[str, str, Path, Path, str, int]] = []
-        migrated_jobs: set[str] = set()
-        for row in rows:
-            job_id = str(row["job_id"])
-            kind = str(row["kind"])
-            raw_path = Path(str(row["path"]))
-            if not raw_path.is_absolute() or raw_path.is_symlink() or raw_path.parent.is_symlink():
-                raise ValueError("legacy preview path is unsafe")
-            resolved = raw_path.resolve(strict=False)
-            job_key = self.artifact_store._job_key(job_id)
-            if resolved.is_relative_to(private):
-                expected_parent = private / job_key
-                if resolved.parent != expected_parent or not self._preview_filename_is_valid(resolved, kind):
-                    raise ValueError("private preview registration is invalid")
-                self._verify_preview_file(resolved, str(row["digest"]), int(row["size"]))
-                continue
-            if not resolved.is_relative_to(legacy):
-                raise ValueError("legacy preview path is outside configured roots")
-            expected_parent = legacy / job_key
-            if resolved.parent != expected_parent or not self._preview_filename_is_valid(resolved, kind):
-                raise ValueError("legacy preview path is not a registered UUID artifact")
-            destination = private / job_key / resolved.name
-            if destination.parent.exists() and destination.parent.is_symlink():
-                raise ValueError("private preview destination directory must not be a symlink")
-            if destination.parent.exists() and destination.parent.resolve().parent != private:
-                raise ValueError("private preview destination escapes private root")
-            if destination.exists() and destination.is_symlink():
-                raise ValueError("private preview destination must not be a symlink")
-            if resolved.exists():
-                self._verify_preview_file(resolved, str(row["digest"]), int(row["size"]))
-            if destination.exists():
-                self._verify_preview_file(destination, str(row["digest"]), int(row["size"]))
-            elif not resolved.exists():
-                raise ValueError("legacy preview source and private destination are missing")
-            plans.append(
-                (job_id, kind, resolved, destination, str(row["path"]), int(row["size"]))
-            )
-            migrated_jobs.add(job_id)
-
-        # Prepare every destination before removing any legacy source.  If a
-        # process dies here, the next run sees source+destination and resumes.
-        for _job_id, _kind, source, destination, _old, _size in plans:
-            if destination.exists():
-                continue
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            fd, temporary_name = tempfile.mkstemp(prefix=".legacy-preview-", dir=destination.parent)
-            temporary = Path(temporary_name)
-            try:
-                with os.fdopen(fd, "wb") as target, source.open("rb") as source_stream:
-                    shutil.copyfileobj(source_stream, target)
-                    target.flush()
-                    os.fsync(target.fileno())
-                os.replace(temporary, destination)
-            except BaseException:
-                temporary.unlink(missing_ok=True)
-                raise ValueError("legacy preview migration could not prepare private file") from None
-        for _job_id, _kind, source, destination, _old, _size in plans:
-            if source.exists() and source != destination:
-                source.unlink()
-
-        if plans:
-            with self._connect() as db:
-                db.execute("BEGIN IMMEDIATE")
-                for job_id, kind, _source, destination, old_path, _size in plans:
-                    cursor = db.execute(
-                        "UPDATE artifacts SET path=? WHERE job_id=? AND kind=? AND path=?",
-                        (str(destination), job_id, kind, old_path),
-                    )
-                    if cursor.rowcount != 1:
-                        db.rollback()
-                        raise ValueError("legacy preview registration changed during migration")
+            registered_paths = {
+                Path(str(row["path"])).expanduser().resolve(strict=False)
+                for row in rows
+                if Path(str(row["path"])).expanduser().is_absolute()
+            }
+            self._scan_legacy_preview_orphans(legacy, registered_paths)
+            if legacy == private:
                 db.commit()
-        return sorted(migrated_jobs)
+                return []
+            if legacy.is_relative_to(private) or private.is_relative_to(legacy):
+                db.rollback()
+                raise ValueError("legacy preview root must be separate from private preview root")
+
+            plans: list[tuple[str, str, Path, Path, str, int]] = []
+            migrated_jobs: set[str] = set()
+            for row in rows:
+                job_id = str(row["job_id"])
+                kind = str(row["kind"])
+                raw_path = Path(str(row["path"]))
+                if not raw_path.is_absolute() or raw_path.is_symlink() or raw_path.parent.is_symlink():
+                    raise ValueError("legacy preview path is unsafe")
+                resolved = raw_path.resolve(strict=False)
+                job_key = self.artifact_store._job_key(job_id)
+                if resolved.is_relative_to(private):
+                    expected_parent = private / job_key
+                    if resolved.parent != expected_parent or not self._preview_filename_is_valid(resolved, kind):
+                        raise ValueError("private preview registration is invalid")
+                    self._verify_preview_file(resolved, str(row["digest"]), int(row["size"]))
+                    continue
+                if not resolved.is_relative_to(legacy):
+                    raise ValueError("legacy preview path is outside configured roots")
+                expected_parent = legacy / job_key
+                if resolved.parent != expected_parent or not self._preview_filename_is_valid(resolved, kind):
+                    raise ValueError("legacy preview path is not a registered UUID artifact")
+                destination = private / job_key / resolved.name
+                if destination.parent.exists() and destination.parent.is_symlink():
+                    raise ValueError("private preview destination directory must not be a symlink")
+                if destination.parent.exists() and destination.parent.resolve().parent != private:
+                    raise ValueError("private preview destination escapes private root")
+                if destination.exists() and destination.is_symlink():
+                    raise ValueError("private preview destination must not be a symlink")
+                if resolved.exists():
+                    self._verify_preview_file(resolved, str(row["digest"]), int(row["size"]))
+                if destination.exists():
+                    self._verify_preview_file(destination, str(row["digest"]), int(row["size"]))
+                elif not resolved.exists():
+                    raise ValueError("legacy preview source and private destination are missing")
+                plans.append(
+                    (job_id, kind, resolved, destination, str(row["path"]), int(row["size"]))
+                )
+                migrated_jobs.add(job_id)
+
+            # Prepare every destination before removing any legacy source.  If
+            # a process dies here, the next run sees source+destination and resumes.
+            for _job_id, _kind, source, destination, _old, _size in plans:
+                if destination.exists():
+                    continue
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                fd, temporary_name = tempfile.mkstemp(prefix=".legacy-preview-", dir=destination.parent)
+                temporary = Path(temporary_name)
+                try:
+                    with os.fdopen(fd, "wb") as target, source.open("rb") as source_stream:
+                        shutil.copyfileobj(source_stream, target)
+                        target.flush()
+                        os.fsync(target.fileno())
+                    os.replace(temporary, destination)
+                    self._fsync_directory(destination.parent)
+                except BaseException:
+                    temporary.unlink(missing_ok=True)
+                    raise ValueError("legacy preview migration could not prepare private file") from None
+            for _job_id, _kind, source, destination, _old, _size in plans:
+                if source.exists() and source != destination:
+                    source.unlink()
+                    self._fsync_directory(source.parent)
+
+            for job_id, kind, _source, destination, old_path, _size in plans:
+                cursor = db.execute(
+                    "UPDATE artifacts SET path=? WHERE job_id=? AND kind=? AND path=?",
+                    (str(destination), job_id, kind, old_path),
+                )
+                if cursor.rowcount != 1:
+                    db.rollback()
+                    raise ValueError("legacy preview registration changed during migration")
+            db.commit()
+            return sorted(migrated_jobs)
 
     @staticmethod
     def _invalidate_batch_matching(
@@ -676,8 +740,7 @@ class PipelineState:
         with self._connect() as db:
             rows = db.execute(
                 "SELECT publication_manifest_json FROM jobs "
-                "WHERE publication_manifest_json IS NOT NULL "
-                "AND status IN ('published','published_with_warning') ORDER BY id"
+                "WHERE publication_manifest_json IS NOT NULL ORDER BY id"
             ).fetchall()
         manifests: list[dict[str, Any]] = []
         for row in rows:
@@ -818,6 +881,33 @@ class PipelineState:
             return None
         return {"worker_id": str(row["worker_id"]), "at": str(row["at"])}
 
+    def get_formal_gc_cursor(self) -> str | None:
+        """Return durable bounded-GC cursor used across worker restarts."""
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT value FROM maintenance_state WHERE key='formal_gc_cursor'"
+            ).fetchone()
+        return None if row is None or row["value"] is None else str(row["value"])
+
+    def set_formal_gc_cursor(self, cursor: str | None) -> None:
+        """Persist or clear one safe formal-store listing cursor."""
+        value: str | None = None
+        if cursor is not None:
+            value = str(cursor)
+            if not value or "\x00" in value or len(value) > 2048:
+                raise ValueError("formal GC cursor is invalid")
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if cursor is None:
+                db.execute("DELETE FROM maintenance_state WHERE key='formal_gc_cursor'")
+            else:
+                db.execute(
+                    "INSERT INTO maintenance_state(key,value) VALUES('formal_gc_cursor',?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    (value,),
+                )
+            db.commit()
+
     def cleanup_expired_artifacts(
         self, now: datetime | None = None, *, limit: int | None = None
     ) -> list[str]:
@@ -842,42 +932,52 @@ class PipelineState:
                 "SELECT id,status,terminal_at FROM jobs "
                 "WHERE status IN ('published','published_with_warning','rejected','cancelled') "
                 "AND cleanup_completed_at IS NULL "
+                "AND (cleanup_next_attempt_at IS NULL OR cleanup_next_attempt_at <= ?) "
                 "AND terminal_at IS NOT NULL AND terminal_at <= ? "
                 "ORDER BY terminal_at,id"
                 + (" LIMIT ?" if limit is not None else ""),
-                ((cutoff, int(limit)) if limit is not None else (cutoff,)),
+                (
+                    (cutoff, cutoff, int(limit))
+                    if limit is not None
+                    else (cutoff, cutoff)
+                ),
             ).fetchall()
-        jobs = {
-            str(row["id"]): {"status": str(row["status"]), "terminal_at": row["terminal_at"]}
-            for row in rows
-        }
-        # The store receives the complete selected window.  It may return no
-        # id when a directory was removed by an earlier process, but that is
-        # still successful progress for the durable cursor below.
-        self.artifact_store.cleanup(jobs, now=cleanup_now, limit=None)
-        if not rows:
-            return []
+        completed_ids: list[str] = []
         completed_at = _stamp(cleanup_now)
-        selected_ids = [str(row["id"]) for row in rows]
-        with self._connect() as db:
-            db.execute("BEGIN IMMEDIATE")
-            db.executemany(
-                "DELETE FROM artifacts WHERE job_id=?",
-                ((job_id,) for job_id in selected_ids),
-            )
-            db.executemany(
-                "DELETE FROM heartbeats WHERE job_id=?",
-                ((job_id,) for job_id in selected_ids),
-            )
-            db.executemany(
-                "UPDATE jobs SET cleanup_completed_at=?,updated_at=? WHERE id=? "
-                "AND status IN ('published','published_with_warning','rejected','cancelled')",
-                ((completed_at, completed_at, job_id) for job_id in selected_ids),
-            )
-            db.commit()
-        # Returning selected ids reports durable progress even when the
-        # filesystem had nothing left to remove.
-        return selected_ids
+        retry_at = _stamp(cleanup_now + timedelta(seconds=60))
+        for row in rows:
+            job_id = str(row["id"])
+            job = {"status": str(row["status"]), "terminal_at": row["terminal_at"]}
+            try:
+                # Process each row independently.  One malformed/symlinked
+                # directory records a durable retry timestamp and cannot
+                # occupy every future bounded window.
+                self.artifact_store.cleanup({job_id: job}, now=cleanup_now, limit=None)
+            except Exception as exc:
+                with self._connect() as db:
+                    db.execute("BEGIN IMMEDIATE")
+                    db.execute(
+                        "UPDATE jobs SET cleanup_error=?,cleanup_next_attempt_at=?,updated_at=? "
+                        "WHERE id=? AND cleanup_completed_at IS NULL",
+                        (f"cleanup failed: {type(exc).__name__}", retry_at, completed_at, job_id),
+                    )
+                    db.commit()
+                continue
+            with self._connect() as db:
+                db.execute("BEGIN IMMEDIATE")
+                db.execute("DELETE FROM artifacts WHERE job_id=?", (job_id,))
+                db.execute("DELETE FROM heartbeats WHERE job_id=?", (job_id,))
+                db.execute(
+                    "UPDATE jobs SET cleanup_completed_at=?,cleanup_next_attempt_at=NULL,"
+                    "cleanup_error=NULL,updated_at=? WHERE id=? "
+                    "AND status IN ('published','published_with_warning','rejected','cancelled')",
+                    (completed_at, completed_at, job_id),
+                )
+                db.commit()
+            completed_ids.append(job_id)
+        # Returning successful ids reports durable progress; failed rows carry
+        # a safe diagnostic and a bounded retry timestamp in Job state.
+        return completed_ids
 
     def requeue_after_shutdown(self, job_id: str, lease_token: str) -> str:
         """Atomically release a processing lease while retaining checkpoints."""
@@ -888,7 +988,7 @@ class PipelineState:
                 db.rollback()
                 raise LeaseError("shutdown requeue requires a running processing job")
             db.execute(
-                "UPDATE jobs SET status='queued',terminal_at=NULL,cleanup_completed_at=NULL,lease_owner=NULL,"
+                "UPDATE jobs SET status='queued',terminal_at=NULL,cleanup_completed_at=NULL,cleanup_next_attempt_at=NULL,cleanup_error=NULL,lease_owner=NULL,"
                 "lease_token=NULL,lease_expires_at=NULL,updated_at=?,revision=revision+1 WHERE id=?",
                 (_stamp(_utc()), job_id),
             )
@@ -1742,7 +1842,7 @@ class PipelineState:
             ) and row["status"] != status:
                 self._invalidate_batch_matching(db, str(row["batch_id"]))
             db.execute(
-                "UPDATE jobs SET status=?,terminal_at=?,cleanup_completed_at=NULL,cancel_requested=CASE WHEN ? THEN 0 ELSE cancel_requested END,lease_owner=CASE WHEN ? THEN NULL ELSE lease_owner END,lease_token=CASE WHEN ? THEN NULL ELSE lease_token END,lease_expires_at=CASE WHEN ? THEN NULL ELSE lease_expires_at END,updated_at=?,revision=revision+1 WHERE id=?",
+                "UPDATE jobs SET status=?,terminal_at=?,cleanup_completed_at=NULL,cleanup_next_attempt_at=NULL,cleanup_error=NULL,cancel_requested=CASE WHEN ? THEN 0 ELSE cancel_requested END,lease_owner=CASE WHEN ? THEN NULL ELSE lease_owner END,lease_token=CASE WHEN ? THEN NULL ELSE lease_token END,lease_expires_at=CASE WHEN ? THEN NULL ELSE lease_expires_at END,updated_at=?,revision=revision+1 WHERE id=?",
                 (
                     status,
                     terminal,
@@ -1787,7 +1887,7 @@ class PipelineState:
                 or status in {"failed", "cancelled", "rejected"}
             ) and row["status"] != status and not matching_requeue_handled:
                 self._invalidate_batch_matching(db, str(row["batch_id"]))
-            db.execute("UPDATE jobs SET status=?,terminal_at=?,cleanup_completed_at=NULL,lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,updated_at=?,revision=revision+1 WHERE id=?", (status, terminal, _stamp(_utc()), job_id))
+            db.execute("UPDATE jobs SET status=?,terminal_at=?,cleanup_completed_at=NULL,cleanup_next_attempt_at=NULL,cleanup_error=NULL,lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,updated_at=?,revision=revision+1 WHERE id=?", (status, terminal, _stamp(_utc()), job_id))
             db.commit()
         return status
 
@@ -1831,7 +1931,7 @@ class PipelineState:
                 if name in {"ocr", "extract"} and row["batch_id"]:
                     self._invalidate_batch_matching(db, str(row["batch_id"]))
             db.execute(
-                "UPDATE jobs SET selected_models=?,status='queued',terminal_at=NULL,cleanup_completed_at=NULL,"
+                "UPDATE jobs SET selected_models=?,status='queued',terminal_at=NULL,cleanup_completed_at=NULL,cleanup_next_attempt_at=NULL,cleanup_error=NULL,"
                 "cancel_requested=0,lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,"
                 "preview_error=NULL,updated_at=?,revision=revision+1 WHERE id=?",
                 (json.dumps(next_models, sort_keys=True), _stamp(_utc()), job_id),
@@ -1864,7 +1964,7 @@ class PipelineState:
             now = _stamp(_utc())
             next_revision = int(row["revision"]) + 1
             db.execute(
-                "UPDATE jobs SET status='publish_queued',cleanup_completed_at=NULL,revision=?,updated_at=? WHERE id=?",
+                "UPDATE jobs SET status='publish_queued',cleanup_completed_at=NULL,cleanup_next_attempt_at=NULL,cleanup_error=NULL,revision=?,updated_at=? WHERE id=?",
                 (next_revision, now, job_id),
             )
             db.commit()
@@ -1882,7 +1982,7 @@ class PipelineState:
             changed = False
             if row["status"] == "queued":
                 self._invalidate_batch_matching(db, str(row["batch_id"]) if row["batch_id"] else None)
-                db.execute("UPDATE jobs SET status='cancelled',terminal_at=?,cleanup_completed_at=NULL,cancel_requested=1,revision=revision+1,updated_at=? WHERE id=?", (_stamp(_utc()), _stamp(_utc()), job_id))
+                db.execute("UPDATE jobs SET status='cancelled',terminal_at=?,cleanup_completed_at=NULL,cleanup_next_attempt_at=NULL,cleanup_error=NULL,cancel_requested=1,revision=revision+1,updated_at=? WHERE id=?", (_stamp(_utc()), _stamp(_utc()), job_id))
                 changed = True
             elif row["status"] not in _TERMINAL:
                 db.execute("UPDATE jobs SET cancel_requested=1,revision=revision+1,updated_at=? WHERE id=?", (_stamp(_utc()), job_id))
@@ -1932,7 +2032,7 @@ class PipelineState:
                 )
             next_revision = int(row["revision"]) + 1
             db.execute(
-                "UPDATE jobs SET status='indexing',terminal_at=NULL,cleanup_completed_at=NULL,revision=?,updated_at=? WHERE id=?",
+                "UPDATE jobs SET status='indexing',terminal_at=NULL,cleanup_completed_at=NULL,cleanup_next_attempt_at=NULL,cleanup_error=NULL,revision=?,updated_at=? WHERE id=?",
                 (next_revision, _stamp(_utc()), job_id),
             )
             db.commit()
@@ -1947,7 +2047,7 @@ class PipelineState:
             row = self._check_token(db, job_id, lease_token)
             if row["cancel_requested"]:
                 self._invalidate_batch_matching(db, str(row["batch_id"]) if row["batch_id"] else None)
-                db.execute("UPDATE jobs SET status='cancelled',terminal_at=?,cleanup_completed_at=NULL,lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,updated_at=?,revision=revision+1 WHERE id=?", (_stamp(_utc()), _stamp(_utc()), job_id))
+                db.execute("UPDATE jobs SET status='cancelled',terminal_at=?,cleanup_completed_at=NULL,cleanup_next_attempt_at=NULL,cleanup_error=NULL,lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,updated_at=?,revision=revision+1 WHERE id=?", (_stamp(_utc()), _stamp(_utc()), job_id))
                 db.commit()
                 return "cancelled"
             db.commit()
@@ -2248,7 +2348,7 @@ class PipelineState:
                         else None,
                     )
             db.executemany(
-                "UPDATE jobs SET lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,cleanup_completed_at=NULL,status=CASE WHEN status IN ('publishing','indexing') THEN 'publish_queued' ELSE 'queued' END,updated_at=?,revision=revision+1 WHERE id=?",
+                "UPDATE jobs SET lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,cleanup_completed_at=NULL,cleanup_next_attempt_at=NULL,cleanup_error=NULL,status=CASE WHEN status IN ('publishing','indexing') THEN 'publish_queued' ELSE 'queued' END,updated_at=?,revision=revision+1 WHERE id=?",
                 [(_stamp(_utc(now)), job_id) for job_id in ids],
             )
             db.commit()

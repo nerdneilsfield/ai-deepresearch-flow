@@ -327,6 +327,56 @@ def test_snapshot_lock_is_released_before_indexing(tmp_path: Path) -> None:
     assert len(results) == 1
 
 
+def test_formal_gc_waits_for_publish_snapshot_boundary(tmp_path: Path) -> None:
+    from deepresearch_flow.pipeline.formal_gc import collect_unreferenced_formal_resources
+
+    bundle = _bundle(tmp_path, job_id="gc-publish-boundary")
+    database = tmp_path / "snapshot.sqlite3"
+
+    class BlockingStore(LocalFormalStore):
+        def __init__(self, root: Path) -> None:
+            super().__init__(root)
+            self.started = Event()
+            self.release = Event()
+
+        def put(self, relative_path: str, data: bytes) -> None:
+            self.started.set()
+            assert self.release.wait(timeout=3)
+            super().put(relative_path, data)
+
+    store = BlockingStore(tmp_path / "formal")
+    published: list[object] = []
+    collected: list[object] = []
+    collector_done = Event()
+
+    publisher = Thread(
+        target=lambda: published.append(publish_bundle(bundle, database, store)),
+        daemon=True,
+    )
+    publisher.start()
+    assert store.started.wait(timeout=3)
+
+    def collect() -> None:
+        collected.append(
+            collect_unreferenced_formal_resources(
+                store, snapshot_db=database, limit=10, grace_seconds=0
+            )
+        )
+        collector_done.set()
+
+    collector = Thread(target=collect, daemon=True)
+    collector.start()
+    assert not collector_done.wait(timeout=0.2)
+    store.release.set()
+    publisher.join(timeout=3)
+    collector.join(timeout=3)
+
+    assert published
+    assert collector_done.is_set()
+    assert collected[0].deleted == ()
+    assert all((store.root / resource.relative_path).exists() for resource in bundle.resources)
+
+
 def test_receipt_retry_releases_snapshot_lock_before_indexing(tmp_path: Path) -> None:
     bundle = _bundle(tmp_path, job_id="receipt-slow-index")
     second = _bundle(tmp_path, job_id="receipt-fast-index", title="Second paper")

@@ -424,13 +424,20 @@ def _build_production_publication_worker(
         return build_publication_bundle_from_state(job_id, state, artifacts, config)
 
     def formal_gc() -> FormalGcResult:
-        return collect_unreferenced_formal_resources(
+        cursor_getter = getattr(state, "get_formal_gc_cursor", None)
+        cursor_setter = getattr(state, "set_formal_gc_cursor", None)
+        cursor = cursor_getter() if callable(cursor_getter) else None
+        result = collect_unreferenced_formal_resources(
             formal_store,
             snapshot_db=snapshot_db,
             manifests=state.list_publication_manifests(),
             limit=config.formal_gc_batch_size,
             grace_seconds=config.formal_gc_grace_seconds,
+            cursor=cursor,
         )
+        if callable(cursor_setter):
+            cursor_setter(result.next_cursor)
+        return result
 
     return (
         PublicationWorker(

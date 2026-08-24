@@ -430,16 +430,17 @@ Supervisor 仅在桥接变量与 TOML 一致时启动一个持久 Worker。Worke
 heartbeat 年龄报告 `online`、`degraded` 或 `offline`。逐篇查看
 受保护 PDF/source/summary/translation；处理 BibTeX 歧义（或明确选择无 BibTeX），
 再执行 retry、reject、publish 或批量发布。发布带 revision CAS，旧页面会收到冲突。
-Supervisor 初次启动失败最多重试三次；Worker 已启动后可由 `autorestart` 使用同一
-持久 queue 重启，lease expiry/heartbeat recovery 保证恢复安全。配置持续无效时会
+Supervisor 将五秒内崩溃视为初次启动失败，最多重试三次；Worker 已启动后可由
+`autorestart=unexpected` 使用同一持久 queue 重启，lease expiry/heartbeat recovery 保证恢复安全。配置持续无效时会
 进入 Supervisor startup failure，需管理员修复，不会伪造数据状态迁移。
 
 `published`、`published_with_warning`、`rejected`、`cancelled` 终态 work 与 preview
 中间产物默认保留七日；清理按批次执行，不删除正式发布资源、失败/待审核任务或
 WebDAV 对象。另有有界、按引用的正式资源 GC：只删除通过 digest 校验、且早于
 `formal_gc_grace_seconds`、未被当前 Snapshot、publication receipt 或 manifest 引用的
-对象；若 receipt/manifest 不完整，或 WebDAV 不支持安全 list/delete，则只报告 warning，
-不删除远端对象。若需立即丢弃终态上传，先用受保护 Admin 操作确认状态，再执行有界
+对象；仅与 Snapshot publication receipt 配对的 manifest 才有保活权。若 receipt/manifest
+不完整，或 WebDAV 不支持安全 list/delete，则只报告 warning，不删除对象；有界 cursor
+跨 Worker 重启持久化，避免已引用前缀令后续候选饥饿。若需立即丢弃终态上传，先用受保护 Admin 操作确认状态，再执行有界
 清理（或只删除该 UUID 的 private `work/` 与 `previews/` 目录）；勿手删正式
 static root。
 

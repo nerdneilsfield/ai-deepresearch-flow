@@ -6,9 +6,15 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import tempfile
+from threading import RLock
 from typing import Any
 
 from .publication_models import FormalStore, PublicationConflict, PublicationError
+
+
+# Shared process-wide boundary for immutable formal writes and Snapshot/receipt
+# commits.  GC takes same lock while reading references and deleting orphans.
+PUBLICATION_SERIALIZATION_LOCK = RLock()
 
 
 class LocalFormalStore:
@@ -58,7 +64,9 @@ class LocalFormalStore:
             temporary.unlink(missing_ok=True)
             raise
 
-    def list_content_addressed_files(self) -> tuple[str, ...]:
+    def list_content_addressed_files(
+        self, *, max_items: int | None = None, after: str | None = None
+    ) -> tuple[str, ...]:
         """List immutable digest-named files below this store only."""
         result: list[str] = []
         for candidate in self.root.rglob("*"):
@@ -69,7 +77,11 @@ class LocalFormalStore:
                 relative = resolved.relative_to(self.root).as_posix()
             except (OSError, ValueError):
                 continue
+            if after is not None and relative <= after:
+                continue
             result.append(relative)
+            if max_items is not None and len(result) >= max_items:
+                break
         return tuple(sorted(set(result)))
 
     def read(self, relative_path: str) -> bytes:
@@ -121,7 +133,9 @@ class WebDavFormalStore:
                 mkdir(current)
         self.storage.upload(target, data)
 
-    def list_content_addressed_files(self) -> tuple[str, ...]:
+    def list_content_addressed_files(
+        self, *, max_items: int | None = None, after: str | None = None
+    ) -> tuple[str, ...]:
         listing = getattr(self.storage, "list", None)
         if not callable(listing):
             raise PublicationError("WebDAV formal store does not support safe listing")
@@ -133,20 +147,32 @@ class WebDavFormalStore:
             if current in visited:
                 continue
             visited.add(current)
-            for raw in listing(current):
+            try:
+                raw_values = listing(current, max_items=max_items)
+            except TypeError:
+                raw_values = listing(current)
+            for raw in raw_values:
                 value = str(raw).replace("\\", "/").lstrip("/")
-                if value.endswith("/"):
-                    pending.append(value.rstrip("/"))
-                    continue
                 if self.prefix:
                     prefix = self.prefix.rstrip("/") + "/"
                     if value == self.prefix:
                         continue
                     if not value.startswith(prefix):
                         continue
-                    value = value[len(prefix) :]
-                if value:
-                    files.add(safe_relative_path(value))
+                    relative = value[len(prefix) :]
+                else:
+                    relative = value
+                if value.endswith("/"):
+                    if relative:
+                        safe_relative_path(relative.rstrip("/"))
+                        pending.append(value.rstrip("/"))
+                    continue
+                if relative:
+                    if after is not None and relative <= after:
+                        continue
+                    files.add(safe_relative_path(relative))
+                    if max_items is not None and len(files) >= max_items:
+                        return tuple(sorted(files))
         return tuple(sorted(files))
 
     def read(self, relative_path: str) -> bytes:
@@ -209,4 +235,5 @@ __all__ = [
     "MirroredFormalStore",
     "WebDavFormalStore",
     "safe_relative_path",
+    "PUBLICATION_SERIALIZATION_LOCK",
 ]

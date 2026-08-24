@@ -20,7 +20,6 @@ from pathlib import Path, PurePosixPath
 import re
 import sqlite3
 from datetime import datetime, timezone
-from threading import RLock
 from typing import Any
 
 from deepresearch_flow.paper.snapshot.publication import (
@@ -54,6 +53,7 @@ from .publication_models import (
 from .publication_store import (
     LocalFormalStore,
     MirroredFormalStore,
+    PUBLICATION_SERIALIZATION_LOCK,
     WebDavFormalStore,
     safe_relative_path,
 )
@@ -386,10 +386,10 @@ def publish_bundle(
 ) -> PublicationResult:
     """Publish formal resources, commit one Snapshot receipt, then index.
 
-    Formal objects are written before the queue/Snapshot guard where safe;
-    content-addressed orphans are acceptable.  Definitive duplicate and
-    receipt checks happen inside the globally serialized Snapshot transaction.
-    A supplied queue guard is held through Snapshot commit and indexing.
+    A supplied queue guard is acquired before formal writes and held through
+    Snapshot commit and indexing.  Formal writes and the receipt transaction
+    share one serialization primitive, so reference GC cannot cross that
+    boundary.  Content-addressed orphans remain recoverable after failures.
     """
     _validate_publication_resources(bundle.resource_map, bundle.references)
     db_path = Path(snapshot_db)
@@ -400,27 +400,29 @@ def publish_bundle(
         raise PublicationConflict(
             f"publication receipt for job {bundle.job_id} has conflicting bundle digest"
         )
-    if receipt_hint is None:
-        _check_cancel(cancel_check)
-        for resource in bundle.resources:
-            _check_lease(lease_check)
-            _check_cancel(cancel_check)
-            try:
-                formal_store.put(resource.relative_path, resource.content)
-            except PublicationConflict:
-                raise
-            except Exception as exc:
-                raise PublicationError(
-                    f"formal resource write failed for {resource.relative_path}: {exc}"
-                ) from exc
-
     guard_context = lease_guard() if lease_guard is not None else nullcontext()
     already_published = False
     published_paper_id = bundle.paper_id
     published_bundle_digest = bundle.bundle_digest
-    with guard_context as guard:
-        _guard_check(guard, lease_check)
-        with _SNAPSHOT_COMMIT_LOCK:
+    lock_held = False
+    _SNAPSHOT_COMMIT_LOCK.acquire()
+    lock_held = True
+    try:
+        if receipt_hint is None:
+            _check_cancel(cancel_check)
+            for resource in bundle.resources:
+                _check_lease(lease_check)
+                _check_cancel(cancel_check)
+                try:
+                    formal_store.put(resource.relative_path, resource.content)
+                except PublicationConflict:
+                    raise
+                except Exception as exc:
+                    raise PublicationError(
+                        f"formal resource write failed for {resource.relative_path}: {exc}"
+                    ) from exc
+
+        with guard_context as guard:
             _guard_check(guard, lease_check)
             conn = open_snapshot_connection(db_path)
             try:
@@ -508,13 +510,20 @@ def publish_bundle(
             finally:
                 conn.close()
 
-        return _run_indexer(
-            bundle,
-            paper_id=published_paper_id,
-            bundle_digest=published_bundle_digest,
-            already_published=already_published,
-            indexer=indexer,
-        )
+            # GC must not cross formal writes and Snapshot receipt commit, but
+            # indexing may proceed after that shared lock is released.
+            _SNAPSHOT_COMMIT_LOCK.release()
+            lock_held = False
+            return _run_indexer(
+                bundle,
+                paper_id=published_paper_id,
+                bundle_digest=published_bundle_digest,
+                already_published=already_published,
+                indexer=indexer,
+            )
+    finally:
+        if lock_held:
+            _SNAPSHOT_COMMIT_LOCK.release()
 
 
 def queue_publication(state: Any, job_id: str, expected_revision: int) -> dict[str, Any]:
@@ -547,7 +556,7 @@ def validate_vector_index(
     )
 
 
-_SNAPSHOT_COMMIT_LOCK = RLock()
+_SNAPSHOT_COMMIT_LOCK = PUBLICATION_SERIALIZATION_LOCK
 
 
 def _run_indexer(

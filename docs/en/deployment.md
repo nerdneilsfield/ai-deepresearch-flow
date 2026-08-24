@@ -424,7 +424,8 @@ never from `/static`; formal local output alone is written under `/static`.
 On first enabled startup, registered legacy previews found under the historical
 static root are validated and moved into `preview_root`; corrupt, outside, or
 symlinked registrations fail closed before routes/Worker start. The migration
-is idempotent across restart and does not scan or delete unrelated static files.
+is idempotent across restart and scans only the exact UUID/preview artifact
+shape for unregistered crash orphans; it never deletes unrelated static files.
 
 Nginx accepts multipart uploads up to `500m` by default. Override with a
 validated positive Nginx size such as `PAPER_DB_NGINX_BODY_LIMIT=1g`; the
@@ -436,8 +437,9 @@ Supervisor starts one durable Worker only when the bridge and TOML agree. It
 polls processing and queued publication jobs, uses SQLite WAL leases, writes
 idle and active heartbeats, recovers expired `running`/`publishing`/`indexing`
 leases after restart, and stops between processing step boundaries on `TERM`.
-Supervisor bounds failed initial starts to three retries; once a Worker has
-started, `autorestart` may restart it using the same durable queue, and lease
+Supervisor classifies a crash before five seconds as a failed initial start
+and bounds those starts to three retries. Once a Worker has started,
+`autorestart=unexpected` may restart it using the same durable queue, and lease
 expiry/heartbeat recovery makes that restart safe. A persistently invalid
 configuration becomes a Supervisor startup failure requiring operator action,
 not a successful data-state transition.
@@ -458,7 +460,10 @@ touches formal published resources, failed/review-ready work, or WebDAV
 objects. A separate bounded reference-based formal GC may remove only
 digest-verified, unreferenced objects older than `formal_gc_grace_seconds`;
 unknown receipt/manifest metadata or unsupported WebDAV listing/deletion is
-reported as a warning and causes no remote deletion. To discard an unwanted terminal upload immediately, use the
+reported as a warning and causes no deletion. Only a manifest joined to a
+Snapshot publication receipt authorizes liveness; a bounded cursor persists
+across Worker restarts so referenced prefixes cannot starve later candidates.
+To discard an unwanted terminal upload immediately, use the
 authenticated reject/cancel action and run the bounded local cleanup task (or
 remove only its UUID directories under both private `work/` and `previews/`
 after confirming status in the Admin API); never delete the formal static root

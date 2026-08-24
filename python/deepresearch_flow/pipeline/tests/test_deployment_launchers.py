@@ -175,6 +175,8 @@ def test_start_supervisor_materializes_worker_only_for_consistent_enabled_config
     rendered = output.read_text(encoding="utf-8")
     assert rendered.count("program:pipeline-worker") == 1
     assert "stopsignal=TERM" in rendered
+    assert "startsecs=5" in rendered
+    assert "startretries=3" in rendered
     assert "stopwaitsecs=120" in rendered
 
     env["PAPER_PIPELINE_ENABLED"] = "0"

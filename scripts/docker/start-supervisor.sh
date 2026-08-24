@@ -46,7 +46,9 @@ if [[ "$pipeline_bridge_enabled" == true ]]; then
 [program:pipeline-worker]
 command=/usr/local/bin/start-pipeline-worker.sh
 autostart=true
-autorestart=true
+autorestart=unexpected
+exitcodes=0
+startsecs=5
 startretries=3
 stopsignal=TERM
 stopasgroup=true

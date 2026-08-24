@@ -61,6 +61,59 @@ def test_legacy_preview_symlink_fails_closed_without_deleting_static_content(
         new_state.migrate_legacy_previews(legacy_static)
 
 
+def test_unregistered_legacy_preview_shaped_orphan_fails_closed(
+    tmp_path: Path,
+) -> None:
+    legacy_static = tmp_path / "legacy-static"
+    orphan_directory = legacy_static / "123e4567-e89b-12d3-a456-426614174000"
+    orphan_directory.mkdir(parents=True)
+    orphan = orphan_directory / ("preview_pdf-" + "a" * 32 + ".artifact")
+    orphan.write_bytes(b"orphan preview")
+    state = PipelineState(
+        tmp_path / "queue.sqlite3",
+        artifact_store=ArtifactStore(tmp_path / "work", tmp_path / "previews"),
+    )
+
+    with pytest.raises(ValueError, match="legacy preview"):
+        state.migrate_legacy_previews(legacy_static)
+
+    assert orphan.read_bytes() == b"orphan preview"
+
+
+def test_legacy_preview_migration_serializes_concurrent_starters(
+    tmp_path: Path,
+) -> None:
+    work = tmp_path / "work"
+    legacy_static = tmp_path / "legacy-static"
+    queue = tmp_path / "queue.sqlite3"
+    old_artifacts = ArtifactStore(work, legacy_static)
+    old_state = PipelineState(queue, artifact_store=old_artifacts)
+    job_id = old_state.create_job()
+    lease = old_state.acquire_lease(job_id, "legacy")
+    assert lease is not None
+    old = old_artifacts.protect(job_id, "preview_pdf", b"legacy")
+    old_state.register_protected_artifact(job_id, "preview_pdf", old, lease.token)
+    private = tmp_path / "previews"
+
+    def migrate() -> list[str]:
+        state = PipelineState(queue, artifact_store=ArtifactStore(work, private))
+        return state.migrate_legacy_previews(legacy_static)
+
+    first_result: list[list[str]] = []
+    second_result: list[list[str]] = []
+    first_thread = Thread(target=lambda: first_result.append(migrate()))
+    second_thread = Thread(target=lambda: second_result.append(migrate()))
+    first_thread.start()
+    second_thread.start()
+    first_thread.join(timeout=5)
+    second_thread.join(timeout=5)
+
+    assert not first_thread.is_alive()
+    assert not second_thread.is_alive()
+    assert sorted(first_result + second_result) == [[], [job_id]]
+    assert any(path.is_file() for path in private.rglob("preview_pdf-*.artifact"))
+
+
 def test_legacy_published_warning_without_manifest_is_not_requeued(
     tmp_path: Path,
 ) -> None:
@@ -162,6 +215,43 @@ def test_cleanup_limit_makes_progress_when_oldest_private_directory_is_absent(
     assert state.cleanup_expired_artifacts(
         now=datetime(2030, 1, 1, tzinfo=timezone.utc), limit=1
     ) == []
+
+
+def test_cleanup_poisoned_oldest_job_does_not_starve_later_terminal_jobs(
+    tmp_path: Path,
+) -> None:
+    artifacts = ArtifactStore(tmp_path / "work", tmp_path / "previews")
+    state = PipelineState(tmp_path / "queue.sqlite3", artifact_store=artifacts)
+    poisoned = state.create_job()
+    state.admin_transition(poisoned, "rejected")
+    poisoned_directory = artifacts.work_dir / poisoned
+    poisoned_directory.symlink_to(tmp_path / "outside", target_is_directory=True)
+    later = state.create_job()
+    state.admin_transition(later, "rejected")
+
+    first = state.cleanup_expired_artifacts(
+        now=datetime(2030, 1, 1, tzinfo=timezone.utc), limit=1
+    )
+    second = state.cleanup_expired_artifacts(
+        now=datetime(2030, 1, 1, tzinfo=timezone.utc), limit=1
+    )
+
+    assert first == []
+    assert second == [later]
+    assert state.get_job(poisoned)["cleanup_completed_at"] is None
+    assert state.get_job(poisoned)["cleanup_error"]
+    assert state.get_job(later)["cleanup_completed_at"] is not None
+
+
+def test_formal_gc_cursor_persists_across_state_restart(tmp_path: Path) -> None:
+    database = tmp_path / "queue.sqlite3"
+    PipelineState(database).set_formal_gc_cursor("pdf/" + "a" * 64 + ".pdf")
+
+    restarted = PipelineState(database)
+
+    assert restarted.get_formal_gc_cursor() == "pdf/" + "a" * 64 + ".pdf"
+    restarted.set_formal_gc_cursor(None)
+    assert restarted.get_formal_gc_cursor() is None
 
 
 def test_generic_worker_transition_rejects_missing_lease_token(tmp_path: Path) -> None:
