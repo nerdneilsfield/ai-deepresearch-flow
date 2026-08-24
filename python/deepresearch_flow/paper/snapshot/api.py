@@ -1584,6 +1584,7 @@ def create_app(
                 lease_seconds=pipeline_config.lease_seconds,
                 heartbeat_seconds=pipeline_config.heartbeat_seconds,
                 artifact_store=pipeline_artifacts,
+                publication_cache_root=pipeline_config.static_root,
             )
         pipeline_app = create_pipeline_admin_app(
             config=pipeline_config,

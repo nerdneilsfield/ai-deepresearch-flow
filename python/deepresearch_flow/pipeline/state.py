@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import secrets
+import shutil
 import sqlite3
+import tempfile
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -213,11 +216,24 @@ def _stamp(value: datetime) -> str:
 class PipelineState:
     """Persistent jobs, steps, leases, and artifact metadata in SQLite."""
 
-    def __init__(self, db_path: str | Path, *, lease_seconds: int = 300, heartbeat_seconds: int = 30, artifact_store: ArtifactStore | None = None):
+    def __init__(
+        self,
+        db_path: str | Path,
+        *,
+        lease_seconds: int = 300,
+        heartbeat_seconds: int = 30,
+        artifact_store: ArtifactStore | None = None,
+        publication_cache_root: str | Path | None = None,
+    ):
         self.db_path = Path(db_path)
         self.lease_seconds = int(lease_seconds)
         self.heartbeat_seconds = int(heartbeat_seconds)
         self.artifact_store = artifact_store
+        self.publication_cache_root = (
+            Path(publication_cache_root).expanduser().resolve(strict=False)
+            if publication_cache_root is not None
+            else None
+        )
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
 
@@ -311,6 +327,125 @@ class PipelineState:
             result_columns = {row["name"] for row in db.execute("PRAGMA table_info(batch_match_results)").fetchall()}
             if "revision" not in result_columns:
                 db.execute("ALTER TABLE batch_match_results ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
+
+    @staticmethod
+    def _preview_filename_is_valid(path: Path, kind: str) -> bool:
+        stem = path.name.removesuffix(".artifact")
+        candidate_kind, separator, identifier = stem.rpartition("-")
+        return bool(
+            separator
+            and candidate_kind == kind
+            and len(identifier) == 32
+            and all(character in "0123456789abcdef" for character in identifier)
+            and path.name.endswith(".artifact")
+        )
+
+    @staticmethod
+    def _verify_preview_file(path: Path, digest: str, size: int) -> None:
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("legacy preview file is not a regular file")
+        content = path.read_bytes()
+        if len(content) != int(size) or hashlib.sha256(content).hexdigest() != str(digest):
+            raise ValueError("legacy preview metadata does not match file")
+
+    def migrate_legacy_previews(self, legacy_root: str | Path) -> list[str]:
+        """Move registered previews from historical static root to private root.
+
+        This is an allow-listed, registration-driven migration.  It never
+        scans or deletes static content, and it rejects an ambiguous row before
+        serving or processing can continue.  A copied destination plus the
+        original registration is intentionally recoverable on restart.
+        """
+        if self.artifact_store is None:
+            return []
+        legacy = Path(legacy_root).expanduser().resolve(strict=False)
+        private = self.artifact_store.preview_root
+        if legacy == private:
+            # Compatibility callers that have not split preview/static roots
+            # yet already keep protected files under this private directory.
+            return []
+        if legacy.is_relative_to(private) or private.is_relative_to(legacy):
+            raise ValueError("legacy preview root must be separate from private preview root")
+        with self._connect() as db:
+            rows = db.execute(
+                "SELECT job_id,kind,path,digest,size FROM artifacts "
+                "WHERE kind IN (?,?,?,?) ORDER BY job_id,kind",
+                _PREVIEW_PROTECTED_KINDS,
+            ).fetchall()
+
+        plans: list[tuple[str, str, Path, Path, str, int]] = []
+        migrated_jobs: set[str] = set()
+        for row in rows:
+            job_id = str(row["job_id"])
+            kind = str(row["kind"])
+            raw_path = Path(str(row["path"]))
+            if not raw_path.is_absolute() or raw_path.is_symlink() or raw_path.parent.is_symlink():
+                raise ValueError("legacy preview path is unsafe")
+            resolved = raw_path.resolve(strict=False)
+            job_key = self.artifact_store._job_key(job_id)
+            if resolved.is_relative_to(private):
+                expected_parent = private / job_key
+                if resolved.parent != expected_parent or not self._preview_filename_is_valid(resolved, kind):
+                    raise ValueError("private preview registration is invalid")
+                self._verify_preview_file(resolved, str(row["digest"]), int(row["size"]))
+                continue
+            if not resolved.is_relative_to(legacy):
+                raise ValueError("legacy preview path is outside configured roots")
+            expected_parent = legacy / job_key
+            if resolved.parent != expected_parent or not self._preview_filename_is_valid(resolved, kind):
+                raise ValueError("legacy preview path is not a registered UUID artifact")
+            destination = private / job_key / resolved.name
+            if destination.parent.exists() and destination.parent.is_symlink():
+                raise ValueError("private preview destination directory must not be a symlink")
+            if destination.parent.exists() and destination.parent.resolve().parent != private:
+                raise ValueError("private preview destination escapes private root")
+            if destination.exists() and destination.is_symlink():
+                raise ValueError("private preview destination must not be a symlink")
+            if resolved.exists():
+                self._verify_preview_file(resolved, str(row["digest"]), int(row["size"]))
+            if destination.exists():
+                self._verify_preview_file(destination, str(row["digest"]), int(row["size"]))
+            elif not resolved.exists():
+                raise ValueError("legacy preview source and private destination are missing")
+            plans.append(
+                (job_id, kind, resolved, destination, str(row["path"]), int(row["size"]))
+            )
+            migrated_jobs.add(job_id)
+
+        # Prepare every destination before removing any legacy source.  If a
+        # process dies here, the next run sees source+destination and resumes.
+        for _job_id, _kind, source, destination, _old, _size in plans:
+            if destination.exists():
+                continue
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            fd, temporary_name = tempfile.mkstemp(prefix=".legacy-preview-", dir=destination.parent)
+            temporary = Path(temporary_name)
+            try:
+                with os.fdopen(fd, "wb") as target, source.open("rb") as source_stream:
+                    shutil.copyfileobj(source_stream, target)
+                    target.flush()
+                    os.fsync(target.fileno())
+                os.replace(temporary, destination)
+            except BaseException:
+                temporary.unlink(missing_ok=True)
+                raise ValueError("legacy preview migration could not prepare private file") from None
+        for _job_id, _kind, source, destination, _old, _size in plans:
+            if source.exists() and source != destination:
+                source.unlink()
+
+        if plans:
+            with self._connect() as db:
+                db.execute("BEGIN IMMEDIATE")
+                for job_id, kind, _source, destination, old_path, _size in plans:
+                    cursor = db.execute(
+                        "UPDATE artifacts SET path=? WHERE job_id=? AND kind=? AND path=?",
+                        (str(destination), job_id, kind, old_path),
+                    )
+                    if cursor.rowcount != 1:
+                        db.rollback()
+                        raise ValueError("legacy preview registration changed during migration")
+                db.commit()
+        return sorted(migrated_jobs)
 
     @staticmethod
     def _invalidate_batch_matching(
@@ -535,6 +670,69 @@ class PipelineState:
         if not isinstance(value, dict):
             raise ValueError("stored publication manifest is invalid")
         return value
+
+    def list_publication_manifests(self) -> list[dict[str, Any]]:
+        """Return durable publication metadata for formal-resource GC."""
+        with self._connect() as db:
+            rows = db.execute(
+                "SELECT publication_manifest_json FROM jobs "
+                "WHERE publication_manifest_json IS NOT NULL "
+                "AND status IN ('published','published_with_warning') ORDER BY id"
+            ).fetchall()
+        manifests: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                value = json.loads(str(row["publication_manifest_json"]))
+            except (TypeError, json.JSONDecodeError) as exc:
+                raise ValueError("stored publication manifest is invalid") from exc
+            if not isinstance(value, dict):
+                raise ValueError("stored publication manifest is invalid")
+            manifests.append(value)
+        return manifests
+
+    def _publication_cache_is_ready(self, manifest: Mapping[str, Any]) -> bool:
+        """Verify immutable cache files before allowing index-only retry."""
+        version = manifest.get("version")
+        bundle_digest = str(manifest.get("bundle_digest") or "")
+        if (
+            isinstance(version, bool)
+            or not isinstance(version, int)
+            or version != 1
+            or len(bundle_digest) != 64
+            or any(character not in "0123456789abcdef" for character in bundle_digest)
+        ):
+            return False
+        if self.publication_cache_root is None:
+            return True
+        records = manifest.get("resources")
+        if not isinstance(records, list) or not records:
+            return False
+        root = self.publication_cache_root
+        for record in records:
+            if not isinstance(record, Mapping):
+                return False
+            try:
+                from .publication_store import safe_relative_path
+
+                relative = safe_relative_path(str(record.get("path") or ""))
+            except (TypeError, ValueError):
+                return False
+            digest = str(record.get("digest") or "")
+            size = record.get("size")
+            if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+                return False
+            if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+                return False
+            path = (root / relative).resolve(strict=False)
+            if not path.is_relative_to(root) or path.is_symlink() or not path.is_file():
+                return False
+            try:
+                content = path.read_bytes()
+            except OSError:
+                return False
+            if len(content) != size or hashlib.sha256(content).hexdigest() != digest:
+                return False
+        return True
 
     def record_publication_manifest(
         self,
@@ -1701,7 +1899,7 @@ class PipelineState:
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
-                "SELECT status,revision FROM jobs WHERE id=?", (job_id,)
+                "SELECT status,revision,publication_manifest_json FROM jobs WHERE id=?", (job_id,)
             ).fetchone()
             if row is None:
                 db.rollback()
@@ -1712,6 +1910,26 @@ class PipelineState:
             if str(row["status"]) != "published_with_warning":
                 db.rollback()
                 raise ValueError("indexing retry requires published_with_warning job")
+            raw_manifest = row["publication_manifest_json"]
+            if not raw_manifest:
+                db.rollback()
+                raise ValueError(
+                    "published warning lacks durable publication metadata; republish or reject"
+                )
+            try:
+                manifest = json.loads(str(raw_manifest))
+            except (TypeError, json.JSONDecodeError):
+                db.rollback()
+                raise ValueError("published warning has invalid publication metadata") from None
+            if (
+                not isinstance(manifest, Mapping)
+                or str(manifest.get("job_id") or "") != job_id
+                or not self._publication_cache_is_ready(manifest)
+            ):
+                db.rollback()
+                raise ValueError(
+                    "published warning publication cache is unavailable; republish or reject"
+                )
             next_revision = int(row["revision"]) + 1
             db.execute(
                 "UPDATE jobs SET status='indexing',terminal_at=NULL,cleanup_completed_at=NULL,revision=?,updated_at=? WHERE id=?",

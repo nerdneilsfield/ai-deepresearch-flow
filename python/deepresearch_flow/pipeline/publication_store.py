@@ -58,9 +58,47 @@ class LocalFormalStore:
             temporary.unlink(missing_ok=True)
             raise
 
+    def list_content_addressed_files(self) -> tuple[str, ...]:
+        """List immutable digest-named files below this store only."""
+        result: list[str] = []
+        for candidate in self.root.rglob("*"):
+            if candidate.is_symlink() or not candidate.is_file():
+                continue
+            try:
+                resolved = candidate.resolve(strict=True)
+                relative = resolved.relative_to(self.root).as_posix()
+            except (OSError, ValueError):
+                continue
+            result.append(relative)
+        return tuple(sorted(set(result)))
+
+    def read(self, relative_path: str) -> bytes:
+        rel = safe_relative_path(relative_path)
+        path = (self.root / rel).resolve(strict=False)
+        if not path.is_relative_to(self.root) or path.is_symlink() or not path.is_file():
+            raise PublicationError("formal resource is unavailable")
+        return path.read_bytes()
+
+    def modified_at(self, relative_path: str):
+        rel = safe_relative_path(relative_path)
+        path = (self.root / rel).resolve(strict=False)
+        if not path.is_relative_to(self.root) or path.is_symlink() or not path.is_file():
+            raise PublicationError("formal resource is unavailable")
+        from datetime import datetime, timezone
+
+        return datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
+
+    def delete(self, relative_path: str) -> None:
+        rel = safe_relative_path(relative_path)
+        path = (self.root / rel).resolve(strict=False)
+        if not path.is_relative_to(self.root) or path.is_symlink():
+            raise PublicationError("formal resource path escapes configured root")
+        if path.exists():
+            path.unlink()
+
 
 class WebDavFormalStore:
-    """Write-only WebDAV formal store.
+    """WebDAV formal store with explicit immutable read/GC capabilities.
 
     The adapter does not issue a HEAD/exists request.  Publication reserves
     paper identity in Snapshot before calling this adapter; content-addressed
@@ -82,6 +120,58 @@ class WebDavFormalStore:
                 current = f"{current}/{part}" if current else part
                 mkdir(current)
         self.storage.upload(target, data)
+
+    def list_content_addressed_files(self) -> tuple[str, ...]:
+        listing = getattr(self.storage, "list", None)
+        if not callable(listing):
+            raise PublicationError("WebDAV formal store does not support safe listing")
+        pending = [self.prefix] if self.prefix else [""]
+        files: set[str] = set()
+        visited: set[str] = set()
+        while pending:
+            current = pending.pop()
+            if current in visited:
+                continue
+            visited.add(current)
+            for raw in listing(current):
+                value = str(raw).replace("\\", "/").lstrip("/")
+                if value.endswith("/"):
+                    pending.append(value.rstrip("/"))
+                    continue
+                if self.prefix:
+                    prefix = self.prefix.rstrip("/") + "/"
+                    if value == self.prefix:
+                        continue
+                    if not value.startswith(prefix):
+                        continue
+                    value = value[len(prefix) :]
+                if value:
+                    files.add(safe_relative_path(value))
+        return tuple(sorted(files))
+
+    def read(self, relative_path: str) -> bytes:
+        rel = safe_relative_path(relative_path)
+        target = f"{self.prefix}/{rel}" if self.prefix else rel
+        download = getattr(self.storage, "download", None)
+        if not callable(download):
+            raise PublicationError("WebDAV formal store does not support safe reads")
+        return bytes(download(target))
+
+    def modified_at(self, relative_path: str):
+        getter = getattr(self.storage, "modified_at", None)
+        if not callable(getter):
+            return None
+        rel = safe_relative_path(relative_path)
+        target = f"{self.prefix}/{rel}" if self.prefix else rel
+        return getter(target)
+
+    def delete(self, relative_path: str) -> None:
+        rel = safe_relative_path(relative_path)
+        target = f"{self.prefix}/{rel}" if self.prefix else rel
+        delete = getattr(self.storage, "delete", None)
+        if not callable(delete):
+            raise PublicationError("WebDAV formal store does not support safe deletion")
+        delete(target)
 
 
 class MirroredFormalStore:

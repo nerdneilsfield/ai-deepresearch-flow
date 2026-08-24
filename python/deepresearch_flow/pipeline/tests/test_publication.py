@@ -585,6 +585,108 @@ def test_runtime_public_worker_recovers_warning_from_manifest_cache(
     assert marker.read_text(encoding="utf-8") == bundle.paper_id
 
 
+def test_runtime_webdav_retry_indexes_reconstructed_bundle_after_retention(
+    tmp_path: Path,
+) -> None:
+    from deepresearch_flow.pipeline import ArtifactStore, PipelineConfig, PipelineState
+    from deepresearch_flow.pipeline.runtime import build_publication_bundle_from_state, run_worker_until_stopped
+
+    work = tmp_path / "work"
+    previews = tmp_path / "previews"
+    formal = tmp_path / "formal"
+    snapshot = tmp_path / "snapshot.sqlite3"
+    config = PipelineConfig(
+        enabled=True,
+        work_dir=str(work),
+        preview_root=str(previews),
+        static_root=str(formal),
+        queue_db=str(tmp_path / "queue.sqlite3"),
+        snapshot_db=str(snapshot),
+    )
+    artifacts = ArtifactStore(work, previews)
+    state = PipelineState(
+        config.queue_db,
+        artifact_store=artifacts,
+        publication_cache_root=formal,
+    )
+    job_id = state.create_job()
+    state.admin_transition(job_id, "running")
+    state.admin_transition(job_id, "review_ready")
+    queue_publication(state, job_id, int(state.get_job(job_id)["revision"]))
+    bundle = _bundle(work, job_id=job_id)
+
+    class FakeWebDav:
+        def __init__(self) -> None:
+            self.uploads: list[str] = []
+
+        def mkdir(self, path: str) -> None:
+            del path
+
+        def upload(self, path: str, data: bytes) -> None:
+            del data
+            self.uploads.append(path)
+
+    remote = FakeWebDav()
+    first = PublicationWorker(
+        state,
+        snapshot,
+        MirroredFormalStore(WebDavFormalStore(remote), LocalFormalStore(formal)),
+        bundle_builder=lambda _: bundle,
+        indexer=lambda _: (_ for _ in ()).throw(RuntimeError("index unavailable")),
+    ).run_once()
+    assert first[0].status == "published_with_warning"
+    assert remote.uploads
+
+    assert state.cleanup_expired_artifacts(
+        now=datetime(2030, 1, 1, tzinfo=timezone.utc), limit=1
+    ) == [job_id]
+    state.retry_indexing(job_id, int(state.get_job(job_id)["revision"]))
+
+    marker = tmp_path / "runtime-indexed"
+
+    class ProcessingIdle:
+        def run_once(self, job_ids: list[str] | None = None) -> list[object]:
+            del job_ids
+            return []
+
+    def index(value: object) -> None:
+        assert isinstance(value, PublicationBundle)
+        marker.write_text(value.paper_id, encoding="utf-8")
+
+    class BrokenPrimary:
+        def put(self, relative_path: str, data: bytes) -> None:
+            del relative_path, data
+            raise AssertionError("formal rewrite")
+
+    recovery = PublicationWorker(
+        state,
+        snapshot,
+        MirroredFormalStore(
+            BrokenPrimary(),
+            LocalFormalStore(formal),
+        ),
+        bundle_builder=lambda current: build_publication_bundle_from_state(
+            current, state, artifacts, config
+        ),
+        indexer=index,
+    )
+    result = run_worker_until_stopped(
+        config,
+        state,
+        artifacts,
+        processing_worker=ProcessingIdle(),
+        publication_worker=recovery,
+        stop_event=Event(),
+        poll_interval_seconds=0,
+        cleanup_interval_seconds=3600,
+        max_cycles=1,
+        worker_id="webdav-recovery",
+    )
+    assert result.published_jobs == 1
+    assert state.get_job(job_id)["status"] == "published"
+    assert marker.read_text(encoding="utf-8") == bundle.paper_id
+
+
 def test_publication_worker_stops_after_current_job_without_claiming_next(
     tmp_path: Path,
 ) -> None:

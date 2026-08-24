@@ -2,6 +2,7 @@
 
 from .artifacts import ArtifactStore, ProtectedArtifactScope
 from .config import PipelineConfig, load_pipeline_config
+from .formal_gc import FormalGcResult, collect_unreferenced_formal_resources
 from .ingestion import BatchIngestor, IngestionResult, IngestionService, UploadIngestion, UploadPart
 from .matching import BibTeXMatcher, BibtexMatcher, MatchResult
 from .publication import (
@@ -52,6 +53,8 @@ __all__ = [
     "STEP_NAMES",
     "PROCESSING_STEP_NAMES",
     "load_pipeline_config",
+    "FormalGcResult",
+    "collect_unreferenced_formal_resources",
     "BatchIngestor",
     "IngestionResult",
     "UploadPart",

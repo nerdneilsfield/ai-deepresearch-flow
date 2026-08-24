@@ -124,6 +124,38 @@ class TestUpload:
             storage.upload("pdf/abc.pdf", b"%PDF-fake")
 
 
+def test_list_download_and_delete_support_reference_gc() -> None:
+    xml = b"""
+    <d:multistatus xmlns:d='DAV:'>
+      <d:response><d:href>/static/pdf/abc.pdf</d:href>
+        <d:propstat><d:prop><d:resourcetype/></d:prop></d:propstat>
+      </d:response>
+      <d:response><d:href>/static/summary/</d:href>
+        <d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat>
+      </d:response>
+    </d:multistatus>
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "PROPFIND":
+            return httpx.Response(207, content=xml)
+        if request.method == "GET":
+            return httpx.Response(200, content=b"payload")
+        if request.method == "DELETE":
+            return httpx.Response(204)
+        return httpx.Response(405)
+
+    storage = WebDavStorage(
+        "https://cdn.example.com/static",
+        "user",
+        "pass",
+        _transport=httpx.MockTransport(handler),
+    )
+    assert storage.list() == ("pdf/abc.pdf", "summary/")
+    assert storage.download("pdf/abc.pdf") == b"payload"
+    storage.delete("pdf/abc.pdf")
+
+
 class TestContextManager:
     def test_with_statement(self) -> None:
         transport = _mock_transport({"HEAD": 200})

@@ -9,6 +9,79 @@ from deepresearch_flow.pipeline.artifacts import Artifact, ArtifactStore
 from deepresearch_flow.pipeline.state import LeaseError, PipelineState
 
 
+def test_enabled_startup_migrates_registered_legacy_previews_idempotently(
+    tmp_path: Path,
+) -> None:
+    work = tmp_path / "work"
+    legacy_static = tmp_path / "legacy-static"
+    queue = tmp_path / "queue.sqlite3"
+    old_artifacts = ArtifactStore(work, legacy_static)
+    old_state = PipelineState(queue, artifact_store=old_artifacts)
+    job_id = old_state.create_job()
+    lease = old_state.acquire_lease(job_id, "legacy")
+    assert lease is not None
+    old = old_artifacts.protect(job_id, "preview_pdf", b"%PDF-1.7 legacy")
+    old_state.register_protected_artifact(job_id, "preview_pdf", old, lease.token)
+
+    previews = tmp_path / "previews"
+    new_artifacts = ArtifactStore(work, previews)
+    new_state = PipelineState(queue, artifact_store=new_artifacts)
+
+    assert new_state.migrate_legacy_previews(legacy_static) == [job_id]
+    migrated = new_state.get_job_details(job_id)["artifacts"][0]
+    migrated_path = Path(str(migrated["path"]))
+    assert migrated_path.is_relative_to(previews.resolve())
+    assert migrated_path.read_bytes() == b"%PDF-1.7 legacy"
+    assert not old.path.exists()
+    assert new_state.migrate_legacy_previews(legacy_static) == []
+
+
+def test_legacy_preview_symlink_fails_closed_without_deleting_static_content(
+    tmp_path: Path,
+) -> None:
+    work = tmp_path / "work"
+    legacy_static = tmp_path / "legacy-static"
+    old_artifacts = ArtifactStore(work, legacy_static)
+    state = PipelineState(tmp_path / "queue.sqlite3", artifact_store=old_artifacts)
+    job_id = state.create_job()
+    lease = state.acquire_lease(job_id, "legacy")
+    assert lease is not None
+    old = old_artifacts.protect(job_id, "preview_pdf", b"legacy")
+    state.register_protected_artifact(job_id, "preview_pdf", old, lease.token)
+    target = tmp_path / "outside"
+    target.mkdir()
+    old.path.parent.rename(tmp_path / "moved-job")
+    old.path.parent.symlink_to(target, target_is_directory=True)
+
+    new_state = PipelineState(
+        tmp_path / "queue.sqlite3",
+        artifact_store=ArtifactStore(work, tmp_path / "previews"),
+    )
+    with pytest.raises(ValueError, match="legacy preview"):
+        new_state.migrate_legacy_previews(legacy_static)
+
+
+def test_legacy_published_warning_without_manifest_is_not_requeued(
+    tmp_path: Path,
+) -> None:
+    state = PipelineState(tmp_path / "queue.sqlite3", publication_cache_root=tmp_path / "formal")
+    job_id = state.create_job()
+    state.admin_transition(job_id, "running")
+    state.admin_transition(job_id, "review_ready")
+    state.admin_transition(job_id, "publish_queued")
+    state.admin_transition(job_id, "publishing")
+    state.admin_transition(job_id, "indexing")
+    state.admin_transition(job_id, "published_with_warning")
+    before = state.get_job(job_id)
+
+    with pytest.raises(ValueError, match="durable publication metadata"):
+        state.retry_indexing(job_id, int(before["revision"]))
+
+    after = state.get_job(job_id)
+    assert after["status"] == "published_with_warning"
+    assert int(after["revision"]) == int(before["revision"])
+
+
 def test_valid_transitions_and_invalid_transition_are_enforced(tmp_path: Path) -> None:
     state = PipelineState(tmp_path / "queue.sqlite3")
     job_id = state.create_job()

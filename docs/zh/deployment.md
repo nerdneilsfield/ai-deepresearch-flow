@@ -377,6 +377,8 @@ preview_root = "/data/pipeline-work/previews"
 queue_db = "/data/pipeline-work/queue.sqlite3"
 snapshot_db = "/db/papers.db"
 static_root = "/static"
+formal_gc_batch_size = 100
+formal_gc_grace_seconds = 86400
 ```
 
 完整注释例见 `config.example.toml`，含上传限制、OCR/Extract/Translate
@@ -412,6 +414,9 @@ Worker，不能把 TOML 中关闭的 pipeline 偷开；两者不一致即 fail c
 创建 `work/` 与 `previews/`；持久挂载缺失即拒绝启动。`pipeline-work` 必须私有，
 内含上传原件、中间产物和受保护预览，绝不作为 Nginx alias。预览只能由受保护
 Admin artifact API 读取，不进入 `/static`；正式 local 输出只写入 `/static`。
+首次启用启动时，会校验并迁移历史 static root 下已登记的 legacy preview 到
+`preview_root`；损坏、越界或 symlink 登记会在 API/Worker 启动前 fail closed。迁移可
+跨重启幂等执行，不扫描或删除无登记的 static 文件。
 
 Nginx 默认允许 `500m` multipart 上传；可用经校验的 `1g` 等值设置
 `PAPER_DB_NGINX_BODY_LIMIT`。Admin pipeline location 使用较长上传/预览 timeout。
@@ -425,10 +430,16 @@ Supervisor 仅在桥接变量与 TOML 一致时启动一个持久 Worker。Worke
 heartbeat 年龄报告 `online`、`degraded` 或 `offline`。逐篇查看
 受保护 PDF/source/summary/translation；处理 BibTeX 歧义（或明确选择无 BibTeX），
 再执行 retry、reject、publish 或批量发布。发布带 revision CAS，旧页面会收到冲突。
+Supervisor 初次启动失败最多重试三次；Worker 已启动后可由 `autorestart` 使用同一
+持久 queue 重启，lease expiry/heartbeat recovery 保证恢复安全。配置持续无效时会
+进入 Supervisor startup failure，需管理员修复，不会伪造数据状态迁移。
 
 `published`、`published_with_warning`、`rejected`、`cancelled` 终态 work 与 preview
 中间产物默认保留七日；清理按批次执行，不删除正式发布资源、失败/待审核任务或
-WebDAV 对象。若需立即丢弃终态上传，先用受保护 Admin 操作确认状态，再执行有界
+WebDAV 对象。另有有界、按引用的正式资源 GC：只删除通过 digest 校验、且早于
+`formal_gc_grace_seconds`、未被当前 Snapshot、publication receipt 或 manifest 引用的
+对象；若 receipt/manifest 不完整，或 WebDAV 不支持安全 list/delete，则只报告 warning，
+不删除远端对象。若需立即丢弃终态上传，先用受保护 Admin 操作确认状态，再执行有界
 清理（或只删除该 UUID 的 private `work/` 与 `previews/` 目录）；勿手删正式
 static root。
 
@@ -439,8 +450,10 @@ private 临时目录，仅加载/更新当前论文，索引完成即清理。We
 保留，状态为 `published_with_warning`；修复向量配置后可只重试 indexing，不重复
 发布 Snapshot/静态资源。队列只保存小型 publication manifest；正式的
 content-addressed 资源（WebDAV 发布时亦保留在正式 static root 的本地 cache）与
-私有 pipeline work 分离，故七日清理 work/preview 后仍可只重试 indexing。首版不
-自动回收正式文件。
+私有 pipeline work 分离，故七日清理 work/preview 后仍可只重试 indexing。Worker 会
+对本地及具备能力的 WebDAV 执行有界引用 GC；绝不遍历 private root，亦不删除当前
+Snapshot、receipt 或 manifest 引用对象。旧的 `published_with_warning` 记录若缺少可
+精确验证的 manifest/cache，会返回可行动的 409，保持原状态，不进入必失败 retry。
 
 禁用/回滚：停止容器，取消设置或设 `PAPER_PIPELINE_ENABLED=0`，并将
 `[pipeline].enabled = false`。既有公开检索/API 与 CLI Snapshot 行为不变。恢复时

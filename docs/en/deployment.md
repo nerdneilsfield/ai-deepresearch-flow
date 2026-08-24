@@ -379,6 +379,8 @@ preview_root = "/data/pipeline-work/previews"
 queue_db = "/data/pipeline-work/queue.sqlite3"
 snapshot_db = "/db/papers.db"
 static_root = "/static"
+formal_gc_batch_size = 100
+formal_gc_grace_seconds = 86400
 ```
 
 Use the commented `[pipeline]` example in `config.example.toml` for limits,
@@ -419,6 +421,10 @@ durability mounts fail closed. Keep `pipeline-work` private; it contains
 uploads, intermediates, and protected previews and is never an Nginx alias.
 Protected previews are served only through authenticated Admin artifact routes,
 never from `/static`; formal local output alone is written under `/static`.
+On first enabled startup, registered legacy previews found under the historical
+static root are validated and moved into `preview_root`; corrupt, outside, or
+symlinked registrations fail closed before routes/Worker start. The migration
+is idempotent across restart and does not scan or delete unrelated static files.
 
 Nginx accepts multipart uploads up to `500m` by default. Override with a
 validated positive Nginx size such as `PAPER_DB_NGINX_BODY_LIMIT=1g`; the
@@ -430,6 +436,11 @@ Supervisor starts one durable Worker only when the bridge and TOML agree. It
 polls processing and queued publication jobs, uses SQLite WAL leases, writes
 idle and active heartbeats, recovers expired `running`/`publishing`/`indexing`
 leases after restart, and stops between processing step boundaries on `TERM`.
+Supervisor bounds failed initial starts to three retries; once a Worker has
+started, `autorestart` may restart it using the same durable queue, and lease
+expiry/heartbeat recovery makes that restart safe. A persistently invalid
+configuration becomes a Supervisor startup failure requiring operator action,
+not a successful data-state transition.
 An in-flight remote processing call may finish; its completed checkpoint is
 committed, the lease is atomically requeued, and no next Job is claimed.
 An in-flight irreversible publication may finish, then publication polling
@@ -444,7 +455,10 @@ Terminal work and protected-preview artifacts for `published`,
 `published_with_warning`, `rejected`, and `cancelled` jobs are retained for
 seven days by default. Cleanup is batched and never
 touches formal published resources, failed/review-ready work, or WebDAV
-objects. To discard an unwanted terminal upload immediately, use the
+objects. A separate bounded reference-based formal GC may remove only
+digest-verified, unreferenced objects older than `formal_gc_grace_seconds`;
+unknown receipt/manifest metadata or unsupported WebDAV listing/deletion is
+reported as a warning and causes no remote deletion. To discard an unwanted terminal upload immediately, use the
 authenticated reject/cancel action and run the bounded local cleanup task (or
 remove only its UUID directories under both private `work/` and `previews/`
 after confirming status in the Admin API); never delete the formal static root
@@ -461,8 +475,12 @@ as `published_with_warning`; retry indexing only after fixing vector
 configuration. The queue keeps only a small publication manifest; formal
 content-addressed resources remain in the local formal root (including a
 local cache alongside WebDAV publication), so index-only retry still works
-after seven-day private work/preview cleanup. Formal local/WebDAV files are
-separate from private pipeline work and are not automatically collected.
+after seven-day private work/preview cleanup. The Worker runs bounded,
+reference-based GC against both local and capable WebDAV stores; it never
+traverses private roots or removes objects referenced by current Snapshot,
+publication receipts, or manifests. Legacy `published_with_warning` rows that
+lack an exact manifest/cache fail with an actionable 409 instead of entering a
+doomed retry.
 
 To disable or roll back, stop the container, set `PAPER_PIPELINE_ENABLED` unset
 or `0`, and use a config with `[pipeline].enabled = false`. Existing public

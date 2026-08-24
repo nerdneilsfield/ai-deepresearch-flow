@@ -1108,6 +1108,11 @@ def create_pipeline_admin_app(
         app.state.worker_status_provider = worker_status_provider
         app.state.preview_regenerator = preview_regenerator
         return app
+    if state.publication_cache_root is None:
+        state.publication_cache_root = Path(config.static_root).expanduser().resolve(strict=False)
+    # Existing queue databases may still point protected previews at the
+    # historical public static root.  Migrate before exposing any route.
+    state.migrate_legacy_previews(config.static_root)
     routes = [
         Route("/config", _with_auth(_config, admin_token), methods=["GET"]),
         Route("/batches", _with_auth(_create_batch, admin_token), methods=["POST"]),

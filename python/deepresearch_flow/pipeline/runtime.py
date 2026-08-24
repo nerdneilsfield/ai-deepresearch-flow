@@ -21,6 +21,7 @@ from typing import Any, Mapping
 
 from .artifacts import ArtifactStore
 from .config import PipelineConfig, load_pipeline_config
+from .formal_gc import FormalGcResult, collect_unreferenced_formal_resources
 from .publication import (
     build_publication_bundle,
     build_publication_bundle_from_manifest,
@@ -268,6 +269,9 @@ def run_worker_until_stopped(
     if not worker_name:
         raise ValueError("worker_id must not be empty")
     stop = stop_event or Event()
+    if state.publication_cache_root is None:
+        state.publication_cache_root = Path(config.static_root).expanduser().resolve(strict=False)
+    state.migrate_legacy_previews(config.static_root)
     processing = processing_worker
     if processing is None:
         if paper_config_path is None or ocr_config_path is None:
@@ -283,9 +287,10 @@ def run_worker_until_stopped(
         )
     publication = publication_worker
     closeables: list[Any] = []
+    formal_gc: Any | None = None
     if publication is None and snapshot_db is not None:
         resolved_snapshot_db = resolve_snapshot_db(config, snapshot_db)
-        publication, closeables = _build_production_publication_worker(
+        publication, closeables, formal_gc = _build_production_publication_worker(
             config,
             state,
             artifacts,
@@ -328,6 +333,10 @@ def run_worker_until_stopped(
                     cleaned += len(
                         state.cleanup_expired_artifacts(limit=config.cleanup_batch_size)
                     )
+                    if formal_gc is not None:
+                        gc_result = formal_gc()
+                        if isinstance(gc_result, FormalGcResult) and gc_result.warning:
+                            LOGGER.warning("pipeline formal GC warning: %s", gc_result.warning)
                 except Exception:
                     errors += 1
                     LOGGER.exception("pipeline cleanup cycle failed")
@@ -382,7 +391,7 @@ def _build_production_publication_worker(
     paper_config_path: str | Path | None,
     worker_id: str,
     stop_requested: Any | None = None,
-) -> tuple[PublicationWorker, list[Any]]:
+) -> tuple[PublicationWorker, list[Any], Any]:
     closeables: list[Any] = []
     if config.webdav_url:
         username = os.environ.get("PAPER_PIPELINE_WEBDAV_USERNAME", "")
@@ -414,6 +423,15 @@ def _build_production_publication_worker(
     def bundle_builder(job_id: str) -> Any:
         return build_publication_bundle_from_state(job_id, state, artifacts, config)
 
+    def formal_gc() -> FormalGcResult:
+        return collect_unreferenced_formal_resources(
+            formal_store,
+            snapshot_db=snapshot_db,
+            manifests=state.list_publication_manifests(),
+            limit=config.formal_gc_batch_size,
+            grace_seconds=config.formal_gc_grace_seconds,
+        )
+
     return (
         PublicationWorker(
             state,
@@ -425,6 +443,7 @@ def _build_production_publication_worker(
             stop_requested=stop_requested,
         ),
         closeables,
+        formal_gc,
     )
 
 
@@ -437,6 +456,7 @@ def build_publication_bundle_from_state(
     details = state.get_job_details(job_id)
     manifest_getter = getattr(state, "get_publication_manifest", None)
     manifest = manifest_getter(job_id) if callable(manifest_getter) else None
+    status = str(details.get("status") or "")
     artifact_rows = {
         str(row.get("kind")): row
         for row in details.get("artifacts", [])
@@ -448,6 +468,30 @@ def build_publication_bundle_from_state(
         "preview_summary_json",
         "preview_translated_md",
     }
+    if isinstance(manifest, Mapping) and str(manifest.get("job_id") or "") != job_id:
+        raise ValueError("publication manifest belongs to a different job")
+    if isinstance(manifest, Mapping) and status in {
+        "indexing",
+        "published_with_warning",
+        "published",
+    }:
+        return _bundle_from_published_manifest(
+            manifest,
+            static_root=Path(config.static_root),
+            work_dir=Path(artifacts.work_dir),
+        )
+    if isinstance(manifest, Mapping) and status == "publish_queued":
+        try:
+            return _bundle_from_published_manifest(
+                manifest,
+                static_root=Path(config.static_root),
+                work_dir=Path(artifacts.work_dir),
+            )
+        except Exception:
+            # A crash may have recorded metadata before formal writes.  The
+            # private preview remains safe fallback for this pre-receipt state;
+            # indexing/recovery states above never use stale previews.
+            pass
     if isinstance(manifest, Mapping) and not required_kinds.issubset(artifact_rows):
         return _bundle_from_published_manifest(
             manifest,
@@ -561,7 +605,9 @@ def main(argv: list[str] | None = None) -> int:
         lease_seconds=config.lease_seconds,
         heartbeat_seconds=config.heartbeat_seconds,
         artifact_store=artifacts,
+        publication_cache_root=config.static_root,
     )
+    state.migrate_legacy_previews(config.static_root)
     stop = Event()
 
     def request_stop(signum: int, _frame: Any) -> None:

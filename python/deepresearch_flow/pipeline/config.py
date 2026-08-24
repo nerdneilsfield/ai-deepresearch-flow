@@ -19,6 +19,13 @@ def _positive(value: Any, name: str, default: int) -> int:
     return int(value)
 
 
+def _nonnegative(value: Any, name: str, default: int) -> int:
+    value = default if value is None else value
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        raise ValueError(f"pipeline {name} must not be negative")
+    return int(value)
+
+
 def _path(value: Any, default: str) -> str:
     return os.path.expanduser(str(default if value is None else value))
 
@@ -85,6 +92,8 @@ class PipelineConfig:
     heartbeat_seconds: int = 30
     validation_retry_limit: int = 2
     cleanup_batch_size: int = 100
+    formal_gc_batch_size: int = 100
+    formal_gc_grace_seconds: int = 86_400
     supporting_models: tuple[tuple[str, str], ...] = ()
     ocr_model_map: tuple[tuple[str, str], ...] = ()
 
@@ -243,6 +252,8 @@ def load_pipeline_config(path: str | Path) -> PipelineConfig:
         heartbeat_seconds=_positive(raw.get("heartbeat_seconds", raw.get("heartbeat_interval_seconds")), "heartbeat_seconds", 30),
         validation_retry_limit=_positive(raw.get("validation_retry_limit"), "validation_retry_limit", 2),
         cleanup_batch_size=_positive(raw.get("cleanup_batch_size"), "cleanup_batch_size", 100),
+        formal_gc_batch_size=_positive(raw.get("formal_gc_batch_size"), "formal_gc_batch_size", 100),
+        formal_gc_grace_seconds=_nonnegative(raw.get("formal_gc_grace_seconds"), "formal_gc_grace_seconds", 86_400),
         supporting_models=tuple(sorted(supporting_raw.items())),
         ocr_model_map=ocr_model_map,
     )

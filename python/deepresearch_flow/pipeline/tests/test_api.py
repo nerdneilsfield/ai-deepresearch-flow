@@ -941,6 +941,58 @@ def test_disabled_factory_has_no_routes(tmp_path: Path) -> None:
     assert response.status_code == 404
 
 
+def test_legacy_published_warning_retry_returns_actionable_conflict(
+    tmp_path: Path,
+) -> None:
+    app, state, _artifacts = _make_app(tmp_path)
+    job_id = state.create_job()
+    for status in ("running", "review_ready", "publish_queued", "publishing", "indexing", "published_with_warning"):
+        state.admin_transition(job_id, status)
+
+    response = _request(
+        app,
+        "POST",
+        f"/jobs/{job_id}/retry",
+        headers=_headers(),
+        json={},
+    )
+    assert response.status_code == 409
+    assert "republish" in response.json()["error"]["message"]
+    assert state.get_job(job_id)["status"] == "published_with_warning"
+
+
+def test_admin_app_startup_migrates_legacy_preview_before_serving_artifact(
+    tmp_path: Path,
+) -> None:
+    config = PipelineConfig(
+        enabled=True,
+        work_dir=str(tmp_path / "work"),
+        preview_root=str(tmp_path / "previews"),
+        static_root=str(tmp_path / "legacy-static"),
+        queue_db=str(tmp_path / "queue.sqlite3"),
+    )
+    legacy_artifacts = ArtifactStore(config.work_dir, config.static_root)
+    legacy_state = PipelineState(config.queue_db, artifact_store=legacy_artifacts)
+    job_id = legacy_state.create_job()
+    lease = legacy_state.acquire_lease(job_id, "legacy")
+    assert lease is not None
+    old = legacy_artifacts.protect(job_id, "preview_pdf", b"%PDF-1.7 legacy")
+    legacy_state.register_protected_artifact(job_id, "preview_pdf", old, lease.token)
+
+    artifacts = ArtifactStore(config.work_dir, config.preview_root)
+    state = PipelineState(config.queue_db, artifact_store=artifacts)
+    app = create_pipeline_admin_app(
+        config=config,
+        state=state,
+        artifacts=artifacts,
+        admin_token=TOKEN,
+    )
+    response = _request(app, "GET", f"/jobs/{job_id}/artifacts/pdf", headers=_headers())
+    assert response.status_code == 200
+    assert response.content == b"%PDF-1.7 legacy"
+    assert not old.path.exists()
+
+
 def test_snapshot_app_mounts_pipeline_only_when_enabled(tmp_path: Path) -> None:
     config = PipelineConfig(
         enabled=True,

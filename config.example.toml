@@ -206,6 +206,8 @@ hybrid = true
 # heartbeat_seconds = 30
 # validation_retry_limit = 2
 # cleanup_batch_size = 100
+# formal_gc_batch_size = 100              # bounded immutable formal-object GC
+# formal_gc_grace_seconds = 86400         # keep fresh crash leftovers for one day
 #
 # Selectable uploader model keys. Every default must be in its allowlist.
 # [pipeline.models.ocr]
