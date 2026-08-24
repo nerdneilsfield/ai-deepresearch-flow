@@ -11,7 +11,9 @@ from deepresearch_flow.pipeline.artifacts import ArtifactStore
 from deepresearch_flow.pipeline.config import load_pipeline_config
 from deepresearch_flow.pipeline.runtime import (
     WorkerLoopResult,
+    resolve_snapshot_db,
     run_worker_until_stopped,
+    validate_pipeline_mounts,
     validate_pipeline_environment,
 )
 from deepresearch_flow.pipeline.state import PipelineState
@@ -26,6 +28,7 @@ def _config(path: Path, *, enabled: bool) -> Path:
         f"queue_db = {str(root / 'work' / 'queue.sqlite3')!r}\n"
         f"static_root = {str(root / 'formal')!r}\n"
         f"snapshot_root = {str(root / 'snapshot')!r}\n"
+        f"snapshot_db = {str(root / 'snapshot.sqlite3')!r}\n"
         "[pipeline.models.ocr]\n"
         "allowlist = ['ocr/test']\n"
         "default = 'ocr/test'\n"
@@ -67,6 +70,61 @@ def test_pipeline_environment_requires_explicit_consistent_worker_bridge(
 
     with pytest.raises(ValueError, match="disabled"):
         validate_pipeline_environment(disabled_path, {"PAPER_PIPELINE_ENABLED": "1"})
+
+
+def test_pipeline_mount_validator_accepts_persistent_ancestors_and_rejects_root(
+    tmp_path: Path,
+) -> None:
+    private = tmp_path / "private"
+    work = private / "work"
+    previews = private / "previews"
+    work.mkdir(parents=True)
+    previews.mkdir()
+    static = tmp_path / "static"
+    static.mkdir()
+    db = tmp_path / "db"
+    db.mkdir()
+    config_path = tmp_path / "mounts.toml"
+    config_path.write_text(
+        "[pipeline]\n"
+        "enabled = true\n"
+        f"work_dir = {str(work)!r}\n"
+        f"preview_root = {str(previews)!r}\n"
+        f"queue_db = {str(db / 'queue.sqlite3')!r}\n"
+        f"static_root = {str(static)!r}\n"
+        f"snapshot_db = {str(db / 'papers.db')!r}\n"
+        "[pipeline.models.ocr]\nallowlist=['ocr/test']\ndefault='ocr/test'\n"
+        "[pipeline.models.extract]\nallowlist=['extract/test']\ndefault='extract/test'\n"
+        "[pipeline.models.translate]\nallowlist=['translate/test']\ndefault='translate/test'\n",
+        encoding="utf-8",
+    )
+    mountinfo = (
+        "36 29 0:32 / / rw,relatime - overlay overlay rw\n"
+        f"37 36 0:33 / {tmp_path} rw,relatime - ext4 /dev/test rw\n"
+    )
+    validated = validate_pipeline_mounts(
+        config_path,
+        {"PAPER_PIPELINE_REQUIRE_MOUNTS": "1", "PAPER_PIPELINE_MOUNTINFO": mountinfo},
+    )
+    assert validated["work_dir"] == str(work.resolve())
+    assert validated["snapshot_db"] == str((db / "papers.db").resolve())
+
+    with pytest.raises(ValueError, match="persistent mount"):
+        validate_pipeline_mounts(
+            config_path,
+            {
+                "PAPER_PIPELINE_REQUIRE_MOUNTS": "1",
+                "PAPER_PIPELINE_MOUNTINFO": "36 29 0:32 / / rw - overlay overlay rw\n",
+            },
+        )
+
+
+def test_snapshot_db_cli_value_must_match_pipeline_configuration(tmp_path: Path) -> None:
+    config_path = _config(tmp_path / "config.toml", enabled=True)
+    config = load_pipeline_config(config_path)
+    assert resolve_snapshot_db(config) == Path(config.snapshot_db).resolve()
+    with pytest.raises(ValueError, match="snapshot_db"):
+        resolve_snapshot_db(config, tmp_path / "other.db")
 
 
 def test_worker_loop_processes_jobs_persists_heartbeat_and_stops_at_boundary(

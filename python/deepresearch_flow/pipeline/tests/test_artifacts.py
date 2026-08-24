@@ -90,3 +90,36 @@ def test_cleanup_uses_terminal_timestamp_not_directory_mtime(tmp_path: Path) -> 
     os.utime(artifact.path.parent, (1, 1))
     jobs = {"published": {"status": "published", "terminal_at": "2030-01-01T00:00:00+00:00"}}
     assert store.cleanup(jobs, now=datetime(2030, 1, 2, tzinfo=timezone.utc)) == []
+
+
+def test_protected_previews_use_private_root_and_expire_with_work_artifacts(
+    tmp_path: Path,
+) -> None:
+    store = ArtifactStore(
+        tmp_path / "work",
+        tmp_path / "previews",
+        retention_days=1,
+    )
+    static_root = (tmp_path / "static").resolve()
+    static_root.mkdir()
+    job_id = "published"
+    preview = store.protect(job_id, "preview_pdf", b"preview")
+    pending = store.begin(job_id, "ocr")
+    pending.write(b"work")
+    pending.promote()
+    (static_root / "published.pdf").write_bytes(b"formal")
+
+    assert preview.path.is_relative_to(store.preview_root)
+    assert not preview.path.is_relative_to(static_root)
+    assert store.cleanup(
+        {
+            job_id: {
+                "status": "published",
+                "terminal_at": "2020-01-01T00:00:00+00:00",
+            }
+        },
+        now=datetime(2030, 1, 1, tzinfo=timezone.utc),
+    ) == [job_id]
+    assert not preview.path.exists()
+    assert not (store.work_dir / store._job_key(job_id)).exists()
+    assert (static_root / "published.pdf").exists()

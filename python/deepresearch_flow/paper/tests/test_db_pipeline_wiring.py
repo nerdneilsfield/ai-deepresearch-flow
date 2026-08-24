@@ -30,3 +30,9 @@ def test_api_serve_rejects_enabled_pipeline_without_admin_token(tmp_path: Path) 
     config = _pipeline_config(tmp_path / "config.toml", enabled=True)
     with pytest.raises(ValueError, match="PAPER_DB_ADMIN_TOKEN"):
         load_api_pipeline_config(config, "")
+
+
+def test_api_pipeline_loader_rejects_snapshot_path_disagreement(tmp_path: Path) -> None:
+    config = _pipeline_config(tmp_path / "config.toml", enabled=True)
+    with pytest.raises(ValueError, match="snapshot_db"):
+        load_api_pipeline_config(config, "admin-token", snapshot_db=tmp_path / "other.db")

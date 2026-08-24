@@ -14,6 +14,7 @@ import logging
 import os
 from pathlib import Path
 import signal
+import stat
 from threading import Event
 import time
 from typing import Any, Mapping
@@ -51,11 +52,141 @@ class WorkerLoopResult:
     errors: int = 0
 
 
+_TRUE_VALUES = {"1", "true", "yes", "on"}
+_FALSE_VALUES = {"0", "false", "no", "off"}
+
+
+def _decode_mountinfo_path(value: str) -> str:
+    return value.replace("\\040", " ").replace("\\011", "\t").replace("\\134", "\\")
+
+
+def _mount_points(mountinfo: str) -> tuple[Path, ...]:
+    points: list[Path] = []
+    for line in mountinfo.splitlines():
+        left, separator, _right = line.partition(" - ")
+        if not separator:
+            continue
+        fields = left.split()
+        if len(fields) < 5:
+            continue
+        points.append(Path(_decode_mountinfo_path(fields[4])))
+    return tuple(points)
+
+
+def _mounted_under(path: Path, mounts: tuple[Path, ...]) -> bool:
+    candidates = [mount for mount in mounts if path == mount or path.is_relative_to(mount)]
+    return bool(candidates and max(candidates, key=lambda item: len(item.parts)) != Path("/"))
+
+
+def _writable_directory(path: Path) -> bool:
+    try:
+        mode = path.stat().st_mode
+    except OSError:
+        return False
+    writable_bits = stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH
+    return bool(mode & writable_bits) and os.access(path, os.W_OK)
+
+
+def _as_absolute_path(value: str, role: str) -> Path:
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        raise ValueError(f"pipeline {role} path must be absolute")
+    return path.resolve(strict=False)
+
+
+def _validate_directory(path: Path, role: str) -> None:
+    if not path.is_dir() or not _writable_directory(path):
+        raise ValueError(f"pipeline {role} path is missing or not writable")
+
+
+def _validate_database_path(path: Path, role: str) -> None:
+    parent = path.parent
+    if not parent.is_dir() or not _writable_directory(parent):
+        raise ValueError(f"pipeline {role} parent is missing or not writable")
+    if path.exists() and (not path.is_file() or not os.access(path, os.W_OK)):
+        raise ValueError(f"pipeline {role} is not writable")
+
+
+def validate_pipeline_mounts(
+    config_or_path: PipelineConfig | str | Path,
+    environ: Mapping[str, str] | None = None,
+    *,
+    require_mounts: bool | None = None,
+) -> dict[str, str]:
+    """Validate enabled pipeline storage paths and optional container mounts.
+
+    ``PAPER_PIPELINE_REQUIRE_MOUNTS=1`` or Docker runtime enables mount-boundary
+    checks.  ``PAPER_PIPELINE_MOUNTINFO`` is a public test/deployment seam; in
+    production the kernel mount table is read.  Errors identify only logical
+    roles, never credentials or raw operational paths.
+    """
+
+    env = os.environ if environ is None else environ
+    config = (
+        load_pipeline_config(config_or_path)
+        if isinstance(config_or_path, (str, Path))
+        else config_or_path
+    )
+    if not config.enabled:
+        return {}
+    values = {
+        "work_dir": _as_absolute_path(config.work_dir, "work_dir"),
+        "preview_root": _as_absolute_path(config.preview_root, "preview_root"),
+        "queue_db": _as_absolute_path(config.queue_db, "queue_db"),
+        "static_root": _as_absolute_path(config.static_root, "static_root"),
+        "snapshot_db": _as_absolute_path(config.snapshot_db, "snapshot_db"),
+    }
+    for role in ("work_dir", "preview_root", "static_root"):
+        _validate_directory(values[role], role)
+    _validate_database_path(values["queue_db"], "queue_db")
+    _validate_database_path(values["snapshot_db"], "snapshot_db")
+    roots = (values["work_dir"], values["preview_root"], values["static_root"])
+    for index, left in enumerate(roots):
+        for right in roots[index + 1 :]:
+            if left == right or left.is_relative_to(right) or right.is_relative_to(left):
+                raise ValueError("pipeline storage roots must be physically separate")
+
+    raw_force = str(env.get("PAPER_PIPELINE_REQUIRE_MOUNTS", "")).strip().lower()
+    if raw_force and raw_force not in _TRUE_VALUES | _FALSE_VALUES:
+        raise ValueError("PAPER_PIPELINE_REQUIRE_MOUNTS must be 0 or 1")
+    in_docker = str(env.get("PAPER_PIPELINE_DOCKER", "")).strip().lower() in _TRUE_VALUES
+    in_docker = in_docker or Path("/.dockerenv").exists() or bool(env.get("container"))
+    enforce_mounts = (
+        raw_force in _TRUE_VALUES if require_mounts is None else bool(require_mounts)
+    ) or in_docker
+    if enforce_mounts:
+        supplied = env.get("PAPER_PIPELINE_MOUNTINFO")
+        try:
+            mountinfo = supplied if supplied is not None else Path("/proc/self/mountinfo").read_text()
+        except OSError as exc:
+            raise ValueError("pipeline persistent mount information is unavailable") from exc
+        mounts = _mount_points(mountinfo)
+        for role, path in values.items():
+            target = path if path.exists() else path.parent
+            if not _mounted_under(target, mounts):
+                raise ValueError(f"pipeline {role} is not on a persistent mount")
+    return {role: str(path) for role, path in values.items()}
+
+
+def resolve_snapshot_db(
+    config: PipelineConfig, requested: str | Path | None = None
+) -> Path:
+    """Resolve one Snapshot path and reject CLI/env/config disagreement."""
+    configured = Path(config.snapshot_db).expanduser().resolve()
+    if requested is None:
+        return configured
+    candidate = Path(requested).expanduser().resolve()
+    if candidate != configured:
+        raise ValueError("snapshot_db CLI value must match pipeline configuration")
+    return configured
+
+
 def validate_pipeline_environment(
     config_path: str | Path,
     environ: Mapping[str, str] | None = None,
     *,
     require_runtime_files: bool = True,
+    require_runtime_storage: bool | None = None,
 ) -> PipelineEnvironment:
     """Validate deployment bridge without mutating state or revealing secrets.
 
@@ -92,7 +223,11 @@ def validate_pipeline_environment(
             raise ValueError("PAPER_DB_ADMIN_TOKEN is required when pipeline is enabled")
         ocr_config = str(env.get("PAPER_OCR_CONFIG", "ocr.toml")).strip()
         if require_runtime_files and not Path(ocr_config).is_file():
-            raise ValueError(f"OCR config file not found: {ocr_config}")
+            raise ValueError("OCR config file is missing")
+        if require_runtime_storage is None:
+            require_runtime_storage = require_runtime_files
+        if require_runtime_storage:
+            validate_pipeline_mounts(config, env)
     return PipelineEnvironment(config, config.enabled, worker_enabled)
 
 
@@ -141,18 +276,21 @@ def run_worker_until_stopped(
             paper_config_path=paper_config_path,
             ocr_config_path=ocr_config_path,
             worker_id=worker_name,
+            stop_requested=stop.is_set,
         )
     publication = publication_worker
     closeables: list[Any] = []
     if publication is None and snapshot_db is not None:
+        resolved_snapshot_db = resolve_snapshot_db(config, snapshot_db)
         publication, closeables = _build_production_publication_worker(
             config,
             state,
             artifacts,
-            snapshot_db=Path(snapshot_db),
+            snapshot_db=resolved_snapshot_db,
             vector_dir=Path(vector_dir) if vector_dir is not None else None,
             paper_config_path=paper_config_path,
             worker_id=worker_name,
+            stop_requested=stop.is_set,
         )
 
     cycles = processed = published = recovered = cleaned = errors = 0
@@ -184,7 +322,9 @@ def run_worker_until_stopped(
             now = time.monotonic()
             if cleanup_interval_seconds == 0 or now >= next_cleanup:
                 try:
-                    cleaned += len(state.cleanup_expired_artifacts())
+                    cleaned += len(
+                        state.cleanup_expired_artifacts(limit=config.cleanup_batch_size)
+                    )
                 except Exception:
                     errors += 1
                     LOGGER.exception("pipeline cleanup cycle failed")
@@ -238,6 +378,7 @@ def _build_production_publication_worker(
     vector_dir: Path | None,
     paper_config_path: str | Path | None,
     worker_id: str,
+    stop_requested: Any | None = None,
 ) -> tuple[PublicationWorker, list[Any]]:
     closeables: list[Any] = []
     if config.webdav_url:
@@ -278,6 +419,7 @@ def _build_production_publication_worker(
             bundle_builder=bundle_builder,
             indexer=indexer,
             worker_id=worker_id,
+            stop_requested=stop_requested,
         ),
         closeables,
     )
@@ -317,7 +459,7 @@ def _bundle_from_state(
             path,
             str(row.get("digest", "")),
             int(row.get("size", 0)),
-            artifacts.formal_root,
+            artifacts.preview_root,
             path.parent,
         )
         artifacts.validate_protected_artifact(artifact, job_id, kind)
@@ -353,9 +495,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--ocr-config", default=os.environ.get("PAPER_OCR_CONFIG", "ocr.toml")
     )
-    parser.add_argument(
-        "--snapshot-db", default=os.environ.get("PAPER_DB_SNAPSHOT_DB", "/db/papers.db")
-    )
+    parser.add_argument("--snapshot-db", default=os.environ.get("PAPER_DB_SNAPSHOT_DB"))
     parser.add_argument("--vector-dir", default=os.environ.get("PAPER_DB_EMBED_DB"))
     parser.add_argument("--worker-id", default=os.environ.get("PAPER_PIPELINE_WORKER_ID"))
     return parser.parse_args(argv)
@@ -369,9 +509,10 @@ def main(argv: list[str] | None = None) -> int:
     if not environment.worker_enabled:
         raise ValueError("pipeline Worker requires PAPER_PIPELINE_ENABLED=1")
     config = environment.config
+    snapshot_db = resolve_snapshot_db(config, args.snapshot_db)
     artifacts = ArtifactStore(
         config.work_dir,
-        config.static_root,
+        config.preview_root,
         retention_days=config.retention_days,
     )
     state = PipelineState(
@@ -394,7 +535,7 @@ def main(argv: list[str] | None = None) -> int:
         artifacts,
         paper_config_path=args.config,
         ocr_config_path=args.ocr_config,
-        snapshot_db=args.snapshot_db,
+        snapshot_db=snapshot_db,
         vector_dir=args.vector_dir,
         worker_id=args.worker_id,
         stop_event=stop,
@@ -412,5 +553,7 @@ __all__ = [
     "WorkerLoopResult",
     "run_production_worker_forever",
     "run_worker_until_stopped",
+    "resolve_snapshot_db",
+    "validate_pipeline_mounts",
     "validate_pipeline_environment",
 ]

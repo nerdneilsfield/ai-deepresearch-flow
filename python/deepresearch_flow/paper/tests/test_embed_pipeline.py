@@ -19,7 +19,7 @@ from deepresearch_flow.paper.config import (
     DEFAULT_EXTRACT,
     DEFAULT_RENDER,
 )
-from deepresearch_flow.paper.embed_pipeline import run_embed_pipeline
+from deepresearch_flow.paper.embed_pipeline import run_embed_pipeline, select_orphan_group_keys
 from deepresearch_flow.paper.vector_store import (
     _reset_ensured_scalar_index_cache,
     load_index_meta,
@@ -143,6 +143,23 @@ def test_pipeline_creates_index_meta(tmp_path: Path, monkeypatch) -> None:
     )
 
     assert (vector_dir / "index_meta.json").exists()
+
+
+def test_filtered_rebuild_removes_selected_stale_group_and_preserves_other_paper() -> None:
+    existing = {
+        ("paper-a", "simple"),
+        ("paper-b", "simple"),
+    }
+    source = {
+        ("paper-a", "deep_read"),
+    }
+
+    assert select_orphan_group_keys(existing, source, ("paper-a",)) == {
+        ("paper-a", "simple")
+    }
+    assert ("paper-b", "simple") not in select_orphan_group_keys(
+        existing, source, ("paper-a",)
+    )
 
 
 def test_pipeline_incremental_skips_unchanged(tmp_path: Path, monkeypatch) -> None:

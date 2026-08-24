@@ -69,9 +69,11 @@ class PipelineConfig:
     bibtex_max_bytes: int = 1024 * 1024
     max_concurrent_jobs: int = 2
     retention_days: int = 7
-    work_dir: str = "pipeline-work"
+    work_dir: str = "pipeline-work/work"
+    preview_root: str = "pipeline-work/previews"
     queue_db: str = "pipeline-work/queue.sqlite3"
     snapshot_root: str = "pipeline-snapshots"
+    snapshot_db: str = "pipeline-snapshots/papers.db"
     static_root: str = "pipeline-static"
     webdav_url: str | None = None
     ocr: ModelAllowlist = field(default_factory=ModelAllowlist)
@@ -82,6 +84,7 @@ class PipelineConfig:
     lease_seconds: int = 300
     heartbeat_seconds: int = 30
     validation_retry_limit: int = 2
+    cleanup_batch_size: int = 100
     supporting_models: tuple[tuple[str, str], ...] = ()
     ocr_model_map: tuple[tuple[str, str], ...] = ()
 
@@ -192,6 +195,30 @@ def load_pipeline_config(path: str | Path) -> PipelineConfig:
         groups = (("ocr", ocr_allowed, ocr_default), ("extract", extract_allowed, extract_default), ("translate", translate_allowed, translate_default))
         if any(not allowed or default is None for _, allowed, default in groups):
             raise ValueError("pipeline model allowlist and default are required when enabled")
+    work_dir = _path(raw.get("work_dir"), "pipeline-work/work")
+    preview_raw = raw.get("preview_root", raw.get("preview_dir"))
+    if preview_raw is None:
+        work_path = Path(work_dir)
+        preview_raw = str(
+            work_path.parent / "previews" if work_path.name == "work" else Path(f"{work_dir}-previews")
+        )
+    snapshot_legacy = raw.get("snapshot_root", raw.get("snapshot_dir"))
+    snapshot_db_raw = raw.get("snapshot_db")
+    if snapshot_db_raw is None:
+        if snapshot_legacy is None:
+            snapshot_db_raw = "pipeline-snapshots/papers.db"
+        else:
+            legacy_path = Path(str(snapshot_legacy))
+            snapshot_db_raw = str(
+                legacy_path
+                if legacy_path.suffix.lower() in {".db", ".sqlite", ".sqlite3"}
+                else legacy_path / "papers.db"
+            )
+    snapshot_db = _path(snapshot_db_raw, "pipeline-snapshots/papers.db")
+    snapshot_root = _path(
+        snapshot_legacy,
+        str(Path(snapshot_db).parent),
+    )
     return PipelineConfig(
         enabled=enabled,
         pdfs_per_batch=_positive(raw.get("pdfs_per_batch"), "pdfs_per_batch", 20),
@@ -200,9 +227,11 @@ def load_pipeline_config(path: str | Path) -> PipelineConfig:
         bibtex_max_bytes=_positive(raw.get("bibtex_max_bytes"), "bibtex_max_bytes", 1024 * 1024),
         max_concurrent_jobs=_positive(raw.get("max_concurrent_jobs"), "max_concurrent_jobs", 2),
         retention_days=_positive(raw.get("retention_days"), "retention_days", 7),
-        work_dir=_path(raw.get("work_dir"), "pipeline-work"),
+        work_dir=work_dir,
+        preview_root=_path(preview_raw, "pipeline-work/previews"),
         queue_db=_path(raw.get("queue_db"), "pipeline-work/queue.sqlite3"),
-        snapshot_root=_path(raw.get("snapshot_root", raw.get("snapshot_dir")), "pipeline-snapshots"),
+        snapshot_root=snapshot_root,
+        snapshot_db=snapshot_db,
         static_root=_path(raw.get("static_root"), "pipeline-static"),
         webdav_url=raw.get("webdav_url"),
         ocr=ModelAllowlist(ocr_allowed, ocr_default),
@@ -213,6 +242,7 @@ def load_pipeline_config(path: str | Path) -> PipelineConfig:
         lease_seconds=_positive(raw.get("lease_seconds", raw.get("lease_duration_seconds")), "lease_seconds", 300),
         heartbeat_seconds=_positive(raw.get("heartbeat_seconds", raw.get("heartbeat_interval_seconds")), "heartbeat_seconds", 30),
         validation_retry_limit=_positive(raw.get("validation_retry_limit"), "validation_retry_limit", 2),
+        cleanup_batch_size=_positive(raw.get("cleanup_batch_size"), "cleanup_batch_size", 100),
         supporting_models=tuple(sorted(supporting_raw.items())),
         ocr_model_map=ocr_model_map,
     )

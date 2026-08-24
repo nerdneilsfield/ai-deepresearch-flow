@@ -17,9 +17,18 @@ def _executable(path: Path, body: str) -> Path:
 
 
 def _pipeline_config(path: Path, *, enabled: bool) -> Path:
+    work = path.parent / "work"
+    previews = path.parent / "previews"
+    static = path.parent / "static"
+    work.mkdir(exist_ok=True)
+    previews.mkdir(exist_ok=True)
+    static.mkdir(exist_ok=True)
     path.write_text(
         "[pipeline]\n"
         f"enabled = {'true' if enabled else 'false'}\n"
+        f"work_dir={str(work)!r}\npreview_root={str(previews)!r}\n"
+        f"queue_db={str(path.parent / 'queue.sqlite3')!r}\n"
+        f"static_root={str(static)!r}\nsnapshot_db={str(path.parent / 'papers.db')!r}\n"
         "[pipeline.models.ocr]\nallowlist=['ocr/test']\ndefault='ocr/test'\n"
         "[pipeline.models.extract]\nallowlist=['extract/test']\ndefault='extract/test'\n"
         "[pipeline.models.translate]\nallowlist=['translate/test']\ndefault='translate/test'\n",
@@ -54,6 +63,9 @@ def test_start_nginx_renders_default_and_custom_body_limit_without_work_alias(
     rendered = output.read_text(encoding="utf-8")
     assert "client_max_body_size 500m;" in rendered
     assert "proxy_read_timeout 1800s;" in rendered
+    assert rendered.count("location ^~ /api/v1/admin/pipeline") == 1
+    assert rendered.count("proxy_request_buffering off;") == 1
+    assert rendered.count("proxy_read_timeout 300s;") >= 1
     assert "pipeline-work" not in rendered
 
     env["PAPER_DB_NGINX_BODY_LIMIT"] = "64m"
@@ -66,7 +78,11 @@ def test_start_nginx_renders_default_and_custom_body_limit_without_work_alias(
         text=True,
     )
     assert result.returncode == 0, result.stderr
-    assert "client_max_body_size 64m;" in output.read_text(encoding="utf-8")
+    rendered = output.read_text(encoding="utf-8")
+    assert "client_max_body_size 64m;" in rendered
+    assert rendered.count("location ^~ /api/v1/admin/pipeline") == 1
+    assert rendered.count("proxy_request_buffering off;") == 1
+    assert rendered.count("proxy_read_timeout 300s;") >= 1
 
 
 def test_start_nginx_rejects_invalid_body_limit(tmp_path: Path) -> None:

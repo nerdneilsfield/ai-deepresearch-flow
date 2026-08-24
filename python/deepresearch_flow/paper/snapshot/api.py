@@ -1575,7 +1575,7 @@ def create_app(
         if pipeline_artifacts is None:
             pipeline_artifacts = ArtifactStore(
                 pipeline_config.work_dir,
-                pipeline_config.static_root,
+                pipeline_config.preview_root,
                 retention_days=pipeline_config.retention_days,
             )
         if pipeline_state is None:

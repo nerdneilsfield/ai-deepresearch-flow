@@ -31,6 +31,7 @@ class PublicationWorker:
         bundle_builder: Callable[[str], PublicationBundle],
         indexer: Callable[[PublicationBundle], Any] | None = None,
         worker_id: str = "pipeline-publisher",
+        stop_requested: Callable[[], bool] | None = None,
     ) -> None:
         self.state = state
         self.snapshot_db = Path(snapshot_db)
@@ -38,6 +39,7 @@ class PublicationWorker:
         self.bundle_builder = bundle_builder
         self.indexer = indexer
         self.worker_id = worker_id
+        self.stop_requested = stop_requested or (lambda: False)
 
     def run_job(self, job_id: str) -> PublicationWorkerResult:
         try:
@@ -181,7 +183,12 @@ class PublicationWorker:
             if job_ids is not None
             else self.state.list_job_ids({"publish_queued", "indexing"})
         )
-        return [self.run_job(job_id) for job_id in ids]
+        results: list[PublicationWorkerResult] = []
+        for job_id in ids:
+            if self.stop_requested():
+                break
+            results.append(self.run_job(job_id))
+        return results
 
     run = run_once
 

@@ -395,6 +395,44 @@ def test_publication_worker_commits_receipt_before_index_and_reports_warning(tmp
         conn.close()
 
 
+def test_publication_worker_stops_after_current_job_without_claiming_next(
+    tmp_path: Path,
+) -> None:
+    from deepresearch_flow.pipeline import ArtifactStore, PipelineState
+
+    artifacts = ArtifactStore(tmp_path / "work", tmp_path / "previews")
+    state = PipelineState(tmp_path / "queue.sqlite3", artifact_store=artifacts)
+    jobs: list[str] = []
+    bundles: dict[str, PublicationBundle] = {}
+    for title in ("First paper", "Second paper"):
+        job_id = state.create_job()
+        state.admin_transition(job_id, "running")
+        state.admin_transition(job_id, "review_ready")
+        queue_publication(state, job_id, int(state.get_job(job_id)["revision"]))
+        jobs.append(job_id)
+        bundles[job_id] = _bundle(tmp_path, job_id=job_id, title=title)
+    stop = Event()
+
+    class StopAfterCurrent(LocalFormalStore):
+        def put(self, relative_path: str, data: bytes) -> None:
+            super().put(relative_path, data)
+            stop.set()
+
+    worker = PublicationWorker(
+        state,
+        tmp_path / "snapshot.sqlite3",
+        StopAfterCurrent(tmp_path / "formal"),
+        bundle_builder=lambda job_id: bundles[job_id],
+        stop_requested=stop.is_set,
+    )
+
+    results = worker.run_once()
+
+    assert len(results) == 1
+    assert state.get_job(jobs[0])["status"] == "published"
+    assert state.get_job(jobs[1])["status"] == "publish_queued"
+
+
 def test_expired_publication_lease_requeues_and_receipt_retry_indexes_only(tmp_path: Path) -> None:
     from deepresearch_flow.pipeline import ArtifactStore, PipelineState
 

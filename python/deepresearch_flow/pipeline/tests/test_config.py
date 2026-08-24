@@ -18,6 +18,7 @@ def test_missing_pipeline_section_is_disabled_with_safe_defaults(tmp_path: Path)
     assert config.bibtex_max_bytes == 1024 * 1024
     assert config.max_concurrent_jobs == 2
     assert config.retention_days == 7
+    assert config.cleanup_batch_size == 100
 
 
 def test_pipeline_models_must_be_in_allowlists(tmp_path: Path) -> None:
@@ -76,6 +77,8 @@ work_dir = "/srv/work"
 queue_db = "/srv/queue.db"
 snapshot_root = "/srv/snapshots"
 static_root = "/srv/static"
+preview_root = "/srv/previews"
+snapshot_db = "/srv/papers.db"
 webdav_url = "https://dav.example.test/library"
 [pipeline.models.ocr]
 allowlist = ["ocr-a", "ocr-b"]
@@ -94,6 +97,8 @@ default = "translate-a"
 
     assert config.work_dir == "/srv/work"
     assert config.queue_db == "/srv/queue.db"
+    assert config.preview_root == "/srv/previews"
+    assert config.snapshot_db == "/srv/papers.db"
     assert config.ocr.default == "ocr-b"
     assert config.translation_language == "zh-Hant"
     assert config.public_snapshot()["webdav_url"] == "https://dav.example.test/library"
@@ -114,8 +119,9 @@ def test_commented_config_example_can_be_enabled_and_loaded_by_public_loader(
         "retention_days =",
         "work_dir =",
         "queue_db =",
-        "snapshot_root =",
         "static_root =",
+        "preview_root =",
+        "snapshot_db =",
         "webdav_url =",
         "extract_templates =",
         "translation_language =",
@@ -155,6 +161,8 @@ def test_commented_config_example_can_be_enabled_and_loaded_by_public_loader(
     assert config.enabled is True
     assert config.ocr.default == "paddle/default"
     assert config.ocr_model_map == (("paddle", "PaddleOCR-VL-1.6"),)
+    assert config.preview_root == "/data/pipeline-work/previews"
+    assert config.snapshot_db == "/db/papers.db"
 
 
 def test_enabled_pipeline_requires_complete_nonempty_model_allowlists(tmp_path: Path) -> None:

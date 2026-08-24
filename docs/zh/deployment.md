@@ -372,9 +372,11 @@ docker compose -f scripts/docker/docker-compose.example.yml --profile local-stat
 ```toml
 [pipeline]
 enabled = true
-work_dir = "/data/pipeline-work"
+work_dir = "/data/pipeline-work/work"
+preview_root = "/data/pipeline-work/previews"
 queue_db = "/data/pipeline-work/queue.sqlite3"
-static_root = "/data/pipeline-static"
+snapshot_db = "/db/papers.db"
+static_root = "/static"
 ```
 
 完整注释例见 `config.example.toml`，含上传限制、OCR/Extract/Translate
@@ -386,22 +388,30 @@ WebDAV 密码须用环境变量或容器 secret，勿写入 TOML。
 部署镜像启用时设置：
 
 ```bash
--e PAPER_DB_CONFIG=/app/config.toml \
--e PAPER_OCR_CONFIG=/app/ocr.toml \
--e PAPER_DB_ADMIN_TOKEN="$(openssl rand -hex 32)" \
--e PAPER_PIPELINE_ENABLED=1 \
--v "$(pwd)/config.toml:/app/config.toml:ro" \
--v "$(pwd)/ocr.toml:/app/ocr.toml:ro" \
--v "$(pwd)/pipeline-work:/data/pipeline-work" \
--v "$(pwd)/pipeline-static:/data/pipeline-static"
+mkdir -p pipeline-work/work pipeline-work/previews pipeline-static
+touch paper_snapshot.db
+docker run --rm -p 127.0.0.1:8899:8899 \
+  -e PAPER_DB_CONFIG=/app/config.toml \
+  -e PAPER_OCR_CONFIG=/app/ocr.toml \
+  -e PAPER_DB_ADMIN_TOKEN="$(openssl rand -hex 32)" \
+  -e PAPER_PIPELINE_ENABLED=1 \
+  -e PAPER_DB_SNAPSHOT_DB=/db/papers.db \
+  -v "$(pwd)/config.toml:/app/config.toml:ro" \
+  -v "$(pwd)/ocr.toml:/app/ocr.toml:ro" \
+  -v "$(pwd)/pipeline-work:/data/pipeline-work" \
+  -v "$(pwd)/pipeline-static:/static" \
+  -v "$(pwd)/paper_snapshot.db:/db/papers.db" \
+  ghcr.io/nerdneilsfield/deepresearch-flow:deploy-latest
 ```
 
-API 与 Worker 共用 `PAPER_DB_CONFIG`、queue DB、work root、Snapshot DB、正式
-static root。`PAPER_PIPELINE_ENABLED=1` 仅控制 Supervisor 是否物化 Worker，
-不能把 TOML 中关闭的 pipeline 偷开；两者不一致即 fail closed。TOML 开启时
-必须提供 `PAPER_DB_ADMIN_TOKEN`。`pipeline-work` 必须私有，内含上传原件和中间
-产物，绝不作为 Nginx alias。预览只能由受保护 Admin artifact API 读取，不进入
-`/static`。
+API 与 Worker 共用 `PAPER_DB_CONFIG`、queue DB、work root、preview root、Snapshot
+DB、正式 static root。`PAPER_PIPELINE_ENABLED=1` 仅控制 Supervisor 是否物化
+Worker，不能把 TOML 中关闭的 pipeline 偷开；两者不一致即 fail closed。TOML 开启时
+必须提供 `PAPER_DB_ADMIN_TOKEN`。启动会验证 work、preview、queue、Snapshot 与
+`/static` 路径为绝对、可写；Docker 中还须位于非 root 的持久挂载边界。启动前先
+创建 `work/` 与 `previews/`；持久挂载缺失即拒绝启动。`pipeline-work` 必须私有，
+内含上传原件、中间产物和受保护预览，绝不作为 Nginx alias。预览只能由受保护
+Admin artifact API 读取，不进入 `/static`；正式 local 输出只写入 `/static`。
 
 Nginx 默认允许 `500m` multipart 上传；可用经校验的 `1g` 等值设置
 `PAPER_DB_NGINX_BODY_LIMIT`。Admin pipeline location 使用较长上传/预览 timeout。
@@ -409,21 +419,26 @@ Nginx 默认允许 `500m` multipart 上传；可用经校验的 `1g` 等值设�
 
 Supervisor 仅在桥接变量与 TOML 一致时启动一个持久 Worker。Worker 轮询处理与
 待发布任务，使用 SQLite WAL lease，持续写 idle/active heartbeat；重启后恢复过期
-的 `running`/`publishing`/`indexing` lease，收到 `TERM` 则在处理步骤边界停止。
-Admin config 根据 heartbeat 年龄报告 `online`、`degraded` 或 `offline`。逐篇查看
+的 `running`/`publishing`/`indexing` lease，收到 `TERM` 则在处理步骤边界停止。正在
+进行的远端处理调用可能完成；其 checkpoint 会提交，lease 原子重排队，且不再领取
+下一篇。不可逆发布可能完成，随后停止轮询，不再领取下一篇。Admin config 根据
+heartbeat 年龄报告 `online`、`degraded` 或 `offline`。逐篇查看
 受保护 PDF/source/summary/translation；处理 BibTeX 歧义（或明确选择无 BibTeX），
 再执行 retry、reject、publish 或批量发布。发布带 revision CAS，旧页面会收到冲突。
 
-`published`、`published_with_warning`、`rejected`、`cancelled` 终态中间产物默认
-保留七日。清理不删除正式发布资源、失败/待审核任务或 WebDAV 对象。若需立即丢弃
-终态上传，先用受保护 Admin 操作确认状态，再执行有界清理（或只删除该 UUID work
-目录）；勿手删正式 static root。
+`published`、`published_with_warning`、`rejected`、`cancelled` 终态 work 与 preview
+中间产物默认保留七日；清理按批次执行，不删除正式发布资源、失败/待审核任务或
+WebDAV 对象。若需立即丢弃终态上传，先用受保护 Admin 操作确认状态，再执行有界
+清理（或只删除该 UUID 的 private `work/` 与 `previews/` 目录）；勿手删正式
+static root。
 
 发布先向本地正式目录或 WebDAV 幂等写入 content-addressed 文件，再写 Snapshot
-publication receipt，最后增量更新 LanceDB；WebDAV 上传成功即足够，不强制 HEAD。
-receipt 写入后若进程崩溃，重启会安全续跑。Embedding 失败时论文仍保留，状态为
-`published_with_warning`；修复向量配置后可只重试 indexing，不重复发布 Snapshot/静态资源。
-正式 local/WebDAV 资源与私有 pipeline work 分离，首版不自动回收正式文件。
+publication receipt，最后增量更新 LanceDB；WebDAV 当前 bundle 的资源会先暂存到
+private 临时目录，仅加载/更新当前论文，索引完成即清理。WebDAV 上传成功即足够，
+不强制 HEAD。receipt 写入后若进程崩溃，重启会安全续跑。Embedding 失败时论文仍
+保留，状态为 `published_with_warning`；修复向量配置后可只重试 indexing，不重复
+发布 Snapshot/静态资源。正式 local/WebDAV 资源与私有 pipeline work 分离，首版不
+自动回收正式文件。
 
 禁用/回滚：停止容器，取消设置或设 `PAPER_PIPELINE_ENABLED=0`，并将
 `[pipeline].enabled = false`。既有公开检索/API 与 CLI Snapshot 行为不变。恢复时

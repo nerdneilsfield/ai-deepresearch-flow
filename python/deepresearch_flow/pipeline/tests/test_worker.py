@@ -7,6 +7,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
+from threading import Event
 from types import SimpleNamespace
 from typing import Any, cast, override
 
@@ -111,6 +112,33 @@ def test_worker_runs_fixed_steps_and_emits_protected_preview(tmp_path: Path) -> 
     assert result.preview.pdf.read_bytes().startswith(b"%PDF-")
     assert state.step_artifact(job_id, "preview") is not None
     assert state.get_job(job_id)["preview_digest"] == result.preview_digest
+
+
+def test_worker_stop_requeues_after_completed_step_and_keeps_checkpoint(
+    tmp_path: Path,
+) -> None:
+    config, state, artifacts, job_id = _setup(tmp_path)
+    stop = Event()
+
+    class StopAfterOcr(FakeAdapters):
+        def ocr(self, pdf_path: Path, model_key: str) -> str:
+            result = super().ocr(pdf_path, model_key)
+            stop.set()
+            return result
+
+    result = PipelineWorker(
+        config,
+        state,
+        artifacts,
+        adapters=StopAfterOcr(),
+        worker_id="stop-worker",
+        stop_requested=stop.is_set,
+    ).run_job(job_id)
+
+    assert result.status == "queued"
+    assert state.get_job(job_id)["status"] == "queued"
+    assert state.step_artifact(job_id, "ocr") is not None
+    assert state.step_artifact(job_id, "source_repair") is None
 
 
 def test_worker_failure_is_public_safe_and_retry_resumes_failed_step(tmp_path: Path) -> None:

@@ -570,20 +570,48 @@ class PipelineState:
             return None
         return {"worker_id": str(row["worker_id"]), "at": str(row["at"])}
 
-    def cleanup_expired_artifacts(self, now: datetime | None = None) -> list[str]:
+    def cleanup_expired_artifacts(
+        self, now: datetime | None = None, *, limit: int | None = None
+    ) -> list[str]:
         """Remove only expired terminal work artifacts through bound store."""
         if self.artifact_store is None:
             return []
+        if limit is not None and limit <= 0:
+            raise ValueError("cleanup limit must be positive")
         with self._connect() as db:
             rows = db.execute(
                 "SELECT id,status,terminal_at FROM jobs "
-                "WHERE status IN ('published','published_with_warning','rejected','cancelled')"
+                "WHERE status IN ('published','published_with_warning','rejected','cancelled') "
+                "ORDER BY terminal_at,id"
+                + (" LIMIT ?" if limit is not None else ""),
+                ((int(limit),) if limit is not None else ()),
             ).fetchall()
         jobs = {
             str(row["id"]): {"status": str(row["status"]), "terminal_at": row["terminal_at"]}
             for row in rows
         }
-        return self.artifact_store.cleanup(jobs, now=now)
+        removed = self.artifact_store.cleanup(jobs, now=now, limit=limit)
+        if removed:
+            with self._connect() as db:
+                db.executemany("DELETE FROM heartbeats WHERE job_id=?", ((job_id,) for job_id in removed))
+                db.commit()
+        return removed
+
+    def requeue_after_shutdown(self, job_id: str, lease_token: str) -> str:
+        """Atomically release a processing lease while retaining checkpoints."""
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = self._check_token(db, job_id, lease_token)
+            if str(row["status"]) != "running":
+                db.rollback()
+                raise LeaseError("shutdown requeue requires a running processing job")
+            db.execute(
+                "UPDATE jobs SET status='queued',terminal_at=NULL,lease_owner=NULL,"
+                "lease_token=NULL,lease_expires_at=NULL,updated_at=?,revision=revision+1 WHERE id=?",
+                (_stamp(_utc()), job_id),
+            )
+            db.commit()
+        return "queued"
 
     def list_job_ids(self, statuses: set[str] | frozenset[str] | None = None) -> list[str]:
         """List jobs for Supervisor scheduling in stable creation order."""
@@ -974,7 +1002,7 @@ class PipelineState:
                     path,
                     str(item.get("digest") or ""),
                     int(item.get("size") or 0),
-                    self.artifact_store.formal_root,
+                    self.artifact_store.work_dir if kind == "preview" else self.artifact_store.preview_root,
                 )
                 if kind == "preview":
                     self.artifact_store.validate_artifact(artifact, job_id, kind)
@@ -1055,7 +1083,7 @@ class PipelineState:
                 if not isinstance(tracked, Artifact) or tracked.job_id != job_id:
                     continue
                 try:
-                    if tracked.root is None or Path(tracked.root).resolve() != self.artifact_store.formal_root:
+                    if tracked.root is None or Path(tracked.root).resolve() != self.artifact_store.preview_root:
                         continue
                     self.artifact_store.validate_protected_artifact(
                         tracked, job_id, tracked.kind
@@ -1082,7 +1110,7 @@ class PipelineState:
                 raise ValueError("preview regenerator returned invalid artifact metadata")
             if artifact.kind not in _PREVIEW_PROTECTED_KINDS or artifact.job_id != job_id:
                 raise ValueError("preview artifact ownership or kind is invalid")
-            if artifact.root is None or Path(artifact.root).resolve() != self.artifact_store.formal_root:
+            if artifact.root is None or Path(artifact.root).resolve() != self.artifact_store.preview_root:
                 raise ValueError("preview artifact root is invalid")
             self.artifact_store.validate_protected_artifact(artifact, job_id, artifact.kind)
             actual_path = artifact.path.resolve()
@@ -1212,7 +1240,7 @@ class PipelineState:
             if artifact.kind not in _PREVIEW_PROTECTED_KINDS or artifact.root is None:
                 continue
             try:
-                if Path(artifact.root).resolve() != self.artifact_store.formal_root:
+                if Path(artifact.root).resolve() != self.artifact_store.preview_root:
                     continue
                 self.artifact_store.validate_protected_artifact(artifact, job_id, artifact.kind)
                 actual = artifact.path.resolve()

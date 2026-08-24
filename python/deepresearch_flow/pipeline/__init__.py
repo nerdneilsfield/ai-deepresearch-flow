@@ -99,6 +99,8 @@ from .runtime import (
     WorkerLoopResult,
     run_production_worker_forever,
     run_worker_until_stopped,
+    resolve_snapshot_db,
+    validate_pipeline_mounts,
     validate_pipeline_environment,
 )
 
@@ -124,5 +126,7 @@ __all__ += [
     "WorkerLoopResult",
     "run_production_worker_forever",
     "run_worker_until_stopped",
+    "resolve_snapshot_db",
+    "validate_pipeline_mounts",
     "validate_pipeline_environment",
 ]

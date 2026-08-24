@@ -291,6 +291,35 @@ def test_load_from_snapshot_reads_source_and_translation(tmp_path: Path) -> None
     assert doc.translations == {"ja": "snapshot translation"}
 
 
+def test_load_from_snapshot_selects_only_requested_paper_ids(tmp_path: Path) -> None:
+    snapshot_db = tmp_path / "snapshot.db"
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    conn = sqlite3.connect(snapshot_db)
+    try:
+        init_snapshot_db(conn)
+        for index, paper_id in enumerate(("paper-1", "paper-2")):
+            conn.execute(
+                """
+                INSERT INTO paper (
+                  paper_id, paper_key, paper_key_type, title, year, month,
+                  publication_date, venue, preferred_summary_template,
+                  summary_preview, paper_index
+                ) VALUES (?, ?, 'paper_id', ?, '2024', '', '2024', '', 'simple', '', ?)
+                """,
+                (paper_id, paper_id, paper_id, index),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    selected = load_from_snapshot(snapshot_db, static_dir, paper_ids=("paper-2",))
+    empty = load_from_snapshot(snapshot_db, static_dir, paper_ids=())
+
+    assert [document.doc_id for document in selected] == ["paper-2"]
+    assert empty == []
+
+
 def test_load_from_snapshot_ignores_traversal_in_legacy_summary_keys(
     tmp_path: Path,
 ) -> None:

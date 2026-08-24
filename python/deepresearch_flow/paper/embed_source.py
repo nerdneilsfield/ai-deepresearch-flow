@@ -314,18 +314,35 @@ def _parse_snapshot_year(value: Any) -> int:
 def load_from_snapshot(
     snapshot_db: Path,
     static_export_dir: Path,
+    *,
+    paper_ids: Iterable[str] | None = None,
 ) -> list[EmbedDocument]:
     conn = sqlite3.connect(str(snapshot_db))
     conn.row_factory = sqlite3.Row
     static_root = static_export_dir.resolve()
     try:
-        rows = conn.execute(
-            """
-            SELECT *
-            FROM paper
-            ORDER BY paper_index
-            """
-        ).fetchall()
+        selected_ids = {str(item) for item in paper_ids} if paper_ids is not None else None
+        if selected_ids is None:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM paper
+                ORDER BY paper_index
+                """
+            ).fetchall()
+        elif not selected_ids:
+            rows = []
+        else:
+            placeholders = ", ".join("?" for _ in selected_ids)
+            rows = conn.execute(
+                f"""
+                SELECT *
+                FROM paper
+                WHERE paper_id IN ({placeholders})
+                ORDER BY paper_index
+                """,
+                tuple(sorted(selected_ids)),
+            ).fetchall()
         docs: list[EmbedDocument] = []
         with tqdm(total=len(rows), desc="load snapshot", unit="paper") as progress:
             for row in rows:

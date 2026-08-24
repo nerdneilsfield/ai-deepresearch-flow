@@ -374,9 +374,11 @@ only until both `config.toml` and the process bridge enable it:
 ```toml
 [pipeline]
 enabled = true
-work_dir = "/data/pipeline-work"
+work_dir = "/data/pipeline-work/work"
+preview_root = "/data/pipeline-work/previews"
 queue_db = "/data/pipeline-work/queue.sqlite3"
-static_root = "/data/pipeline-static"
+snapshot_db = "/db/papers.db"
+static_root = "/static"
 ```
 
 Use the commented `[pipeline]` example in `config.example.toml` for limits,
@@ -390,23 +392,33 @@ variables or the container secret mechanism.
 Set all of the following when enabling the deployment image:
 
 ```bash
--e PAPER_DB_CONFIG=/app/config.toml \
--e PAPER_OCR_CONFIG=/app/ocr.toml \
--e PAPER_DB_ADMIN_TOKEN="$(openssl rand -hex 32)" \
--e PAPER_PIPELINE_ENABLED=1 \
--v "$(pwd)/config.toml:/app/config.toml:ro" \
--v "$(pwd)/ocr.toml:/app/ocr.toml:ro" \
--v "$(pwd)/pipeline-work:/data/pipeline-work" \
--v "$(pwd)/pipeline-static:/data/pipeline-static"
+mkdir -p pipeline-work/work pipeline-work/previews pipeline-static
+touch paper_snapshot.db
+docker run --rm -p 127.0.0.1:8899:8899 \
+  -e PAPER_DB_CONFIG=/app/config.toml \
+  -e PAPER_OCR_CONFIG=/app/ocr.toml \
+  -e PAPER_DB_ADMIN_TOKEN="$(openssl rand -hex 32)" \
+  -e PAPER_PIPELINE_ENABLED=1 \
+  -e PAPER_DB_SNAPSHOT_DB=/db/papers.db \
+  -v "$(pwd)/config.toml:/app/config.toml:ro" \
+  -v "$(pwd)/ocr.toml:/app/ocr.toml:ro" \
+  -v "$(pwd)/pipeline-work:/data/pipeline-work" \
+  -v "$(pwd)/pipeline-static:/static" \
+  -v "$(pwd)/paper_snapshot.db:/db/papers.db" \
+  ghcr.io/nerdneilsfield/deepresearch-flow:deploy-latest
 ```
 
 The same `PAPER_DB_CONFIG`, queue DB, work root, Snapshot DB, and formal static
 root are used by API and Worker. `PAPER_PIPELINE_ENABLED=1` is only a
 Supervisor materialization bridge: it cannot turn on a TOML-disabled pipeline,
 and disagreement fails closed. `PAPER_DB_ADMIN_TOKEN` is required when TOML
-enables the feature. Keep `pipeline-work` private; it contains uploads and
-intermediate artifacts and is never an Nginx alias. Protected previews are
-served only through authenticated Admin artifact routes, never from `/static`.
+enables the feature. Startup verifies that work, preview, queue, Snapshot, and
+`/static` paths are absolute, writable, and (in Docker) below a non-root
+mounted boundary. Create `work/` and `previews/` before startup; missing
+durability mounts fail closed. Keep `pipeline-work` private; it contains
+uploads, intermediates, and protected previews and is never an Nginx alias.
+Protected previews are served only through authenticated Admin artifact routes,
+never from `/static`; formal local output alone is written under `/static`.
 
 Nginx accepts multipart uploads up to `500m` by default. Override with a
 validated positive Nginx size such as `PAPER_DB_NGINX_BODY_LIMIT=1g`; the
@@ -418,27 +430,36 @@ Supervisor starts one durable Worker only when the bridge and TOML agree. It
 polls processing and queued publication jobs, uses SQLite WAL leases, writes
 idle and active heartbeats, recovers expired `running`/`publishing`/`indexing`
 leases after restart, and stops between processing step boundaries on `TERM`.
+An in-flight remote processing call may finish; its completed checkpoint is
+committed, the lease is atomically requeued, and no next Job is claimed.
+An in-flight irreversible publication may finish, then publication polling
+stops before claiming another Job.
 The Admin config endpoint reports `online`, `degraded`, or `offline` from the
 heartbeat age. Review each protected PDF/source/summary/translation, resolve
 BibTeX ambiguity (or explicitly choose no BibTeX), then retry, reject, publish,
 or batch-publish ready jobs. A publish action is revision-aware and returns a
 conflict for stale UI data.
 
-Terminal work artifacts for `published`, `published_with_warning`, `rejected`,
-and `cancelled` jobs are retained for seven days by default. Cleanup never
+Terminal work and protected-preview artifacts for `published`,
+`published_with_warning`, `rejected`, and `cancelled` jobs are retained for
+seven days by default. Cleanup is batched and never
 touches formal published resources, failed/review-ready work, or WebDAV
 objects. To discard an unwanted terminal upload immediately, use the
 authenticated reject/cancel action and run the bounded local cleanup task (or
-remove only its UUID work directory after confirming status in the Admin API);
-never delete the formal static root by hand.
+remove only its UUID directories under both private `work/` and `previews/`
+after confirming status in the Admin API); never delete the formal static root
+by hand.
 
 Publication writes immutable content-addressed files to the configured local
 formal root or WebDAV, then commits a Snapshot publication receipt before
-incremental LanceDB indexing. WebDAV upload success is sufficient; no HEAD
-probe is required. A crash after the receipt is safe to retry. If embedding
-fails, the paper remains published as `published_with_warning`; retry indexing
-only after fixing vector configuration. Formal local/WebDAV files are separate
-from private pipeline work and are not automatically collected.
+incremental LanceDB indexing. For WebDAV, the current bundle's
+content-addressed resources are staged in a temporary private directory and
+only that paper is loaded/upserted; the stage is removed after indexing.
+WebDAV upload success is sufficient; no HEAD probe is required. A crash after
+the receipt is safe to retry. If embedding fails, the paper remains published
+as `published_with_warning`; retry indexing only after fixing vector
+configuration. Formal local/WebDAV files are separate from private pipeline
+work and are not automatically collected.
 
 To disable or roll back, stop the container, set `PAPER_PIPELINE_ENABLED` unset
 or `0`, and use a config with `[pipeline].enabled = false`. Existing public

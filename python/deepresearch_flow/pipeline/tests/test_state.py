@@ -32,6 +32,31 @@ def test_worker_lease_is_cleared_on_transition_and_admin_transition_is_explicit(
     assert state.admin_transition(job_id, "rejected") == "rejected"
 
 
+def test_cleanup_limit_bounds_expired_terminal_artifact_batch(tmp_path: Path) -> None:
+    artifacts = ArtifactStore(tmp_path / "work", tmp_path / "previews")
+    state = PipelineState(tmp_path / "queue.sqlite3", artifact_store=artifacts)
+    jobs: list[str] = []
+    for label in ("first", "second"):
+        job_id = state.create_job()
+        lease = state.acquire_lease(job_id, "cleanup-worker")
+        assert lease is not None
+        pending = artifacts.begin(job_id, "ocr")
+        pending.write(label.encode("ascii"))
+        pending.promote()
+        state.transition(job_id, "review_ready", lease.token)
+        state.admin_transition(job_id, "rejected")
+        jobs.append(job_id)
+
+    removed = state.cleanup_expired_artifacts(
+        now=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        limit=1,
+    )
+
+    assert len(removed) == 1
+    remaining = jobs[1] if removed[0] == jobs[0] else jobs[0]
+    assert artifacts.resolve(remaining, "ocr") is not None
+
+
 def test_generic_worker_transition_rejects_missing_lease_token(tmp_path: Path) -> None:
     state = PipelineState(tmp_path / "queue.sqlite3")
     job_id = state.create_job()

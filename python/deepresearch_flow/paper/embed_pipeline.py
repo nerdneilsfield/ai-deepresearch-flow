@@ -6,6 +6,7 @@ import json
 import hashlib
 import logging
 import asyncio
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 import signal
@@ -58,6 +59,25 @@ class _EmbedBatchJob:
     group: _EmbedGroupState
     start: int
     batch_rows: list[ChunkRow]
+
+
+def select_orphan_group_keys(
+    existing_group_keys: Iterable[tuple[str, str]],
+    source_group_keys: Iterable[tuple[str, str]],
+    selected_paper_ids: Iterable[str] | None = None,
+) -> set[tuple[str, str]]:
+    """Return stale vector groups without deleting unrelated papers.
+
+    Full rebuilds compare every existing group with source groups.  Filtered
+    rebuilds compare only groups belonging to selected papers, preserving
+    vectors for papers outside the current publication bundle.
+    """
+    existing = {(str(doc_id), str(template)) for doc_id, template in existing_group_keys}
+    source = {(str(doc_id), str(template)) for doc_id, template in source_group_keys}
+    if selected_paper_ids is None:
+        return existing - source
+    selected = {str(paper_id) for paper_id in selected_paper_ids}
+    return {key for key in existing if key[0] in selected} - source
 
 
 def _build_searchable_fields(doc: EmbedDocument) -> list[SearchableField]:
@@ -228,6 +248,7 @@ async def run_embed_pipeline(
     template_tag_override: str | None = None,
     max_concurrency_override: int | None = None,
     document_window_override: int | None = None,
+    snapshot_paper_ids: tuple[str, ...] | None = None,
     verbose: bool = False,
 ) -> None:
     embedding_config = config.embedding
@@ -242,7 +263,11 @@ async def run_embed_pipeline(
             md_translated_roots=md_translated_roots,
         )
     elif snapshot_db and static_export_dir:
-        docs = load_from_snapshot(snapshot_db, static_export_dir)
+        docs = load_from_snapshot(
+            snapshot_db,
+            static_export_dir,
+            paper_ids=snapshot_paper_ids,
+        )
     else:
         raise ValueError("No input source provided")
 
@@ -456,7 +481,9 @@ async def run_embed_pipeline(
             embed_progress.close()
             signal.signal(signal.SIGINT, previous_sigint)
 
-    orphan_keys = read_group_keys(db) - source_group_keys
+    orphan_keys = select_orphan_group_keys(
+        read_group_keys(db), source_group_keys, snapshot_paper_ids
+    )
     if orphan_keys:
         delete_groups(db, list(orphan_keys))
     _clear_checkpoint(vector_dir)
@@ -465,3 +492,6 @@ async def run_embed_pipeline(
         logger.info("No new chunks to embed.")
     else:
         logger.info("Embedded %d chunks across %d documents", written_chunk_count, len(docs))
+
+
+__all__ = ["run_embed_pipeline", "select_orphan_group_keys"]

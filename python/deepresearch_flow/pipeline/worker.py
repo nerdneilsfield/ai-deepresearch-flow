@@ -89,6 +89,7 @@ class PipelineWorker:
         paper_config_path: str | Path | None = None,
         ocr_config_path: str | Path | None = None,
         worker_id: str | None = None,
+        stop_requested: Callable[[], bool] | None = None,
     ) -> "PipelineWorker":
         """Construct worker with real OCR/provider seams for Supervisor."""
         adapters = build_production_adapters(
@@ -101,7 +102,14 @@ class PipelineWorker:
             output_language=config.translation_language,
             ocr_model_map=config.ocr_model_map,
         )
-        return cls(config, state, artifacts, adapters=adapters, worker_id=worker_id)
+        return cls(
+            config,
+            state,
+            artifacts,
+            adapters=adapters,
+            worker_id=worker_id,
+            stop_requested=stop_requested,
+        )
 
     def __init__(
         self,
@@ -113,6 +121,7 @@ class PipelineWorker:
         worker_id: str | None = None,
         concurrency: int | None = None,
         _test_supporting_models: Mapping[str, str] | None = None,
+        stop_requested: Callable[[], bool] | None = None,
     ) -> None:
         self.config = config
         self.state = state
@@ -120,6 +129,7 @@ class PipelineWorker:
         self.adapters = adapters if adapters is not None else ProductionAdapters()
         self.worker_id = worker_id or f"worker-{id(self):x}"
         self.concurrency = max(1, int(concurrency or config.max_concurrent_jobs))
+        self.stop_requested = stop_requested or (lambda: False)
         defaults = dict(config.supporting_models)
         if _test_supporting_models is not None and isinstance(self.adapters, ProductionAdapters):
             raise ValueError("supporting model overrides are test-only")
@@ -185,6 +195,8 @@ class PipelineWorker:
                 raise LeaseLost() from exc
             if boundary == "cancelled":
                 return WorkerResult(job_id, "cancelled")
+            if self.stop_requested():
+                return self._requeue_after_shutdown(lease)
 
             existing = self._load_existing(job_id, step)
             if existing is not None:
@@ -230,6 +242,8 @@ class PipelineWorker:
                         raise LeaseLost() from exc
                 if self.state.step_boundary(job_id, token) == "cancelled":
                     return WorkerResult(job_id, "cancelled", failed_step=step)
+                if self.stop_requested():
+                    return self._requeue_after_shutdown(lease)
             except CancelledAtBoundary:
                 self._mark_cancelled(lease, step)
                 return WorkerResult(job_id, "cancelled", failed_step=step)
@@ -504,6 +518,18 @@ class PipelineWorker:
         except LeaseError as exc:
             raise LeaseLost() from exc
 
+    def _requeue_after_shutdown(self, lease: Lease) -> WorkerResult:
+        try:
+            self.state.requeue_after_shutdown(lease.job_id, lease.token)
+        except LeaseError as exc:
+            raise LeaseLost() from exc
+        return WorkerResult(
+            lease.job_id,
+            "queued",
+            error_type="shutdown",
+            retryable=True,
+        )
+
     def _mark_cancelled(self, lease: Lease, step: str) -> None:
         try:
             self.state.record_step_attempt(
@@ -532,12 +558,20 @@ class PipelineWorker:
         latest: dict[str, WorkerResult] = {}
         pending = ids
         for _ in range(len(ids) + 1):
-            results = list(await asyncio.gather(*(run_one(job_id) for job_id in pending)))
-            latest.update({result.job_id: result for result in results})
-            pending = [result.job_id for result in results if result.status == "batch_waiting"]
+            if not pending or self.stop_requested():
+                break
+            retry: list[str] = []
+            for start in range(0, len(pending), self.concurrency):
+                if self.stop_requested():
+                    break
+                batch = pending[start : start + self.concurrency]
+                results = list(await asyncio.gather(*(run_one(job_id) for job_id in batch)))
+                latest.update({result.job_id: result for result in results})
+                retry.extend(result.job_id for result in results if result.status == "batch_waiting")
+            pending = retry
             if not pending:
                 break
-        return [latest[job_id] for job_id in ids]
+        return [latest[job_id] for job_id in ids if job_id in latest]
 
     def run_once(self, job_ids: list[str] | None = None) -> list[WorkerResult]:
         return asyncio.run(self.run_once_async(job_ids))

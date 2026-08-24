@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 import hashlib
 import threading
 from pathlib import Path
@@ -34,6 +35,7 @@ def _make_app(
     config = PipelineConfig(
         enabled=enabled,
         work_dir=str(tmp_path / "work"),
+        preview_root=str(tmp_path / "previews"),
         static_root=str(tmp_path / "formal"),
         queue_db=str(tmp_path / "queue.sqlite3"),
         pdfs_per_batch=pdfs_per_batch,
@@ -44,7 +46,7 @@ def _make_app(
         extract=ModelAllowlist(("extract-a",), "extract-a"),
         translate=ModelAllowlist(("translate-a",), "translate-a"),
     )
-    artifacts = ArtifactStore(config.work_dir, config.static_root)
+    artifacts = ArtifactStore(config.work_dir, config.preview_root)
     state = PipelineState(config.queue_db, artifact_store=artifacts)
     app = create_pipeline_admin_app(
         config=config,
@@ -900,6 +902,39 @@ def test_artifact_response_is_allowlisted_and_containment_safe(tmp_path: Path) -
     assert denied.status_code == 401
 
 
+def test_expired_cleanup_removes_private_roots_and_missing_registration_is_404(
+    tmp_path: Path,
+) -> None:
+    app, state, artifacts = _make_app(tmp_path)
+    response = _upload(
+        app,
+        files=[("pdfs", ("a.pdf", b"%PDF-1.7 a", "application/pdf"))],
+    )
+    job_id = response.json()["job_ids"][0]
+    lease = state.acquire_lease(job_id, "cleanup-test")
+    assert lease is not None
+    protected = artifacts.protect(job_id, "preview_pdf", b"%PDF-1.7 preview")
+    state.register_protected_artifact(job_id, "preview_pdf", protected, lease.token)
+    state.transition(job_id, "needs_attention", lease.token)
+    state.admin_transition(job_id, "rejected")
+    formal = Path(artifacts.work_dir.parent / "formal")
+    formal.mkdir()
+    (formal / "keep.bin").write_bytes(b"formal")
+
+    removed = state.cleanup_expired_artifacts(
+        now=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        limit=1,
+    )
+
+    assert removed == [job_id]
+    assert artifacts.resolve(job_id, "pdf") is None
+    assert not protected.path.exists()
+    assert state.heartbeat_metadata(job_id) is None
+    assert (formal / "keep.bin").read_bytes() == b"formal"
+    missing = _request(app, "GET", f"/jobs/{job_id}/artifacts/pdf", headers=_headers())
+    assert missing.status_code == 404
+
+
 def test_disabled_factory_has_no_routes(tmp_path: Path) -> None:
     app, _state, _artifacts = _make_app(tmp_path, enabled=False)
     response = _request(app, "GET", "/config", headers=_headers())
@@ -910,13 +945,14 @@ def test_snapshot_app_mounts_pipeline_only_when_enabled(tmp_path: Path) -> None:
     config = PipelineConfig(
         enabled=True,
         work_dir=str(tmp_path / "work"),
+        preview_root=str(tmp_path / "previews"),
         static_root=str(tmp_path / "formal"),
         queue_db=str(tmp_path / "queue.sqlite3"),
         ocr=ModelAllowlist(("ocr-a",), "ocr-a"),
         extract=ModelAllowlist(("extract-a",), "extract-a"),
         translate=ModelAllowlist(("translate-a",), "translate-a"),
     )
-    artifacts = ArtifactStore(config.work_dir, config.static_root)
+    artifacts = ArtifactStore(config.work_dir, config.preview_root)
     state = PipelineState(config.queue_db, artifact_store=artifacts)
     app = create_snapshot_app(
         snapshot_db=tmp_path / "snapshot.sqlite3",

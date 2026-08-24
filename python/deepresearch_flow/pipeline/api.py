@@ -1064,7 +1064,7 @@ async def _artifact(request: Request) -> Response:
             path,
             str(metadata["digest"]),
             int(metadata["size"]),
-            artifacts.formal_root,
+            artifacts.preview_root,
         )
         artifacts.validate_protected_artifact(artifact, job_id, internal_kind)
         content = path.read_bytes()

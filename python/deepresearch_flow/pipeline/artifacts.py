@@ -134,14 +134,19 @@ class PendingArtifact:
 
 
 class ArtifactStore:
-    def __init__(self, work_dir: str | Path, formal_root: str | Path, *, retention_days: int = 7):
+    def __init__(self, work_dir: str | Path, preview_root: str | Path, *, retention_days: int = 7):
         self.work_dir = Path(work_dir).resolve()
-        self.formal_root = Path(formal_root).resolve()
-        if self.work_dir == self.formal_root or self.work_dir.is_relative_to(self.formal_root) or self.formal_root.is_relative_to(self.work_dir):
+        self.preview_root = Path(preview_root).resolve()
+        if self.work_dir == self.preview_root or self.work_dir.is_relative_to(self.preview_root) or self.preview_root.is_relative_to(self.work_dir):
             raise ValueError("work and formal artifact roots must be physically separate")
         self.retention_days = int(retention_days)
         self.work_dir.mkdir(parents=True, exist_ok=True)
-        self.formal_root.mkdir(parents=True, exist_ok=True)
+        self.preview_root.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def formal_root(self) -> Path:
+        """Compatibility alias for the historical protected-preview root."""
+        return self.preview_root
 
     @staticmethod
     def _job_key(job_id: str) -> str:
@@ -154,7 +159,7 @@ class ArtifactStore:
         return self.work_dir / self._job_key(job_id)
 
     def _protected_job_directory(self, job_id: str) -> Path:
-        return self.formal_root / self._job_key(job_id)
+        return self.preview_root / self._job_key(job_id)
 
     def _assert_job_directory(self, directory: Path) -> None:
         if directory.exists() and directory.is_symlink():
@@ -190,7 +195,7 @@ class ArtifactStore:
         if directory.exists() and directory.is_symlink():
             raise ValueError("protected artifact directory must not be a symlink")
         directory.mkdir(parents=True, exist_ok=True)
-        if directory.resolve().parent != self.formal_root:
+        if directory.resolve().parent != self.preview_root:
             raise ValueError("protected artifact directory escapes formal root")
         path = artifact.path.resolve()
         if artifact.path.is_symlink() or path.parent != directory.resolve() or not path.is_file():
@@ -207,7 +212,7 @@ class ArtifactStore:
         if directory.exists() and directory.is_symlink():
             raise ValueError("protected artifact directory must not be a symlink")
         directory.mkdir(parents=True, exist_ok=True)
-        if directory.resolve().parent != self.formal_root:
+        if directory.resolve().parent != self.preview_root:
             raise ValueError("protected artifact directory escapes formal root")
         fd, name = tempfile.mkstemp(prefix=".artifact-", dir=directory)
         temporary = Path(name)
@@ -222,7 +227,7 @@ class ArtifactStore:
             temporary.unlink(missing_ok=True)
             raise
         digest = hashlib.sha256(content).hexdigest()
-        artifact = Artifact(job_id, kind, target, digest, len(content), self.formal_root, directory)
+        artifact = Artifact(job_id, kind, target, digest, len(content), self.preview_root, directory)
         scope = _ACTIVE_PROTECTED_SCOPE.get()
         if scope is not None and scope.store is self and scope.job_id == job_id:
             scope._record(artifact)
@@ -283,18 +288,30 @@ class ArtifactStore:
         content = path.read_bytes()
         return Artifact(job_id, kind, path, hashlib.sha256(content).hexdigest(), len(content), self.work_dir, directory)
 
-    def cleanup(self, jobs: Mapping[str, str | Mapping[str, str]], *, now: datetime | None = None, force: bool = False) -> list[str]:
-        """Delete work directories for expired terminal jobs; never formal roots."""
+    def cleanup(
+        self,
+        jobs: Mapping[str, str | Mapping[str, str]],
+        *,
+        now: datetime | None = None,
+        force: bool = False,
+        limit: int | None = None,
+    ) -> list[str]:
+        """Delete expired terminal work and preview directories, never formal roots."""
+        if limit is not None and limit <= 0:
+            raise ValueError("cleanup limit must be positive")
         cutoff = (now or datetime.now(timezone.utc)).astimezone(timezone.utc) - timedelta(days=self.retention_days)
         removed: list[str] = []
         for job_id, info in jobs.items():
+            if limit is not None and len(removed) >= limit:
+                break
             status = info if isinstance(info, str) else info.get("status", "")
             if status not in {"published", "published_with_warning", "rejected", "cancelled"}:
                 continue
             directory = self._job_directory(job_id)
+            preview_directory = self._protected_job_directory(job_id)
             self._assert_job_directory(directory)
-            if not directory.exists():
-                continue
+            if preview_directory.exists() and preview_directory.is_symlink():
+                raise ValueError("protected artifact directory must not be a symlink")
             if not force:
                 terminal_raw = info.get("terminal_at") if isinstance(info, Mapping) else None
                 if not isinstance(terminal_raw, str) or not terminal_raw:
@@ -302,8 +319,17 @@ class ArtifactStore:
                 terminal_at = datetime.fromisoformat(terminal_raw).astimezone(timezone.utc)
                 if terminal_at > cutoff:
                     continue
-            shutil.rmtree(directory)
-            removed.append(job_id)
+            removed_one = False
+            if directory.exists():
+                shutil.rmtree(directory)
+                removed_one = True
+            if preview_directory.exists():
+                if preview_directory.resolve().parent != self.preview_root:
+                    raise ValueError("protected artifact directory escapes formal root")
+                shutil.rmtree(preview_directory)
+                removed_one = True
+            if removed_one:
+                removed.append(job_id)
         return removed
 
     def discard_job(self, job_id: str) -> None:

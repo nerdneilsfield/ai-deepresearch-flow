@@ -194,16 +194,18 @@ hybrid = true
 # bibtex_max_bytes = 1048576      # 1 MiB
 # max_concurrent_jobs = 2
 # retention_days = 7
-# work_dir = "/data/pipeline-work"       # private uploads/intermediates
+# work_dir = "/data/pipeline-work/work"       # private uploads/intermediates
+# preview_root = "/data/pipeline-work/previews" # private protected previews
 # queue_db = "/data/pipeline-work/queue.sqlite3"
-# snapshot_root = "/data/pipeline-snapshot"
-# static_root = "/data/pipeline-static"  # formal content-addressed output
+# snapshot_db = "/db/papers.db"                # API/Worker must share this file
+# static_root = "/static"                       # formal content-addressed output
 # webdav_url = "https://dav.example.test/papers" # endpoint only; no credentials
 # extract_templates = ["simple"]
 # translation_language = "en"
 # lease_seconds = 300
 # heartbeat_seconds = 30
 # validation_retry_limit = 2
+# cleanup_batch_size = 100
 #
 # Selectable uploader model keys. Every default must be in its allowlist.
 # [pipeline.models.ocr]

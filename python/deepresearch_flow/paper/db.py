@@ -447,6 +447,9 @@ def parse_tag_list(text: str) -> list[str]:
 def load_api_pipeline_config(
     config_path: str | Path,
     admin_token: str | None,
+    *,
+    snapshot_db: str | Path | None = None,
+    validate_storage: bool = False,
 ) -> Any | None:
     """Load enabled pipeline settings for API startup, or return ``None``.
 
@@ -465,6 +468,15 @@ def load_api_pipeline_config(
         return None
     if not str(admin_token or "").strip():
         raise ValueError("PAPER_DB_ADMIN_TOKEN is required when [pipeline].enabled is true")
+    if snapshot_db is not None:
+        configured = Path(parsed.snapshot_db).expanduser().resolve()
+        requested = Path(snapshot_db).expanduser().resolve()
+        if configured != requested:
+            raise ValueError("--snapshot-db must match pipeline snapshot_db")
+    if validate_storage:
+        from deepresearch_flow.pipeline.runtime import validate_pipeline_mounts
+
+        validate_pipeline_mounts(parsed)
     return parsed
 
 
@@ -1282,7 +1294,12 @@ def register_db_commands(db_group: click.Group) -> None:
         advanced_ctx = None
         paper_config = load_config(config_path)
         try:
-            pipeline_config = load_api_pipeline_config(config_path, admin_token)
+            pipeline_config = load_api_pipeline_config(
+                config_path,
+                admin_token,
+                snapshot_db=snapshot_db,
+                validate_storage=True,
+            )
         except (OSError, ValueError) as exc:
             raise click.ClickException(str(exc)) from exc
         startup_embed_db = None
