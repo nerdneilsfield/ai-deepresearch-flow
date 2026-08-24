@@ -42,4 +42,71 @@ describe('protected pipeline previews', () => {
     wrapper.unmount()
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:protected-preview')
   })
+
+  it('revokes a newly created PDF URL when later text decoding fails', async () => {
+    const pdf = { ok: true, blob: () => Promise.resolve(new Blob(['%PDF-1.7'])) }
+    const brokenText = { ok: true, text: () => Promise.reject(new Error('summary decode failed')) }
+    const text = { ok: true, text: () => Promise.resolve('# text') }
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce(pdf)
+      .mockResolvedValueOnce(text)
+      .mockResolvedValueOnce(brokenText)
+      .mockResolvedValueOnce(text) as unknown as typeof fetch
+
+    let load: ((jobId: string, token: string) => Promise<void>) | undefined
+    const Host = defineComponent({
+      setup() {
+        const previews = useProtectedPipelinePreviews()
+        load = previews.load
+        return () => h('div')
+      },
+    })
+    const wrapper = mount(Host)
+    await load?.('job-1', 'session-secret')
+
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:protected-preview')
+    wrapper.unmount()
+  })
+
+  it('fences late prior loads and revokes their object URL', async () => {
+    let firstResolve: ((value: unknown) => void)[] = []
+    let secondResolve: ((value: unknown) => void)[] = []
+    const deferred = (bucket: ((value: unknown) => void)[]) => new Promise<unknown>((resolve) => bucket.push(resolve))
+    globalThis.fetch = vi.fn()
+      .mockImplementationOnce(() => deferred(firstResolve))
+      .mockImplementationOnce(() => deferred(firstResolve))
+      .mockImplementationOnce(() => deferred(firstResolve))
+      .mockImplementationOnce(() => deferred(firstResolve))
+      .mockImplementationOnce(() => deferred(secondResolve))
+      .mockImplementationOnce(() => deferred(secondResolve))
+      .mockImplementationOnce(() => deferred(secondResolve))
+      .mockImplementationOnce(() => deferred(secondResolve)) as unknown as typeof fetch
+    let nextUrl = 0
+    URL.createObjectURL = vi.fn().mockImplementation(() => `blob:load-${++nextUrl}`)
+    let load: ((jobId: string, token: string) => Promise<void>) | undefined
+    let pdfUrl: { value: string | null } | undefined
+    const Host = defineComponent({
+      setup() {
+        const previews = useProtectedPipelinePreviews()
+        load = previews.load
+        pdfUrl = previews.pdfUrl
+        return () => h('div')
+      },
+    })
+    const wrapper = mount(Host)
+    const firstLoad = load?.('first', 'session-secret')
+    const secondLoad = load?.('second', 'session-secret')
+    const responses = () => ({
+      ok: true,
+      blob: () => Promise.resolve(new Blob(['%PDF-1.7'])),
+      text: () => Promise.resolve('# text'),
+    })
+    firstResolve.forEach((resolve) => resolve(responses()))
+    secondResolve.forEach((resolve) => resolve(responses()))
+    await Promise.all([firstLoad, secondLoad])
+
+    expect(pdfUrl?.value).toBe('blob:load-2')
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:load-1')
+    wrapper.unmount()
+  })
 })

@@ -24,9 +24,11 @@ const totalBytes = computed(() => pdfFiles.value.reduce((sum, file) => sum + fil
 const pdfCountInvalid = computed(() => Boolean(config.value && pdfFiles.value.length > config.value.limits.pdfs_per_batch))
 const aggregateInvalid = computed(() => Boolean(config.value && totalBytes.value > config.value.limits.max_batch_bytes))
 const sizeInvalid = computed(() => Boolean(config.value && pdfFiles.value.some((file) => file.size > config.value!.limits.max_pdf_bytes)))
-const pdfTypeInvalid = computed(() => pdfFiles.value.some((file) => !file.name.toLowerCase().endsWith('.pdf') && file.type !== 'application/pdf'))
+const pdfTypeInvalid = computed(() => pdfFiles.value.some((file) => !file.name.toLowerCase().endsWith('.pdf')))
 const bibtexInvalid = computed(() => Boolean(config.value && bibtexFile.value && bibtexFile.value.size > config.value.limits.bibtex_max_bytes))
-const bibtexTypeInvalid = computed(() => Boolean(bibtexFile.value && !bibtexFile.value.name.toLowerCase().endsWith('.bib') && !['application/x-bibtex', 'text/plain'].includes(bibtexFile.value.type)))
+const bibtexTypeInvalid = computed(() => Boolean(bibtexFile.value && !bibtexFile.value.name.toLowerCase().endsWith('.bib')))
+const pdfValidationError = computed(() => pdfCountInvalid.value || aggregateInvalid.value || sizeInvalid.value || pdfTypeInvalid.value)
+const bibtexValidationError = computed(() => bibtexInvalid.value || bibtexTypeInvalid.value)
 const uploadInvalid = computed(() => pdfFiles.value.length === 0 || pdfCountInvalid.value || aggregateInvalid.value || sizeInvalid.value || pdfTypeInvalid.value || bibtexInvalid.value || bibtexTypeInvalid.value)
 
 function modelDefault(name: 'ocr' | 'extract' | 'translate'): string {
@@ -198,21 +200,25 @@ onMounted(async () => {
           <div class="space-y-4">
             <div class="space-y-2">
               <label class="text-sm font-medium" for="pdf-files">PDF files</label>
-              <input id="pdf-files" ref="inputElement" data-testid="pdf-input" class="block w-full rounded-md border border-input bg-background p-2 text-sm file:mr-3 file:rounded-md file:border-0 file:bg-primary file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-primary-foreground" type="file" accept=".pdf,application/pdf" multiple @change="setPdfFiles">
+              <input id="pdf-files" ref="inputElement" data-testid="pdf-input" :aria-describedby="pdfValidationError ? 'pdf-upload-error' : undefined" class="block w-full rounded-md border border-input bg-background p-2 text-sm file:mr-3 file:rounded-md file:border-0 file:bg-primary file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-primary-foreground" type="file" accept=".pdf,application/pdf" multiple @change="setPdfFiles">
               <p class="text-xs text-muted-foreground">Each PDF ≤ {{ formatPipelineBytes(config?.limits.max_pdf_bytes) }}. Batch ≤ {{ formatPipelineBytes(config?.limits.max_batch_bytes) }}.</p>
             </div>
             <div class="space-y-2">
               <label class="text-sm font-medium" for="bibtex-file">BibTeX file <span class="font-normal text-muted-foreground">(optional)</span></label>
-              <input id="bibtex-file" ref="bibInputElement" data-testid="bibtex-input" class="block w-full rounded-md border border-input bg-background p-2 text-sm file:mr-3 file:rounded-md file:border-0 file:bg-muted file:px-3 file:py-1.5 file:text-sm file:font-medium" type="file" accept=".bib,application/x-bibtex,text/plain" @change="setBibtex">
+              <input id="bibtex-file" ref="bibInputElement" data-testid="bibtex-input" :aria-describedby="bibtexValidationError ? 'bib-upload-error' : undefined" class="block w-full rounded-md border border-input bg-background p-2 text-sm file:mr-3 file:rounded-md file:border-0 file:bg-muted file:px-3 file:py-1.5 file:text-sm file:font-medium" type="file" accept=".bib,application/x-bibtex,text/plain" @change="setBibtex">
               <p class="text-xs text-muted-foreground">Maximum {{ formatPipelineBytes(config?.limits.bibtex_max_bytes) }}. Ambiguous matches can be corrected after processing.</p>
             </div>
-            <div v-if="pdfCountInvalid || aggregateInvalid || sizeInvalid || bibtexInvalid" class="space-y-1 rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive" role="alert" data-testid="upload-validation-error">
-              <p v-if="pdfCountInvalid">Too many PDFs for one batch.</p>
-              <p v-if="aggregateInvalid">Combined PDF size exceeds batch limit.</p>
-              <p v-if="sizeInvalid">One or more PDFs exceed per-file limit.</p>
-              <p v-if="pdfTypeInvalid">Only PDF files can be uploaded.</p>
-              <p v-if="bibtexInvalid">BibTeX file exceeds configured limit.</p>
-              <p v-if="bibtexTypeInvalid">BibTeX file must use a .bib extension.</p>
+            <div v-if="pdfValidationError || bibtexValidationError" id="upload-validation-error" class="space-y-1 rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive" role="alert" aria-live="assertive" data-testid="upload-validation-error">
+              <div v-if="pdfValidationError" id="pdf-upload-error">
+                <p v-if="pdfCountInvalid">Too many PDFs for one batch.</p>
+                <p v-if="aggregateInvalid">Combined PDF size exceeds batch limit.</p>
+                <p v-if="sizeInvalid">One or more PDFs exceed per-file limit.</p>
+                <p v-if="pdfTypeInvalid">Only PDF files can be uploaded. Each filename must end in .pdf.</p>
+              </div>
+              <div v-if="bibtexValidationError" id="bib-upload-error">
+                <p v-if="bibtexInvalid">BibTeX file exceeds configured limit.</p>
+                <p v-if="bibtexTypeInvalid">BibTeX file must use a .bib extension.</p>
+              </div>
             </div>
           </div>
 
@@ -227,7 +233,7 @@ onMounted(async () => {
           </div>
         </div>
         <div class="mt-5 flex items-center justify-end">
-          <button data-testid="upload-submit" class="inline-flex h-10 items-center justify-center rounded-md bg-primary px-5 text-sm font-medium text-primary-foreground disabled:cursor-not-allowed disabled:opacity-50" type="button" :disabled="uploadInvalid || uploadLoading" @click="upload">
+          <button data-testid="upload-submit" class="inline-flex h-10 items-center justify-center rounded-md bg-primary px-5 text-sm font-medium text-primary-foreground disabled:cursor-not-allowed disabled:opacity-50" type="button" :aria-describedby="uploadInvalid ? 'upload-validation-error' : undefined" :title="uploadInvalid ? 'Resolve upload validation errors before submitting.' : undefined" :disabled="uploadInvalid || uploadLoading" @click="upload">
             {{ uploadLoading ? 'Uploading…' : 'Upload and process' }}
           </button>
         </div>

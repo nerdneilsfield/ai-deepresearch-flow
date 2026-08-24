@@ -78,6 +78,36 @@ describe('admin pipeline upload view', () => {
     expect(wrapper.get('[data-testid="upload-submit"]').attributes('disabled')).toBeDefined()
   })
 
+  it('rejects MIME-valid files whose filenames do not use required extensions', async () => {
+    ;(globalThis.fetch as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(new Response(JSON.stringify(configPayload()), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ page: 1, page_size: 20, total: 0, has_more: false, items: [] }), { status: 200 }))
+
+    const { default: AdminPipelineView } = await import('@/views/AdminPipelineView.vue')
+    const wrapper = mount(AdminPipelineView)
+    await wrapper.get('[data-testid="admin-token-input"]').setValue('session-secret')
+    await wrapper.get('form').trigger('submit')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await nextTick()
+
+    const pdfInput = wrapper.get('[data-testid="pdf-input"]')
+    Object.defineProperty(pdfInput.element, 'files', {
+      value: [new File([new Uint8Array([37, 80, 68, 70])], 'paper.txt', { type: 'application/pdf' })],
+    })
+    await pdfInput.trigger('change')
+    const bibInput = wrapper.get('[data-testid="bibtex-input"]')
+    Object.defineProperty(bibInput.element, 'files', {
+      value: [new File(['@article{x}'], 'references.txt', { type: 'text/plain' })],
+    })
+    await bibInput.trigger('change')
+
+    expect(wrapper.get('[data-testid="upload-validation-error"]').text()).toContain('Only PDF files can be uploaded.')
+    expect(wrapper.get('[data-testid="upload-validation-error"]').text()).toContain('BibTeX file must use a .bib extension.')
+    expect(pdfInput.attributes('aria-describedby')).toBe('pdf-upload-error')
+    expect(bibInput.attributes('aria-describedby')).toBe('bib-upload-error')
+    expect(wrapper.get('[data-testid="upload-submit"]').attributes('disabled')).toBeDefined()
+  })
+
   it('clears an invalid session token before exposing admin navigation state', async () => {
     sessionStorage.setItem('paper-db-admin-pipeline-token', 'expired-secret')
     ;(globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce(

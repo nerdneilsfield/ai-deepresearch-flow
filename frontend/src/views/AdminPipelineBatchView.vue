@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   AdminPipelineError,
@@ -30,6 +30,7 @@ const notificationsEnabled = ref(false)
 const previousStatuses = new Map<string, string>()
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let pollInFlight = false
+let routeGeneration = 0
 
 const workerOffline = computed(() => isPipelineWorkerUnavailable(admin.worker))
 const readyJobs = computed(() => batch.value?.jobs.filter((job) => job.status === 'review_ready') ?? [])
@@ -38,12 +39,17 @@ const isPolling = computed(() => activeJobs.value.length > 0)
 
 function displayError(error: unknown, fallback: string): string {
   if (error instanceof AdminPipelineError && error.status === 401) {
-    admin.logout()
-    void router.replace('/admin/pipeline')
+    handleAuthLoss()
     return 'Admin token expired. Please sign in again.'
   }
   if (error instanceof AdminPipelineError && error.status === 409) return `Conflict: ${error.message}`
   return error instanceof Error && error.message ? error.message : fallback
+}
+
+function handleAuthLoss(): void {
+  stopPolling()
+  admin.logout()
+  void router.replace('/admin/pipeline')
 }
 
 async function ensureAuth(): Promise<boolean> {
@@ -69,16 +75,23 @@ function startPolling(): void {
   }, 3000)
 }
 
-async function refresh(): Promise<void> {
-  if (!admin.token || !route.params.batchId || pollInFlight) return
+async function refresh(generation = routeGeneration): Promise<void> {
+  const batchId = String(route.params.batchId || '')
+  if (!admin.token || !batchId || pollInFlight) return
   pollInFlight = true
   try {
-    const result = await getPipelineBatch(admin.token, String(route.params.batchId))
+    const result = await getPipelineBatch(admin.token, batchId)
+    if (generation !== routeGeneration || batchId !== String(route.params.batchId || '')) return
     for (const nextJob of result.batch.jobs) {
       const previous = previousStatuses.get(nextJob.id)
-      if (notificationsEnabled.value && previous && previous !== nextJob.status && ['published', 'published_with_warning', 'failed'].includes(nextJob.status)) {
+      if (notificationsEnabled.value && previous && previous !== nextJob.status && ['review_ready', 'published', 'published_with_warning', 'failed'].includes(nextJob.status)) {
+        const title = nextJob.status === 'failed'
+          ? 'Pipeline job failed'
+          : nextJob.status === 'review_ready'
+            ? 'Pipeline job ready for review'
+            : 'Pipeline job completed'
         notifyPipelineTransition(
-          nextJob.status === 'failed' ? 'Pipeline job failed' : 'Pipeline job completed',
+          title,
           `${nextJob.filename || nextJob.id}: ${statusLabel(nextJob.status)}`,
         )
       }
@@ -86,15 +99,44 @@ async function refresh(): Promise<void> {
     }
     batch.value = result.batch
     await admin.refreshConfig()
+    if (generation !== routeGeneration || batchId !== String(route.params.batchId || '')) return
+    if (!admin.token || !admin.authenticated) {
+      handleAuthLoss()
+      return
+    }
     errorMessage.value = ''
     if (!isPolling.value) stopPolling()
     else if (!pollTimer) startPolling()
   } catch (error) {
-    errorMessage.value = displayError(error, 'Batch could not be loaded.')
+    if (generation === routeGeneration && batchId === String(route.params.batchId || '')) {
+      errorMessage.value = displayError(error, 'Batch could not be loaded.')
+    }
   } finally {
-    loading.value = false
+    if (generation === routeGeneration && batchId === String(route.params.batchId || '')) loading.value = false
     pollInFlight = false
   }
+}
+
+function refreshNow(): void {
+  void refresh()
+}
+
+async function loadForRoute(): Promise<void> {
+  const generation = ++routeGeneration
+  stopPolling()
+  pollInFlight = false
+  batch.value = null
+  loading.value = true
+  actionLoading.value = false
+  errorMessage.value = ''
+  outcomes.value = []
+  previousStatuses.clear()
+  if (!(await ensureAuth()) || generation !== routeGeneration) {
+    if (generation === routeGeneration) loading.value = false
+    return
+  }
+  await refresh(generation)
+  if (generation === routeGeneration && batch.value && isPolling.value && !pollTimer) startPolling()
 }
 
 async function enableNotifications(): Promise<void> {
@@ -144,11 +186,12 @@ function statusLabel(status: string): string {
   return status.replace(/_/g, ' ')
 }
 
-onMounted(async () => {
-  if (await ensureAuth()) {
-    await refresh()
-    startPolling()
-  }
+onMounted(() => {
+  void loadForRoute()
+})
+
+watch(() => String(route.params.batchId || ''), () => {
+  void loadForRoute()
 })
 
 onUnmounted(stopPolling)
@@ -164,7 +207,7 @@ onUnmounted(stopPolling)
       </div>
       <div class="flex flex-wrap gap-2">
         <button data-testid="enable-notifications" class="rounded-md border border-border px-3 py-2 text-sm hover:bg-muted disabled:opacity-50" type="button" :disabled="notificationsEnabled" @click="enableNotifications">{{ notificationsEnabled ? 'Notifications enabled' : 'Enable notifications' }}</button>
-        <button class="rounded-md border border-border px-3 py-2 text-sm hover:bg-muted disabled:opacity-50" type="button" :disabled="loading || actionLoading" @click="refresh">Refresh</button>
+        <button class="rounded-md border border-border px-3 py-2 text-sm hover:bg-muted disabled:opacity-50" type="button" :disabled="loading || actionLoading" @click="refreshNow">Refresh</button>
         <button data-testid="batch-publish-ready" class="rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50" type="button" :disabled="readyJobs.length === 0 || actionLoading" @click="publishReady">Publish ready ({{ readyJobs.length }})</button>
         <button class="rounded-md border border-destructive/50 px-3 py-2 text-sm text-destructive hover:bg-destructive/5 disabled:opacity-50" type="button" :disabled="actionLoading || !activeJobs.length" @click="cancelBatch">Cancel remaining</button>
       </div>

@@ -1,4 +1,4 @@
-import { reactive } from 'vue'
+import { reactive, nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -59,9 +59,9 @@ function jobPayload(overrides: Record<string, unknown> = {}) {
   }
 }
 
-function batchPayload(jobs: unknown[]) {
+function batchPayload(jobs: unknown[], id = 'batch-1') {
   return {
-    id: 'batch-1',
+    id,
     revision: 1,
     job_count: jobs.length,
     status_counts: {},
@@ -130,6 +130,52 @@ describe('admin pipeline batch and review workflow', () => {
     wrapper.unmount()
   })
 
+  it('notifies once when a job first reaches review_ready after permission', async () => {
+    vi.useFakeTimers()
+    routeState.params = { batchId: 'batch-1' }
+    const queued = jobPayload({ status: 'queued', progress: { completed_steps: 9, total_steps: 10 } })
+    const ready = jobPayload({ status: 'review_ready' })
+    class TestNotification {
+      static permission: NotificationPermission = 'default'
+      static calls = 0
+      static requestPermission = vi.fn().mockImplementation(() => {
+        TestNotification.permission = 'granted'
+        return Promise.resolve('granted')
+      })
+
+      constructor() {
+        TestNotification.calls += 1
+      }
+    }
+    Object.defineProperty(window, 'Notification', { configurable: true, value: TestNotification })
+    const fetchMock = installResponses([
+      responseJson(configPayload()),
+      responseJson({ batch: batchPayload([queued]) }),
+      responseJson(configPayload()),
+    ])
+    const { default: AdminPipelineBatchView } = await import('@/views/AdminPipelineBatchView.vue')
+    const wrapper = mount(AdminPipelineBatchView)
+    await flushPromises()
+    await wrapper.get('[data-testid="enable-notifications"]').trigger('click')
+    await flushPromises()
+    fetchMock.mockImplementationOnce(() => Promise.resolve(responseJson({ batch: batchPayload([ready]) })))
+    fetchMock.mockImplementationOnce(() => Promise.resolve(responseJson(configPayload())))
+    await vi.advanceTimersByTimeAsync(3000)
+    await flushPromises()
+    expect(TestNotification.permission).toBe('granted')
+    expect(TestNotification.calls).toBe(1)
+    const callsAfterTransition = fetchMock.mock.calls.length
+    fetchMock.mockImplementationOnce(() => Promise.resolve(responseJson({ batch: batchPayload([ready]) })))
+    fetchMock.mockImplementationOnce(() => Promise.resolve(responseJson(configPayload())))
+    const refreshButton = wrapper.findAll('button').find((button) => button.text() === 'Refresh')
+    expect(refreshButton).toBeDefined()
+    await refreshButton?.trigger('click')
+    await flushPromises()
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(callsAfterTransition)
+    expect(TestNotification.calls).toBe(1)
+    wrapper.unmount()
+  })
+
   it('submits displayed revisions and renders partial batch publish outcomes', async () => {
     routeState.params = { batchId: 'batch-1' }
     const ready = jobPayload({ revision: 7 })
@@ -160,6 +206,54 @@ describe('admin pipeline batch and review workflow', () => {
       items: [{ job_id: 'job-1', expected_revision: 7 }],
     })
     expect(wrapper.find('[data-testid="batch-outcomes"]').text()).toContain('conflict')
+    wrapper.unmount()
+  })
+
+  it('reloads and resets state when reused route changes to another batch', async () => {
+    routeState.params = { batchId: 'batch-1' }
+    const first = jobPayload({ filename: 'first.pdf' })
+    const second = jobPayload({ id: 'job-2', batch_id: 'batch-2', filename: 'second.pdf', status: 'queued', progress: { completed_steps: 0, total_steps: 10 } })
+    const fetchMock = installResponses([
+      responseJson(configPayload()),
+      responseJson({ batch: batchPayload([first], 'batch-1') }),
+      responseJson(configPayload()),
+      responseJson({ batch: batchPayload([second], 'batch-2') }),
+      responseJson(configPayload()),
+    ])
+    const { default: AdminPipelineBatchView } = await import('@/views/AdminPipelineBatchView.vue')
+    const wrapper = mount(AdminPipelineBatchView)
+    await flushPromises()
+    expect(wrapper.text()).toContain('first.pdf')
+    routeState.params = { batchId: 'batch-2' }
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.text()).toContain('second.pdf')
+    expect(wrapper.text()).not.toContain('first.pdf')
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/batches/batch-2'))).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('stops polling and redirects to login when heartbeat config loses auth', async () => {
+    vi.useFakeTimers()
+    routeState.params = { batchId: 'batch-1' }
+    const queued = jobPayload({ status: 'queued', progress: { completed_steps: 0, total_steps: 10 } })
+    const fetchMock = installResponses([
+      responseJson(configPayload()),
+      responseJson({ batch: batchPayload([queued]) }),
+      responseJson(configPayload()),
+    ])
+    const { default: AdminPipelineBatchView } = await import('@/views/AdminPipelineBatchView.vue')
+    const wrapper = mount(AdminPipelineBatchView)
+    await flushPromises()
+    fetchMock.mockImplementationOnce(() => Promise.resolve(responseJson({ batch: batchPayload([queued]) })))
+    fetchMock.mockImplementationOnce(() => Promise.resolve(responseJson({ error: { code: 'unauthorized', message: 'authentication required' } }, 401)))
+    await vi.advanceTimersByTimeAsync(3000)
+    await flushPromises()
+    expect(routerReplace).toHaveBeenCalledWith('/admin/pipeline')
+    const callsAfterLogout = fetchMock.mock.calls.length
+    await vi.advanceTimersByTimeAsync(6000)
+    await flushPromises()
+    expect(fetchMock.mock.calls.length).toBe(callsAfterLogout)
     wrapper.unmount()
   })
 
@@ -204,12 +298,13 @@ describe('admin pipeline batch and review workflow', () => {
   it('publishes with current revision and exposes stale 409 response', async () => {
     routeState.params = { jobId: 'job-1' }
     const current = jobPayload({ revision: 9 })
-    const stale = jobPayload({ revision: 10 })
+    const stale = jobPayload({ revision: 10, status: 'published', filename: 'updated.pdf' })
     const fetchMock = installResponses([
       responseJson(configPayload()),
       responseJson({ job: current, worker: configPayload().worker }),
       ...previewResponses(),
-      responseJson({ error: { code: 'conflict', message: 'revision is stale' }, job: stale }, 409),
+      responseJson({ error: { code: 'conflict', message: 'publication revision is stale' } }, 409),
+      responseJson({ job: stale, worker: configPayload().worker }),
     ])
     const { default: AdminPipelineJobView } = await import('@/views/AdminPipelineJobView.vue')
     const wrapper = mount(AdminPipelineJobView)
@@ -220,6 +315,7 @@ describe('admin pipeline batch and review workflow', () => {
     expect(JSON.parse(String((publishCall?.[1] as RequestInit).body))).toEqual({ expected_revision: 9 })
     expect(wrapper.find('[data-testid="stale-revision"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('Stale revision')
+    expect(wrapper.text()).toContain('updated.pdf')
     wrapper.unmount()
   })
 

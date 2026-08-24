@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   AdminPipelineError,
@@ -28,6 +28,7 @@ const errorMessage = ref('')
 const staleRevision = ref(false)
 const selectedBib = ref('')
 const selectedModels = ref({ ocr: '', extract: '', translate: '' })
+let routeGeneration = 0
 
 const config = computed(() => admin.config)
 const workerOffline = computed(() => isPipelineWorkerUnavailable(admin.worker))
@@ -44,8 +45,7 @@ function modelOptions(name: 'ocr' | 'extract' | 'translate'): string[] {
 
 function displayError(error: unknown, fallback: string): string {
   if (error instanceof AdminPipelineError && error.status === 401) {
-    admin.logout()
-    void router.replace('/admin/pipeline')
+    handleAuthLoss()
     return 'Admin token expired. Please sign in again.'
   }
   if (error instanceof AdminPipelineError && error.status === 409) {
@@ -58,6 +58,11 @@ function displayError(error: unknown, fallback: string): string {
     return 'This job changed elsewhere. Refresh before trying the action again.'
   }
   return error instanceof Error && error.message ? error.message : fallback
+}
+
+function handleAuthLoss(): void {
+  admin.logout()
+  void router.replace('/admin/pipeline')
 }
 
 async function ensureAuth(): Promise<boolean> {
@@ -80,20 +85,60 @@ function setJob(next: PipelineJob): void {
   }
 }
 
-async function loadJob(): Promise<void> {
-  if (!admin.token || !route.params.jobId) return
+async function loadJob(generation = routeGeneration): Promise<void> {
+  const jobId = String(route.params.jobId || '')
+  if (!admin.token || !jobId) return
   loading.value = true
   try {
-    const result = await getPipelineJob(admin.token, String(route.params.jobId))
+    const result = await getPipelineJob(admin.token, jobId)
+    if (generation !== routeGeneration || jobId !== String(route.params.jobId || '')) return
     setJob(result.job)
     if (result.worker) admin.config = admin.config ? { ...admin.config, worker: result.worker } : admin.config
     staleRevision.value = false
     await preview.load(result.job.id, admin.token)
   } catch (error) {
-    errorMessage.value = displayError(error, 'Job could not be loaded.')
+    if (generation === routeGeneration && jobId === String(route.params.jobId || '')) {
+      errorMessage.value = displayError(error, 'Job could not be loaded.')
+    }
   } finally {
-    loading.value = false
+    if (generation === routeGeneration && jobId === String(route.params.jobId || '')) loading.value = false
   }
+}
+
+async function refreshJobAfterConflict(generation: number, jobId: string): Promise<void> {
+  const token = admin.token
+  if (!token) {
+    handleAuthLoss()
+    return
+  }
+  try {
+    const result = await getPipelineJob(token, jobId)
+    if (generation !== routeGeneration || jobId !== String(route.params.jobId || '')) return
+    setJob(result.job)
+    if (result.worker) admin.config = admin.config ? { ...admin.config, worker: result.worker } : admin.config
+    if (!admin.token || !admin.authenticated) handleAuthLoss()
+  } catch (error) {
+    if (generation === routeGeneration && jobId === String(route.params.jobId || '')) {
+      errorMessage.value = displayError(error, 'Current job could not be refreshed.')
+    }
+  }
+}
+
+async function loadForRoute(): Promise<void> {
+  const generation = ++routeGeneration
+  job.value = null
+  loading.value = true
+  actionLoading.value = false
+  errorMessage.value = ''
+  staleRevision.value = false
+  selectedBib.value = ''
+  selectedModels.value = { ocr: '', extract: '', translate: '' }
+  preview.dispose()
+  if (!(await ensureAuth()) || generation !== routeGeneration) {
+    if (generation === routeGeneration) loading.value = false
+    return
+  }
+  await loadJob(generation)
 }
 
 async function bindBibtex(): Promise<void> {
@@ -146,14 +191,20 @@ async function reject(): Promise<void> {
 
 async function publish(): Promise<void> {
   if (!admin.token || !job.value || !canPublish.value) return
+  const generation = routeGeneration
+  const jobId = job.value.id
+  const expectedRevision = job.value.revision
   actionLoading.value = true
   errorMessage.value = ''
   try {
-    const result = await publishPipelineJob(admin.token, job.value.id, job.value.revision)
+    const result = await publishPipelineJob(admin.token, jobId, expectedRevision)
     setJob(result.job)
     staleRevision.value = false
   } catch (error) {
     errorMessage.value = displayError(error, 'Publish could not be queued.')
+    if (error instanceof AdminPipelineError && error.status === 409) {
+      await refreshJobAfterConflict(generation, jobId)
+    }
   } finally {
     actionLoading.value = false
   }
@@ -163,8 +214,12 @@ function statusLabel(status: string): string {
   return status.replace(/_/g, ' ')
 }
 
-onMounted(async () => {
-  if (await ensureAuth()) await loadJob()
+onMounted(() => {
+  void loadForRoute()
+})
+
+watch(() => String(route.params.jobId || ''), () => {
+  void loadForRoute()
 })
 </script>
 
