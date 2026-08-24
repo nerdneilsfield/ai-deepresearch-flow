@@ -84,6 +84,14 @@ function previewResponses(): Response[] {
   ]
 }
 
+function artifactResponseFor(url: string): Response {
+  if (url.endsWith('/artifacts/pdf')) return responseArtifact('%PDF-1.7 preview', 'application/pdf')
+  if (url.endsWith('/artifacts/source_markdown')) return responseArtifact('# source')
+  if (url.endsWith('/artifacts/summary_json')) return responseArtifact('{"summary":"ok"}', 'application/json')
+  if (url.endsWith('/artifacts/translated_markdown')) return responseArtifact('# translation')
+  return responseJson({}, 404)
+}
+
 describe('admin pipeline batch and review workflow', () => {
   beforeEach(() => {
     sessionStorage.clear()
@@ -322,6 +330,79 @@ describe('admin pipeline batch and review workflow', () => {
     wrapper.unmount()
   })
 
+  it('ignores stale publish success and finally after reused job route', async () => {
+    routeState.params = { jobId: 'job-1' }
+    const first = jobPayload({ filename: 'first.pdf' })
+    const second = jobPayload({ id: 'job-2', filename: 'second.pdf' })
+    const stalePublished = jobPayload({ status: 'published', filename: 'stale-published.pdf' })
+    const secondPublished = jobPayload({ id: 'job-2', status: 'published', filename: 'second.pdf' })
+    const publishResolvers: Array<(response: Response) => void> = []
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/config')) return Promise.resolve(responseJson(configPayload()))
+      if (url.endsWith('/jobs/job-1')) return Promise.resolve(responseJson({ job: first, worker: configPayload().worker }))
+      if (url.endsWith('/jobs/job-2')) return Promise.resolve(responseJson({ job: second, worker: configPayload().worker }))
+      if (url.includes('/jobs/job-1/artifacts/') || url.includes('/jobs/job-2/artifacts/')) return Promise.resolve(artifactResponseFor(url))
+      if (url.endsWith('/jobs/job-1/publish') || url.endsWith('/jobs/job-2/publish')) {
+        return new Promise<Response>((resolve) => publishResolvers.push(resolve))
+      }
+      return Promise.resolve(responseJson({}, 404))
+    })
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    const { default: AdminPipelineJobView } = await import('@/views/AdminPipelineJobView.vue')
+    const wrapper = mount(AdminPipelineJobView)
+    await flushPromises()
+    await wrapper.get('[data-testid="job-publish"]').trigger('click')
+    expect(publishResolvers).toHaveLength(1)
+
+    routeState.params = { jobId: 'job-2' }
+    await flushPromises()
+    expect(wrapper.text()).toContain('second.pdf')
+    await wrapper.get('[data-testid="job-publish"]').trigger('click')
+    expect(publishResolvers).toHaveLength(2)
+
+    publishResolvers[0]?.(responseJson({ job: stalePublished }))
+    await flushPromises()
+    expect(wrapper.text()).toContain('second.pdf')
+    expect(wrapper.text()).not.toContain('stale-published.pdf')
+    expect(wrapper.get('[data-testid="job-publish"]').attributes('disabled')).toBeDefined()
+
+    publishResolvers[1]?.(responseJson({ job: secondPublished }))
+    await flushPromises()
+    wrapper.unmount()
+  })
+
+  it('ignores stale publish errors after reused job route', async () => {
+    routeState.params = { jobId: 'job-1' }
+    const first = jobPayload({ filename: 'first.pdf' })
+    const second = jobPayload({ id: 'job-2', filename: 'second.pdf' })
+    let resolvePublish!: (response: Response) => void
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/config')) return Promise.resolve(responseJson(configPayload()))
+      if (url.endsWith('/jobs/job-1')) return Promise.resolve(responseJson({ job: first, worker: configPayload().worker }))
+      if (url.endsWith('/jobs/job-2')) return Promise.resolve(responseJson({ job: second, worker: configPayload().worker }))
+      if (url.includes('/jobs/job-1/artifacts/') || url.includes('/jobs/job-2/artifacts/')) return Promise.resolve(artifactResponseFor(url))
+      if (url.endsWith('/jobs/job-1/publish')) return new Promise<Response>((resolve) => { resolvePublish = resolve })
+      return Promise.resolve(responseJson({}, 404))
+    })
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    const { default: AdminPipelineJobView } = await import('@/views/AdminPipelineJobView.vue')
+    const wrapper = mount(AdminPipelineJobView)
+    await flushPromises()
+    await wrapper.get('[data-testid="job-publish"]').trigger('click')
+    routeState.params = { jobId: 'job-2' }
+    await flushPromises()
+    resolvePublish(responseJson({ error: { code: 'provider_failed', message: 'stale publish failed' } }, 500))
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('second.pdf')
+    expect(wrapper.text()).not.toContain('stale publish failed')
+    wrapper.unmount()
+  })
+
   it('refreshes indexing retry conflicts before enabling actions again', async () => {
     routeState.params = { jobId: 'job-1' }
     const current = jobPayload({ revision: 12, status: 'published_with_warning' })
@@ -346,6 +427,200 @@ describe('admin pipeline batch and review workflow', () => {
     expect(wrapper.get('[data-testid="job-retry"]').attributes('disabled')).toBeUndefined()
     expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('/artifacts/')).length).toBe(8)
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:job-preview')
+    wrapper.unmount()
+  })
+
+  it('ignores stale publish-ready success and finally after reused batch route', async () => {
+    routeState.params = { batchId: 'batch-1' }
+    const firstJob = jobPayload({ filename: 'first.pdf' })
+    const secondJob = jobPayload({ id: 'job-2', batch_id: 'batch-2', filename: 'second.pdf' })
+    const firstBatch = batchPayload([firstJob], 'batch-1')
+    const secondBatch = batchPayload([secondJob], 'batch-2')
+    const publishResolvers: Array<(response: Response) => void> = []
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/config')) return Promise.resolve(responseJson(configPayload()))
+      if (url.endsWith('/batches/batch-1')) return Promise.resolve(responseJson({ batch: firstBatch }))
+      if (url.endsWith('/batches/batch-2')) return Promise.resolve(responseJson({ batch: secondBatch }))
+      if (url.endsWith('/batches/batch-1/publish-ready') || url.endsWith('/batches/batch-2/publish-ready')) {
+        return new Promise<Response>((resolve) => publishResolvers.push(resolve))
+      }
+      return Promise.resolve(responseJson({}, 404))
+    })
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    const { default: AdminPipelineBatchView } = await import('@/views/AdminPipelineBatchView.vue')
+    const wrapper = mount(AdminPipelineBatchView)
+    await flushPromises()
+    await wrapper.get('[data-testid="batch-publish-ready"]').trigger('click')
+    expect(publishResolvers).toHaveLength(1)
+
+    routeState.params = { batchId: 'batch-2' }
+    await flushPromises()
+    expect(wrapper.text()).toContain('second.pdf')
+    await wrapper.get('[data-testid="batch-publish-ready"]').trigger('click')
+    expect(publishResolvers).toHaveLength(2)
+
+    publishResolvers[0]?.(responseJson({ batch_id: 'batch-1', outcomes: [{ job_id: 'job-1', status: 'queued' }] }))
+    await flushPromises()
+    expect(wrapper.text()).toContain('second.pdf')
+    expect(wrapper.find('[data-testid="batch-outcomes"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="batch-publish-ready"]').attributes('disabled')).toBeDefined()
+
+    publishResolvers[1]?.(responseJson({ batch_id: 'batch-2', outcomes: [{ job_id: 'job-2', status: 'queued' }] }))
+    await flushPromises()
+    wrapper.unmount()
+  })
+
+  it('ignores stale publish-ready errors after reused batch route', async () => {
+    routeState.params = { batchId: 'batch-1' }
+    const firstBatch = batchPayload([jobPayload({ filename: 'first.pdf' })], 'batch-1')
+    const secondBatch = batchPayload([jobPayload({ id: 'job-2', batch_id: 'batch-2', filename: 'second.pdf' })], 'batch-2')
+    let resolvePublish!: (response: Response) => void
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/config')) return Promise.resolve(responseJson(configPayload()))
+      if (url.endsWith('/batches/batch-1')) return Promise.resolve(responseJson({ batch: firstBatch }))
+      if (url.endsWith('/batches/batch-2')) return Promise.resolve(responseJson({ batch: secondBatch }))
+      if (url.endsWith('/batches/batch-1/publish-ready')) return new Promise<Response>((resolve) => { resolvePublish = resolve })
+      return Promise.resolve(responseJson({}, 404))
+    })
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    const { default: AdminPipelineBatchView } = await import('@/views/AdminPipelineBatchView.vue')
+    const wrapper = mount(AdminPipelineBatchView)
+    await flushPromises()
+    await wrapper.get('[data-testid="batch-publish-ready"]').trigger('click')
+    routeState.params = { batchId: 'batch-2' }
+    await flushPromises()
+    resolvePublish(responseJson({ error: { code: 'provider_failed', message: 'stale publish-ready failed' } }, 500))
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('second.pdf')
+    expect(wrapper.text()).not.toContain('stale publish-ready failed')
+    wrapper.unmount()
+  })
+
+  it('ignores stale cancel success and finally after reused batch route', async () => {
+    routeState.params = { batchId: 'batch-1' }
+    const firstJob = jobPayload({ status: 'queued', filename: 'first.pdf' })
+    const secondJob = jobPayload({ id: 'job-2', batch_id: 'batch-2', status: 'queued', filename: 'second.pdf' })
+    const firstBatch = batchPayload([firstJob], 'batch-1')
+    const secondBatch = batchPayload([secondJob], 'batch-2')
+    const cancelResolvers: Array<(response: Response) => void> = []
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/config')) return Promise.resolve(responseJson(configPayload()))
+      if (url.endsWith('/batches/batch-1')) return Promise.resolve(responseJson({ batch: firstBatch }))
+      if (url.endsWith('/batches/batch-2')) return Promise.resolve(responseJson({ batch: secondBatch }))
+      if (url.endsWith('/batches/batch-1/cancel') || url.endsWith('/batches/batch-2/cancel')) {
+        return new Promise<Response>((resolve) => cancelResolvers.push(resolve))
+      }
+      return Promise.resolve(responseJson({}, 404))
+    })
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    const { default: AdminPipelineBatchView } = await import('@/views/AdminPipelineBatchView.vue')
+    const wrapper = mount(AdminPipelineBatchView)
+    await flushPromises()
+    const cancelButton = () => wrapper.findAll('button').find((button) => button.text() === 'Cancel remaining')
+    await cancelButton()?.trigger('click')
+    expect(cancelResolvers).toHaveLength(1)
+
+    routeState.params = { batchId: 'batch-2' }
+    await flushPromises()
+    await cancelButton()?.trigger('click')
+    expect(cancelResolvers).toHaveLength(2)
+
+    cancelResolvers[0]?.(responseJson({ batch_id: 'batch-1', outcomes: [{ job_id: 'job-1', status: 'cancelled' }] }))
+    await flushPromises()
+    expect(wrapper.text()).toContain('second.pdf')
+    expect(wrapper.find('[data-testid="batch-outcomes"]').exists()).toBe(false)
+    expect(cancelButton()?.attributes('disabled')).toBeDefined()
+
+    cancelResolvers[1]?.(responseJson({ batch_id: 'batch-2', outcomes: [{ job_id: 'job-2', status: 'cancelled' }] }))
+    await flushPromises()
+    wrapper.unmount()
+  })
+
+  it('ignores stale cancel errors after reused batch route', async () => {
+    routeState.params = { batchId: 'batch-1' }
+    const firstBatch = batchPayload([jobPayload({ status: 'queued', filename: 'first.pdf' })], 'batch-1')
+    const secondBatch = batchPayload([jobPayload({ id: 'job-2', batch_id: 'batch-2', status: 'queued', filename: 'second.pdf' })], 'batch-2')
+    let resolveCancel!: (response: Response) => void
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/config')) return Promise.resolve(responseJson(configPayload()))
+      if (url.endsWith('/batches/batch-1')) return Promise.resolve(responseJson({ batch: firstBatch }))
+      if (url.endsWith('/batches/batch-2')) return Promise.resolve(responseJson({ batch: secondBatch }))
+      if (url.endsWith('/batches/batch-1/cancel')) return new Promise<Response>((resolve) => { resolveCancel = resolve })
+      return Promise.resolve(responseJson({}, 404))
+    })
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    const { default: AdminPipelineBatchView } = await import('@/views/AdminPipelineBatchView.vue')
+    const wrapper = mount(AdminPipelineBatchView)
+    await flushPromises()
+    const cancelButton = wrapper.findAll('button').find((button) => button.text() === 'Cancel remaining')
+    await cancelButton?.trigger('click')
+    routeState.params = { batchId: 'batch-2' }
+    await flushPromises()
+    resolveCancel(responseJson({ error: { code: 'provider_failed', message: 'stale cancellation failed' } }, 500))
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('second.pdf')
+    expect(wrapper.text()).not.toContain('stale cancellation failed')
+    wrapper.unmount()
+  })
+
+  it('keeps newer batch polling lock when stale refresh finishes after route reuse', async () => {
+    vi.useFakeTimers()
+    routeState.params = { batchId: 'batch-1' }
+    const firstJob = jobPayload({ status: 'queued', filename: 'first.pdf' })
+    const secondJob = jobPayload({ id: 'job-2', batch_id: 'batch-2', status: 'queued', filename: 'second.pdf' })
+    const firstBatch = batchPayload([firstJob], 'batch-1')
+    const secondBatch = batchPayload([secondJob], 'batch-2')
+    let batch1Gets = 0
+    let batch2Gets = 0
+    let resolveStaleBatch1!: (response: Response) => void
+    const batch2PollResolvers: Array<(response: Response) => void> = []
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/config')) return Promise.resolve(responseJson(configPayload()))
+      if (url.endsWith('/batches/batch-1')) {
+        batch1Gets += 1
+        if (batch1Gets === 1) return Promise.resolve(responseJson({ batch: firstBatch }))
+        return new Promise<Response>((resolve) => { resolveStaleBatch1 = resolve })
+      }
+      if (url.endsWith('/batches/batch-2')) {
+        batch2Gets += 1
+        if (batch2Gets === 1) return Promise.resolve(responseJson({ batch: secondBatch }))
+        return new Promise<Response>((resolve) => batch2PollResolvers.push(resolve))
+      }
+      return Promise.resolve(responseJson({}, 404))
+    })
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    const { default: AdminPipelineBatchView } = await import('@/views/AdminPipelineBatchView.vue')
+    const wrapper = mount(AdminPipelineBatchView)
+    await flushPromises()
+    const refreshButton = wrapper.findAll('button').find((button) => button.text() === 'Refresh')
+    await refreshButton?.trigger('click')
+    expect(batch1Gets).toBe(2)
+
+    routeState.params = { batchId: 'batch-2' }
+    await flushPromises()
+    expect(batch2Gets).toBe(1)
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(batch2Gets).toBe(2)
+
+    resolveStaleBatch1(responseJson({ batch: firstBatch }))
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(batch2Gets).toBe(2)
+
+    for (const resolve of batch2PollResolvers) resolve(responseJson({ batch: secondBatch }))
+    await flushPromises()
     wrapper.unmount()
   })
 

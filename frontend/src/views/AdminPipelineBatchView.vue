@@ -112,8 +112,10 @@ async function refresh(generation = routeGeneration): Promise<void> {
       errorMessage.value = displayError(error, 'Batch could not be loaded.')
     }
   } finally {
-    if (generation === routeGeneration && batchId === String(route.params.batchId || '')) loading.value = false
-    pollInFlight = false
+    if (generation === routeGeneration && batchId === String(route.params.batchId || '')) {
+      loading.value = false
+      pollInFlight = false
+    }
   }
 }
 
@@ -145,36 +147,44 @@ async function enableNotifications(): Promise<void> {
 
 async function publishReady(): Promise<void> {
   if (!admin.token || !batch.value || readyJobs.value.length === 0) return
+  const generation = routeGeneration
+  const batchId = batch.value.id
   actionLoading.value = true
   errorMessage.value = ''
   outcomes.value = []
   try {
     const result = await publishReadyPipelineBatch(
       admin.token,
-      batch.value.id,
+      batchId,
       readyJobs.value.map((job) => ({ job_id: job.id, expected_revision: job.revision })),
     )
+    if (generation !== routeGeneration || batchId !== String(route.params.batchId || '')) return
     outcomes.value = result.outcomes
-    await refresh()
+    await refresh(generation)
   } catch (error) {
+    if (generation !== routeGeneration || batchId !== String(route.params.batchId || '')) return
     errorMessage.value = displayError(error, 'Ready jobs could not be queued.')
   } finally {
-    actionLoading.value = false
+    if (generation === routeGeneration && batchId === String(route.params.batchId || '')) actionLoading.value = false
   }
 }
 
 async function cancelBatch(): Promise<void> {
   if (!admin.token || !batch.value) return
+  const generation = routeGeneration
+  const batchId = batch.value.id
   actionLoading.value = true
   errorMessage.value = ''
   try {
-    const result = await cancelPipelineBatch(admin.token, batch.value.id)
+    const result = await cancelPipelineBatch(admin.token, batchId)
+    if (generation !== routeGeneration || batchId !== String(route.params.batchId || '')) return
     outcomes.value = result.outcomes
-    await refresh()
+    await refresh(generation)
   } catch (error) {
+    if (generation !== routeGeneration || batchId !== String(route.params.batchId || '')) return
     errorMessage.value = displayError(error, 'Batch cancellation failed.')
   } finally {
-    actionLoading.value = false
+    if (generation === routeGeneration && batchId === String(route.params.batchId || '')) actionLoading.value = false
   }
 }
 

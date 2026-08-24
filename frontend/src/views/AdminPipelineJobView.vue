@@ -235,16 +235,18 @@ async function publish(): Promise<void> {
   errorMessage.value = ''
   try {
     const result = await publishPipelineJob(admin.token, jobId, expectedRevision)
+    if (generation !== routeGeneration || jobId !== String(route.params.jobId || '')) return
     setJob(result.job)
     staleRevision.value = false
     conflictRefreshFailed.value = false
   } catch (error) {
+    if (generation !== routeGeneration || jobId !== String(route.params.jobId || '')) return
     errorMessage.value = displayError(error, 'Publish could not be queued.')
     if (error instanceof AdminPipelineError && error.status === 409) {
       await refreshJobAfterConflict(generation, jobId)
     }
   } finally {
-    actionLoading.value = false
+    if (generation === routeGeneration && jobId === String(route.params.jobId || '')) actionLoading.value = false
   }
 }
 
