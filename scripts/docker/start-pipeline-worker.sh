@@ -14,8 +14,10 @@ cmd=(
   "${PYTHON_BIN:-python3}" -m deepresearch_flow.pipeline.runtime
   --config "$PAPER_DB_CONFIG"
   --ocr-config "${PAPER_OCR_CONFIG:-ocr.toml}"
-  --snapshot-db "${PAPER_DB_SNAPSHOT_DB:-/db/papers.db}"
 )
+if [[ -n "${PAPER_DB_SNAPSHOT_DB:-}" ]]; then
+  cmd+=(--snapshot-db "${PAPER_DB_SNAPSHOT_DB}")
+fi
 if [[ -n "${PAPER_DB_EMBED_DB:-}" ]]; then
   cmd+=(--vector-dir "$PAPER_DB_EMBED_DB")
 fi

@@ -84,6 +84,20 @@ class WebDavFormalStore:
         self.storage.upload(target, data)
 
 
+class MirroredFormalStore:
+    """Write immutable resources to primary publication and local cache."""
+
+    def __init__(self, primary: FormalStore, cache: FormalStore):
+        self.primary = primary
+        self.cache = cache
+
+    def put(self, relative_path: str, data: bytes) -> None:
+        # Cache first guarantees a WebDAV publication always has enough local
+        # content to reconstruct an index-only retry after private cleanup.
+        self.cache.put(relative_path, data)
+        self.primary.put(relative_path, data)
+
+
 def safe_relative_path(value: str) -> str:
     """Validate and normalize one formal object path."""
     normalized = str(value).replace("\\", "/")
@@ -102,6 +116,7 @@ def safe_relative_path(value: str) -> str:
 __all__ = [
     "FormalStore",
     "LocalFormalStore",
+    "MirroredFormalStore",
     "WebDavFormalStore",
     "safe_relative_path",
 ]

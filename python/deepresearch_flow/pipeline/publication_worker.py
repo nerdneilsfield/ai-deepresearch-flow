@@ -108,6 +108,15 @@ class PublicationWorker:
             if not isinstance(bundle, PublicationBundle):
                 raise TypeError("bundle_builder must return PublicationBundle")
             check_lease()
+            manifest_recorder = getattr(self.state, "record_publication_manifest", None)
+            if callable(manifest_recorder):
+                from .publication import publication_manifest
+
+                manifest_recorder(
+                    job_id,
+                    publication_manifest(bundle),
+                    lease.token,
+                )
             self.state.set_digests(job_id, bundle_digest=bundle.bundle_digest, lease_token=lease.token)
 
             @contextmanager

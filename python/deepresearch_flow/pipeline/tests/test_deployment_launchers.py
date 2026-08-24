@@ -187,3 +187,38 @@ def test_start_supervisor_materializes_worker_only_for_consistent_enabled_config
     )
     assert result.returncode != 0
     assert "invalid or inconsistent" in result.stderr
+
+
+def test_start_pipeline_worker_leaves_custom_snapshot_path_to_runtime_config(
+    tmp_path: Path,
+) -> None:
+    captured = tmp_path / "worker-args"
+    fake_python = _executable(
+        tmp_path / "python",
+        "#!/bin/sh\n"
+        "printf '%s\\n' \"$@\" > \"$CAPTURE_ARGS\"\n",
+    )
+    config = _pipeline_config(tmp_path / "enabled.toml", enabled=True)
+    env = os.environ.copy()
+    env.update(
+        {
+            "PYTHON_BIN": str(fake_python),
+            "CAPTURE_ARGS": str(captured),
+            "PAPER_PIPELINE_ENABLED": "1",
+            "PAPER_DB_CONFIG": str(config),
+            "PAPER_OCR_CONFIG": str(tmp_path / "ocr.toml"),
+            "PAPER_DB_SNAPSHOT_DB": "",
+        }
+    )
+    result = subprocess.run(
+        ["bash", str(DOCKER / "start-pipeline-worker.sh")],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    args = captured.read_text(encoding="utf-8").splitlines()
+    assert "--snapshot-db" not in args
+    assert "--config" in args
+    assert str(config) in args

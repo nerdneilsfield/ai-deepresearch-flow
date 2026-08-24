@@ -458,8 +458,11 @@ only that paper is loaded/upserted; the stage is removed after indexing.
 WebDAV upload success is sufficient; no HEAD probe is required. A crash after
 the receipt is safe to retry. If embedding fails, the paper remains published
 as `published_with_warning`; retry indexing only after fixing vector
-configuration. Formal local/WebDAV files are separate from private pipeline
-work and are not automatically collected.
+configuration. The queue keeps only a small publication manifest; formal
+content-addressed resources remain in the local formal root (including a
+local cache alongside WebDAV publication), so index-only retry still works
+after seven-day private work/preview cleanup. Formal local/WebDAV files are
+separate from private pipeline work and are not automatically collected.
 
 To disable or roll back, stop the container, set `PAPER_PIPELINE_ENABLED` unset
 or `0`, and use a config with `[pipeline].enabled = false`. Existing public

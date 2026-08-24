@@ -1133,7 +1133,13 @@ def register_db_commands(db_group: click.Group) -> None:
         """Read-only JSON API server backed by a snapshot DB."""
 
     @api_group.command("serve")
-    @click.option("--snapshot-db", "snapshot_db", required=True, help="Path to paper_snapshot.db")
+    @click.option(
+        "--snapshot-db",
+        "snapshot_db",
+        required=False,
+        default=None,
+        help="Path to paper_snapshot.db (pipeline config may supply it)",
+    )
     @click.option(
         "--static-base-url",
         "static_base_url",
@@ -1242,7 +1248,7 @@ def register_db_commands(db_group: click.Group) -> None:
         help="JSON file path for persisted MCP OAuth dynamic client registrations.",
     )
     def api_serve(
-        snapshot_db: str,
+        snapshot_db: str | None,
         static_base_url: str | None,
         cors_origins: tuple[str, ...],
         max_query_length: int,
@@ -1302,6 +1308,12 @@ def register_db_commands(db_group: click.Group) -> None:
             )
         except (OSError, ValueError) as exc:
             raise click.ClickException(str(exc)) from exc
+        if snapshot_db is None:
+            if pipeline_config is None:
+                raise click.ClickException(
+                    "--snapshot-db is required when pipeline configuration is disabled"
+                )
+            snapshot_db = str(pipeline_config.snapshot_db)
         startup_embed_db = None
         if embed_db:
             startup_embed_db = Path(embed_db)

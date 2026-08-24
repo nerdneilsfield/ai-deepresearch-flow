@@ -21,9 +21,12 @@ from typing import Any, Mapping
 
 from .artifacts import ArtifactStore
 from .config import PipelineConfig, load_pipeline_config
-from .publication import build_publication_bundle
+from .publication import (
+    build_publication_bundle,
+    build_publication_bundle_from_manifest,
+)
 from .publication_indexing import LanceDBIndexer
-from .publication_store import LocalFormalStore, WebDavFormalStore
+from .publication_store import LocalFormalStore, MirroredFormalStore, WebDavFormalStore, safe_relative_path
 from .publication_worker import PublicationWorker
 from .state import PipelineState
 from .worker import PipelineWorker
@@ -392,7 +395,7 @@ def _build_production_publication_worker(
         from deepresearch_flow.storage.webdav import WebDavStorage
 
         storage = WebDavStorage(config.webdav_url, username, password)
-        formal_store = WebDavFormalStore(storage)
+        formal_store = MirroredFormalStore(WebDavFormalStore(storage), LocalFormalStore(config.static_root))
         closeables.append(storage)
     else:
         formal_store = LocalFormalStore(config.static_root)
@@ -409,7 +412,7 @@ def _build_production_publication_worker(
         )
 
     def bundle_builder(job_id: str) -> Any:
-        return _bundle_from_state(job_id, state, artifacts, config)
+        return build_publication_bundle_from_state(job_id, state, artifacts, config)
 
     return (
         PublicationWorker(
@@ -425,22 +428,36 @@ def _build_production_publication_worker(
     )
 
 
-def _bundle_from_state(
+def build_publication_bundle_from_state(
     job_id: str,
     state: PipelineState,
     artifacts: ArtifactStore,
     config: PipelineConfig,
 ) -> Any:
     details = state.get_job_details(job_id)
-    summary = details.get("summary")
-    if not isinstance(summary, Mapping):
-        raise ValueError(f"job {job_id} has no normalized summary")
-    resources: dict[str, bytes] = {}
+    manifest_getter = getattr(state, "get_publication_manifest", None)
+    manifest = manifest_getter(job_id) if callable(manifest_getter) else None
     artifact_rows = {
         str(row.get("kind")): row
         for row in details.get("artifacts", [])
         if isinstance(row, Mapping)
     }
+    required_kinds = {
+        "preview_pdf",
+        "preview_source_md",
+        "preview_summary_json",
+        "preview_translated_md",
+    }
+    if isinstance(manifest, Mapping) and not required_kinds.issubset(artifact_rows):
+        return _bundle_from_published_manifest(
+            manifest,
+            static_root=Path(config.static_root),
+            work_dir=Path(artifacts.work_dir),
+        )
+    summary = details.get("summary")
+    if not isinstance(summary, Mapping):
+        raise ValueError(f"job {job_id} has no normalized summary")
+    resources: dict[str, bytes] = {}
     for kind, alias in (
         ("preview_pdf", "pdf"),
         ("preview_source_md", "source_markdown"),
@@ -486,6 +503,30 @@ def _bundle_from_state(
         resources=resources,
         work_dir=artifacts.work_dir,
         translation_language=config.translation_language,
+    )
+
+
+def _bundle_from_published_manifest(
+    manifest: Mapping[str, Any], *, static_root: Path, work_dir: Path
+) -> Any:
+    """Load content-addressed formal cache without touching private previews."""
+    root = static_root.resolve()
+    resources: dict[str, bytes] = {}
+    records = manifest.get("resources")
+    if not isinstance(records, list):
+        raise ValueError("publication manifest has invalid resources")
+    for record in records:
+        if not isinstance(record, Mapping):
+            raise ValueError("publication manifest has invalid resource metadata")
+        relative_path = safe_relative_path(str(record.get("path") or ""))
+        path = (root / relative_path).resolve()
+        if not path.is_relative_to(root) or not path.is_file():
+            raise ValueError("published resource cache is unavailable")
+        resources[relative_path] = path.read_bytes()
+    return build_publication_bundle_from_manifest(
+        manifest,
+        resources,
+        work_dir=work_dir,
     )
 
 
@@ -554,6 +595,7 @@ __all__ = [
     "run_production_worker_forever",
     "run_worker_until_stopped",
     "resolve_snapshot_db",
+    "build_publication_bundle_from_state",
     "validate_pipeline_mounts",
     "validate_pipeline_environment",
 ]

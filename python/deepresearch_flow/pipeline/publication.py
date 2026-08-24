@@ -51,7 +51,12 @@ from .publication_models import (
     PublicationWorkerResult,
     plain,
 )
-from .publication_store import LocalFormalStore, WebDavFormalStore, safe_relative_path
+from .publication_store import (
+    LocalFormalStore,
+    MirroredFormalStore,
+    WebDavFormalStore,
+    safe_relative_path,
+)
 from .publication_indexing import LanceDBIndexer
 from .publication_worker import PublicationWorker
 
@@ -215,22 +220,14 @@ def build_publication_bundle(
 
     _validate_publication_resources(resource_map, references)
 
-    payload = {
-        "job_id": normalized_job_id,
-        "paper_id": paper_id,
-        "paper": plain(normalized_paper),
-        "bibtex": plain(normalized_bibtex),
-        "references": {key: references[key] for key in sorted(references)},
-        "resources": [
-            {
-                "path": path,
-                "digest": resource_map[path].digest,
-                "size": resource_map[path].size,
-                "media_type": resource_map[path].media_type,
-            }
-            for path in sorted(resource_map)
-        ],
-    }
+    payload = _publication_manifest_payload(
+        normalized_job_id,
+        paper_id,
+        normalized_paper,
+        normalized_bibtex,
+        references,
+        resource_map,
+    )
     bundle_digest = hashlib.sha256(
         json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
             "utf-8"
@@ -245,6 +242,109 @@ def build_publication_bundle(
         references=references,
         bundle_digest=bundle_digest,
         work_dir=raw_work_dir,
+    )
+
+
+def publication_manifest(bundle: PublicationBundle) -> dict[str, Any]:
+    """Return metadata required to reconstruct one published bundle.
+
+    Only paper metadata, references, and content-addressed resource metadata
+    are returned.  Resource bytes are intentionally excluded.
+    """
+    payload = _publication_manifest_payload(
+        bundle.job_id,
+        bundle.paper_id,
+        bundle.paper,
+        bundle.bibtex,
+        bundle.references,
+        bundle.resource_map,
+    )
+    return {
+        "version": 1,
+        **payload,
+        "bundle_digest": bundle.bundle_digest,
+    }
+
+
+def build_publication_bundle_from_manifest(
+    manifest: Mapping[str, Any],
+    resources: Mapping[str, bytes],
+    *,
+    work_dir: str | Path | None = None,
+) -> PublicationBundle:
+    """Reconstruct immutable bundle from metadata and formal cached bytes."""
+    if int(manifest.get("version", 0)) != 1:
+        raise ValueError("unsupported publication manifest version")
+    job_id = str(manifest.get("job_id") or "").strip()
+    paper_id = str(manifest.get("paper_id") or "").strip()
+    paper = manifest.get("paper")
+    bibtex = manifest.get("bibtex")
+    references = manifest.get("references")
+    records = manifest.get("resources")
+    bundle_digest = str(manifest.get("bundle_digest") or "").strip()
+    if (
+        not job_id
+        or not paper_id
+        or not isinstance(paper, Mapping)
+        or not isinstance(bibtex, Mapping)
+        or not isinstance(references, Mapping)
+        or not isinstance(records, list)
+        or not bundle_digest
+    ):
+        raise ValueError("publication manifest is incomplete")
+    resource_map: dict[str, PublicationResource] = {}
+    for record in records:
+        if not isinstance(record, Mapping):
+            raise ValueError("publication manifest resource is invalid")
+        relative_path = safe_relative_path(str(record.get("path") or ""))
+        digest = str(record.get("digest") or "")
+        size = record.get("size")
+        media_type = str(record.get("media_type") or "application/octet-stream")
+        if not isinstance(size, int) or isinstance(size, bool) or not digest:
+            raise ValueError("publication manifest resource metadata is invalid")
+        if relative_path not in resources:
+            raise PublicationError(f"published resource cache is missing {relative_path}")
+        content = resources[relative_path]
+        if not isinstance(content, bytes):
+            raise ValueError("published resource cache must contain bytes")
+        actual_digest = hashlib.sha256(content).hexdigest()
+        if actual_digest != digest or len(content) != size:
+            raise PublicationError(f"published resource cache is corrupt for {relative_path}")
+        resource_map[relative_path] = PublicationResource(
+            relative_path=relative_path,
+            content=content,
+            digest=digest,
+            size=size,
+            media_type=media_type,
+        )
+    if set(resources) != set(resource_map):
+        raise ValueError("published resource cache contains unexpected resources")
+    normalized_references = {str(key): str(value) for key, value in references.items()}
+    _validate_publication_resources(resource_map, normalized_references)
+    payload = _publication_manifest_payload(
+        job_id,
+        paper_id,
+        paper,
+        bibtex,
+        normalized_references,
+        resource_map,
+    )
+    expected_digest = hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
+    ).hexdigest()
+    if expected_digest != bundle_digest:
+        raise PublicationConflict("publication manifest bundle digest does not match")
+    return PublicationBundle(
+        job_id=job_id,
+        paper_id=paper_id,
+        paper=paper,
+        bibtex=bibtex,
+        resource_map=resource_map,
+        references=normalized_references,
+        bundle_digest=bundle_digest,
+        work_dir=Path(work_dir).resolve() if work_dir is not None else None,
     )
 
 
@@ -543,6 +643,33 @@ def _validate_publication_resources(
         raise ValueError("publication resource reference is missing from resource map")
 
 
+def _publication_manifest_payload(
+    job_id: str,
+    paper_id: str,
+    paper: Mapping[str, Any],
+    bibtex: Mapping[str, Any],
+    references: Mapping[str, str],
+    resource_map: Mapping[str, PublicationResource],
+) -> dict[str, Any]:
+    """Build stable metadata payload used for bundle identity and recovery."""
+    return {
+        "job_id": str(job_id),
+        "paper_id": str(paper_id),
+        "paper": plain(paper),
+        "bibtex": plain(bibtex),
+        "references": {str(key): str(references[key]) for key in sorted(references)},
+        "resources": [
+            {
+                "path": path,
+                "digest": resource_map[path].digest,
+                "size": resource_map[path].size,
+                "media_type": resource_map[path].media_type,
+            }
+            for path in sorted(resource_map)
+        ],
+    }
+
+
 def _check_lease(check: Callable[[], None] | None) -> None:
     if check is not None:
         try:
@@ -777,6 +904,7 @@ __all__ = [
     "FormalStore",
     "LanceDBIndexer",
     "LocalFormalStore",
+    "MirroredFormalStore",
     "PublicationBundle",
     "PublicationCancelled",
     "PublicationConflict",
@@ -788,6 +916,8 @@ __all__ = [
     "WebDavFormalStore",
     "build_bundle_from_preview",
     "build_publication_bundle",
+    "build_publication_bundle_from_manifest",
+    "publication_manifest",
     "publish_bundle",
     "queue_publication",
     "validate_vector_index",

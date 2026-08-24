@@ -57,6 +57,40 @@ def test_cleanup_limit_bounds_expired_terminal_artifact_batch(tmp_path: Path) ->
     assert artifacts.resolve(remaining, "ocr") is not None
 
 
+def test_cleanup_limit_makes_progress_when_oldest_private_directory_is_absent(
+    tmp_path: Path,
+) -> None:
+    artifacts = ArtifactStore(tmp_path / "work", tmp_path / "previews")
+    state = PipelineState(tmp_path / "queue.sqlite3", artifact_store=artifacts)
+    first = state.create_job()
+    state.admin_transition(first, "rejected")
+    second = state.create_job()
+    lease = state.acquire_lease(second, "cleanup-worker")
+    assert lease is not None
+    pending = artifacts.begin(second, "ocr")
+    pending.write(b"second")
+    pending.promote()
+    state.transition(second, "review_ready", lease.token)
+    state.admin_transition(second, "rejected")
+
+    processed: list[str] = []
+    for _ in range(3):
+        processed.extend(
+            state.cleanup_expired_artifacts(
+                now=datetime(2030, 1, 1, tzinfo=timezone.utc),
+                limit=1,
+            )
+        )
+
+    assert set(processed) == {first, second}
+    assert state.get_job(first)["status"] == "rejected"
+    assert state.get_job(second)["status"] == "rejected"
+    assert artifacts.resolve(second, "ocr") is None
+    assert state.cleanup_expired_artifacts(
+        now=datetime(2030, 1, 1, tzinfo=timezone.utc), limit=1
+    ) == []
+
+
 def test_generic_worker_transition_rejects_missing_lease_token(tmp_path: Path) -> None:
     state = PipelineState(tmp_path / "queue.sqlite3")
     job_id = state.create_job()

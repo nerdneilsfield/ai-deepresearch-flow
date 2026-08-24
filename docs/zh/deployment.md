@@ -437,7 +437,9 @@ publication receipt，最后增量更新 LanceDB；WebDAV 当前 bundle 的资�
 private 临时目录，仅加载/更新当前论文，索引完成即清理。WebDAV 上传成功即足够，
 不强制 HEAD。receipt 写入后若进程崩溃，重启会安全续跑。Embedding 失败时论文仍
 保留，状态为 `published_with_warning`；修复向量配置后可只重试 indexing，不重复
-发布 Snapshot/静态资源。正式 local/WebDAV 资源与私有 pipeline work 分离，首版不
+发布 Snapshot/静态资源。队列只保存小型 publication manifest；正式的
+content-addressed 资源（WebDAV 发布时亦保留在正式 static root 的本地 cache）与
+私有 pipeline work 分离，故七日清理 work/preview 后仍可只重试 indexing。首版不
 自动回收正式文件。
 
 禁用/回滚：停止容器，取消设置或设 `PAPER_PIPELINE_ENABLED=0`，并将

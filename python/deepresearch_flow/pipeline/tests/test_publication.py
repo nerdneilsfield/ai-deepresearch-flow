@@ -13,16 +13,33 @@ import pytest
 
 from deepresearch_flow.pipeline.publication import (
     LocalFormalStore,
+    MirroredFormalStore,
     PublicationBundle,
     PublicationConflict,
     PublicationError,
     PublicationResource,
     PublicationWorker,
     WebDavFormalStore,
+    build_publication_bundle_from_manifest,
     build_publication_bundle,
     publish_bundle,
     queue_publication,
 )
+
+
+def _cached_bundle_from_manifest(
+    manifest: dict[str, object], formal_root: Path, work_root: Path
+) -> PublicationBundle:
+    records = manifest["resources"]
+    assert isinstance(records, list)
+    resources: dict[str, bytes] = {}
+    for record in records:
+        assert isinstance(record, dict)
+        path = str(record["path"])
+        resources[path] = (formal_root / path).read_bytes()
+    return build_publication_bundle_from_manifest(
+        manifest, resources, work_dir=work_root
+    )
 
 
 def _paper(title: str = "Tiny paper") -> dict[str, object]:
@@ -393,6 +410,179 @@ def test_publication_worker_commits_receipt_before_index_and_reports_warning(tmp
         assert conn.execute("SELECT COUNT(*) FROM pipeline_publication_receipt").fetchone()[0] == 1
     finally:
         conn.close()
+
+
+@pytest.mark.parametrize("backend", ["local", "webdav"])
+def test_warning_retry_reconstructs_from_published_cache_after_private_retention(
+    tmp_path: Path, backend: str
+) -> None:
+    from deepresearch_flow.pipeline import ArtifactStore, PipelineState
+
+    work = tmp_path / "work"
+    previews = tmp_path / "previews"
+    formal = tmp_path / "formal"
+    artifacts = ArtifactStore(work, previews)
+    state = PipelineState(tmp_path / "queue.sqlite3", artifact_store=artifacts)
+    job_id = state.create_job()
+    state.admin_transition(job_id, "running")
+    state.admin_transition(job_id, "review_ready")
+    queue_publication(state, job_id, int(state.get_job(job_id)["revision"]))
+    bundle = _bundle(work, job_id=job_id)
+
+    class FakeWebDav:
+        def __init__(self) -> None:
+            self.uploads: list[str] = []
+
+        def upload(self, path: str, data: bytes) -> None:
+            del data
+            self.uploads.append(path)
+
+    remote = FakeWebDav()
+    cache = LocalFormalStore(formal)
+    primary = (
+        LocalFormalStore(formal)
+        if backend == "local"
+        else WebDavFormalStore(remote)
+    )
+    first = PublicationWorker(
+        state,
+        tmp_path / "snapshot.sqlite3",
+        MirroredFormalStore(primary, cache),
+        bundle_builder=lambda _: bundle,
+        indexer=lambda _: (_ for _ in ()).throw(RuntimeError("index unavailable")),
+    ).run_once()
+    assert first[0].status == "published_with_warning"
+    manifest = state.get_publication_manifest(job_id)
+    assert manifest is not None
+    assert all("content" not in record for record in manifest["resources"])
+
+    private_work = artifacts.begin(job_id, "ocr")
+    private_work.write(b"private")
+    private_work.promote()
+    artifacts.protect(job_id, "preview_pdf", b"preview")
+    assert state.cleanup_expired_artifacts(
+        now=datetime(2030, 1, 1, tzinfo=timezone.utc), limit=1
+    ) == [job_id]
+    assert artifacts.resolve(job_id, "ocr") is None
+
+    state.retry_indexing(job_id, int(state.get_job(job_id)["revision"]))
+
+    class BrokenPrimary:
+        def put(self, relative_path: str, data: bytes) -> None:
+            del relative_path, data
+            raise AssertionError("index-only retry must not rewrite formal resources")
+
+    rebuilt = _cached_bundle_from_manifest(manifest, formal, work)
+    index_marker = tmp_path / "index-marker"
+
+    def recover_indexer(value: object) -> None:
+        assert isinstance(value, PublicationBundle)
+        assert value.resource_map
+        index_marker.write_text(value.paper_id, encoding="utf-8")
+
+    second = PublicationWorker(
+        state,
+        tmp_path / "snapshot.sqlite3",
+        MirroredFormalStore(BrokenPrimary(), LocalFormalStore(formal)),
+        bundle_builder=lambda _: rebuilt,
+        indexer=recover_indexer,
+    ).run_once()
+    assert second[0].status == "published"
+    assert state.get_job(job_id)["status"] == "published"
+    if backend == "webdav":
+        assert len(remote.uploads) == len(bundle.resources)
+    assert index_marker.read_text(encoding="utf-8") == bundle.paper_id
+
+
+def test_runtime_public_worker_recovers_warning_from_manifest_cache(
+    tmp_path: Path,
+) -> None:
+    from deepresearch_flow.pipeline import ArtifactStore, PipelineConfig, PipelineState
+    from deepresearch_flow.pipeline.runtime import (
+        build_publication_bundle_from_state,
+        run_worker_until_stopped,
+    )
+
+    work = tmp_path / "work"
+    previews = tmp_path / "previews"
+    formal = tmp_path / "formal"
+    snapshot = tmp_path / "snapshot.sqlite3"
+    config = PipelineConfig(
+        enabled=True,
+        work_dir=str(work),
+        preview_root=str(previews),
+        static_root=str(formal),
+        queue_db=str(tmp_path / "queue.sqlite3"),
+        snapshot_db=str(snapshot),
+    )
+    artifacts = ArtifactStore(work, previews)
+    state = PipelineState(config.queue_db, artifact_store=artifacts)
+    job_id = state.create_job()
+    state.admin_transition(job_id, "running")
+    state.admin_transition(job_id, "review_ready")
+    queue_publication(state, job_id, int(state.get_job(job_id)["revision"]))
+    bundle = _bundle(work, job_id=job_id)
+    first = PublicationWorker(
+        state,
+        snapshot,
+        LocalFormalStore(formal),
+        bundle_builder=lambda _: bundle,
+        indexer=lambda _: (_ for _ in ()).throw(RuntimeError("index unavailable")),
+    ).run_once()
+    assert first[0].status == "published_with_warning"
+
+    private_work = artifacts.begin(job_id, "ocr")
+    private_work.write(b"private")
+    private_work.promote()
+    artifacts.protect(job_id, "preview_pdf", b"preview")
+    assert state.cleanup_expired_artifacts(
+        now=datetime(2030, 1, 1, tzinfo=timezone.utc), limit=1
+    ) == [job_id]
+    state.retry_indexing(job_id, int(state.get_job(job_id)["revision"]))
+
+    class ProcessingIdle:
+        def run_once(self, job_ids: list[str] | None = None) -> list[object]:
+            del job_ids
+            return []
+
+    marker = tmp_path / "index-marker"
+
+    def fake_indexer(value: object) -> None:
+        assert isinstance(value, PublicationBundle)
+        assert value.resource_map
+        marker.write_text(value.paper_id, encoding="utf-8")
+
+    class BrokenPrimary:
+        def put(self, relative_path: str, data: bytes) -> None:
+            del relative_path, data
+            raise AssertionError("index-only retry must not rewrite formal resources")
+
+    recovery_worker = PublicationWorker(
+        state,
+        snapshot,
+        MirroredFormalStore(BrokenPrimary(), LocalFormalStore(formal)),
+        bundle_builder=lambda current_job_id: build_publication_bundle_from_state(
+            current_job_id, state, artifacts, config
+        ),
+        indexer=fake_indexer,
+    )
+
+    result = run_worker_until_stopped(
+        config,
+        state,
+        artifacts,
+        snapshot_db=snapshot,
+        processing_worker=ProcessingIdle(),
+        publication_worker=recovery_worker,
+        stop_event=Event(),
+        poll_interval_seconds=0,
+        cleanup_interval_seconds=3600,
+        max_cycles=1,
+        worker_id="runtime-recovery",
+    )
+    assert result.published_jobs == 1
+    assert state.get_job(job_id)["status"] == "published"
+    assert marker.read_text(encoding="utf-8") == bundle.paper_id
 
 
 def test_publication_worker_stops_after_current_job_without_claiming_next(

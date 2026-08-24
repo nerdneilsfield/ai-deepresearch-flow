@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-snapshot_db="${PAPER_DB_SNAPSHOT_DB:-/db/papers.db}"
 advanced_env_count=0
 mcp_access_token="${MCP_ACCESS_TOKEN:-}"
 pipeline_bridge="${PAPER_PIPELINE_ENABLED:-}"
@@ -47,10 +46,15 @@ fi
 
 cmd=(
   deepresearch-flow paper db api serve
-  --snapshot-db "$snapshot_db"
   --host 0.0.0.0 --port 8000
   --static-base-url "${PAPER_DB_STATIC_BASE:-}"
 )
+if [[ -n "${PAPER_DB_SNAPSHOT_DB:-}" ]]; then
+  cmd+=(--snapshot-db "${PAPER_DB_SNAPSHOT_DB}")
+elif [[ "$pipeline_bridge" != "1" && "$pipeline_bridge" != "true" && "$pipeline_bridge" != "yes" && "$pipeline_bridge" != "on" ]]; then
+  # Keep legacy non-pipeline containers on their historical bind mount.
+  cmd+=(--snapshot-db "/db/papers.db")
+fi
 
 if [[ -v PAPER_DB_CORS_ORIGINS ]]; then
   cors_origins="${PAPER_DB_CORS_ORIGINS}"

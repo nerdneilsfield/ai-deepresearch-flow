@@ -7,6 +7,7 @@ import json
 import secrets
 import sqlite3
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -158,7 +159,7 @@ class LeaseGuard:
         terminal = _stamp(_utc()) if status in _TERMINAL else None
         clear = status not in {"running", "publishing", "indexing"}
         connection.execute(
-            "UPDATE jobs SET status=?,terminal_at=?,cancel_requested=CASE WHEN ? THEN 0 ELSE cancel_requested END,lease_owner=CASE WHEN ? THEN NULL ELSE lease_owner END,lease_token=CASE WHEN ? THEN NULL ELSE lease_token END,lease_expires_at=CASE WHEN ? THEN NULL ELSE lease_expires_at END,updated_at=?,revision=revision+1 WHERE id=?",
+            "UPDATE jobs SET status=?,terminal_at=?,cleanup_completed_at=NULL,cancel_requested=CASE WHEN ? THEN 0 ELSE cancel_requested END,lease_owner=CASE WHEN ? THEN NULL ELSE lease_owner END,lease_token=CASE WHEN ? THEN NULL ELSE lease_token END,lease_expires_at=CASE WHEN ? THEN NULL ELSE lease_expires_at END,updated_at=?,revision=revision+1 WHERE id=?",
             (
                 status,
                 terminal,
@@ -239,6 +240,7 @@ class PipelineState:
                     updated_at TEXT NOT NULL, terminal_at TEXT, lease_owner TEXT, lease_token TEXT, lease_expires_at TEXT,
                     cancel_requested INTEGER NOT NULL DEFAULT 0, revision INTEGER NOT NULL DEFAULT 0,
                     preview_digest TEXT, bundle_digest TEXT, preview_error TEXT,
+                    publication_manifest_json TEXT, cleanup_completed_at TEXT,
                     preview_generation TEXT,
                     selected_models TEXT NOT NULL DEFAULT '{}',
                     config_fingerprint TEXT NOT NULL DEFAULT '',
@@ -302,6 +304,10 @@ class PipelineState:
                 db.execute("ALTER TABLE jobs ADD COLUMN preview_error TEXT")
             if "preview_generation" not in job_columns:
                 db.execute("ALTER TABLE jobs ADD COLUMN preview_generation TEXT")
+            if "publication_manifest_json" not in job_columns:
+                db.execute("ALTER TABLE jobs ADD COLUMN publication_manifest_json TEXT")
+            if "cleanup_completed_at" not in job_columns:
+                db.execute("ALTER TABLE jobs ADD COLUMN cleanup_completed_at TEXT")
             result_columns = {row["name"] for row in db.execute("PRAGMA table_info(batch_match_results)").fetchall()}
             if "revision" not in result_columns:
                 db.execute("ALTER TABLE batch_match_results ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
@@ -511,6 +517,50 @@ class PipelineState:
         result["summary"] = None if summary is None else json.loads(summary["summary_json"])
         return result
 
+    def get_publication_manifest(self, job_id: str) -> dict[str, Any] | None:
+        """Return durable publication metadata without exposing resource bytes."""
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT publication_manifest_json FROM jobs WHERE id=?", (job_id,)
+            ).fetchone()
+        if row is None:
+            raise KeyError(job_id)
+        raw = row["publication_manifest_json"]
+        if raw is None:
+            return None
+        try:
+            value = json.loads(str(raw))
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise ValueError("stored publication manifest is invalid") from exc
+        if not isinstance(value, dict):
+            raise ValueError("stored publication manifest is invalid")
+        return value
+
+    def record_publication_manifest(
+        self,
+        job_id: str,
+        manifest: Mapping[str, Any],
+        lease_token: str,
+    ) -> None:
+        """Persist small publication metadata while a publication lease is held.
+
+        Manifest stores paper identity, references, and content-addressed
+        resource metadata only.  Resource bytes remain in formal storage.
+        """
+        payload = json.dumps(
+            dict(manifest), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+        if len(payload.encode("utf-8")) > 4 * 1024 * 1024:
+            raise ValueError("publication manifest exceeds metadata limit")
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self._check_token(db, job_id, lease_token)
+            db.execute(
+                "UPDATE jobs SET publication_manifest_json=?,bundle_digest=COALESCE(?,bundle_digest),updated_at=? WHERE id=?",
+                (payload, manifest.get("bundle_digest"), _stamp(_utc()), job_id),
+            )
+            db.commit()
+
     def worker_status_snapshot(self, *, offline_after_seconds: float | None = None) -> dict[str, Any]:
         """Summarize persisted heartbeats without exposing lease credentials."""
         now = _utc()
@@ -573,29 +623,63 @@ class PipelineState:
     def cleanup_expired_artifacts(
         self, now: datetime | None = None, *, limit: int | None = None
     ) -> list[str]:
-        """Remove only expired terminal work artifacts through bound store."""
+        """Remove expired private artifacts and durably advance cleanup cursor.
+
+        ``cleanup_completed_at`` is an operational cursor, not a paper-state
+        mutation.  It prevents terminal rows with already-missing directories
+        from occupying every bounded cleanup window.  Publication manifests
+        remain available for index-only retry; only private artifact
+        registrations and heartbeats are removed.
+        """
         if self.artifact_store is None:
             return []
         if limit is not None and limit <= 0:
             raise ValueError("cleanup limit must be positive")
+        cleanup_now = _utc(now)
+        cutoff = _stamp(
+            cleanup_now - timedelta(days=self.artifact_store.retention_days)
+        )
         with self._connect() as db:
             rows = db.execute(
                 "SELECT id,status,terminal_at FROM jobs "
                 "WHERE status IN ('published','published_with_warning','rejected','cancelled') "
+                "AND cleanup_completed_at IS NULL "
+                "AND terminal_at IS NOT NULL AND terminal_at <= ? "
                 "ORDER BY terminal_at,id"
                 + (" LIMIT ?" if limit is not None else ""),
-                ((int(limit),) if limit is not None else ()),
+                ((cutoff, int(limit)) if limit is not None else (cutoff,)),
             ).fetchall()
         jobs = {
             str(row["id"]): {"status": str(row["status"]), "terminal_at": row["terminal_at"]}
             for row in rows
         }
-        removed = self.artifact_store.cleanup(jobs, now=now, limit=limit)
-        if removed:
-            with self._connect() as db:
-                db.executemany("DELETE FROM heartbeats WHERE job_id=?", ((job_id,) for job_id in removed))
-                db.commit()
-        return removed
+        # The store receives the complete selected window.  It may return no
+        # id when a directory was removed by an earlier process, but that is
+        # still successful progress for the durable cursor below.
+        self.artifact_store.cleanup(jobs, now=cleanup_now, limit=None)
+        if not rows:
+            return []
+        completed_at = _stamp(cleanup_now)
+        selected_ids = [str(row["id"]) for row in rows]
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.executemany(
+                "DELETE FROM artifacts WHERE job_id=?",
+                ((job_id,) for job_id in selected_ids),
+            )
+            db.executemany(
+                "DELETE FROM heartbeats WHERE job_id=?",
+                ((job_id,) for job_id in selected_ids),
+            )
+            db.executemany(
+                "UPDATE jobs SET cleanup_completed_at=?,updated_at=? WHERE id=? "
+                "AND status IN ('published','published_with_warning','rejected','cancelled')",
+                ((completed_at, completed_at, job_id) for job_id in selected_ids),
+            )
+            db.commit()
+        # Returning selected ids reports durable progress even when the
+        # filesystem had nothing left to remove.
+        return selected_ids
 
     def requeue_after_shutdown(self, job_id: str, lease_token: str) -> str:
         """Atomically release a processing lease while retaining checkpoints."""
@@ -606,7 +690,7 @@ class PipelineState:
                 db.rollback()
                 raise LeaseError("shutdown requeue requires a running processing job")
             db.execute(
-                "UPDATE jobs SET status='queued',terminal_at=NULL,lease_owner=NULL,"
+                "UPDATE jobs SET status='queued',terminal_at=NULL,cleanup_completed_at=NULL,lease_owner=NULL,"
                 "lease_token=NULL,lease_expires_at=NULL,updated_at=?,revision=revision+1 WHERE id=?",
                 (_stamp(_utc()), job_id),
             )
@@ -1460,7 +1544,7 @@ class PipelineState:
             ) and row["status"] != status:
                 self._invalidate_batch_matching(db, str(row["batch_id"]))
             db.execute(
-                "UPDATE jobs SET status=?,terminal_at=?,cancel_requested=CASE WHEN ? THEN 0 ELSE cancel_requested END,lease_owner=CASE WHEN ? THEN NULL ELSE lease_owner END,lease_token=CASE WHEN ? THEN NULL ELSE lease_token END,lease_expires_at=CASE WHEN ? THEN NULL ELSE lease_expires_at END,updated_at=?,revision=revision+1 WHERE id=?",
+                "UPDATE jobs SET status=?,terminal_at=?,cleanup_completed_at=NULL,cancel_requested=CASE WHEN ? THEN 0 ELSE cancel_requested END,lease_owner=CASE WHEN ? THEN NULL ELSE lease_owner END,lease_token=CASE WHEN ? THEN NULL ELSE lease_token END,lease_expires_at=CASE WHEN ? THEN NULL ELSE lease_expires_at END,updated_at=?,revision=revision+1 WHERE id=?",
                 (
                     status,
                     terminal,
@@ -1505,7 +1589,7 @@ class PipelineState:
                 or status in {"failed", "cancelled", "rejected"}
             ) and row["status"] != status and not matching_requeue_handled:
                 self._invalidate_batch_matching(db, str(row["batch_id"]))
-            db.execute("UPDATE jobs SET status=?,terminal_at=?,lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,updated_at=?,revision=revision+1 WHERE id=?", (status, terminal, _stamp(_utc()), job_id))
+            db.execute("UPDATE jobs SET status=?,terminal_at=?,cleanup_completed_at=NULL,lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,updated_at=?,revision=revision+1 WHERE id=?", (status, terminal, _stamp(_utc()), job_id))
             db.commit()
         return status
 
@@ -1549,7 +1633,7 @@ class PipelineState:
                 if name in {"ocr", "extract"} and row["batch_id"]:
                     self._invalidate_batch_matching(db, str(row["batch_id"]))
             db.execute(
-                "UPDATE jobs SET selected_models=?,status='queued',terminal_at=NULL,"
+                "UPDATE jobs SET selected_models=?,status='queued',terminal_at=NULL,cleanup_completed_at=NULL,"
                 "cancel_requested=0,lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,"
                 "preview_error=NULL,updated_at=?,revision=revision+1 WHERE id=?",
                 (json.dumps(next_models, sort_keys=True), _stamp(_utc()), job_id),
@@ -1582,7 +1666,7 @@ class PipelineState:
             now = _stamp(_utc())
             next_revision = int(row["revision"]) + 1
             db.execute(
-                "UPDATE jobs SET status='publish_queued',revision=?,updated_at=? WHERE id=?",
+                "UPDATE jobs SET status='publish_queued',cleanup_completed_at=NULL,revision=?,updated_at=? WHERE id=?",
                 (next_revision, now, job_id),
             )
             db.commit()
@@ -1600,7 +1684,7 @@ class PipelineState:
             changed = False
             if row["status"] == "queued":
                 self._invalidate_batch_matching(db, str(row["batch_id"]) if row["batch_id"] else None)
-                db.execute("UPDATE jobs SET status='cancelled',terminal_at=?,cancel_requested=1,revision=revision+1,updated_at=? WHERE id=?", (_stamp(_utc()), _stamp(_utc()), job_id))
+                db.execute("UPDATE jobs SET status='cancelled',terminal_at=?,cleanup_completed_at=NULL,cancel_requested=1,revision=revision+1,updated_at=? WHERE id=?", (_stamp(_utc()), _stamp(_utc()), job_id))
                 changed = True
             elif row["status"] not in _TERMINAL:
                 db.execute("UPDATE jobs SET cancel_requested=1,revision=revision+1,updated_at=? WHERE id=?", (_stamp(_utc()), job_id))
@@ -1630,7 +1714,7 @@ class PipelineState:
                 raise ValueError("indexing retry requires published_with_warning job")
             next_revision = int(row["revision"]) + 1
             db.execute(
-                "UPDATE jobs SET status='indexing',terminal_at=NULL,revision=?,updated_at=? WHERE id=?",
+                "UPDATE jobs SET status='indexing',terminal_at=NULL,cleanup_completed_at=NULL,revision=?,updated_at=? WHERE id=?",
                 (next_revision, _stamp(_utc()), job_id),
             )
             db.commit()
@@ -1645,7 +1729,7 @@ class PipelineState:
             row = self._check_token(db, job_id, lease_token)
             if row["cancel_requested"]:
                 self._invalidate_batch_matching(db, str(row["batch_id"]) if row["batch_id"] else None)
-                db.execute("UPDATE jobs SET status='cancelled',terminal_at=?,lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,updated_at=?,revision=revision+1 WHERE id=?", (_stamp(_utc()), _stamp(_utc()), job_id))
+                db.execute("UPDATE jobs SET status='cancelled',terminal_at=?,cleanup_completed_at=NULL,lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,updated_at=?,revision=revision+1 WHERE id=?", (_stamp(_utc()), _stamp(_utc()), job_id))
                 db.commit()
                 return "cancelled"
             db.commit()
@@ -1946,7 +2030,7 @@ class PipelineState:
                         else None,
                     )
             db.executemany(
-                "UPDATE jobs SET lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,status=CASE WHEN status IN ('publishing','indexing') THEN 'publish_queued' ELSE 'queued' END,updated_at=?,revision=revision+1 WHERE id=?",
+                "UPDATE jobs SET lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,cleanup_completed_at=NULL,status=CASE WHEN status IN ('publishing','indexing') THEN 'publish_queued' ELSE 'queued' END,updated_at=?,revision=revision+1 WHERE id=?",
                 [(_stamp(_utc(now)), job_id) for job_id in ids],
             )
             db.commit()

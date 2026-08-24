@@ -84,6 +84,23 @@ def test_start_api_script_uses_basic_mode_without_advanced_envs(tmp_path: Path) 
     assert "--config" not in args
 
 
+def test_start_api_pipeline_mode_uses_snapshot_path_from_config_when_env_unset(
+    tmp_path: Path,
+) -> None:
+    result = _run_start_api(
+        tmp_path,
+        PAPER_PIPELINE_ENABLED="1",
+        PAPER_DB_CONFIG="/app/pipeline.toml",
+        PAPER_DB_SNAPSHOT_DB="",
+        MCP_PUBLIC_UNSAFE="1",
+    )
+
+    assert result.returncode == 0
+    args = (tmp_path / "args.txt").read_text(encoding="utf-8").splitlines()
+    assert "--config" in args
+    assert "--snapshot-db" not in args
+
+
 def test_start_api_script_accepts_restricted_cors_origins(tmp_path: Path) -> None:
     result = _run_start_api(
         tmp_path,
