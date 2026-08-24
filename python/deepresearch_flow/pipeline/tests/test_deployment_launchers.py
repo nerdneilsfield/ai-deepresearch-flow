@@ -177,6 +177,7 @@ def test_start_supervisor_materializes_worker_only_for_consistent_enabled_config
     assert "stopsignal=TERM" in rendered
     assert "startsecs=5" in rendered
     assert "startretries=3" in rendered
+    assert "autorestart=false" in rendered
     assert "stopwaitsecs=120" in rendered
 
     env["PAPER_PIPELINE_ENABLED"] = "0"

@@ -50,7 +50,7 @@ class WebDavStorage:
     ) -> str:
         path = str(remote_path or "").replace("\\", "/").strip("/")
         parts = [part for part in path.split("/") if part]
-        if (not parts and not allow_empty) or any(part == ".." for part in parts):
+        if (not parts and not allow_empty) or any(part in {".", ".."} for part in parts):
             raise ValueError("remote_path must be a relative path without parent traversal")
         if not parts:
             return f"{self._base_url}/"
@@ -107,7 +107,11 @@ class WebDavStorage:
         return b""  # pragma: no cover - raise_for_status always raises here
 
     def list(
-        self, remote_path: str = "", *, max_items: int | None = None
+        self,
+        remote_path: str = "",
+        *,
+        max_items: int | None = None,
+        after: str | None = None,
     ) -> tuple[str, ...]:
         """List one WebDAV collection using bounded ``Depth: 1`` PROPFIND.
 
@@ -147,21 +151,26 @@ class WebDavStorage:
                 continue
             parsed = urlparse(href)
             path = unquote(parsed.path)
-            if base_path and path.startswith(base_path + "/"):
+            if base_path:
+                if path == base_path or not path.startswith(base_path + "/"):
+                    continue
                 relative = path[len(base_path) + 1 :]
             else:
                 relative = path.strip("/")
-            if not relative:
+            relative_parts = relative.rstrip("/").split("/")
+            if not relative or any(part in {"", ".", ".."} for part in relative_parts):
                 continue
             is_collection = any(
                 child.tag.rsplit("}", 1)[-1] == "collection"
                 for parent in item.iter()
                 for child in parent
             )
-            entries.append(relative.rstrip("/") + ("/" if is_collection else ""))
-            if max_items is not None and len(entries) >= max_items:
-                break
-        return tuple(sorted(set(entries)))
+            normalized = relative.rstrip("/") + ("/" if is_collection else "")
+            if after is not None and normalized.rstrip("/") <= after.rstrip("/"):
+                continue
+            entries.append(normalized)
+        ordered = sorted(set(entries))
+        return tuple(ordered if max_items is None else ordered[:max_items])
 
     def delete(self, remote_path: str) -> None:
         """DELETE one remote object; missing object is already collected."""

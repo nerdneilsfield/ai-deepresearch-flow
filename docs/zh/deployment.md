@@ -422,17 +422,20 @@ Nginx 默认允许 `500m` multipart 上传；可用经校验的 `1g` 等值设�
 `PAPER_DB_NGINX_BODY_LIMIT`。Admin pipeline location 使用较长上传/预览 timeout。
 前端 token 只存 `sessionStorage`，并先请求 `/api/v1/admin/pipeline/config` 验证。
 
-Supervisor 仅在桥接变量与 TOML 一致时启动一个持久 Worker。Worker 轮询处理与
-待发布任务，使用 SQLite WAL lease，持续写 idle/active heartbeat；重启后恢复过期
-的 `running`/`publishing`/`indexing` lease，收到 `TERM` 则在处理步骤边界停止。正在
-进行的远端处理调用可能完成；其 checkpoint 会提交，lease 原子重排队，且不再领取
-下一篇。不可逆发布可能完成，随后停止轮询，不再领取下一篇。Admin config 根据
-heartbeat 年龄报告 `online`、`degraded` 或 `offline`。逐篇查看
+Supervisor 仅在桥接变量与 TOML 一致时启动一个持久 Worker。每个 queue deployment
+只运行一个 pipeline Worker 进程；发布与 formal-GC serialization lock 在进程内，依赖此
+拓扑。Worker 轮询处理与待发布任务，使用 SQLite WAL lease，持续写 idle/active
+heartbeat；重启后恢复过期的 `running`/`publishing`/`indexing` lease，收到 `TERM`
+则在处理步骤边界停止。正在进行的远端处理调用可能完成；其 checkpoint 会提交，lease
+原子重排队，且不再领取下一篇。不可逆发布可能完成，随后停止轮询，不再领取下一篇。
+Admin config 根据 heartbeat 年龄报告 `online`、`degraded` 或 `offline`。逐篇查看
 受保护 PDF/source/summary/translation；处理 BibTeX 歧义（或明确选择无 BibTeX），
 再执行 retry、reject、publish 或批量发布。发布带 revision CAS，旧页面会收到冲突。
-Supervisor 将五秒内崩溃视为初次启动失败，最多重试三次；Worker 已启动后可由
-`autorestart=unexpected` 使用同一持久 queue 重启，lease expiry/heartbeat recovery 保证恢复安全。配置持续无效时会
-进入 Supervisor startup failure，需管理员修复，不会伪造数据状态迁移。
+Supervisor 将五秒内崩溃视为初次启动失败，最多重试三次；Worker 启动后使用
+`autorestart=false`：运行时失败会保持停止，heartbeat 过期后 Admin API/UI 报告
+`offline`，Supervisor 不会无限崩溃重启。管理员须刻意重启 Worker，随后由 lease expiry/
+heartbeat recovery 恢复队列任务。配置持续无效时会进入 Supervisor startup failure，需
+管理员修复，不会伪造数据状态迁移。
 
 `published`、`published_with_warning`、`rejected`、`cancelled` 终态 work 与 preview
 中间产物默认保留七日；清理按批次执行，不删除正式发布资源、失败/待审核任务或

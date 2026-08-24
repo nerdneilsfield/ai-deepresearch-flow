@@ -433,16 +433,21 @@ protected Admin pipeline location has long upload/preview timeouts. The
 frontend keeps the Admin token only in `sessionStorage` and validates it
 against `/api/v1/admin/pipeline/config`.
 
-Supervisor starts one durable Worker only when the bridge and TOML agree. It
-polls processing and queued publication jobs, uses SQLite WAL leases, writes
-idle and active heartbeats, recovers expired `running`/`publishing`/`indexing`
-leases after restart, and stops between processing step boundaries on `TERM`.
+Supervisor starts one durable Worker only when the bridge and TOML agree. Run
+exactly one pipeline Worker process per queue deployment; the publication and
+formal-GC serialization lock is in-process and assumes this topology. The
+Worker polls processing and queued publication jobs, uses SQLite WAL leases,
+writes idle and active heartbeats, recovers expired
+`running`/`publishing`/`indexing` leases after restart, and stops between
+processing step boundaries on `TERM`.
 Supervisor classifies a crash before five seconds as a failed initial start
-and bounds those starts to three retries. Once a Worker has started,
-`autorestart=unexpected` may restart it using the same durable queue, and lease
-expiry/heartbeat recovery makes that restart safe. A persistently invalid
-configuration becomes a Supervisor startup failure requiring operator action,
-not a successful data-state transition.
+and bounds those starts to three retries. After startup, the Worker uses
+`autorestart=false`: a runtime failure leaves it stopped, its heartbeat ages
+out, and the Admin API/UI report `offline`; Supervisor does not enter an
+unlimited crash loop. An operator must deliberately restart the Worker, after
+which lease expiry/heartbeat recovery resumes queued work. A persistently
+invalid configuration becomes a Supervisor startup failure requiring operator
+action, not a successful data-state transition.
 An in-flight remote processing call may finish; its completed checkpoint is
 committed, the lease is atomically requeued, and no next Job is claimed.
 An in-flight irreversible publication may finish, then publication polling

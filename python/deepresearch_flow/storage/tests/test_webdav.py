@@ -156,6 +156,54 @@ def test_list_download_and_delete_support_reference_gc() -> None:
     storage.delete("pdf/abc.pdf")
 
 
+def test_list_ignores_responses_outside_configured_endpoint() -> None:
+    xml = b"""
+    <d:multistatus xmlns:d='DAV:'>
+      <d:response><d:href>/static/pdf/inside.pdf</d:href>
+        <d:propstat><d:prop><d:resourcetype/></d:prop></d:propstat>
+      </d:response>
+      <d:response><d:href>/private/outside.pdf</d:href>
+        <d:propstat><d:prop><d:resourcetype/></d:prop></d:propstat>
+      </d:response>
+    </d:multistatus>
+    """
+
+    storage = WebDavStorage(
+        "https://cdn.example.com/static",
+        "user",
+        "pass",
+        _transport=httpx.MockTransport(
+            lambda request: httpx.Response(207, content=xml)
+        ),
+    )
+
+    assert storage.list() == ("pdf/inside.pdf",)
+
+
+def test_list_applies_cursor_before_page_limit() -> None:
+    xml = b"""
+    <d:multistatus xmlns:d='DAV:'>
+      <d:response><d:href>/static/pdf/aaa.pdf</d:href>
+        <d:propstat><d:prop><d:resourcetype/></d:prop></d:propstat>
+      </d:response>
+      <d:response><d:href>/static/pdf/zzz.pdf</d:href>
+        <d:propstat><d:prop><d:resourcetype/></d:prop></d:propstat>
+      </d:response>
+    </d:multistatus>
+    """
+
+    storage = WebDavStorage(
+        "https://cdn.example.com/static",
+        "user",
+        "pass",
+        _transport=httpx.MockTransport(
+            lambda request: httpx.Response(207, content=xml)
+        ),
+    )
+
+    assert storage.list(max_items=1, after="pdf/mid.pdf") == ("pdf/zzz.pdf",)
+
+
 class TestContextManager:
     def test_with_statement(self) -> None:
         transport = _mock_transport({"HEAD": 200})

@@ -51,6 +51,7 @@ from .publication_models import (
     plain,
 )
 from .publication_store import (
+    FormalStorePage,
     LocalFormalStore,
     MirroredFormalStore,
     PUBLICATION_SERIALIZATION_LOCK,
@@ -911,6 +912,7 @@ def _now_iso() -> str:
 
 __all__ = [
     "FormalStore",
+    "FormalStorePage",
     "LanceDBIndexer",
     "LocalFormalStore",
     "MirroredFormalStore",

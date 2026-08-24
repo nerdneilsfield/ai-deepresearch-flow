@@ -7,6 +7,7 @@ from .ingestion import BatchIngestor, IngestionResult, IngestionService, UploadI
 from .matching import BibTeXMatcher, BibtexMatcher, MatchResult
 from .publication import (
     FormalStore,
+    FormalStorePage,
     LanceDBIndexer,
     LocalFormalStore,
     MirroredFormalStore,
@@ -64,6 +65,7 @@ __all__ = [
     "BibtexMatcher",
     "MatchResult",
     "FormalStore",
+    "FormalStorePage",
     "LanceDBIndexer",
     "LocalFormalStore",
     "MirroredFormalStore",

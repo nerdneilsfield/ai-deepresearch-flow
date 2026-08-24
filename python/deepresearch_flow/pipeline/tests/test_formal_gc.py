@@ -7,7 +7,12 @@ from pathlib import Path
 import pytest
 
 from deepresearch_flow.pipeline.formal_gc import collect_unreferenced_formal_resources
-from deepresearch_flow.pipeline.publication_store import LocalFormalStore, WebDavFormalStore
+from deepresearch_flow.pipeline.publication_store import (
+    FormalStorePage,
+    LocalFormalStore,
+    MirroredFormalStore,
+    WebDavFormalStore,
+)
 from deepresearch_flow.pipeline.state import PipelineState
 from deepresearch_flow.paper.snapshot.publication import open_snapshot_connection
 
@@ -103,8 +108,17 @@ def test_webdav_formal_gc_uses_explicit_list_read_delete_capability(
         def __init__(self) -> None:
             self.files: dict[str, bytes] = {}
 
-        def list(self, _prefix: str = "") -> tuple[str, ...]:
-            return tuple(self.files)
+        def list(
+            self,
+            _prefix: str = "",
+            *,
+            max_items: int | None = None,
+            after: str | None = None,
+        ) -> tuple[str, ...]:
+            values = sorted(
+                path for path in self.files if after is None or path > after.rstrip("/")
+            )
+            return tuple(values if max_items is None else values[:max_items])
 
         def download(self, path: str) -> bytes:
             return self.files[path]
@@ -139,8 +153,17 @@ def test_webdav_formal_gc_reports_partial_delete_failure_without_overclaiming(
             self.files: dict[str, bytes] = {}
             self.failing_path = failing_path
 
-        def list(self, _prefix: str = "") -> tuple[str, ...]:
-            return tuple(self.files)
+        def list(
+            self,
+            _prefix: str = "",
+            *,
+            max_items: int | None = None,
+            after: str | None = None,
+        ) -> tuple[str, ...]:
+            values = sorted(
+                path for path in self.files if after is None or path > after.rstrip("/")
+            )
+            return tuple(values if max_items is None else values[:max_items])
 
         def download(self, path: str) -> bytes:
             return self.files[path]
@@ -174,12 +197,25 @@ def test_webdav_formal_gc_reports_partial_delete_failure_without_overclaiming(
 
 def test_webdav_formal_store_does_not_traverse_outside_prefix() -> None:
     class PrefixListing:
-        def list(self, prefix: str = "") -> tuple[str, ...]:
+        def list(
+            self,
+            prefix: str = "",
+            *,
+            max_items: int | None = None,
+            after: str | None = None,
+        ) -> tuple[str, ...]:
             if prefix == "published":
-                return ("published/pdf/", "private/")
-            if prefix == "published/pdf":
-                return ("published/pdf/object.txt",)
-            raise AssertionError(f"outside prefix was traversed: {prefix}")
+                values = ("published/pdf/", "private/")
+            elif prefix == "published/pdf":
+                values = ("published/pdf/object.txt",)
+            else:
+                raise AssertionError(f"outside prefix was traversed: {prefix}")
+            values = tuple(
+                value
+                for value in values
+                if after is None or value.rstrip("/") > after.rstrip("/")
+            )
+            return values if max_items is None else values[:max_items]
 
     files = WebDavFormalStore(PrefixListing(), prefix="published").list_content_addressed_files()
 
@@ -188,11 +224,120 @@ def test_webdav_formal_store_does_not_traverse_outside_prefix() -> None:
 
 def test_webdav_formal_store_rejects_parent_traversal_in_listing() -> None:
     class UnsafeListing:
-        def list(self, _prefix: str = "") -> tuple[str, ...]:
-            return ("published/../secret/",)
+        def list(
+            self,
+            _prefix: str = "",
+            *,
+            max_items: int | None = None,
+            after: str | None = None,
+        ) -> tuple[str, ...]:
+            del after
+            values = ("published/../secret/",)
+            return values if max_items is None else values[:max_items]
 
     with pytest.raises(ValueError, match="traversal"):
         WebDavFormalStore(UnsafeListing(), prefix="published").list_content_addressed_files()
+
+
+def test_webdav_gc_fails_closed_without_bounded_listing_capability(
+    tmp_path: Path,
+) -> None:
+    payload = b"legacy listing must remain safe"
+    relative = f"pdf/{hashlib.sha256(payload).hexdigest()}.pdf"
+
+    class LegacyListing:
+        def __init__(self) -> None:
+            self.files = {relative: payload}
+
+        def list(self, _prefix: str = "") -> tuple[str, ...]:
+            return tuple(self.files)
+
+        def download(self, path: str) -> bytes:
+            return self.files[path]
+
+        def delete(self, path: str) -> None:
+            self.files.pop(path, None)
+
+    remote = LegacyListing()
+    snapshot = tmp_path / "snapshot.sqlite3"
+    _empty_snapshot(snapshot)
+
+    result = collect_unreferenced_formal_resources(
+        WebDavFormalStore(remote),
+        snapshot_db=snapshot,
+        limit=1,
+        grace_seconds=0,
+    )
+
+    assert result.deleted == ()
+    assert result.warning is not None
+    assert "bounded" in result.warning
+    assert remote.files == {relative: payload}
+
+
+def test_webdav_cursor_uses_full_completed_collection_path_for_deep_siblings(
+    tmp_path: Path,
+) -> None:
+    payload = b"sibling after empty deep collection"
+    orphan = f"summary/zeta/simple/{hashlib.sha256(payload).hexdigest()}.json"
+
+    class TreeListing:
+        def __init__(self) -> None:
+            self.collections = {
+                "": ("summary/",),
+                "summary": ("summary/zeta/",),
+                "summary/zeta": ("summary/zeta/same/", "summary/zeta/simple/"),
+                "summary/zeta/same": ("summary/zeta/same/readme.txt",),
+                "summary/zeta/simple": (orphan,),
+            }
+
+        def list(
+            self,
+            prefix: str = "",
+            *,
+            max_items: int | None = None,
+            after: str | None = None,
+        ) -> tuple[str, ...]:
+            values = self.collections.get(prefix, ())
+            values = tuple(
+                value
+                for value in values
+                if after is None or value.rstrip("/") > after.rstrip("/")
+            )
+            return values if max_items is None else values[:max_items]
+
+        def download(self, path: str) -> bytes:
+            assert path == orphan
+            return payload
+
+        def delete(self, path: str) -> None:
+            assert path == orphan
+            self.collections["summary/zeta/simple"] = ()
+
+    remote = TreeListing()
+    snapshot = tmp_path / "snapshot.sqlite3"
+    _empty_snapshot(snapshot)
+    cursor: str | None = None
+    seen_cursors: list[str] = []
+    deleted: set[str] = set()
+    for _ in range(12):
+        result = collect_unreferenced_formal_resources(
+            WebDavFormalStore(remote),
+            snapshot_db=snapshot,
+            limit=1,
+            grace_seconds=0,
+            cursor=cursor,
+        )
+        deleted.update(result.deleted)
+        cursor = result.next_cursor
+        if cursor is not None:
+            assert cursor not in seen_cursors
+            seen_cursors.append(cursor)
+        if orphan in deleted:
+            break
+
+    assert deleted == {orphan}
+    assert len(seen_cursors) >= 2
 
 
 def test_formal_gc_missing_snapshot_fails_closed_without_deletion(tmp_path: Path) -> None:
@@ -397,6 +542,408 @@ def test_bounded_gc_cursor_converges_past_large_referenced_prefix(tmp_path: Path
             break
 
     assert deleted == {orphan_path}
+
+
+def test_gc_cursor_advances_only_through_inspected_objects(tmp_path: Path) -> None:
+    store = LocalFormalStore(tmp_path / "formal")
+    paths: list[str] = []
+    for index in range(4):
+        data = f"cursor object {index}".encode()
+        path = f"pdf/{hashlib.sha256(data).hexdigest()}.pdf"
+        store.put(path, data)
+        paths.append(path)
+    paths.sort()
+
+    snapshot = tmp_path / "snapshot.sqlite3"
+    _empty_snapshot(snapshot)
+    result = collect_unreferenced_formal_resources(
+        store, snapshot_db=snapshot, limit=1, grace_seconds=0
+    )
+
+    assert result.deleted == (paths[0],)
+    assert result.next_cursor == paths[0]
+
+
+def test_gc_clears_cursor_after_reaching_end_of_short_page(tmp_path: Path) -> None:
+    store = LocalFormalStore(tmp_path / "formal")
+    payload = b"referenced final page"
+    relative = f"pdf/{hashlib.sha256(payload).hexdigest()}.pdf"
+    store.put(relative, payload)
+    snapshot = tmp_path / "snapshot.sqlite3"
+    _empty_snapshot(snapshot)
+    connection = open_snapshot_connection(snapshot)
+    connection.execute(
+        "INSERT INTO paper(paper_id,paper_key,paper_key_type,title,year,month,publication_date,"
+        "venue,preferred_summary_template,summary_preview,pdf_content_hash,source_md_content_hash) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "paper-1",
+            "paper-1",
+            "bib",
+            "Referenced",
+            "2026",
+            "01",
+            "2026-01-01",
+            "Journal",
+            "simple",
+            "summary",
+            hashlib.sha256(payload).hexdigest(),
+            None,
+        ),
+    )
+    connection.commit()
+    connection.close()
+
+    result = collect_unreferenced_formal_resources(
+        store, snapshot_db=snapshot, limit=1, grace_seconds=0
+    )
+
+    assert result.deleted == ()
+    assert result.next_cursor is None
+
+
+def test_gc_clears_cursor_after_deleting_only_object_on_short_page(tmp_path: Path) -> None:
+    store = LocalFormalStore(tmp_path / "formal")
+    payload = b"only object"
+    relative = f"pdf/{hashlib.sha256(payload).hexdigest()}.pdf"
+    store.put(relative, payload)
+    snapshot = tmp_path / "snapshot.sqlite3"
+    _empty_snapshot(snapshot)
+
+    result = collect_unreferenced_formal_resources(
+        store, snapshot_db=snapshot, limit=1, grace_seconds=0
+    )
+
+    assert result.deleted == (relative,)
+    assert result.next_cursor is None
+
+
+def test_gc_filters_unrelated_files_before_inspection_page_limit(tmp_path: Path) -> None:
+    store = LocalFormalStore(tmp_path / "formal")
+    payload = b"orphan after unrelated files"
+    relative = f"pdf/{hashlib.sha256(payload).hexdigest()}.pdf"
+    store.put(relative, payload)
+    for index in range(20):
+        unrelated = store.root / "aaa" / f"unrelated-{index:02d}.txt"
+        unrelated.parent.mkdir(parents=True, exist_ok=True)
+        unrelated.write_text("not a publication object", encoding="utf-8")
+
+    snapshot = tmp_path / "snapshot.sqlite3"
+    _empty_snapshot(snapshot)
+    result = collect_unreferenced_formal_resources(
+        store, snapshot_db=snapshot, limit=1, grace_seconds=0
+    )
+
+    assert result.deleted == (relative,)
+    assert not (store.root / relative).exists()
+
+
+def test_webdav_formal_listing_normalizes_unstable_order_and_applies_cursor(
+    tmp_path: Path,
+) -> None:
+    first_data = b"first remote object"
+    second_data = b"second remote object"
+    first = f"pdf/{hashlib.sha256(first_data).hexdigest()}.pdf"
+    second = f"pdf/{hashlib.sha256(second_data).hexdigest()}.pdf"
+
+    class UnstableListing:
+        def __init__(self) -> None:
+            self.reversed = False
+
+        def list(self, prefix: str = "", **_kwargs: object) -> tuple[str, ...]:
+            if prefix == "published":
+                return ("published/pdf/",)
+            values = [f"published/{first}", f"published/{second}"]
+            self.reversed = not self.reversed
+            if self.reversed:
+                values.reverse()
+            return tuple(values)
+
+    adapter = WebDavFormalStore(UnstableListing(), prefix="published")
+    first_page = adapter.list_content_addressed_files(max_items=1)
+    second_page = adapter.list_content_addressed_files(
+        max_items=1, after=first_page[-1]
+    )
+
+    assert first_page == (min(first, second),)
+    assert second_page == (max(first, second),)
+
+
+def test_webdav_formal_listing_filters_unrelated_entries_before_page_limit() -> None:
+    payload = b"remote candidate after unrelated entries"
+    candidate = f"pdf/{hashlib.sha256(payload).hexdigest()}.pdf"
+
+    class Listing:
+        def list(self, prefix: str = "", **_kwargs: object) -> tuple[str, ...]:
+            if prefix == "":
+                return ("aaa/", "pdf/")
+            if prefix == "aaa":
+                return ("aaa/notes.txt", "aaa/readme.md")
+            if prefix == "pdf":
+                return (candidate,)
+            raise AssertionError(f"unexpected collection: {prefix}")
+
+    adapter = WebDavFormalStore(Listing())
+
+    assert adapter.list_content_addressed_files(
+        max_items=1, content_addressed_only=True
+    ) == (candidate,)
+
+
+def test_webdav_formal_cursor_does_not_hide_parent_collection(
+    tmp_path: Path,
+) -> None:
+    first_data = b"first cursor-aware object"
+    second_data = b"second cursor-aware object"
+    first = f"pdf/{hashlib.sha256(first_data).hexdigest()}.pdf"
+    second = f"pdf/{hashlib.sha256(second_data).hexdigest()}.pdf"
+
+    class CursorAwareListing:
+        def list(
+            self,
+            prefix: str = "",
+            *,
+            max_items: int | None = None,
+            after: str | None = None,
+        ) -> tuple[str, ...]:
+            values = ("pdf/",) if prefix == "" else tuple(sorted((first, second)))
+            if after is not None:
+                values = tuple(value for value in values if value.rstrip("/") > after.rstrip("/"))
+            return values if max_items is None else values[:max_items]
+
+    adapter = WebDavFormalStore(CursorAwareListing())
+    first_page = adapter.list_content_addressed_files(max_items=1)
+    second_page = adapter.list_content_addressed_files(
+        max_items=1, after=first_page[-1]
+    )
+
+    assert first_page == (min(first, second),)
+    assert second_page == (max(first, second),)
+
+
+def test_mirrored_gc_keeps_independent_cursors_and_fair_progress_after_restart(
+    tmp_path: Path,
+) -> None:
+    class OrderedStore:
+        def __init__(self, files: dict[str, bytes]) -> None:
+            self.files = dict(files)
+
+        def list_content_addressed_files(
+            self, *, max_items: int | None = None, after: str | None = None
+        ) -> tuple[str, ...]:
+            values = sorted(
+                path
+                for path in self.files
+                if after is None or path > after
+            )
+            return tuple(values if max_items is None else values[:max_items])
+
+        def read(self, relative: str) -> bytes:
+            return self.files[relative]
+
+        def delete(self, relative: str) -> None:
+            self.files.pop(relative, None)
+
+    primary_files: dict[str, bytes] = {}
+    for index in range(12):
+        data = f"primary orphan {index}".encode()
+        path = f"pdf/{hashlib.sha256(data).hexdigest()}.pdf"
+        primary_files[path] = data
+    cache_data = b"cache-only orphan"
+    cache_path = f"pdf/{hashlib.sha256(cache_data).hexdigest()}.pdf"
+    primary = OrderedStore(primary_files)
+    cache = OrderedStore({cache_path: cache_data})
+    mirror = MirroredFormalStore(primary, cache)
+    snapshot = tmp_path / "snapshot.sqlite3"
+    _empty_snapshot(snapshot)
+    state = PipelineState(tmp_path / "queue.sqlite3")
+
+    cursor: str | None = None
+    for _ in range(6):
+        result = collect_unreferenced_formal_resources(
+            mirror,
+            snapshot_db=snapshot,
+            limit=1,
+            grace_seconds=0,
+            cursor=cursor,
+        )
+        cursor = result.next_cursor
+        state.set_formal_gc_cursor(cursor)
+        cursor = PipelineState(tmp_path / "queue.sqlite3").get_formal_gc_cursor()
+        if cache_path not in cache.files:
+            break
+
+    assert cache_path not in cache.files
+    assert primary.files
+
+
+def test_mirrored_gc_continues_when_one_store_has_unexpected_listing_failure(
+    tmp_path: Path,
+) -> None:
+    class BrokenStore:
+        def list_content_addressed_files(
+            self, *, max_items: int | None = None, after: str | None = None
+        ) -> tuple[str, ...]:
+            raise LookupError("primary temporarily unavailable")
+
+    payload = b"cache survives primary failure"
+    relative = f"pdf/{hashlib.sha256(payload).hexdigest()}.pdf"
+    cache = LocalFormalStore(tmp_path / "cache")
+    cache.put(relative, payload)
+    snapshot = tmp_path / "snapshot.sqlite3"
+    _empty_snapshot(snapshot)
+
+    result = collect_unreferenced_formal_resources(
+        MirroredFormalStore(BrokenStore(), cache),
+        snapshot_db=snapshot,
+        limit=1,
+        grace_seconds=0,
+    )
+
+    assert result.deleted == (relative,)
+    assert result.warning is not None
+    assert not (cache.root / relative).exists()
+
+
+def test_webdav_page_bounds_traversal_and_eventually_reaches_deep_orphan(
+    tmp_path: Path,
+) -> None:
+    payload = b"deep bounded orphan"
+    orphan = f"pdf/{hashlib.sha256(payload).hexdigest()}.pdf"
+
+    class BoundedListing:
+        def __init__(self) -> None:
+            self.collections: dict[str, tuple[str, ...]] = {"": tuple(
+                [*(f"branch-{index}/" for index in range(5)), "pdf/"]
+            )}
+            for index in range(4):
+                branch = f"branch-{index}"
+                self.collections[branch] = tuple(
+                    f"{branch}/note-{note}.txt" for note in range(3)
+                )
+            self.collections["branch-4"] = ("branch-4/nested/",)
+            self.collections["branch-4/nested"] = ("branch-4/nested/readme.txt",)
+            self.collections["pdf"] = (orphan,)
+            self.calls: list[tuple[str, int | None, str | None]] = []
+
+        def list(
+            self,
+            prefix: str = "",
+            *,
+            max_items: int | None = None,
+            after: str | None = None,
+        ) -> tuple[str, ...]:
+            self.calls.append((prefix, max_items, after))
+            assert max_items is not None
+            values = self.collections.get(prefix, ())
+            return tuple(
+                value
+                for value in values
+                if after is None or value.rstrip("/") > after.rstrip("/")
+            )[:max_items]
+
+        def download(self, path: str) -> bytes:
+            assert path == orphan
+            return payload
+
+        def delete(self, path: str) -> None:
+            assert path == orphan
+            self.collections["pdf"] = ()
+
+    remote = BoundedListing()
+    store = WebDavFormalStore(remote)
+    snapshot = tmp_path / "snapshot.sqlite3"
+    _empty_snapshot(snapshot)
+
+    cursor: str | None = None
+    deleted: set[str] = set()
+    for _ in range(20):
+        before = len(remote.calls)
+        result = collect_unreferenced_formal_resources(
+            store,
+            snapshot_db=snapshot,
+            limit=1,
+            grace_seconds=0,
+            cursor=cursor,
+        )
+        cycle_calls = remote.calls[before:]
+        assert result.inspected <= 4
+        assert len(cycle_calls) <= 4
+        assert all(max_items is not None for _, max_items, _ in cycle_calls)
+        deleted.update(result.deleted)
+        cursor = result.next_cursor
+        if orphan in deleted:
+            break
+
+    assert deleted == {orphan}
+
+
+def test_mirrored_gc_keeps_total_inspection_budget_across_stores(
+    tmp_path: Path,
+) -> None:
+    referenced_data = b"referenced primary"
+    referenced = f"pdf/{hashlib.sha256(referenced_data).hexdigest()}.pdf"
+    cache_data = b"cache orphan"
+    orphan = f"pdf/{hashlib.sha256(cache_data).hexdigest()}.pdf"
+
+    class PagedStore:
+        def __init__(self, files: dict[str, bytes]) -> None:
+            self.files = dict(files)
+            self.inspected = 0
+
+        def list_content_addressed_page(
+            self,
+            *,
+            max_items: int | None = None,
+            after: str | None = None,
+            content_addressed_only: bool = False,
+            inspection_limit: int | None = None,
+        ) -> FormalStorePage:
+            del content_addressed_only
+            budget = inspection_limit or 0
+            values = sorted(path for path in self.files if after is None or path > after)
+            inspected = min(len(values), budget)
+            self.inspected += inspected
+            candidates = values[:inspected]
+            if max_items is not None:
+                candidates = candidates[:max_items]
+            next_cursor = values[inspected - 1] if inspected else after
+            if inspected < len(values) and candidates:
+                next_cursor = candidates[-1]
+            return FormalStorePage(tuple(candidates), next_cursor, inspected)
+
+        def read(self, relative: str) -> bytes:
+            return self.files[relative]
+
+        def delete(self, relative: str) -> None:
+            self.files.pop(relative, None)
+
+    primary = PagedStore({referenced: referenced_data})
+    cache = PagedStore({orphan: cache_data})
+    mirror = MirroredFormalStore(primary, cache)
+    snapshot = tmp_path / "snapshot.sqlite3"
+    _empty_snapshot(snapshot)
+    _receipt(snapshot, "job")
+    manifest = {
+        "version": 1,
+        "job_id": "job",
+        "bundle_digest": "0" * 64,
+        "resources": [
+            {"path": referenced, "digest": hashlib.sha256(referenced_data).hexdigest(), "size": len(referenced_data)}
+        ],
+    }
+
+    result = collect_unreferenced_formal_resources(
+        mirror,
+        snapshot_db=snapshot,
+        manifests=[manifest],
+        limit=1,
+        grace_seconds=0,
+    )
+
+    assert result.deleted == (orphan,)
+    assert result.inspected <= 4
+    assert primary.inspected + cache.inspected == result.inspected
 
 
 def test_failed_pre_snapshot_manifest_does_not_pin_formal_orphan(
