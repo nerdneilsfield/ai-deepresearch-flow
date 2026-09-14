@@ -172,7 +172,8 @@ def test_execution_records_logs_and_stops_after_failure(tmp_path, monkeypatch, f
         "from pathlib import Path\n"
         "with Path(os.environ['CALLS_FILE']).open('a') as log:\n"
         "    log.write(json.dumps(sys.argv[1:]) + '\\n')\n"
-        "Path('intermediate.json').write_text('{}')\n"
+        "if sys.argv[1:3] == ['paper', 'extract']:\n"
+        "    Path('intermediate.json').write_text('{}')\n"
         "print('FAKE_STDOUT_MARKER', flush=True)\n"
         "print('FAKE_STDERR_MARKER', file=sys.stderr, flush=True)\n"
         "sys.exit(9 if ' '.join(sys.argv[1:3]) == os.environ.get('FAIL_AT') else 0)\n",
@@ -279,3 +280,29 @@ def test_selected_translation_reports_missing_markdown_not_pdf(tmp_path):
     progress = json.loads((tmp_path / "data" / "logs" / "progress.json").read_text())
     assert progress["status"] == "failed"
     assert "md_base64" in progress["error"]
+
+
+@pytest.mark.parametrize("step", ["ocr", "organize", "fix"])
+def test_non_model_steps_accept_no_model(tmp_path, step):
+    result = invoke(tmp_path, "data", "--steps", step, "--dry-run")
+    assert result.returncode == 0, result.stderr
+    commands = printed_commands(result.stdout)
+    assert len(commands) == 1
+    assert "--model" not in commands[0]
+
+
+def test_organize_runs_from_caller_directory_without_model(tmp_path, monkeypatch):
+    package = tmp_path / "fake_cli" / "deepresearch_flow"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("")
+    (package / "cli.py").write_text(
+        "from pathlib import Path\nprint(Path('caller-resource.txt').read_text())\n"
+    )
+    monkeypatch.setenv("PYTHONPATH", str(package.parent))
+    (tmp_path / "caller-resource.txt").write_text("CALLER_RESOURCE_OK")
+    root = tmp_path / "data"
+    (root / "ocr").mkdir(parents=True)
+    (root / "ocr" / "full.md").write_text("# Paper")
+    result = invoke(tmp_path, root, "--steps", "organize")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "CALLER_RESOURCE_OK" in result.stdout

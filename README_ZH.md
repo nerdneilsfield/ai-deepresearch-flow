@@ -148,6 +148,13 @@ uv run python scripts/process_data_root.py /path/to/data_root \
 可用 `--target-lang ja` 等选项指定目标语言。添加 `--dry-run` 可预览命令，
 不调用服务，也不创建文件。
 
+单独执行 OCR 或整理已有 OCR 结果，不需要 LLM 模型配置：
+
+```bash
+uv run python scripts/process_data_root.py DATA_ROOT --steps ocr --ocr-config ocr.toml
+uv run python scripts/process_data_root.py DATA_ROOT --steps organize
+```
+
 可通过 `--steps` 选跑部分步骤，或通过 `--from-step` 从某一步开始运行到最后。
 两者不能同时使用；不指定时运行全部步骤。
 
@@ -176,7 +183,7 @@ fix-translated, fix-math-translated, fix-mermaid-deep_read
 `--steps` 使用逗号分隔；无论填写顺序如何，都按上述流程顺序执行，重复名称只运行一次。
 脚本不会自动补跑上游步骤。所选步骤依赖的输入必须已存在，或由前面的所选步骤生成。
 只检查所选步骤需要的配置和工具：例如单独翻译不需要 PDF、OCR 配置或 `mmdc`。
-`--model` 仍为必填参数。
+仅抽取、翻译、公式和 Mermaid 修复需要 `--model`；单独运行 `ocr`、`fix`、`organize` 不需要。
 
 脚本依次执行 OCR、OCR 格式修复、公式修复、Markdown 整理、`simple` 抽取、
 `deep_read` 抽取和翻译。随后对两份 JSON 和译文执行格式与公式修复，
@@ -201,8 +208,8 @@ data_root/
     └── deep_read/paper_stage_outputs/  # 深度阅读中间结果
 ```
 
-各步骤在 `logs/` 内的独立目录运行，公式报告、翻译调试目录及默认相对路径的
-中间结果均留在 `logs/` 内。每一步的输出、错误提示和原生进度条直接显示在当前终端，
+OCR、organize 和修复等步骤保留启动脚本时的工作目录。仅 extract 在 `logs/` 下的
+独立目录运行，以收集其默认相对路径的中间产物；公式报告和翻译调试目录也指定在 `logs/` 内。每一步的输出、错误提示和原生进度条直接显示在当前终端，
 不重定向到日志文件；`pipeline.log` 只记录步骤开始、结束和失败状态。
 配置文件路径按启动脚本时的目录解析；配置中的自定义相对文件路径应改为绝对路径。
 

@@ -151,6 +151,13 @@ organizing Markdown. After extraction and translation, it repairs formatting and
 formulas in both JSON files and translated Markdown, then repairs Mermaid only
 in `deep_read.json`. Translation defaults to Chinese; use `--target-lang` to change it.
 
+OCR and organize can run independently without an LLM model:
+
+```bash
+uv run python scripts/process_data_root.py DATA_ROOT --steps ocr --ocr-config ocr.toml
+uv run python scripts/process_data_root.py DATA_ROOT --steps organize
+```
+
 Select steps with `--steps`, or run from one step through the end with `--from-step`:
 
 ```bash
@@ -175,10 +182,13 @@ The two selection options are mutually exclusive. `--steps` accepts comma-separa
 names, runs them in workflow order, and runs duplicate names only once. It does not
 add upstream steps. Inputs must exist or be produced by an earlier selected step.
 Only selected steps require their configuration files and tools; translation alone
-needs neither PDFs nor OCR configuration nor `mmdc`. `--model` remains required.
+needs neither PDFs nor OCR configuration nor `mmdc`. `--model` is required only for extraction, translation, formula repair, and Mermaid repair.
+OCR, formatting fixes, and organize can run without it.
 Add `--dry-run` to preview commands without creating files or calling providers.
 
 Error reports and intermediate artifacts stay under `DATA_ROOT/logs/`.
+Commands keep the caller working directory, except extraction, which runs under
+`logs/` to contain its relative intermediate-output directory.
 Each command displays its output, errors, and native progress bars directly in the
 current terminal; output is not redirected to files. `progress.json` records the
 latest run, and `pipeline.log` records step start, completion, and failure events.

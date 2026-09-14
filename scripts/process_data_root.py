@@ -19,9 +19,7 @@ def main() -> int:
     parser.add_argument("data_root", type=Path)
     parser.add_argument("--config", type=Path, default=Path("config.toml"))
     parser.add_argument("--ocr-config", type=Path, default=Path("ocr.toml"))
-    parser.add_argument(
-        "--model", required=True, help="LLM provider/model for repair and extraction"
-    )
+    parser.add_argument("--model", help="LLM provider/model; required only for model-based steps")
     parser.add_argument("--target-lang", default="zh")
     parser.add_argument(
         "--dry-run", action="store_true", help="Print commands without writing files"
@@ -34,7 +32,9 @@ def main() -> int:
     config = args.config.expanduser().resolve()
     ocr_config = args.ocr_config.expanduser().resolve()
     logs = root / "logs"
-    llm = ["--config", str(config), "--model", args.model]
+    llm = ["--config", str(config)]
+    if args.model:
+        llm.extend(["--model", args.model])
     steps = [
         (
             "ocr",
@@ -180,11 +180,25 @@ def main() -> int:
         if args.from_step not in step_numbers:
             parser.error(f"Unknown step: {args.from_step}. Available: {', '.join(step_numbers)}")
         steps = steps[step_numbers[args.from_step] - 1 :]
+    model_steps = [
+        name
+        for name, command in steps
+        if command[:2]
+        in (
+            ["paper", "extract"],
+            ["translator", "translate"],
+            ["recognize", "fix-math"],
+            ["recognize", "fix-mermaid"],
+        )
+    ]
+    if model_steps and not args.model:
+        parser.error(f"--model is required for: {', '.join(model_steps)}")
     # Keep the same environment as `uv run python`, even after changing cwd.
     prefix = [sys.executable, "-m", "deepresearch_flow.cli"]
     if args.dry_run:
         for name, command in steps:
-            print(f"# {name} (cwd: {logs / name})")
+            workdir = logs / name if name in {"simple", "deep_read"} else Path.cwd()
+            print(f"# {name} (cwd: {workdir})")
             print(shlex.join(prefix + command))
         return 0
 
@@ -241,12 +255,14 @@ def main() -> int:
         env = {**os.environ, "PYTHONUNBUFFERED": "1"}
         env["PATH"] = command_path
         for index, (name, command) in enumerate(steps, 1):
-            workdir = logs / name
+            # Only extract has a hard-coded relative intermediate-output directory.
+            # Other commands keep the caller cwd, as when invoked directly.
+            workdir = logs / name if name in {"simple", "deep_read"} else Path.cwd()
             workdir.mkdir(parents=True, exist_ok=True)
             entry = {"name": name, "status": "running", "workdir": str(workdir)}
             progress["steps"].append(entry)
             record()
-            announce(f"[{index}/{len(steps)}] {name} (reports: {workdir})")
+            announce(f"[{index}/{len(steps)}] {name} (reports: {logs})")
             # Inherit the terminal so each CLI keeps its live progress bars and colors.
             result = subprocess.run(prefix + command, cwd=workdir, env=env, check=False)
             entry["returncode"] = result.returncode
