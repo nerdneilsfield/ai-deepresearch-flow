@@ -132,6 +132,56 @@ pdfs/ + papers.bib
   └─ md_base64_translated/
 ```
 
+#### 一键处理 `data_root`
+
+在仓库根目录准备好 `config.toml` 和 `ocr.toml`，将 PDF 放入
+`data_root/pdf/`。安装项目的 Node 依赖（`npm install`），供 Mermaid 校验使用，
+然后运行：
+
+```bash
+uv run python scripts/process_data_root.py /path/to/data_root \
+  --config config.toml --ocr-config ocr.toml \
+  --model openai/gpt-4o-mini
+```
+
+把 `--model` 替换为配置中可用的 `provider/model`。默认翻译成中文；
+可用 `--target-lang ja` 等选项指定目标语言。添加 `--dry-run` 可预览命令，
+不调用服务，也不创建文件。
+
+脚本依次执行 OCR、OCR 格式修复、公式修复、Markdown 整理、`simple` 抽取、
+`deep_read` 抽取和翻译。随后对两份 JSON 和译文执行格式与公式修复，
+最后仅对 `deep_read.json` 修复 Mermaid。
+
+```text
+data_root/
+├── pdf/                       # 用户提供的 PDF
+├── ocr/                       # 原始 OCR 布局，随后原地修复
+├── md_simple/
+├── md_base64/
+├── simple.json
+├── deep_read.json
+├── md_base64_translated/
+└── logs/
+    ├── progress.json          # 最近一次运行的步骤状态
+    ├── pipeline.log           # 运行记录，追加写入
+    ├── 01-ocr.log             # 每个步骤的标准输出、错误和进度
+    ├── …
+    ├── simple-errors.json
+    ├── deep_read-errors.json
+    ├── fix-math-*-errors.json
+    ├── fix-mermaid-deep_read-errors.json
+    └── deep_read/paper_stage_outputs/  # 深度阅读中间结果
+```
+
+各步骤在 `logs/` 内的独立目录运行，公式报告、翻译调试目录及默认相对路径的
+中间结果均留在 `logs/` 内。可用 `tail -f data_root/logs/01-ocr.log` 查看步骤输出。
+配置文件路径按启动脚本时的目录解析；配置中的自定义相对文件路径应改为绝对路径。
+
+命令以非零状态退出时，脚本停止并记录失败。部分现有命令会在单篇文档失败后
+仍返回零，因此 `progress.json` 的 `completed` 仅表示命令执行结束；还需检查
+各步骤日志和错误报告。重新运行会再次执行整条流程，沿用各命令的已有结果跳过规则，
+不会按 `progress.json` 跳过步骤。格式和公式修复会直接修改生成产物，不修改输入 PDF。
+
 #### 步骤 1：对 PDF/图片执行 OCR
 
 先复制并填写 OCR 配置：
