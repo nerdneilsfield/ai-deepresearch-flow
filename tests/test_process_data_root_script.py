@@ -213,3 +213,67 @@ def test_execution_records_logs_and_stops_after_failure(tmp_path, monkeypatch, f
     contents = "\n".join(path.read_text(encoding="utf-8") for path in logs)
     assert "FAKE_STDOUT_MARKER" in contents
     assert "FAKE_STDERR_MARKER" in contents
+
+
+@pytest.mark.parametrize(
+    "selection",
+    [
+        ("--steps", "translate,simple"),
+        ("--from-step", "translate"),
+    ],
+)
+def test_selected_commands_follow_workflow_order(tmp_path, selection):
+    result = invoke(tmp_path, "data", "--model", MODEL, "--dry-run", *selection)
+    assert result.returncode == 0, result.stderr
+    commands = printed_commands(result.stdout)
+    if selection[0] == "--steps":
+        assert [cmd[:2] for cmd in commands] == [["paper", "extract"], ["translator", "translate"]]
+        assert option(commands[0], "--prompt-template") == "simple"
+    else:
+        assert len(commands) == 8
+        assert commands[0][:2] == ["translator", "translate"]
+        assert commands[-1][:2] == ["recognize", "fix-mermaid"]
+    assert not (tmp_path / "data").exists()
+
+
+@pytest.mark.parametrize(
+    "selection",
+    [
+        ("--steps", "unknown"),
+        ("--steps", ""),
+        ("--steps", "simple,"),
+        ("--from-step", "unknown"),
+        ("--steps", "simple", "--from-step", "translate"),
+    ],
+)
+def test_invalid_selection_is_rejected(tmp_path, selection):
+    result = invoke(tmp_path, "data", "--model", MODEL, "--dry-run", *selection)
+    assert result.returncode != 0
+    assert not (tmp_path / "data").exists()
+
+
+def test_selected_fix_needs_no_pdf_configs_or_mermaid(tmp_path, monkeypatch):
+    package = tmp_path / "fake_cli" / "deepresearch_flow"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("")
+    (package / "cli.py").write_text("print('SELECTED_FIX_OK')")
+    monkeypatch.setenv("PYTHONPATH", str(package.parent))
+    monkeypatch.setenv("PATH", "")
+    root = tmp_path / "data"
+    root.mkdir()
+    (root / "simple.json").write_text("[]")
+    result = invoke(tmp_path, root, "--model", MODEL, "--steps", "fix-simple")
+    assert result.returncode == 0, result.stdout + result.stderr
+    progress = json.loads((root / "logs" / "progress.json").read_text())
+    assert progress["status"] == "completed"
+    assert [step["name"] for step in progress["steps"]] == ["fix-simple"]
+    assert "SELECTED_FIX_OK" in (root / "logs" / "08-fix-simple.log").read_text()
+    assert not (root / "pdf").exists()
+
+
+def test_selected_translation_reports_missing_markdown_not_pdf(tmp_path):
+    result = invoke(tmp_path, "data", "--model", MODEL, "--steps", "translate")
+    assert result.returncode != 0
+    progress = json.loads((tmp_path / "data" / "logs" / "progress.json").read_text())
+    assert progress["status"] == "failed"
+    assert "md_base64" in progress["error"]

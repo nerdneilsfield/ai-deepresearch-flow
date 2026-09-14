@@ -26,6 +26,9 @@ def main() -> int:
     parser.add_argument(
         "--dry-run", action="store_true", help="Print commands without writing files"
     )
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument("--steps", help="Comma-separated step names; run in workflow order")
+    selection.add_argument("--from-step", help="Run this step and all following steps")
     args = parser.parse_args()
     root = args.data_root.expanduser().resolve()
     config = args.config.expanduser().resolve()
@@ -164,6 +167,19 @@ def main() -> int:
             ],
         )
     )
+    step_numbers = {name: index for index, (name, _) in enumerate(steps, 1)}
+    if args.steps is not None:
+        selected = {name.strip() for name in args.steps.split(",")}
+        unknown = selected - step_numbers.keys()
+        if unknown:
+            parser.error(
+                f"Unknown steps: {', '.join(sorted(unknown))}. Available: {', '.join(step_numbers)}"
+            )
+        steps = [(name, command) for name, command in steps if name in selected]
+    elif args.from_step is not None:
+        if args.from_step not in step_numbers:
+            parser.error(f"Unknown step: {args.from_step}. Available: {', '.join(step_numbers)}")
+        steps = steps[step_numbers[args.from_step] - 1 :]
     # Keep the same environment as `uv run python`, even after changing cwd.
     prefix = [sys.executable, "-m", "deepresearch_flow.cli"]
     if args.dry_run:
@@ -190,26 +206,44 @@ def main() -> int:
 
     record()
     try:
-        if not (root / "pdf").is_dir() or not any(
-            p.is_file() and p.suffix.lower() == ".pdf" for p in (root / "pdf").rglob("*")
-        ):
-            raise ValueError(f"No PDF files found in {root / 'pdf'}")
-        for path in (config, ocr_config):
+        selected_names = {name for name, _ in steps}
+        required_configs = set()
+        for name, command in steps:
+            if "--config" in command:
+                required_configs.add(Path(command[command.index("--config") + 1]))
+        # Validate only inputs not produced by an earlier selected step.
+        produced = set()
+        for name, command in steps:
+            source = root / "pdf" if name == "ocr" else Path(command[command.index("--input") + 1])
+            if source not in produced:
+                suffix = ".pdf" if name == "ocr" else ".md"
+                if source.suffix == ".json":
+                    valid = source.is_file()
+                else:
+                    valid = source.is_dir() and any(
+                        p.is_file() and p.suffix.lower() == suffix for p in source.rglob("*")
+                    )
+                if not valid:
+                    raise ValueError(f"Missing input for {name}: {source}")
+            for flag in ("--output-dir", "--output-simple", "--output-base64", "--output"):
+                if flag in command:
+                    produced.add(Path(command[command.index(flag) + 1]))
+        for path in sorted(required_configs):
             if not path.is_file():
                 raise ValueError(f"Config file not found: {path}")
         # Mermaid validation also needs the repository-local npm executable after chdir.
         node_bin = Path(__file__).resolve().parents[1] / "node_modules" / ".bin"
         command_path = str(node_bin) + os.pathsep + os.environ.get("PATH", "")
-        if not shutil.which("mmdc", path=command_path):
+        if "fix-mermaid-deep_read" in selected_names and not shutil.which(
+            "mmdc", path=command_path
+        ):
             raise ValueError("mmdc not found; run npm install in the repository first")
-        for directory in ("ocr", "md_simple", "md_base64", "md_base64_translated"):
-            (root / directory).mkdir(parents=True, exist_ok=True)
         env = {**os.environ, "PYTHONUNBUFFERED": "1", "NO_COLOR": "1", "TERM": "dumb"}
         env["PATH"] = command_path
         for index, (name, command) in enumerate(steps, 1):
             workdir = logs / name
             workdir.mkdir(parents=True, exist_ok=True)
-            log_path = logs / f"{index:02d}-{name}.log"
+            log_path = logs / f"{step_numbers[name]:02d}-{name}.log"
             entry = {"name": name, "status": "running", "log": str(log_path)}
             progress["steps"].append(entry)
             record()

@@ -148,6 +148,36 @@ uv run python scripts/process_data_root.py /path/to/data_root \
 可用 `--target-lang ja` 等选项指定目标语言。添加 `--dry-run` 可预览命令，
 不调用服务，也不创建文件。
 
+可通过 `--steps` 选跑部分步骤，或通过 `--from-step` 从某一步开始运行到最后。
+两者不能同时使用；不指定时运行全部步骤。
+
+```bash
+# 只抽取两份 JSON 并翻译（需要已有 md_simple 和 md_base64）
+uv run python scripts/process_data_root.py /path/to/data_root \
+  --model openai/gpt-4o-mini --steps simple,deep_read,translate
+
+# 从翻译开始，随后修复两份 JSON 和译文（需要两份 JSON 已存在）
+uv run python scripts/process_data_root.py /path/to/data_root \
+  --model openai/gpt-4o-mini --from-step translate
+
+# 只修复现有深度阅读 JSON 的 Mermaid
+uv run python scripts/process_data_root.py /path/to/data_root \
+  --model openai/gpt-4o-mini --steps fix-mermaid-deep_read
+```
+
+可选步骤按执行顺序为：
+
+```text
+ocr, fix, fix-math, organize, simple, deep_read, translate,
+fix-simple, fix-math-simple, fix-deep_read, fix-math-deep_read,
+fix-translated, fix-math-translated, fix-mermaid-deep_read
+```
+
+`--steps` 使用逗号分隔；无论填写顺序如何，都按上述流程顺序执行，重复名称只运行一次。
+脚本不会自动补跑上游步骤。所选步骤依赖的输入必须已存在，或由前面的所选步骤生成。
+只检查所选步骤需要的配置和工具：例如单独翻译不需要 PDF、OCR 配置或 `mmdc`。
+日志文件保留完整流程的步骤编号。`--model` 仍为必填参数。
+
 脚本依次执行 OCR、OCR 格式修复、公式修复、Markdown 整理、`simple` 抽取、
 `deep_read` 抽取和翻译。随后对两份 JSON 和译文执行格式与公式修复，
 最后仅对 `deep_read.json` 修复 Mermaid。
@@ -179,7 +209,7 @@ data_root/
 
 命令以非零状态退出时，脚本停止并记录失败。部分现有命令会在单篇文档失败后
 仍返回零，因此 `progress.json` 的 `completed` 仅表示命令执行结束；还需检查
-各步骤日志和错误报告。重新运行会再次执行整条流程，沿用各命令的已有结果跳过规则，
+各步骤日志和错误报告。重新运行会再次执行所选步骤（默认整条流程），沿用各命令的已有结果跳过规则，
 不会按 `progress.json` 跳过步骤。格式和公式修复会直接修改生成产物，不修改输入 PDF。
 
 #### 步骤 1：对 PDF/图片执行 OCR

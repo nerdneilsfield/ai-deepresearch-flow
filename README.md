@@ -133,6 +133,60 @@ pdfs/ + papers.bib
   └─ md_base64_translated/
 ```
 
+#### Run the data-root script
+
+Place PDFs in `DATA_ROOT/pdf/`. From the repository root, prepare `config.toml`
+and `ocr.toml`, then install the Node dependencies with `npm install` for Mermaid validation.
+Run the full workflow:
+
+```bash
+uv run python scripts/process_data_root.py DATA_ROOT \
+  --config config.toml --ocr-config ocr.toml --model openai/gpt-4o-mini
+```
+
+Replace the model with a configured `provider/model`. Outputs are `ocr/`,
+`md_simple/`, `md_base64/`, `simple.json`, `deep_read.json`, and
+`md_base64_translated/`, all under `DATA_ROOT`. The script repairs OCR before
+organizing Markdown. After extraction and translation, it repairs formatting and
+formulas in both JSON files and translated Markdown, then repairs Mermaid only
+in `deep_read.json`. Translation defaults to Chinese; use `--target-lang` to change it.
+
+Select steps with `--steps`, or run from one step through the end with `--from-step`:
+
+```bash
+# Requires existing md_simple/ and md_base64/
+uv run python scripts/process_data_root.py DATA_ROOT \
+  --model openai/gpt-4o-mini --steps simple,deep_read,translate
+
+# Requires md_base64/ and both JSON files to exist
+uv run python scripts/process_data_root.py DATA_ROOT \
+  --model openai/gpt-4o-mini --from-step translate
+```
+
+Available steps, in execution order:
+
+```text
+ocr, fix, fix-math, organize, simple, deep_read, translate,
+fix-simple, fix-math-simple, fix-deep_read, fix-math-deep_read,
+fix-translated, fix-math-translated, fix-mermaid-deep_read
+```
+
+The two selection options are mutually exclusive. `--steps` accepts comma-separated
+names, runs them in workflow order, and runs duplicate names only once. It does not
+add upstream steps. Inputs must exist or be produced by an earlier selected step.
+Only selected steps require their configuration files and tools; translation alone
+needs neither PDFs nor OCR configuration nor `mmdc`. `--model` remains required.
+Add `--dry-run` to preview commands without creating files or calling providers.
+
+Logs, error reports, and intermediate progress stay under `DATA_ROOT/logs/`.
+`progress.json` records the latest run; step logs and `pipeline.log` append output.
+Step log numbers remain stable when selecting steps. Configuration paths resolve
+against the caller's directory; use absolute paths for custom file paths inside configs.
+Nonzero command exits stop the workflow. Some commands return zero despite per-file
+failures, so check error reports and step logs even when progress says `completed`.
+Reruns execute the selected steps using each command's existing-output skip rules,
+not the progress file. Repairs modify generated outputs in place, not source PDFs.
+
 #### Step 1: OCR PDFs or Images
 
 Copy and configure the OCR settings:
