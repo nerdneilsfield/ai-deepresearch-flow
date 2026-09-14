@@ -238,35 +238,28 @@ def main() -> int:
             "mmdc", path=command_path
         ):
             raise ValueError("mmdc not found; run npm install in the repository first")
-        env = {**os.environ, "PYTHONUNBUFFERED": "1", "NO_COLOR": "1", "TERM": "dumb"}
+        env = {**os.environ, "PYTHONUNBUFFERED": "1"}
         env["PATH"] = command_path
         for index, (name, command) in enumerate(steps, 1):
             workdir = logs / name
             workdir.mkdir(parents=True, exist_ok=True)
-            log_path = logs / f"{step_numbers[name]:02d}-{name}.log"
-            entry = {"name": name, "status": "running", "log": str(log_path)}
+            entry = {"name": name, "status": "running", "workdir": str(workdir)}
             progress["steps"].append(entry)
             record()
-            announce(f"[{index}/{len(steps)}] {name}: {log_path}")
-            with log_path.open("a", encoding="utf-8") as stream:
-                stream.write("\n$ " + shlex.join(prefix + command) + "\n")
-                stream.flush()
-                result = subprocess.run(
-                    prefix + command,
-                    cwd=workdir,
-                    env=env,
-                    stdout=stream,
-                    stderr=subprocess.STDOUT,
-                    check=False,
-                )
+            announce(f"[{index}/{len(steps)}] {name} (reports: {workdir})")
+            # Inherit the terminal so each CLI keeps its live progress bars and colors.
+            result = subprocess.run(prefix + command, cwd=workdir, env=env, check=False)
             entry["returncode"] = result.returncode
             if result.returncode:
                 entry["status"] = "failed"
-                raise RuntimeError(f"{name} exited with {result.returncode}; see {log_path}")
+                raise RuntimeError(f"{name} exited with {result.returncode}; see terminal output")
             entry["status"] = "completed"
+            announce(f"[{index}/{len(steps)}] {name} completed")
             record()
         progress["status"] = "completed"
-        announce("All commands finished. Check step logs and error reports for per-file failures.")
+        announce(
+            "All commands finished. Check terminal output and error reports for per-file failures."
+        )
         record()
         return 0
     except (OSError, ValueError, RuntimeError, KeyboardInterrupt) as exc:

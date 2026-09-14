@@ -172,6 +172,7 @@ def test_execution_records_logs_and_stops_after_failure(tmp_path, monkeypatch, f
         "from pathlib import Path\n"
         "with Path(os.environ['CALLS_FILE']).open('a') as log:\n"
         "    log.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+        "Path('intermediate.json').write_text('{}')\n"
         "print('FAKE_STDOUT_MARKER', flush=True)\n"
         "print('FAKE_STDERR_MARKER', file=sys.stderr, flush=True)\n"
         "sys.exit(9 if ' '.join(sys.argv[1:3]) == os.environ.get('FAIL_AT') else 0)\n",
@@ -210,9 +211,10 @@ def test_execution_records_logs_and_stops_after_failure(tmp_path, monkeypatch, f
     assert "simple" in console
     logs = [path for path in (root / "logs").rglob("*") if path.is_file()]
     assert logs
-    contents = "\n".join(path.read_text(encoding="utf-8") for path in logs)
-    assert "FAKE_STDOUT_MARKER" in contents
-    assert "FAKE_STDERR_MARKER" in contents
+    assert list((root / "logs").rglob("intermediate.json"))
+    assert not (tmp_path / "intermediate.json").exists()
+    assert "FAKE_STDOUT_MARKER" in result.stdout
+    assert "FAKE_STDERR_MARKER" in result.stderr
 
 
 @pytest.mark.parametrize(
@@ -267,7 +269,7 @@ def test_selected_fix_needs_no_pdf_configs_or_mermaid(tmp_path, monkeypatch):
     progress = json.loads((root / "logs" / "progress.json").read_text())
     assert progress["status"] == "completed"
     assert [step["name"] for step in progress["steps"]] == ["fix-simple"]
-    assert "SELECTED_FIX_OK" in (root / "logs" / "08-fix-simple.log").read_text()
+    assert "SELECTED_FIX_OK" in result.stdout
     assert not (root / "pdf").exists()
 
 

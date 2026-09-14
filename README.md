@@ -178,12 +178,14 @@ Only selected steps require their configuration files and tools; translation alo
 needs neither PDFs nor OCR configuration nor `mmdc`. `--model` remains required.
 Add `--dry-run` to preview commands without creating files or calling providers.
 
-Logs, error reports, and intermediate progress stay under `DATA_ROOT/logs/`.
-`progress.json` records the latest run; step logs and `pipeline.log` append output.
-Step log numbers remain stable when selecting steps. Configuration paths resolve
+Error reports and intermediate artifacts stay under `DATA_ROOT/logs/`.
+Each command displays its output, errors, and native progress bars directly in the
+current terminal; output is not redirected to files. `progress.json` records the
+latest run, and `pipeline.log` records step start, completion, and failure events.
+Configuration paths resolve
 against the caller's directory; use absolute paths for custom file paths inside configs.
 Nonzero command exits stop the workflow. Some commands return zero despite per-file
-failures, so check error reports and step logs even when progress says `completed`.
+failures, so check error reports and terminal output even when progress says `completed`.
 Reruns execute the selected steps using each command's existing-output skip rules,
 not the progress file. Repairs modify generated outputs in place, not source PDFs.
 
