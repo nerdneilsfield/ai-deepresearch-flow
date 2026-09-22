@@ -254,7 +254,7 @@ def test_render_paper_markdown_uses_requested_or_default_template() -> None:
     rendered, template_name, warning = render_paper_markdown(paper, "zh", template_tag="deep_read")
     assert template_name == "deep_read"
     assert warning is None
-    assert "Module A: Reading Alignment and Input Check" in rendered
+    assert "第一轮：问题与贡献" in rendered
     assert "**输出语言 / Output Language:** zh" in rendered
     assert "**期刊/会议 / Publication Venue:** NeurIPS 2024" in rendered
 

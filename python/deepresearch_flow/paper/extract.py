@@ -834,12 +834,15 @@ def compute_stage_needs_run(
     prompt_hash: str,
     stage_validator: Draft7Validator,
 ) -> bool:
-    needs_run = force or stage_name in force_stage_set
+    # Legacy deep-read module names now belong to one of three grouped stages.
+    # Field membership also preserves old --force-stage and retry-list selectors.
+    selectors = {stage_name, *stage_validator.schema.get("properties", {})}
+    needs_run = force or bool(selectors & force_stage_set)
     if stage_record is None:
         needs_run = True
     if is_retry_full:
         needs_run = True
-    if retry_stages is not None and stage_name in retry_stages:
+    if retry_stages is not None and selectors & retry_stages:
         needs_run = True
     if stage_meta_entry.get("prompt_hash") != prompt_hash:
         needs_run = True

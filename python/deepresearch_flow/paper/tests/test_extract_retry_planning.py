@@ -159,7 +159,7 @@ def test_deep_read_stage_a_requests_archetype_and_module_a() -> None:
 
     assert stage_definitions
     assert stage_definitions[0].name == "module_a"
-    assert stage_definitions[0].fields == ["paper_archetype", "module_a"]
+    assert stage_definitions[0].fields == ["paper_archetype", "module_a", "module_b", "module_c1"]
 
 
 def test_deep_read_non_module_a_stages_depend_on_module_a() -> None:

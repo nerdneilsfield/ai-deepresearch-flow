@@ -81,21 +81,17 @@ _TEMPLATES: dict[str, TemplateBundle] = {
 
 _STAGES: dict[str, list[StageDefinition]] = {
     "deep_read": [
-        StageDefinition("module_a", ["paper_archetype", "module_a"]),
-        StageDefinition("module_b", ["module_b"], depends_on=["module_a"]),
-        StageDefinition("module_c1", ["module_c1"], depends_on=["module_a"]),
-        StageDefinition("module_c2", ["module_c2"], depends_on=["module_a"]),
-        StageDefinition("module_c3", ["module_c3"], depends_on=["module_a"]),
-        StageDefinition("module_c4", ["module_c4"], depends_on=["module_a"]),
-        StageDefinition("module_c5", ["module_c5"], depends_on=["module_a"]),
-        StageDefinition("module_c6", ["module_c6"], depends_on=["module_a"]),
-        StageDefinition("module_c7", ["module_c7"], depends_on=["module_a"]),
-        StageDefinition("module_c8", ["module_c8"], depends_on=["module_a"]),
-        StageDefinition("module_d", ["module_d"], depends_on=["module_a"]),
-        StageDefinition("module_e", ["module_e"], depends_on=["module_a"]),
-        StageDefinition("module_f", ["module_f"], depends_on=["module_a"]),
-        StageDefinition("module_g", ["module_g"], depends_on=["module_a"]),
-        StageDefinition("module_h", ["module_h"], depends_on=["module_a"]),
+        StageDefinition("module_a", ["paper_archetype", "module_a", "module_b", "module_c1"]),
+        StageDefinition(
+            "module_d",
+            ["module_c2", "module_c3", "module_c4", "module_c5", "module_d", "module_f", "module_h"],
+            depends_on=["module_a"],
+        ),
+        StageDefinition(
+            "module_e",
+            ["module_c6", "module_c7", "module_c8", "module_e", "module_g"],
+            depends_on=["module_a", "module_d"],
+        ),
     ],
     "deep_read_phi": [
         StageDefinition("module_m1", ["module_m1"]),

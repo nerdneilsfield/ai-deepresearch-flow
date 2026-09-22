@@ -1,372 +1,99 @@
 Template: deep_read
-
 {% if stage_name %}
 Current stage: {{ stage_name }}.
 Return STRICT JSON only with fields: {{ stage_fields | join(", ") }}.
-Output language: {{ output_language }}.
-Use that language for the final content.
-The prompt itself is written in English.
-Do not switch the answer to English unless output_language requests English.
-You may refer to these completed modules (JSON): {{ previous_outputs }}
+Completed rounds (JSON): {{ previous_outputs }}
+{% else %}
+Single-shot mode: complete all three rounds in one JSON object.
+JSON fields: paper_archetype, module_a, module_b, module_c1, module_c2, module_c3, module_c4, module_c5, module_c6, module_c7, module_c8, module_d, module_e, module_f, module_g, module_h, plus metadata required by the schema.
+{% endif %}
 {% if paper_archetype_hint %}Paper archetype already determined: {{ paper_archetype_hint }}.
 {% endif %}
-{% else %}
-This is single-shot mode.
-Complete all required modules in one response and fill these JSON fields: paper_archetype, module_a, module_b, module_c1..module_c8, module_d, module_e; also fill optional module_f, module_g, and module_h when possible. If an optional module cannot be completed, return an empty string for that field.
-Output language: {{ output_language }}.
-Use that language for the final content.
+Output language: {{ output_language }}. Use that language for the final content.
 The prompt itself is written in English.
 Do not switch the answer to English unless output_language requests English.
-Use Markdown inside each module field.
-Do not use first person.
-Every important conclusion must include an in-paper locator such as section, figure, table, or equation number.
 
-Diagram requirements (use Mermaid or Markmap code blocks; choose the diagram style according to paper archetype and module needs):
-- If a diagram is inferred rather than explicitly shown in the paper, prefix its title with `[Inferred]`.
-- Mermaid syntax rule: node IDs must stay simple ASCII alphanumerics such as `NodeA` or `step1`. Put complex wording in labels, for example `NodeA["Complex description"]`.
-- Diagrams support the text; they must not replace the text. Always explain the diagram after the code block.
-- Module B must include a full-paper Markmap outline, even if the paper does not provide an explicit outline.
-- Survey papers must include a taxonomy plus representative-work diagram (`flowchart TD`).
-- Method papers must include a process diagram (`flowchart TD`) and a data-flow diagram (`flowchart LR`).
-- System papers must include an architecture diagram (`flowchart LR`) and a data-flow diagram (`flowchart LR`).
-- Module C3 should include a process diagram (`flowchart TD`) when the paper is method-oriented.
-- Module D should include an architecture diagram (`flowchart LR`) when the paper is system-oriented.
-- Modules C4 and C5 may include data-flow or protocol relationship diagrams (`flowchart LR`) when useful.
-- Module E may include a performance/trade-off diagram (`flowchart TD`) when useful.
-- Module H may include an experiment-setup or benchmark-coverage diagram (`flowchart TD`) when useful.
+# Three-round paper reading: understanding and evaluation
+Help the reader understand an algorithm, system, or survey paper. Assume basic subject knowledge and an understanding-oriented goal unless another purpose is supplied. Start directly; note insufficient material rather than inventing details. This is a batch extraction workflow: complete the requested round without asking for background or waiting for a user to say continue.
 
-Reference examples (follow the code-fence format and keep node IDs simple):
-1) Full-paper outline (Markmap):
-```markmap
-# Paper Overview
-## Introduction
-## Method
-### Pipeline
-### Modules
-## Experiments
-## Conclusion
-```
-2) Survey taxonomy diagram:
-```mermaid
-flowchart TD
-  CatA["Category A"]
-  CatB["Category B"]
-  CatC["Category C"]
-  W1["Work 1"]
-  W2["Work 2"]
-  W3["Work 3"]
-  CatA --> W1
-  CatB --> W2
-  CatC --> W3
-```
-3) Method process diagram:
-```mermaid
-flowchart TD
-  NodeA["Input Data"]
-  NodeB["Preprocessing"]
-  NodeC["Model"]
-  NodeD["Evaluation"]
-  NodeA --> NodeB --> NodeC --> NodeD
-```
-4) Data-flow diagram:
-```mermaid
-flowchart LR
-  Step1["Raw Data"] --> Step2["Feature Extractor"] --> Step3["Fusion"] --> Step4["Output"]
-```
-5) System architecture diagram:
-```mermaid
-flowchart LR
-  Host["Host"] --> FPGA["FPGA / Accelerator"] --> Mem["Memory / IO"]
-```
-6) Trade-off diagram:
-```mermaid
-flowchart TD
-  Fast["Fast / Lower Accuracy"] --> Balanced["Balanced"] --> Accurate["Slower / Higher Accuracy"]
-```
-7) Experiment-setup diagram:
-```mermaid
-flowchart TD
-  Dataset["Datasets"] --> Metrics["Metrics"] --> Baselines["Baselines"] --> Results["Results"]
-```
+## Rules for every round
+- Return only valid JSON matching the supplied schema, with Markdown inside string fields. Use the existing module keys as storage slots, not as separate reading rounds.
+- Be concrete and concise. Explain necessary derivation steps and evidence, not repetitive summaries or fixed-length checklists. Refer back to earlier modules rather than restating them.
+- Locate important conclusions by section, figure, table, or equation number. If a locator cannot be established, say so; never fabricate it.
+- Distinguish author claims, paper evidence, and analytical inference. Mark missing information as not reported or pending verification, in the output language.
+- Explain important terms on first use. Preserve necessary English terminology and mathematical notation.
+- Give most detail to the paper's core innovations and the evidence that could confirm or undermine them. Treat peripheral material briefly.
+- All five supporting components are included by default: glossary, full figure/table index, equation derivations, reproduction plan, and citation checks. They are not optional follow-up tasks. Expand innovation-critical items; summarize the rest without claiming an exhaustive audit where materials are unavailable.
+- Diagrams and pseudocode are useful only when they clarify the method. Do not require a diagram per module or score figures mechanically. Label inferred diagrams as inferred; use simple ASCII Mermaid node IDs and quote complex labels.
+- Adapt to purpose when known: reproduction emphasizes implementation and validation; literature review emphasizes research relationships; peer review emphasizes claims and evidence; deployment emphasizes costs and boundaries.
+
+## Archetype
+Choose one single best-fit paper_archetype: survey, method, system, or other. Give a brief rationale in module_a.
+For surveys, analyze taxonomy, classification axes, representative works, benchmark/protocol coverage, comparison conditions, consensus, coverage bias, blind spots, and research gaps. Do not fabricate a new algorithm or training setup for a survey. Reproduction means reconstructing the synthesis/search/selection procedure.
+For methods and systems, explain the mechanism or architecture, training/inference flow when applicable, evaluation conditions, and deployment costs. For other papers, use the applicable parts and explain what does not apply.
+
+{% set requested = stage_fields if stage_name else ['paper_archetype', 'module_a', 'module_b', 'module_c1', 'module_c2', 'module_c3', 'module_c4', 'module_c5', 'module_c6', 'module_c7', 'module_c8', 'module_d', 'module_e', 'module_f', 'module_g', 'module_h'] %}
+{% if 'module_a' in requested or 'module_b' in requested or 'module_c1' in requested %}
+## Round 1: What problem does this paper solve, and how should it be read?
+Keep this round short. Establish the overall picture; defer detailed derivations and experiment-by-experiment analysis to round 2.
+{% if 'module_a' in requested %}
+- module_a: brief material check (paper, appendix, code, data when available), archetype rationale, and material gaps that affect interpretation. Do not invent author biographies, venue rankings, or links.
 {% endif %}
-
----
-
-# Deep Read Prompt
-
-You are an advanced language model helping a user read and understand an algorithm, systems, or survey paper efficiently and reproducibly. Use *How to Read a Paper: A Three-Pass Approach* (Keshav) as the main reading skeleton, then extend it with reviewer-style checklists, terminology support, and optional verification guidance.
-
-## 0) Global hard constraints (must follow)
-1. Output language: {{ output_language }}. Use that language for the final content.
-2. The prompt itself is written in English. Do not switch the answer to English unless `output_language` requests English.
-3. Keep necessary technical terms, symbols, and equation notation in English when needed for accuracy.
-4. Do not use first person.
-5. Use Markdown inside each module field.
-6. Do not omit the reasoning chain that supports important conclusions.
-7. For every important conclusion, include an in-paper locator such as section, figure, table, or equation number.
-8. Organize each module from shallow understanding to medium-depth analysis to deep analysis when applicable.
-
-## 1) Module list{% if not stage_name %} (single-shot mode must complete all of them){% endif %}
-- Module A: Reading alignment and input validation
-- Module B: First-pass overview
-- Modules C1-C8: The eight core questions
-- Module D: Second-pass understanding
-- Module E: Third-pass deep review
-- Optional Module F: Glossary and concept dependency map
-- Optional Module G: Verification and citation checking
-- Module H: Figure and table extraction
-
-## 2) Module specification and required structure
-{% if stage_name %}
-### Current stage: {{ stage_name }}
-#### Other modules at a glance (summary only, no details here)
-- Module A: metadata, scope, input completeness, reading plan
-- Module B: first-pass overview and structural outline
-- Modules C1-C8: problem, related work, approach, data, results, extensions, deployment, summary
-- Module D: structure tree, method/system breakdown, figure/table interpretation, experiment details
-- Module E: reconstruction, assumptions, failure modes, strengths/weaknesses, next-step research
-- Module F: glossary and concept dependencies
-- Module G: verification, conflicts, and references
-- Module H: figure/table index, top-priority deep reads, and figure-to-claim mapping
-
-#### Current-stage specification (must follow strictly)
-{% if stage_name == "module_a" %}
-### Module A: Reading alignment and input validation
-In the `paper_archetype` field, choose exactly one single best-fit label from: `survey`, `method`, `system`, `other`.
-- `survey`: the main contribution is synthesis, taxonomy, representative-work comparison, benchmark aggregation, trends, or research-gap analysis.
-- `method`: the main contribution is a new algorithm, model, or learning procedure.
-- `system`: the main contribution is a system, platform, hardware design, engineering architecture, or deployment stack.
-- `other`: the paper does not fit the three categories above, but you must still choose the most reasonable single label.
-In the prose of `module_a`, include a brief classification rationale in 1-2 bullets or one short subsection. Do not turn it into a long essay.
-
-Module A must include these sections in order:
-1. Paper metadata
-   - Title:
-   - Authors (name / affiliation / brief background if explicitly available):
-   - Publication venue or outlet (journal / conference / year / level if available):
-2. Research positioning
-   - Research area:
-   - Concrete task:
-   - Target users or application scenario:
-3. Input material checklist
-   - PDF:
-   - Appendix / supplement:
-   - Code link:
-   - Dataset link:
-4. Missing materials and risks
-   - Missing items:
-   - Likely impact:
-5. Reading route (3-6 steps)
-   - Step 1:
-   - Step 2:
-   - Step 3:
-
-Reference format example:
-[Paper metadata] Title: ...; Authors: ...; Venue: ...
-[Research positioning] Area / task / scenario ...
-[Input materials] PDF: yes/no; code: ...
-[Missing materials and risks] ...
-[Reading route] Step 1 ... Step 2 ...
-{% elif stage_name == "module_b" %}
-### Module B: First-pass overview
-Module B must include these sections in order:
-1. Paper type and category
-2. Context and research background
-3. Intuitive correctness check (key assumptions and whether they seem plausible)
-4. Core contributions (3-5 bullets)
-5. Clarity assessment (structure, figures, formulas, readability)
-6. Continue-or-stop recommendation (clear recommendation plus reason)
-7. Structural outline diagram (must include a Markmap block)
-
-Reference format example:
-[Paper type and category] ...
-[Context] ...
-[Contributions] 1) ... 2) ...
-```markmap
-# Paper Overview
-## Introduction
-## Method
-## Experiments
-## Conclusion
-```
-{% elif stage_name == "module_c1" %}
-### Module C1: What problem is the paper trying to solve?
-Must include:
-1. One-sentence problem definition
-2. Pain points or deficiencies (2-4 bullets)
-3. Formal objective or optimization target (if present)
-4. Success criteria (metrics or desired properties)
-{% elif stage_name == "module_c2" %}
-### Module C2: What related work matters here?
-Must include:
-1. Strongest baseline(s) and the comparison axis
-2. Closest approach(es) and the key difference
-3. Orthogonal directions
-4. One-sentence positioning of this paper
-
-Suggested structure: `Method -> core idea -> limitation`.
-{% elif stage_name == "module_c3" %}
-### Module C3: How does the paper solve the problem?
-{% if paper_archetype_hint == "survey" %}
-Must include:
-1. Taxonomy or classification framework overview
-2. Main classification axes or comparison dimensions
-3. Representative work grouping and why the grouping matters
-4. A taxonomy diagram (`flowchart TD`)
-{% else %}
-Must include:
-1. Core mechanism overview
-2. Step-by-step breakdown
-3. Key formulas or module roles
-4. A process diagram (`flowchart TD`) when the paper is method-oriented
+{% if 'module_c1' in requested %}
+- module_c1: the problem, why it matters, and the main shortcoming of existing approaches. Include a formal objective only if it helps define the problem.
 {% endif %}
-
-Reference example:
-```mermaid
-flowchart TD
-  Step1["Input"] --> Step2["Process"] --> Step3["Output"]
-```
-{% elif stage_name == "module_c4" %}
-### Module C4: Datasets, benchmarks, and implementation or evaluation setup
-{% if paper_archetype_hint == "survey" %}
-Must include:
-1. Dataset coverage (name, scale, scenario, and what slice of the field it represents)
-2. Benchmark coverage and how the survey organizes benchmark usage across papers
-3. Evaluation protocol coverage and any protocol mismatches across the literature
-4. Why these coverage choices matter and what they validate
-{% else %}
-Must include:
-1. Dataset / benchmark list (name, scale, scenario)
-2. Preprocessing and split or coverage setup
-3. Training / inference / evaluation environment when applicable
-4. Why these choices matter and what they validate
-{% endif %}
-{% elif stage_name == "module_c5" %}
-### Module C5: Metrics and results
-{% if paper_archetype_hint == "survey" %}
-Must include:
-1. Metrics (with definitions or short explanations)
-2. Comparison patterns across representative prior work
-3. Consensus and disagreement across papers
-4. Benchmark interpretation and evidence strength across the literature
-{% else %}
-Must include:
-1. Metrics (with definitions or short explanations)
-2. Main results (use concrete numbers when available)
-3. Comparison against baselines or representative prior work
-4. Ablations, sensitivity, or synthesis of cross-paper differences when available
-{% endif %}
-{% elif stage_name == "module_c6" %}
-### Module C6: What could be explored next?
-Include at least one item each for theory, engineering, and data/evaluation directions.
-{% elif stage_name == "module_c7" %}
-### Module C7: How would this show up in real-world use?
-Must include deployment constraints, compute/latency implications, robustness/safety issues, and maintainability.
-{% elif stage_name == "module_c8" %}
-### Module C8: Concise summary
-Must include:
-1. One summary paragraph (6-8 sentences)
-2. Five key takeaways
-3. One core formula or mechanism (LaTeX if helpful)
-{% elif stage_name == "module_d" %}
-### Module D: Second-pass understanding
-{% if paper_archetype_hint == "survey" %}
-Must include:
-1. Taxonomy structure
-2. Representative clusters and how the paper separates them
-3. Explanation of at least two important figures or tables
-4. Comparison-table interpretation and coverage structure
-5. A diagram suited to survey synthesis
-{% else %}
-Must include:
-1. Structure tree
-2. Method or system breakdown (inputs, outputs, modules, losses, training/inference flow when applicable)
-3. Explanation of at least two important figures or tables
-4. Experiment or evaluation details (datasets, metrics, comparison targets, fairness, ablations)
-5. A diagram suited to the paper archetype
-{% endif %}
-{% elif stage_name == "module_e" %}
-### Module E: Third-pass deep review
-{% if paper_archetype_hint == "survey" %}
-Must include:
-1. Taxonomy assumptions
-2. Coverage bias
-3. Blind spots or omitted areas (2-4 bullets)
-4. Strengths and weaknesses
-5. Future survey-update directions (2-4 bullets)
-{% else %}
-Must include:
-1. Reconstructability (pseudocode or reconstruction notes when appropriate)
-2. Assumptions (3-6 bullets)
-3. Failure modes or blind spots (2-4 bullets)
-4. Strengths and weaknesses
-5. Next-step research directions (2-4 bullets)
-{% endif %}
-{% elif stage_name == "module_f" %}
-### Module F: Glossary
-Output 15-40 entries. Each entry should include:
-- English term / translated term when useful
-- Definition
-- Intuition
-- Role in the paper
-- Prerequisite knowledge
-
-Then append a text-only concept dependency map.
-{% elif stage_name == "module_g" %}
-### Module G: Verification
-Must include:
-1. Key factual claims (at least two sources per claim when verification is requested)
-2. Conflict or uncertainty notes
-3. Reference list
-{% elif stage_name == "module_h" %}
-### Module H: Figure and table extraction
-{% if paper_archetype_hint == "survey" %}
-Must include:
-1. Full index (table: number / caption / type / location / supported claim / score)
-2. Top-priority deep reads (3-5 items)
-3. Taxonomy figures, comparison tables, or benchmark summary tables
-4. Timeline/grouping visuals and mapping from figures/tables to conclusions
-{% else %}
-Must include:
-1. Full index (table: number / caption / type / location / supported claim / score)
-2. Top-priority deep reads (3-5 items)
-3. Figure relationship or experiment-setup diagram
-4. Mapping from figures/tables to conclusions
+{% if 'module_b' in requested %}
+- module_b: one-sentence overview; core idea and concrete contributions relative to prior work; the most important result and its conditions, separating the authors' claim from supported scope; priority sections/figures and questions for the next round. End with one short transition sentence, not a request for confirmation.
 {% endif %}
 {% endif %}
-{% else %}
-### Single-shot mode: all modules must be completed in detail
-Follow the templates below module by module. Every module must cover its required items and constraints.
 
-#### Module A template
-[Paper metadata] title / authors / institutions / background / venue / level
-[Research positioning] area / task / scenario
-[Input materials] PDF / appendix / code / data
-[Missing materials and risks]
-[Reading route] Step 1 .. Step N
-
-#### Module B template
-[Paper type and category] ... [Context] ... [Intuitive correctness] ... [Contributions] ... [Clarity] ... [Continue or stop] ...
-Include a Markmap outline.
-
-#### Modules C1-C8 template
-Answer C1 through C8 in order. Each one must include problem statements, key points, and in-paper evidence locations.
-
-#### Module D template
-Structure tree + method/system breakdown + figure/table explanations + experiment/evaluation details + necessary diagrams.
-
-#### Module E template
-Reconstruction or pseudocode + assumptions + failure modes + strengths/weaknesses + next-step research.
-
-#### Module F template
-15-40 glossary entries + text-only concept dependency map.
-
-#### Module G template
-Key factual claims (two sources when verification is requested) + conflict notes + references.
-
-#### Module H template
-Full figure/table index + top deep reads + figure relationship or experiment-setup diagram + figure-to-claim mapping.
+{% if 'module_d' in requested or 'module_c2' in requested or 'module_c3' in requested or 'module_c4' in requested or 'module_c5' in requested or 'module_f' in requested or 'module_h' in requested %}
+## Round 2: How does the method work, and do the experiments support it?
+Distribute content among these fields without repeating it.
+{% if 'module_c3' in requested %}
+- module_c3: input → key steps → output, then necessary modules. Explain key formulas with symbol meanings, motivation, role, and a small example where helpful. Derive equations central to the innovation step by step; for other equations, briefly state their purpose and relation to the core method. Retain equation numbers, state assumptions, and distinguish supplied derivations from inferred ones. For surveys, explain the taxonomy and classification instead of imposing an algorithm.
 {% endif %}
+{% if 'module_c4' in requested %}
+- module_c4: datasets, metrics/protocol setup, splits, baselines, compute budgets, and training / inference / evaluation environment when applicable. Identify missing settings and unfair comparisons. For surveys, evaluate literature selection and benchmark/protocol coverage instead.
+{% endif %}
+{% if 'module_c5' in requested %}
+- module_c5: decisive results, metrics, ablations, and whether the evidence supports the innovation. Use numbers from the paper and preserve comparison conditions; mark illegible numbers uncertain. Avoid re-listing every result.
+{% endif %}
+{% if 'module_c2' in requested %}
+- module_c2: compare the closest relevant work, actual differences, and costs. Distinguish the paper's descriptions of prior work from externally verified facts.
+{% endif %}
+{% if 'module_d' in requested %}
+- module_d: explain the most important 3–5 figures/tables (or fewer if the paper contains fewer): what each shows, which claim it supports, and its comparison conditions or interpretation limits. Prioritize evidence for the core innovation. Refer to earlier method/result explanations instead of repeating them. End with one short transition to evaluation.
+{% endif %}
+{% if 'module_f' in requested %}
+- module_f: a glossary covering the paper's technical terms and notation without padding it with generic vocabulary or duplicate definitions. For innovation-critical terms, explain meaning, intuition, role, and necessary prerequisites; give peripheral terms a brief definition. No fixed entry quota.
+{% endif %}
+{% if 'module_h' in requested %}
+- module_h: a full index of figures and tables available in the supplied material: number, caption/subject, location, and related claim. Keep peripheral entries to one line; point to module_d for important interpretations rather than duplicating them. Note missing appendices or unreadable visuals. No scoring or mandatory experiment-setup diagram.
+{% endif %}
+{% endif %}
+
+{% if 'module_e' in requested or 'module_c6' in requested or 'module_c7' in requested or 'module_c8' in requested or 'module_g' in requested %}
+## Round 3: What is trustworthy, what is limited, and how can it be used or reproduced?
+{% if 'module_e' in requested %}
+- module_e: reliable conclusions versus insufficiently supported claims; key assumptions, failure scenarios, their evidence and consequences. Include a reproduction plan: required artifacts, important settings, validation steps, and success criteria. Detail the implementation and experiments needed to validate the core innovation; summarize routine setup and peripheral experiments. Give pseudocode only when it helps reconstruct the method. Do not invent hyperparameters or implementation details; mark blockers explicitly. For surveys, assess coverage bias and reconstructability of the synthesis.
+{% endif %}
+{% if 'module_c7' in requested %}
+- module_c7: practical constraints: data, compute, latency, robustness, and applicability. Separate demonstrated deployment behavior from inference.
+{% endif %}
+{% if 'module_c6' in requested %}
+- module_c6: 2–3 worthwhile follow-up questions, each with a validation approach, possible benefit, and risk. Do not force one question per arbitrary category.
+{% endif %}
+{% if 'module_g' in requested %}
+- module_g: citation and verification notes. Closely check references supporting novelty, strongest comparisons, decisive external claims, or reproduction dependencies. Briefly account for other citations, grouping peripheral ones where useful; state which were not individually checked. Identify whether support comes from the supplied paper or an accessed external source. Never imply a reference was checked without access to it.
+{% endif %}
+{% if 'module_c8' in requested %}
+- module_c8: a short final judgment about what to trust and how to use the paper, not another full summary or repeated list of takeaways. End with one next-step sentence.
+{% endif %}
+{% endif %}
+
+## External verification
+Citing the paper's own methods/results requires an in-paper locator, not a web search for each statement. For external or time-sensitive facts (publication version, code availability, related work, current SOTA), verify when tools/materials permit. Prefer original papers, formal publication pages, official repositories, and dataset homepages; cross-check major disputes, without requiring two sources per claim. Include accessible links for accessed sources and explain conflicts in version, date, or evaluation conditions. If browsing or source access is unavailable, explicitly mark the claim pending verification, not established fact.
 
 Document content:
 {{ content }}
@@ -374,12 +101,5 @@ Document content:
 JSON Schema:
 {{ schema }}
 
-{% if stage_name %}
----
-Critical instructions for Stage {{ stage_name }}:
-1. OUTPUT FORMAT: STRICT JSON only. No Markdown fences outside the JSON object.
-2. COMPLETENESS: Cover ALL requirements listed for Module {{ stage_name }} above, in detail.
-3. NEGATIVE CONSTRAINT: Do NOT generate fields for other modules.
-4. Output language: {{ output_language }}. Use that language for the final content.
-5. The prompt itself is written in English. Do not switch the answer to English unless `output_language` requests English.
-{% endif %}
+Output language: {{ output_language }}.
+Return STRICT JSON only. Fill only the requested fields, preserving their types and metadata requirements. Do not output Markdown fences outside JSON.
