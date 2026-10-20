@@ -254,6 +254,21 @@ class TestLoadRemoteConfig(TestCase):
             cfg = load_remote_config(Path(f.name))
         assert cfg.api_base_url == "http://localhost:8080"
 
+    def test_lan_http_url_allowed(self) -> None:
+        for url in (
+            "http://192.168.1.20:8080",
+            "http://10.4.5.6:8000",
+            "http://172.16.9.9",
+            "http://127.0.0.2:9000",
+            "http://[::1]:8080",
+            "http://[fd00::1]:8080",
+        ):
+            with tempfile.NamedTemporaryFile(suffix=".toml", mode="w", delete=False) as f:
+                f.write(f'[remote]\napi_base_url = "{url}"\nadmin_token = "my-token"\n')
+                f.flush()
+                cfg = load_remote_config(Path(f.name))
+            assert cfg.api_base_url == url
+
     def test_missing_url_raises(self) -> None:
         with tempfile.NamedTemporaryFile(suffix=".toml", mode="w", delete=False) as f:
             f.write('[remote]\nadmin_token = "tok"\n')

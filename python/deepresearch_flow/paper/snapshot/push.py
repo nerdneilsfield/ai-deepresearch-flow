@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import sqlite3
@@ -28,6 +29,17 @@ DEFAULT_PUSH_RETRY_BACKOFF_SECONDS = 1.0
 _LOCAL_HTTP_HOSTS = {"localhost", "127.0.0.1", "::1", "testserver"}
 
 
+def _is_private_http_host(host: str) -> bool:
+    normalized = host.removeprefix("[").removesuffix("]").lower()
+    if normalized in _LOCAL_HTTP_HOSTS:
+        return True
+    try:
+        address = ipaddress.ip_address(normalized)
+    except ValueError:
+        return False
+    return address.is_private or address.is_loopback or address.is_link_local or address.is_reserved
+
+
 @dataclass(frozen=True)
 class RemoteSemanticConfig:
     max_rows: int = DEFAULT_SEMANTIC_MAX_ROWS
@@ -50,7 +62,7 @@ def _requires_secure_transport(url: str) -> bool:
     parsed = urlparse(url)
     if parsed.scheme != "http":
         return False
-    return (parsed.hostname or "").lower() not in _LOCAL_HTTP_HOSTS
+    return not _is_private_http_host(parsed.hostname or "")
 
 
 def _validate_authenticated_url(url: str) -> None:
