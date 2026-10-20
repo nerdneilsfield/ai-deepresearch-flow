@@ -136,7 +136,7 @@ uv run deepresearch-flow paper db api push \
 
 - `api push` 先拉取远端 manifest（`{paper_id: source_hash}` 与 paper_key alias），只推送远端缺失的论文；加 `--overwrite` 时，`source_hash` 与远端不同的论文也会推送。
 - 本地论文的 alias 命中多个远端 id 时，会打印 warning，说明远端存在重复记录。
-- 语义部分（`--embed-db` 与 `push-semantic`）按每个 `(doc_id, template_tag)` 组的 `{id: content_hash}` 指纹与远端比较，只推送缺失或不同的组。只改了元数据、文本没变时不会重推。
+- 语义部分（`--embed-db` 与 `push-semantic`）按每个 `(doc_id, template_tag)` 组的 `{id: content_hash}` 指纹与远端比较，只推送缺失或不同的组。只改了元数据、文本没变时不会重推。`--embed-db` 只能给一个目录；多个本地库先用 `merge-embed` 合并。
 - 有批次实际发出时，推送结束后自动对远端执行 optimize；没有批次发出则不执行。
 - 远端多出来的论文和组不会被删除。
 - 远端是旧版本、没有 manifest 接口时命令会报错并提示先升级服务端，见部署指南的「升级到增量推送」。
@@ -163,6 +163,23 @@ uv run deepresearch-flow paper db api push-semantic \
 ```
 
 说明：分块窗口会自动扩展到完整的 `(doc_id, template_tag)` 分组。`--retry-failed` 仅用于 semantic 重试。不能与 `--start-chunk-idx/--end-chunk-idx` 同时使用。
+
+`api push` 和 `push-semantic` 都只接受一个 `--embed-db`。多个本地 embed 库要先合并，再把合并结果推送。
+
+### 合并本地 Embed 库
+
+```bash
+uv run deepresearch-flow paper db api merge-embed \
+  --embed-db ./dist/paper_vectors \
+  --from-embed-db ./dist/vectors_a \
+  --from-embed-db ./dist/vectors_b
+```
+
+`--from-embed-db` 可重复。目标目录不存在时会创建。每个来源按 `(doc_id, template_tag)` 组的 `{id: content_hash}` 指纹并入目标：目标已有且指纹相同的组跳过，目标没有的组写入。同一组指纹不同时，不带 `--overwrite` 保留目标里先写入的那一份；带 `--overwrite` 时，后一个来源覆盖前一个。命令不单独报告被丢弃的那一份。
+
+来源的 embedding 模型和维度必须与目标一致，否则命令失败。前面的来源已经写入，修正后重跑会跳过已合并的组。来源不能是目标自己。有组写入时，命令结束后对目标执行一次 optimize。
+
+写入使用目标库里的 lock 文件，与正在运行的服务器语义写入排队。合并期间不要对同一个目标库执行远程 push。
 
 ---
 

@@ -2150,6 +2150,64 @@ def register_db_commands(db_group: click.Group) -> None:
             optimize_store(Path(embed_db))
             click.echo("Semantic: optimize done")
 
+    @api_group.command("merge-embed")
+    @click.option(
+        "--embed-db",
+        "embed_db",
+        required=True,
+        type=click.Path(path_type=str),
+        help="Target LanceDB directory; created if missing",
+    )
+    @click.option(
+        "--from-embed-db",
+        "from_embed_dbs",
+        required=True,
+        multiple=True,
+        type=click.Path(exists=True, file_okay=False),
+        help="Source LanceDB directory; repeat to merge several into the target",
+    )
+    @click.option(
+        "--overwrite",
+        is_flag=True,
+        default=False,
+        help="Replace groups whose fingerprint differs; otherwise keep the target group",
+    )
+    def api_merge_embed(
+        embed_db: str,
+        from_embed_dbs: tuple[str, ...],
+        overwrite: bool,
+    ) -> None:
+        """Merge one or more local embed DBs into a target embed DB.
+
+        Groups already in the target with the same fingerprint are skipped. Sources must use
+        the same embedding model and dimensions. Semantic writes queue behind the lock file
+        in the target embed DB.
+        """
+        from deepresearch_flow.paper.snapshot.import_local import (
+            check_embed_compatible,
+            import_semantic,
+        )
+        from deepresearch_flow.paper.vector_store import optimize_store
+
+        target = Path(embed_db)
+        if not target.exists():
+            click.echo(f"Creating new embed db at {target}")
+        groups_written = 0
+        for source_db in from_embed_dbs:
+            source = Path(source_db)
+            if source.resolve() == target.resolve():
+                raise click.ClickException(f"Source embed DB is the target: {source}")
+            try:
+                index_meta = check_embed_compatible(source, target)
+            except (ValueError, OSError) as exc:
+                raise click.ClickException(f"Embed DB is not compatible: {exc}") from exc
+            group_total, written = import_semantic(source, target, index_meta, overwrite=overwrite)
+            groups_written += written
+            click.echo(f"{source}: source_groups={group_total} written={written}")
+        if groups_written:
+            optimize_store(target)
+            click.echo("Semantic: optimize done")
+
     @api_group.command("push-semantic")
     @click.option(
         "--embed-db",

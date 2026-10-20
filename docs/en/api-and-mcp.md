@@ -136,7 +136,7 @@ uv run deepresearch-flow paper db api push \
 
 - `api push` first fetches the remote manifest (`{paper_id: source_hash}` plus the paper_key aliases) and pushes only the papers the remote is missing. With `--overwrite`, papers whose `source_hash` differs from the remote are pushed too.
 - When a local paper's alias matches several remote ids, a warning is printed: the remote holds duplicate records.
-- The semantic part (`--embed-db` and `push-semantic`) compares each `(doc_id, template_tag)` group by its `{id: content_hash}` fingerprint with the remote and pushes only missing or differing groups. A metadata-only change with unchanged text does not re-push.
+- The semantic part (`--embed-db` and `push-semantic`) compares each `(doc_id, template_tag)` group by its `{id: content_hash}` fingerprint with the remote and pushes only missing or differing groups. A metadata-only change with unchanged text does not re-push. `--embed-db` takes one directory; merge several local DBs with `merge-embed` first.
 - When at least one batch was actually sent, the remote is optimized automatically at the end of the push; if nothing was sent, it is not.
 - Papers and groups that exist only on the remote are never deleted.
 - If the remote is an old version with no manifest endpoint, the command fails and tells you to upgrade the server first; see "Upgrading to incremental push" in the deployment guide.
@@ -163,6 +163,23 @@ uv run deepresearch-flow paper db api push-semantic \
 ```
 
 Notes: Chunk-window auto-expands to full `(doc_id, template_tag)` groups. `--retry-failed` semantic only. Cannot combine with `--start-chunk-idx/--end-chunk-idx`.
+
+`api push` and `push-semantic` each take one `--embed-db`. Merge local embed DBs first, then push the result.
+
+### Merge Local Embed DBs
+
+```bash
+uv run deepresearch-flow paper db api merge-embed \
+  --embed-db ./dist/paper_vectors \
+  --from-embed-db ./dist/vectors_a \
+  --from-embed-db ./dist/vectors_b
+```
+
+Repeat `--from-embed-db` for each source. The command creates the target directory when it does not exist. It merges each source by the `{id: content_hash}` fingerprint of every `(doc_id, template_tag)` group: a group already in the target with the same fingerprint is skipped, and a missing group is written. When the same group has a different fingerprint, the copy already in the target stays unless you pass `--overwrite`; with `--overwrite`, a later source replaces an earlier one. The command does not report which copy it dropped.
+
+Every source must use the same embedding model and dimensions as the target, or the command fails. Sources already written stay in the target; rerun after fixing the incompatible source and the command skips groups it has merged. A source cannot be the target. When at least one group was written, the command optimizes the target once at the end.
+
+Writes use the lock file in the target and queue behind semantic writes from a running server. Do not run a remote push against the same target while the merge is running.
 
 ---
 
