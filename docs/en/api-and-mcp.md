@@ -132,6 +132,15 @@ uv run deepresearch-flow paper db api push \
 - `--only-api` and `--only-storage` are mutually exclusive
 - `--dry-run` skips semantic push
 
+### Incremental push behavior
+
+- `api push` first fetches the remote manifest (`{paper_id: source_hash}` plus the paper_key aliases) and pushes only the papers the remote is missing. With `--overwrite`, papers whose `source_hash` differs from the remote are pushed too.
+- When a local paper's alias matches several remote ids, a warning is printed: the remote holds duplicate records.
+- The semantic part (`--embed-db` and `push-semantic`) compares each `(doc_id, template_tag)` group by its `{id: content_hash}` fingerprint with the remote and pushes only missing or differing groups. A metadata-only change with unchanged text does not re-push.
+- When at least one batch was actually sent, the remote is optimized automatically at the end of the push; if nothing was sent, it is not.
+- Papers and groups that exist only on the remote are never deleted.
+- If the remote is an old version with no manifest endpoint, the command fails and tells you to upgrade the server first; see "Upgrading to incremental push" in the deployment guide.
+
 ### Push Semantic Only
 
 ```bash

@@ -1186,6 +1186,35 @@ def register_db_commands(db_group: click.Group) -> None:
         finally:
             conn.close()
 
+    @snapshot_group.command("recompute")
+    @click.option(
+        "--snapshot-db", "snapshot_db", required=True, help="Path to the snapshot database"
+    )
+    def snapshot_recompute(snapshot_db: str) -> None:
+        """Recompute paper_index, facet counts and facet_edge in one write transaction.
+
+        Safe while the API is serving: it waits up to 30s for the write lock.
+        """
+        from deepresearch_flow.paper.snapshot.schema import (
+            recompute_facet_counts,
+            recompute_facet_edges,
+            recompute_paper_index,
+        )
+        from deepresearch_flow.paper.snapshot.transaction import snapshot_transaction
+
+        snapshot_path = Path(snapshot_db)
+        if not snapshot_path.exists():
+            raise click.ClickException(f"Snapshot database not found: {snapshot_path}")
+
+        with snapshot_transaction(snapshot_path) as conn:
+            recompute_paper_index(conn)
+            recompute_facet_counts(conn)
+            recompute_facet_edges(conn)
+            paper_count = conn.execute("SELECT COUNT(*) FROM paper").fetchone()[0]
+            edge_count = conn.execute("SELECT COUNT(*) FROM facet_edge").fetchone()[0]
+        click.echo(f"papers: {paper_count}")
+        click.echo(f"facet_edge rows: {edge_count}")
+
     @db_group.group("api")
     def api_group() -> None:
         """Read-only JSON API server backed by a snapshot DB."""
@@ -1613,6 +1642,7 @@ def register_db_commands(db_group: click.Group) -> None:
             load_remote_config,
             read_local_paper_keys,
             push_papers,
+            select_papers_to_push,
         )
 
         console = Console()
@@ -1714,40 +1744,20 @@ def register_db_commands(db_group: click.Group) -> None:
             local_keys = read_local_paper_keys(db_path)
             all_count = len(papers)
 
-            def remote_paper_ids(paper: dict[str, Any]) -> set[str]:
-                ids = {paper["paper_id"]} & remote_papers.keys()
-                ids.update(
-                    remote_aliases[key]
-                    for key in local_keys.get(paper["paper_id"], [])
-                    if key in remote_aliases
+            papers, duplicates = select_papers_to_push(
+                papers, remote_papers, remote_aliases, local_keys, overwrite
+            )
+            for paper_id, ids in duplicates.items():
+                console.print(
+                    f"[yellow]Warning: local paper {paper_id} matches multiple remote "
+                    f"papers: {', '.join(sorted(ids))}; the remote has duplicate records[/yellow]"
                 )
-                return ids
-
-            remote_ids = {p["paper_id"]: remote_paper_ids(p) for p in papers}
-            for paper_id, ids in remote_ids.items():
-                if len(ids) > 1:
-                    console.print(
-                        f"[yellow]Warning: local paper {paper_id} matches multiple remote "
-                        f"papers: {', '.join(sorted(ids))}; the remote has duplicate records[/yellow]"
-                    )
-            papers = [
-                p
-                for p in papers
-                if not remote_ids[p["paper_id"]]
-                or (
-                    overwrite
-                    and any(
-                        remote_papers.get(rid) != (p.get("source_hash") or "")
-                        for rid in remote_ids[p["paper_id"]]
-                    )
-                )
-            ]
             console.print(
                 f"Remote has {len(remote_papers)}, pushing {len(papers)} "
                 f"(skipped {all_count - len(papers)} already present)"
             )
 
-            templates_count = sum(1 for p in papers if p.get("templates"))
+            templates_count = sum(1 for p in papers if any((p.get("templates") or {}).values()))
             console.print(
                 f"[cyan]Papers with summary payloads:[/cyan] {templates_count}/{len(papers)}"
             )
@@ -2046,6 +2056,99 @@ def register_db_commands(db_group: click.Group) -> None:
                     console.print("[green]Semantic:[/green] remote optimize done")
             else:
                 console.print("[yellow]No semantic chunks to push.[/yellow]")
+
+    @api_group.command("import-local")
+    @click.option(
+        "--from-snapshot-db",
+        "from_snapshot_db",
+        required=True,
+        type=click.Path(exists=True, dir_okay=False),
+        help="Local snapshot DB to import papers from",
+    )
+    @click.option(
+        "--from-embed-db",
+        "from_embed_db",
+        default=None,
+        type=click.Path(exists=True, file_okay=False),
+        help="Local LanceDB directory to import semantic chunks from",
+    )
+    @click.option(
+        "--snapshot-db",
+        "snapshot_db",
+        required=True,
+        envvar="PAPER_DB_SNAPSHOT_DB",
+        type=click.Path(exists=True, dir_okay=False),
+        help="Existing snapshot DB used by the server (or set PAPER_DB_SNAPSHOT_DB)",
+    )
+    @click.option(
+        "--embed-db",
+        "embed_db",
+        default=None,
+        envvar="PAPER_DB_EMBED_DB",
+        help="LanceDB directory used by the server (or set PAPER_DB_EMBED_DB); created if missing",
+    )
+    @click.option(
+        "--overwrite",
+        is_flag=True,
+        default=False,
+        help="Also replace papers whose source_hash differs, and semantic groups whose fingerprint differs",
+    )
+    def api_import_local(
+        from_snapshot_db: str,
+        from_embed_db: str | None,
+        snapshot_db: str,
+        embed_db: str | None,
+        overwrite: bool,
+    ) -> None:
+        """Incrementally import a local snapshot DB and embed DB into the server's databases.
+
+        May run while the server is running; semantic writes queue behind the server's own
+        semantic writes through a lock file in the embed DB. Do not run a remote push at the
+        same time.
+        """
+        from deepresearch_flow.paper.snapshot.import_local import (
+            check_embed_compatible,
+            import_papers,
+            import_semantic,
+        )
+        from deepresearch_flow.paper.vector_store import optimize_store
+
+        if from_embed_db and not embed_db:
+            raise click.ClickException("--from-embed-db requires --embed-db (or PAPER_DB_EMBED_DB)")
+
+        index_meta = None
+        if from_embed_db:
+            if not Path(embed_db).exists():
+                click.echo(f"Creating new embed db at {embed_db}")
+            try:
+                index_meta = check_embed_compatible(Path(from_embed_db), Path(embed_db))
+            except (ValueError, OSError) as exc:
+                raise click.ClickException(f"Embed DB is not compatible: {exc}") from exc
+
+        paper_stats = import_papers(Path(from_snapshot_db), Path(snapshot_db), overwrite=overwrite)
+        for paper_id, ids in paper_stats.duplicates.items():
+            click.echo(
+                f"Warning: local paper {paper_id} matches multiple target papers: "
+                f"{', '.join(sorted(ids))}"
+            )
+        click.echo(
+            f"Papers: source={paper_stats.source_total} "
+            f"added={paper_stats.added} updated={paper_stats.updated}"
+        )
+        if paper_stats.errors:
+            for err in paper_stats.errors[:10]:
+                click.echo(f"  index={err['index']}: {err['error']}")
+            raise click.ClickException(f"{len(paper_stats.errors)} paper(s) failed to import")
+
+        if index_meta is None:
+            return
+        group_total, groups_written = import_semantic(
+            Path(from_embed_db), Path(embed_db), index_meta, overwrite=overwrite
+        )
+        click.echo(f"Semantic: source_groups={group_total} written={groups_written}")
+        if groups_written:
+            optimize_store(Path(embed_db))
+            click.echo("Semantic: optimize done")
 
     @api_group.command("push-semantic")
     @click.option(

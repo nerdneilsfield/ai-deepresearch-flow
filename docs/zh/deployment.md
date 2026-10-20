@@ -289,6 +289,21 @@ npm run build # 生产构建，需要设置环境变量
 
 ---
 
+## 升级到增量推送
+
+`api push` 现在会先拉取远端 manifest，只推送缺失的内容。升级按下面的顺序做：
+
+1. 先升级服务端镜像，再用新版客户端推送。旧服务端没有 manifest 接口，新客户端遇到时会报错并提示升级服务端。
+2. 升级后执行一次 facet_edge 全量修正。服务运行中也能执行：命令在 `BEGIN IMMEDIATE` 事务里完成，推送期间执行会等锁，最多 30 秒。
+
+   ```bash
+   docker exec <container> deepresearch-flow paper db snapshot recompute --snapshot-db /db/papers.db
+   ```
+
+   命令会依次重算 paper_index、各 facet 计数和 facet_edge，最后打印论文数和 facet_edge 行数。
+
+3. 内网访问：设置 `PAPER_DB_BIND_ADDR=[IP]`（或宿主机内网 IP），`MCP_PUBLIC_BASE_URL` 仍填外网 https 域名。通过内网 IP 访问时 GitHub OAuth 不可用，static token 可用。绑定地址与 CORS 的其他注意事项见 5.3。
+
 ## 5. Docker
 
 预构建镜像发布在 Docker Hub 和 GitHub Container Registry：
@@ -364,6 +379,30 @@ docker compose -f scripts/docker/docker-compose.example.yml --profile local-stat
 - compose 示例默认只绑定回环地址（`127.0.0.1:8080`）。要从内网访问，设置 `PAPER_DB_BIND_ADDR`（如 `PAPER_DB_BIND_ADDR=0.0.0.0`，或宿主机的内网 IP）。若同时设置了受限的 `PAPER_DB_CORS_ORIGINS`，必须把内网访问用的 origin（如 `http://192.168.1.10:8080`）加进去，否则跨域预检会返回 400。
 - 部署前务必设置 `MCP_ACCESS_TOKEN`。`MCP_PUBLIC_UNSAFE=1` 仅用于隔离的本地测试环境。
 - `PAPER_DB_NGINX_TEMPLATE=prefix` 只在子路径部署时需要。默认值（`root`）适用于独立域名部署。
+
+### 5.4 把本地构建的数据导入运行中的容器
+
+不想走远程 push 时，可以把本地的 snapshot db 和 embed db 拷进容器（或挂载进去），在容器内增量导入到服务正在使用的 `/db/papers.db` 和 `/db/paper_vectors`。导入期间服务可以继续运行：语义写入会持有 `<embed-db>/.write.lock` 文件锁，与服务端自己的语义写入互相排队。
+
+```bash
+docker cp ./dist/paper_snapshot.db <container>:/tmp/import.db
+docker cp ./dist/paper_vectors <container>:/tmp/import_vectors
+
+docker exec <container> deepresearch-flow paper db api import-local \
+  --from-snapshot-db /tmp/import.db \
+  --from-embed-db /tmp/import_vectors \
+  --snapshot-db /db/papers.db \
+  --embed-db /db/paper_vectors
+```
+
+- 目标路径默认读取环境变量 `PAPER_DB_SNAPSHOT_DB` 和 `PAPER_DB_EMBED_DB`。目标 snapshot db 必须已存在（路径写错会报错，不会新建库）；`--embed-db` 目录不存在时会提示并新建。`--embed-db` 与 `--from-embed-db` 可以省略，省略后只导入论文。
+- 对账规则与 `api push` 相同：只导入目标库缺失的论文，加 `--overwrite` 后 `source_hash` 不同的论文也会被替换；语义部分不加 `--overwrite` 时只写入目标缺失的组；加 `--overwrite` 后指纹（`{id: content_hash}`）不同的组也会被替换，保证论文版本与向量版本一致。
+- 论文按每 200 篇一个事务写入，不会长时间占用写锁；服务自己的写入最多等待 30 秒。
+- 可重入：重复执行不会写入任何数据，也不会触发 optimize。有语义组被写入时，结束前会自动 optimize。
+- 源库 `index_meta.json` 缺失或字段不全，或目标 embed db 的模型、维度与源库不一致（目标有表但没有 `index_meta.json` 时会比对向量列长度）时，命令报错退出，不写入任何论文。
+- 这条路径走的是增量写入，不需要再执行 facet_edge 全量修正。
+- 导入时不要同时进行远程 push：两者对论文的写入没有互斥。
+- 静态资源不在导入范围内，需要另行放进 `/static` 或推送到外部静态存储。
 
 ## 6. 可选 Admin PDF 流水线
 

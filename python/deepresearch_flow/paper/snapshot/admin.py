@@ -753,6 +753,29 @@ def _apply_semantic_chunk_batch(
     dimensions: int,
     all_chunks: list[dict[str, Any]],
 ) -> dict[str, int]:
+    """Write one chunk group under the cross-process embed write lock (blocking)."""
+    from deepresearch_flow.paper.vector_store import embed_write_lock
+
+    with embed_write_lock(cfg.embed_db):
+        return _apply_semantic_chunk_batch_locked(
+            cfg,
+            index_meta=index_meta,
+            doc_id=doc_id,
+            template_tag=template_tag,
+            dimensions=dimensions,
+            all_chunks=all_chunks,
+        )
+
+
+def _apply_semantic_chunk_batch_locked(
+    cfg: AdminConfig,
+    *,
+    index_meta: dict[str, Any],
+    doc_id: str,
+    template_tag: str,
+    dimensions: int,
+    all_chunks: list[dict[str, Any]],
+) -> dict[str, int]:
     from deepresearch_flow.paper.vector_store import (
         ChunkRow,
         decode_vector_b64,

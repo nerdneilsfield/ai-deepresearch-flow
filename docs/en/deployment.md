@@ -291,6 +291,21 @@ After `npm run build`, deploy the `frontend/dist/` directory to any static host 
 
 ---
 
+## Upgrading to incremental push
+
+`api push` now fetches the remote manifest first and pushes only what is missing. Upgrade in this order:
+
+1. Upgrade the server image first, then push with the new client. An old server has no manifest endpoint; the new client fails with an error telling you to upgrade the server.
+2. After upgrading, run one full facet_edge recompute. It is safe while the service is running: the command works inside a `BEGIN IMMEDIATE` transaction, so during a push it waits for the lock for up to 30 seconds.
+
+   ```bash
+   docker exec <container> deepresearch-flow paper db snapshot recompute --snapshot-db /db/papers.db
+   ```
+
+   It recomputes paper_index, the facet counts and facet_edge in turn, then prints the paper count and the facet_edge row count.
+
+3. Intranet access: set `PAPER_DB_BIND_ADDR=[IP]` (or the host's LAN IP) and keep `MCP_PUBLIC_BASE_URL` set to the public https domain. GitHub OAuth does not work when you reach the service through the intranet IP; the static token does. See 5.3 for the other bind-address and CORS notes.
+
 ## 5. Docker
 
 Pre-built images are available on both Docker Hub and GitHub Container Registry:
@@ -366,6 +381,30 @@ docker compose -f scripts/docker/docker-compose.example.yml --profile local-stat
 - The compose example binds to loopback only (`127.0.0.1:8080`) by default. To reach it from the intranet, set `PAPER_DB_BIND_ADDR` (for example `PAPER_DB_BIND_ADDR=0.0.0.0`, or the host's LAN IP). If you also set a restricted `PAPER_DB_CORS_ORIGINS`, add the origin used for intranet access (for example `http://192.168.1.10:8080`), otherwise CORS preflight requests return 400.
 - Set `MCP_ACCESS_TOKEN` before deploying. `MCP_PUBLIC_UNSAFE=1` is intended for isolated local testing only.
 - `PAPER_DB_NGINX_TEMPLATE=prefix` is only needed for sub-path deployments. The default (`root`) works for dedicated domains.
+
+### 5.4 Import locally built data into a running container
+
+Instead of a remote push, you can copy (or mount) a local snapshot DB and embed DB into the container and import them incrementally into the databases the service is using, `/db/papers.db` and `/db/paper_vectors`. The service can keep running during the import: semantic writes take an exclusive lock file (`<embed-db>/.write.lock`) shared with the server's own semantic writes, so they queue behind each other.
+
+```bash
+docker cp ./dist/paper_snapshot.db <container>:/tmp/import.db
+docker cp ./dist/paper_vectors <container>:/tmp/import_vectors
+
+docker exec <container> deepresearch-flow paper db api import-local \
+  --from-snapshot-db /tmp/import.db \
+  --from-embed-db /tmp/import_vectors \
+  --snapshot-db /db/papers.db \
+  --embed-db /db/paper_vectors
+```
+
+- Target paths default to the `PAPER_DB_SNAPSHOT_DB` and `PAPER_DB_EMBED_DB` environment variables. The target snapshot DB must already exist (a wrong path is an error, not a new database); a missing `--embed-db` directory is created with a notice. Omit `--embed-db` and `--from-embed-db` to import papers only.
+- Reconciliation matches `api push`: only papers missing from the target are imported, and with `--overwrite` papers whose `source_hash` differs are replaced too. Without `--overwrite`, only semantic groups missing from the target are written; with `--overwrite`, groups whose `{id: content_hash}` fingerprint differs are replaced too, so paper versions and vectors stay consistent.
+- Papers are written one transaction per 200 papers, so the write lock is never held for long; the service's own writes wait at most 30 seconds.
+- Re-entrant: running it again writes nothing and does not optimize. When semantic groups were written, it optimizes before exiting.
+- If the source `index_meta.json` is missing or incomplete, or the target embed DB's model or dimensions differ from the source (the vector column length is checked when the target has a table but no `index_meta.json`), the command exits with an error before writing any paper.
+- This path writes incrementally, so no full facet_edge recompute is needed afterwards.
+- Do not run a remote push at the same time: paper writes of the two are not coordinated.
+- Static assets are not imported; put them in `/static` or push them to the external static storage separately.
 
 ## 6. Optional Admin PDF pipeline
 

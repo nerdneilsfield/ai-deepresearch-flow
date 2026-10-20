@@ -102,6 +102,42 @@ def read_local_paper_keys(db_path: Path) -> dict[str, list[str]]:
     return keys
 
 
+def select_papers_to_push(
+    papers: list[dict[str, Any]],
+    remote_papers: dict[str, str],
+    remote_aliases: dict[str, str],
+    local_keys: dict[str, list[str]],
+    overwrite: bool,
+) -> tuple[list[dict[str, Any]], dict[str, set[str]]]:
+    """Pick the papers missing on the remote (with ``overwrite``, also those whose source_hash differs).
+
+    Also returns ``{paper_id: remote ids}`` for local papers that match several remote papers.
+    """
+    remote_ids: dict[str, set[str]] = {}
+    for paper in papers:
+        ids = {paper["paper_id"]} & remote_papers.keys()
+        ids.update(
+            remote_aliases[key]
+            for key in local_keys.get(paper["paper_id"], [])
+            if key in remote_aliases
+        )
+        remote_ids[paper["paper_id"]] = ids
+    duplicates = {paper_id: ids for paper_id, ids in remote_ids.items() if len(ids) > 1}
+    selected = [
+        p
+        for p in papers
+        if not remote_ids[p["paper_id"]]
+        or (
+            overwrite
+            and any(
+                remote_papers.get(rid) != (p.get("source_hash") or "")
+                for rid in remote_ids[p["paper_id"]]
+            )
+        )
+    ]
+    return selected, duplicates
+
+
 @dataclass
 class PushStats:
     total: int = 0
@@ -282,9 +318,13 @@ def _load_summary_payloads(
     template_tags: list[str],
     static_export_dir: Path | None,
 ) -> dict[str, dict[str, Any]]:
-    """Load summary JSON payloads from static export directory."""
+    """Load summary JSON payloads from static export directory.
+
+    Without a static export dir, keep the template tags with empty payloads so the
+    receiver records them instead of falling back to a single ``default`` tag.
+    """
     if not static_export_dir:
-        return {}
+        return {tag: {} for tag in template_tags}
     templates: dict[str, dict[str, Any]] = {}
     for tag in template_tags:
         path = static_export_dir / "summary" / paper_id / f"{tag}.json"

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+import threading
 import time
 
 import httpx
@@ -13,6 +14,7 @@ from deepresearch_flow.paper.snapshot.admin import create_admin_app
 from deepresearch_flow.paper.vector_store import (
     ChunkRow,
     compute_group_hash,
+    embed_write_lock,
     encode_vector_b64,
     load_index_meta,
     open_store,
@@ -575,3 +577,52 @@ def test_membership_transitions_update_doc_and_template_counts(tmp_path: Path) -
     meta = load_index_meta(embed_dir)
     assert meta["doc_count"] == 0
     assert meta["template_count"] == 0
+
+
+def test_ingest_and_optimize_wait_for_cross_process_embed_lock(tmp_path: Path) -> None:
+    # Two apps on one embed dir stand in for two processes: each has its own asyncio lock,
+    # so only the file lock can serialize them.
+    ingest_client, headers, embed_dir = _make_app(tmp_path)
+    optimize_app = create_admin_app(
+        snapshot_db=tmp_path / "other.db",
+        admin_token="test-token",
+        embed_db=embed_dir,
+        embed_dimensions=4,
+    )
+    optimize_client = TestClient(optimize_app, raise_server_exceptions=False)
+    body = _body("d1", "simple", [_chunk("d1", "simple", 0)])
+    done = {"ingest": threading.Event(), "optimize": threading.Event()}
+    results: dict[str, int] = {}
+
+    def ingest() -> None:
+        results["ingest"] = ingest_client.post(
+            "/semantic/chunks/batch", json=body, headers=headers
+        ).status_code
+        done["ingest"].set()
+
+    def optimize() -> None:
+        results["optimize"] = optimize_client.post(
+            "/semantic/optimize", headers=headers
+        ).status_code
+        done["optimize"].set()
+
+    threads = [
+        threading.Thread(target=ingest, daemon=True),
+        threading.Thread(target=optimize, daemon=True),
+    ]
+    try:
+        with embed_write_lock(embed_dir):
+            for thread in threads:
+                thread.start()
+            blocked_ingest = not done["ingest"].wait(0.5)
+            blocked_optimize = not done["optimize"].wait(0.1)
+        finished = done["ingest"].wait(30) and done["optimize"].wait(30)
+    finally:
+        for thread in threads:
+            thread.join(30)
+
+    assert blocked_ingest
+    assert blocked_optimize
+    assert finished
+    assert results == {"ingest": 200, "optimize": 200}
+    assert load_index_meta(embed_dir)["chunk_count"] == 1

@@ -5,9 +5,11 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 import shutil
 import struct
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -17,12 +19,23 @@ from uuid import uuid4
 import lancedb
 import pyarrow as pa
 
+try:  # pragma: no cover - Windows fallback
+    import fcntl
+except ImportError:  # pragma: no cover
+    fcntl = None
+
 INDEX_VERSION = 1
 _SHARED_KEY = "_shared"
 SHARED_TEMPLATE_KEY = _SHARED_KEY
 _META_FILE = "index_meta.json"
+_WRITE_LOCK_FILE = ".write.lock"
 _CHUNKS_TABLE = "paper_chunks"
 _WRITE_CHUNK_BATCH_SIZE = 2_000
+# Measured with 1024-dim cosine: flat scan p50 is ~120ms at 100k rows, ~225ms at 200k, ~540ms at 500k.
+_VECTOR_INDEX_MIN_ROWS = 150_000
+# IVF_PQ ranks coarsely; refine_factor=200 kept recall@10 at 1.0 (p50 25ms at 500k rows),
+# while 100 dropped to 0.85 on weakly clustered data.
+_VECTOR_REFINE_FACTOR = 200
 _ADMIN_SCALAR_INDICES = {
     "doc_id": "idx_chunks_doc_id",
     "template_tag": "idx_chunks_template_tag",
@@ -119,12 +132,25 @@ def decode_vector_b64(b64: str, dimensions: int) -> list[float]:
     return list(struct.unpack(f"<{dimensions}f", raw))
 
 
+@contextmanager
+def embed_write_lock(vector_dir: Path) -> Iterator[None]:
+    """Cross-process exclusive lock for writing the LanceDB table and index_meta.json.
+
+    Blocking; call it from a worker thread inside an event loop. Without ``fcntl``
+    (Windows) it does not lock.
+    """
+    vector_dir.mkdir(parents=True, exist_ok=True)
+    with open(vector_dir / _WRITE_LOCK_FILE, "a") as lock_file:
+        if fcntl is not None:
+            fcntl.flock(lock_file, fcntl.LOCK_EX)
+        yield  # closing the file releases the lock
+
+
 def save_index_meta(vector_dir: Path, meta: dict[str, Any]) -> None:
     vector_dir.mkdir(parents=True, exist_ok=True)
-    (vector_dir / _META_FILE).write_text(
-        json.dumps(meta, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    temp_path = vector_dir / f"{_META_FILE}.{uuid4().hex}.tmp"
+    temp_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(temp_path, vector_dir / _META_FILE)
 
 
 def load_index_meta(vector_dir: Path) -> dict[str, Any]:
@@ -364,19 +390,38 @@ def write_chunks(db: lancedb.DBConnection, rows: list[ChunkRow], *, dimensions: 
 
 
 def optimize_store(vector_dir: Path) -> None:
-    """Compact the chunks table and drop versions older than 10 minutes."""
-    db = open_store(vector_dir)
-    if _CHUNKS_TABLE not in _table_names(db):
-        return
-    table = db.open_table(_CHUNKS_TABLE)
-    for attempt in range(4):
-        try:
-            table.optimize(cleanup_older_than=timedelta(minutes=10))
+    """Compact the chunks table, drop versions older than 10 minutes, and index vectors once large.
+
+    Once the table has an ANN index, optimize() folds newly added rows into it.
+    Runs under ``embed_write_lock``.
+    """
+    with embed_write_lock(vector_dir):
+        db = open_store(vector_dir)
+        if _CHUNKS_TABLE not in _table_names(db):
             return
-        except RuntimeError as exc:
-            # Concurrent writes make optimize lose the commit race; observed with lancedb 0.33.
-            if "Retryable commit conflict" not in str(exc) or attempt == 3:
-                raise
+        table = db.open_table(_CHUNKS_TABLE)
+        for attempt in range(4):
+            try:
+                if (
+                    table.count_rows() >= _VECTOR_INDEX_MIN_ROWS
+                    and "vector" not in _scalar_index_columns(table)[0]
+                ):
+                    table.create_index(
+                        metric="cosine", vector_column_name="vector", index_type="IVF_PQ"
+                    )
+                table.optimize(cleanup_older_than=timedelta(minutes=10))
+                return
+            except RuntimeError as exc:
+                # Concurrent writes make optimize lose the commit race; observed with lancedb 0.33.
+                if "Retryable commit conflict" not in str(exc) or attempt == 3:
+                    raise
+
+
+def read_vector_dimensions(db: lancedb.DBConnection) -> int | None:
+    """Vector column length of the chunks table, or None when the table does not exist."""
+    if _CHUNKS_TABLE not in _table_names(db):
+        return None
+    return db.open_table(_CHUNKS_TABLE).schema.field("vector").type.list_size
 
 
 def delete_groups(db: lancedb.DBConnection, groups: list[tuple[str, str]]) -> None:
@@ -569,7 +614,13 @@ def query_vector(
     if _CHUNKS_TABLE not in _table_names(db):
         return []
     table = db.open_table(_CHUNKS_TABLE)
-    q = table.search(query_vector).metric("cosine").limit(top_k)
+    q = (
+        table.search(query_vector)
+        .metric("cosine")
+        .limit(top_k)
+        .refine_factor(_VECTOR_REFINE_FACTOR)
+    )
     if where:
-        q = q.where(where)
+        # Explicit: a post-filter returns fewer than top_k rows when matches lie in far partitions.
+        q = q.where(where, prefilter=True)
     return q.to_list()

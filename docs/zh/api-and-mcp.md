@@ -132,6 +132,15 @@ uv run deepresearch-flow paper db api push \
 - `--only-api` 与 `--only-storage` 互斥
 - `--dry-run` 会跳过 semantic 推送
 
+### 增量推送行为
+
+- `api push` 先拉取远端 manifest（`{paper_id: source_hash}` 与 paper_key alias），只推送远端缺失的论文；加 `--overwrite` 时，`source_hash` 与远端不同的论文也会推送。
+- 本地论文的 alias 命中多个远端 id 时，会打印 warning，说明远端存在重复记录。
+- 语义部分（`--embed-db` 与 `push-semantic`）按每个 `(doc_id, template_tag)` 组的 `{id: content_hash}` 指纹与远端比较，只推送缺失或不同的组。只改了元数据、文本没变时不会重推。
+- 有批次实际发出时，推送结束后自动对远端执行 optimize；没有批次发出则不执行。
+- 远端多出来的论文和组不会被删除。
+- 远端是旧版本、没有 manifest 接口时命令会报错并提示先升级服务端，见部署指南的「升级到增量推送」。
+
 ### 仅推送 Semantic
 
 ```bash

@@ -203,11 +203,12 @@ class TestExtractPapersFromDb(TestCase):
         alpha = next(p for p in papers if p["paper_id"] == "paper-alpha")
         assert alpha["templates"]["simple"]["summary"] == "A summary."
 
-    def test_no_templates_without_static_dir(self) -> None:
+    def test_template_tags_without_static_dir_have_no_payloads(self) -> None:
         papers = extract_papers_from_db(self.db_path)
         alpha = next(p for p in papers if p["paper_id"] == "paper-alpha")
-        # Without static dir, templates should not be included (avoids FTS pollution)
-        assert "templates" not in alpha
+        # Tags are kept, but with empty payloads, so no summary text is invented
+        assert alpha["templates"]
+        assert all(payload == {} for payload in alpha["templates"].values())
 
     def test_summary_preview_carried(self) -> None:
         papers = extract_papers_from_db(self.db_path)

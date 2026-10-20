@@ -1,17 +1,23 @@
 from __future__ import annotations
 
+import json
+import threading
 from pathlib import Path
 
+import numpy as np
 import pytest
 
+from deepresearch_flow.paper import vector_store
 from deepresearch_flow.paper.chunker import Chunk
 from deepresearch_flow.paper.vector_store import (
     INDEX_VERSION,
     ChunkRow,
     build_chunk_id,
+    embed_write_lock,
     _chunks_schema,
     load_index_meta,
     open_store,
+    optimize_store,
     query_vector,
     read_group_hashes_for_doc,
     read_group_keys,
@@ -244,3 +250,135 @@ def test_read_group_keys_returns_unique_group_keys(tmp_path: Path) -> None:
     ]
     write_chunks(db, rows, dimensions=4)
     assert read_group_keys(db) == {("doc1", "simple")}
+
+
+def _unit_rows(vectors: np.ndarray, start: int = 0) -> list[ChunkRow]:
+    return [
+        ChunkRow(
+            id=f"row-{start + i}",
+            doc_id=f"doc-{(start + i) // 20}",
+            source_path="",
+            template_tag="",
+            chunk_type="content",
+            chunk_index=i,
+            field_name="",
+            lang="",
+            text="",
+            content_hash="h",
+            vector=vector.tolist(),
+            title="",
+            year=0,
+            authors="",
+            venue="",
+            tags="",
+        )
+        for i, vector in enumerate(vectors)
+    ]
+
+
+def test_optimize_store_indexes_large_table_and_queries_match_brute_force(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(vector_store, "_VECTOR_INDEX_MIN_ROWS", 500)
+    rng = np.random.default_rng(0)
+    dim = 16
+    first = rng.normal(size=(600, dim)).astype("float32")
+    second = rng.normal(size=(100, dim)).astype("float32")
+    vector_dir = tmp_path / "vectors"
+    db = open_store(vector_dir)
+    write_chunks(db, _unit_rows(first), dimensions=dim)
+
+    optimize_store(vector_dir)
+    write_chunks(open_store(vector_dir), _unit_rows(second, start=600), dimensions=dim)
+    optimize_store(vector_dir)
+
+    table = open_store(vector_dir).open_table("paper_chunks")
+    assert any(index.columns == ["vector"] for index in table.list_indices())
+    everything = np.vstack([first, second])
+    normalized = everything / np.linalg.norm(everything, axis=1, keepdims=True)
+    for row in (3, 250, 599, 600, 699):
+        query = everything[row] + 0.01 * rng.normal(size=dim).astype("float32")
+        expected = int(np.argmax(normalized @ (query / np.linalg.norm(query))))
+        top = query_vector(open_store(vector_dir), query.tolist(), top_k=1)
+        assert top[0]["id"] == f"row-{expected}"
+
+
+def test_optimize_store_leaves_small_table_without_vector_index(tmp_path: Path) -> None:
+    rng = np.random.default_rng(1)
+    vector_dir = tmp_path / "vectors"
+    write_chunks(
+        open_store(vector_dir), _unit_rows(rng.normal(size=(50, 8)).astype("float32")), dimensions=8
+    )
+
+    optimize_store(vector_dir)
+
+    table = open_store(vector_dir).open_table("paper_chunks")
+    assert not any(index.columns == ["vector"] for index in table.list_indices())
+
+
+def test_query_vector_filter_on_distant_cluster_returns_all_matches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(vector_store, "_VECTOR_INDEX_MIN_ROWS", 500)
+    rng = np.random.default_rng(2)
+    dim = 16
+    near = np.ones(dim, dtype="float32") + 0.05 * rng.normal(size=(1500, dim)).astype("float32")
+    far = -np.ones(dim, dtype="float32") + 0.05 * rng.normal(size=(8, dim)).astype("float32")
+    vector_dir = tmp_path / "vectors"
+    rows = _unit_rows(np.vstack([near, far]))
+    write_chunks(open_store(vector_dir), rows, dimensions=dim)
+    optimize_store(vector_dir)
+    db = open_store(vector_dir)
+    assert any(i.columns == ["vector"] for i in db.open_table("paper_chunks").list_indices())
+    far_ids = [f"row-{i}" for i in range(1500, 1508)]
+    where = "id IN (" + ", ".join(f"'{i}'" for i in far_ids) + ")"
+    query = np.ones(dim, dtype="float32").tolist()
+
+    hits = query_vector(db, query, top_k=5, where=where)
+    all_hits = query_vector(db, query, top_k=50, where=where)
+
+    assert len(hits) == min(5, len(far_ids))
+    assert {hit["id"] for hit in all_hits} == set(far_ids)
+
+
+def test_save_index_meta_leaves_no_partial_file_and_replaces_atomically(tmp_path: Path) -> None:
+    save_index_meta(tmp_path, {"chunk_count": 1})
+    save_index_meta(tmp_path, {"chunk_count": 2})
+
+    assert json.loads((tmp_path / "index_meta.json").read_text()) == {"chunk_count": 2}
+    assert [p.name for p in tmp_path.iterdir()] == ["index_meta.json"]
+
+
+def test_embed_write_lock_blocks_second_holder_until_release(tmp_path: Path) -> None:
+    entered = threading.Event()
+
+    def second_holder() -> None:
+        with embed_write_lock(tmp_path):
+            entered.set()
+
+    thread = threading.Thread(target=second_holder)
+    with embed_write_lock(tmp_path):
+        thread.start()
+        assert not entered.wait(0.5)
+    assert entered.wait(10)
+    thread.join(30)
+
+
+def test_optimize_store_waits_for_embed_write_lock(tmp_path: Path) -> None:
+    rng = np.random.default_rng(3)
+    vector_dir = tmp_path / "vectors"
+    write_chunks(
+        open_store(vector_dir), _unit_rows(rng.normal(size=(20, 8)).astype("float32")), dimensions=8
+    )
+    finished = threading.Event()
+
+    def run() -> None:
+        optimize_store(vector_dir)
+        finished.set()
+
+    thread = threading.Thread(target=run)
+    with embed_write_lock(vector_dir):
+        thread.start()
+        assert not finished.wait(0.5)
+    assert finished.wait(30)
+    thread.join(30)
