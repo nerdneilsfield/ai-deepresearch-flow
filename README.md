@@ -402,7 +402,8 @@ uv run deepresearch-flow paper embed \
 
 Add `--rpm 60` or `--tpm 200000` to throttle the embedding provider; both are
 optional and unset by default. `--tpm` counts estimated input tokens (characters
-÷ 4) over a rolling minute.
+÷ 4) over a rolling minute. The same two options exist on
+`paper db snapshot build` when it is asked to build the vector index.
 
 Serve with semantic search enabled:
 

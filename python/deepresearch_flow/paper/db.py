@@ -540,6 +540,12 @@ def register_db_commands(db_group: click.Group) -> None:
         default=None,
         help="Build LanceDB vector index alongside snapshot",
     )
+    @click.option(
+        "--tpm", "tpm_limit", type=int, default=None, help="Estimated embedding tokens per minute"
+    )
+    @click.option(
+        "--rpm", "rpm_limit", type=int, default=None, help="Embedding requests per minute"
+    )
     @click.option("-v", "--verbose", is_flag=True, help="Show detailed snapshot build logs")
     def snapshot_build(
         input_paths: tuple[str, ...],
@@ -552,10 +558,17 @@ def register_db_commands(db_group: click.Group) -> None:
         static_export_dir: str,
         previous_snapshot_db: str | None,
         output_embed_db: str | None,
+        tpm_limit: int | None,
+        rpm_limit: int | None,
         verbose: bool,
     ) -> None:
         """Build a production snapshot (SQLite + static export)."""
         from deepresearch_flow.paper.snapshot.builder import SnapshotBuildOptions, build_snapshot
+
+        if tpm_limit is not None and tpm_limit <= 0:
+            raise click.ClickException("--tpm must be positive")
+        if rpm_limit is not None and rpm_limit <= 0:
+            raise click.ClickException("--rpm must be positive")
 
         opts = SnapshotBuildOptions(
             input_paths=[Path(path) for path in input_paths],
@@ -582,6 +595,8 @@ def register_db_commands(db_group: click.Group) -> None:
                     snapshot_db=opts.output_db,
                     static_export_dir=opts.static_export_dir,
                     vector_dir=Path(output_embed_db),
+                    tpm_limit=tpm_limit,
+                    rpm_limit=rpm_limit,
                 )
             )
 
@@ -1274,6 +1289,7 @@ def register_db_commands(db_group: click.Group) -> None:
         import uvicorn
 
         from deepresearch_flow.paper.snapshot.api import ApiLimits, create_app
+
         static_base_url_value = (
             static_base_url
             or os.getenv("PAPER_DB_STATIC_BASE")
@@ -1452,7 +1468,6 @@ def register_db_commands(db_group: click.Group) -> None:
         )
         click.echo(f"Serving API on http://{host}:{port} (Ctrl+C to stop)")
         uvicorn.run(app, host=host, port=port, log_level="info")
-
 
     @api_group.command("push")
     @click.option(

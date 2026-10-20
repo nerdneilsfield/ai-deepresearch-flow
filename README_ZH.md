@@ -414,6 +414,7 @@ uv run deepresearch-flow paper embed \
 
 需要限流时加 `--rpm 60` 或 `--tpm 200000`；两者都可选，不传则不限速。
 `--tpm` 按估算输入 token（字符数 ÷ 4）计算滑动的每分钟额度。
+`paper db snapshot build` 顺带建向量索引时也接受这两个选项。
 
 启动时开启语义搜索：
 

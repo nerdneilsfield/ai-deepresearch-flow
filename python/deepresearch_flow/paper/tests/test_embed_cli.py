@@ -248,6 +248,84 @@ def test_paper_embed_rejects_nonpositive_rate_limit(tmp_path: Path, option: str)
     assert f"{option} must be positive" in result.output
 
 
+def test_snapshot_build_passes_rate_limits_to_embed(tmp_path: Path, monkeypatch) -> None:
+    runner = CliRunner()
+    config_path = _write_embed_config(tmp_path)
+    json_path = tmp_path / "papers.json"
+    json_path.write_text("[]", encoding="utf-8")
+    seen: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "deepresearch_flow.paper.snapshot.builder.build_snapshot",
+        lambda opts: opts.output_db.write_bytes(b""),
+    )
+
+    async def fake_run_embed_pipeline(**kwargs):  # noqa: ANN003
+        seen.update(kwargs)
+
+    monkeypatch.setattr(
+        "deepresearch_flow.paper.embed_pipeline.run_embed_pipeline", fake_run_embed_pipeline
+    )
+    result = runner.invoke(
+        cli,
+        [
+            "paper",
+            "db",
+            "snapshot",
+            "build",
+            "-c",
+            str(config_path),
+            "-i",
+            str(json_path),
+            "--output-db",
+            str(tmp_path / "snap.db"),
+            "--static-export-dir",
+            str(tmp_path / "static"),
+            "--output-embed-db",
+            str(tmp_path / "vectors"),
+            "--tpm",
+            "900",
+            "--rpm",
+            "3",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert seen["tpm_limit"] == 900
+    assert seen["rpm_limit"] == 3
+
+
+@pytest.mark.parametrize("option", ["--tpm", "--rpm"])
+def test_snapshot_build_rejects_nonpositive_rate_limit(tmp_path: Path, option: str) -> None:
+    runner = CliRunner()
+    config_path = _write_embed_config(tmp_path)
+    json_path = tmp_path / "papers.json"
+    json_path.write_text("[]", encoding="utf-8")
+
+    result = runner.invoke(
+        cli,
+        [
+            "paper",
+            "db",
+            "snapshot",
+            "build",
+            "-c",
+            str(config_path),
+            "-i",
+            str(json_path),
+            "--output-db",
+            str(tmp_path / "snap.db"),
+            "--static-export-dir",
+            str(tmp_path / "static"),
+            option,
+            "0",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert f"{option} must be positive" in result.output
+
+
 def test_paper_embed_rejects_nonpositive_max_concurrency(tmp_path: Path) -> None:
     runner = CliRunner()
     config_path = _write_embed_config(tmp_path)
