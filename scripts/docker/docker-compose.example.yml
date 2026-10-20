@@ -2,7 +2,7 @@ services:
   deploy-local-static:
     image: ghcr.io/nerdneilsfield/deepresearch-flow:deploy-latest
     ports:
-      - "127.0.0.1:8080:8899"
+      - "${PAPER_DB_BIND_ADDR:-127.0.0.1}:8080:8899"
     volumes:
       - ${PWD}/paper_snapshot.db:/db/papers.db
       - ${PWD}/paper-static:/static
@@ -16,7 +16,7 @@ services:
   deploy-local-static-advanced:
     image: ghcr.io/nerdneilsfield/deepresearch-flow:deploy-latest
     ports:
-      - "127.0.0.1:8080:8899"
+      - "${PAPER_DB_BIND_ADDR:-127.0.0.1}:8080:8899"
     volumes:
       - ${PWD}/paper_snapshot.db:/db/papers.db
       - ${PWD}/paper-static:/static
@@ -40,7 +40,7 @@ services:
   deploy-external-static:
     image: ghcr.io/nerdneilsfield/deepresearch-flow:deploy-latest
     ports:
-      - "127.0.0.1:8080:8899"
+      - "${PAPER_DB_BIND_ADDR:-127.0.0.1}:8080:8899"
     volumes:
       - ${PWD}/paper_snapshot.db:/db/papers.db
     environment:
@@ -53,7 +53,7 @@ services:
   deploy-external-static-advanced:
     image: ghcr.io/nerdneilsfield/deepresearch-flow:deploy-latest
     ports:
-      - "127.0.0.1:8080:8899"
+      - "${PAPER_DB_BIND_ADDR:-127.0.0.1}:8080:8899"
     volumes:
       - ${PWD}/paper_snapshot.db:/db/papers.db
       - ${PWD}/paper_vectors:/db/paper_vectors

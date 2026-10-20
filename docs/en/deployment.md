@@ -363,6 +363,7 @@ docker compose -f scripts/docker/docker-compose.example.yml --profile local-stat
 - Nginx listens on `8899`, proxies `/api`, static-bearer MCP (`/mcp`, `/mcp-sse`), OAuth MCP (`/oauth/mcp`), and OAuth discovery/protocol routes (`/.well-known/`, `/authorize`, `/token`, `/register`, `/auth/callback`, `/consent`) to internal API at `127.0.0.1:8000`. OAuth SSE `/oauth/mcp-sse` is currently absent/unsupported.
 - Mount snapshot DB to `/db/papers.db`, static assets to `/static`.
 - `start-api.sh` auto-detects advanced mode by checking whether `PAPER_DB_EMBED_DB`, `PAPER_DB_CONFIG`, and `SEARCH_ACCESS_TOKEN` are set.
+- The compose example binds to loopback only (`127.0.0.1:8080`) by default. To reach it from the intranet, set `PAPER_DB_BIND_ADDR` (for example `PAPER_DB_BIND_ADDR=0.0.0.0`, or the host's LAN IP). If you also set a restricted `PAPER_DB_CORS_ORIGINS`, add the origin used for intranet access (for example `http://192.168.1.10:8080`), otherwise CORS preflight requests return 400.
 - Set `MCP_ACCESS_TOKEN` before deploying. `MCP_PUBLIC_UNSAFE=1` is intended for isolated local testing only.
 - `PAPER_DB_NGINX_TEMPLATE=prefix` is only needed for sub-path deployments. The default (`root`) works for dedicated domains.
 

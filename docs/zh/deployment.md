@@ -361,6 +361,7 @@ docker compose -f scripts/docker/docker-compose.example.yml --profile local-stat
 - Nginx 监听 `8899` 端口，将 `/api`、static-bearer MCP（`/mcp`、`/mcp-sse`）、OAuth MCP（`/oauth/mcp`）以及 OAuth discovery/protocol 路由（`/.well-known/`、`/authorize`、`/token`、`/register`、`/auth/callback`、`/consent`）反向代理到内部 API（`127.0.0.1:8000`）。OAuth SSE `/oauth/mcp-sse` 当前缺失/不支持。
 - 快照数据库挂载到 `/db/papers.db`，静态资源挂载到 `/static`。
 - `start-api.sh` 会自动检测是否设置了 `PAPER_DB_EMBED_DB`、`PAPER_DB_CONFIG` 和 `SEARCH_ACCESS_TOKEN`，以此判断是否启用高级搜索模式。
+- compose 示例默认只绑定回环地址（`127.0.0.1:8080`）。要从内网访问，设置 `PAPER_DB_BIND_ADDR`（如 `PAPER_DB_BIND_ADDR=0.0.0.0`，或宿主机的内网 IP）。若同时设置了受限的 `PAPER_DB_CORS_ORIGINS`，必须把内网访问用的 origin（如 `http://192.168.1.10:8080`）加进去，否则跨域预检会返回 400。
 - 部署前务必设置 `MCP_ACCESS_TOKEN`。`MCP_PUBLIC_UNSAFE=1` 仅用于隔离的本地测试环境。
 - `PAPER_DB_NGINX_TEMPLATE=prefix` 只在子路径部署时需要。默认值（`root`）适用于独立域名部署。
 

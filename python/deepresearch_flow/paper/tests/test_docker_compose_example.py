@@ -20,7 +20,7 @@ def test_docker_compose_example_requires_private_mcp_access_token_for_all_profil
     )
     assert "your-mcp-token" not in content
     assert "SEARCH_ACCESS_TOKEN: your-token" not in content
-    assert content.count('"127.0.0.1:8080:8899"') == 4
+    assert content.count('"${PAPER_DB_BIND_ADDR:-127.0.0.1}:8080:8899"') == 4
     assert '"8080:8899"' not in content
     assert content.count("${PWD}/paper_snapshot.db:/db/papers.db") == 4
     assert "./paper_snapshot.db:/db/papers.db" not in content
