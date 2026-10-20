@@ -19,6 +19,17 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { PaginationJump } from '@/components/ui/pagination'
 import SearchResultItem from '@/components/search/SearchResultItem.vue'
 import AdvancedSearchPanel from '@/components/AdvancedSearchPanel.vue'
+import SearchChips from '@/components/search/SearchChips.vue'
+import SearchAdvancedForm from '@/components/search/SearchAdvancedForm.vue'
+import SearchEmptyState from '@/components/search/SearchEmptyState.vue'
+import {
+  appendCondition,
+  freeTerms,
+  parseSearchExpression,
+  removeToken,
+  toSemanticQuery,
+  type ExprToken,
+} from '@/lib/search-expression'
 import AdvancedSearchResults from '@/components/AdvancedSearchResults.vue'
 import {
   advancedSearch,
@@ -29,7 +40,8 @@ import {
 import type { SearchItem } from '@/types/api'
 import type { FavoriteRating } from '@/types/favorites'
 import { useAdvancedSearchAuth } from '@/composables/useAdvancedSearchAuth'
-import { BarChart2 } from 'lucide-vue-next'
+import { BarChart2, SlidersHorizontal, X } from 'lucide-vue-next'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -52,6 +64,7 @@ const {
   facetPageSize,
   facetSearch,
   sortBy,
+  mode,
   // effectiveSort is computed but not used in template
   effectiveSort: _effectiveSort,
   syncFromRoute,
@@ -72,12 +85,33 @@ const results = computed(() => searchQuery.data.value ?? null)
 const stats = computed(() => statsQuery.data.value ?? null)
 const facetList = computed(() => facetQuery.data.value ?? null)
 const loading = computed(() => searchQuery.isFetching.value)
-const error = computed(() => (searchQuery.error.value ? 'Failed to fetch results. Please retry.' : ''))
+const error = computed(() => {
+  const err = searchQuery.error.value
+  if (!err) return ''
+  try {
+    const body = JSON.parse(err.message) as { error?: string; detail?: string }
+    if (body.error === 'invalid_query') return t('searchInvalidQuery', { detail: body.detail ?? '' })
+  } catch {
+    // Not a JSON error body: fall through to the generic message.
+  }
+  return 'Failed to fetch results. Please retry.'
+})
+
+const parsedQuery = computed(() => parseSearchExpression(query.value))
+const semanticQuery = computed(() => toSemanticQuery(parsedQuery.value))
+const highlightTerms = computed(() => freeTerms(parsedQuery.value.freeText))
+const showAdvancedForm = ref(false)
+const semanticSearched = ref(false)
+const semanticAvailable = computed(() => advancedAuthenticated.value)
+// Labels of the conditions the user could drop when nothing matches.
+const chipHints = computed(() =>
+  parsedQuery.value.tokens.map((token) => query.value.slice(token.start, token.end)),
+)
 
 const snippetRenderer = ref<(value: string) => string>((v) => v)
 const { expanded, expandedMarkdown, expandedLoading, toggleSummary } = useExpandableSummary()
 
-const facetLabel = computed(() => {
+function facetName(name: string) {
   const labels: Record<string, string> = {
     authors: t('authors'),
     venues: t('venues'),
@@ -87,8 +121,9 @@ const facetLabel = computed(() => {
     years: t('years'),
     months: t('months'),
   }
-  return labels[facetType.value] || facetType.value
-})
+  return labels[name] || name
+}
+const facetLabel = computed(() => facetName(facetType.value))
 
 const startResult = computed(() => (page.value - 1) * pageSizeNum.value + 1)
 const endResult = computed(() => Math.min(page.value * pageSizeNum.value, results.value?.total || 0))
@@ -112,7 +147,56 @@ const advancedSearching = ref(false)
 
 function forceSearch() {
   syncToRoute()
-  searchQuery.refetch()
+  if (mode.value === 'semantic') {
+    void runSemanticSearch()
+  } else {
+    searchQuery.refetch()
+  }
+}
+
+async function runSemanticSearch() {
+  if (!advancedAuthenticated.value) return
+  const { q, filters } = semanticQuery.value
+  if (!q.trim()) {
+    ui.pushToast(t('semanticNeedsText'), 'warning')
+    return
+  }
+  semanticSearched.value = true
+  await onAdvancedSearch({ q, filters })
+}
+
+function setMode(next: 'keyword' | 'semantic') {
+  if (next === mode.value) return
+  if (next === 'semantic' && !semanticAvailable.value) return
+  mode.value = next
+  syncToRoute()
+  if (next === 'semantic' && query.value.trim()) void runSemanticSearch()
+}
+
+function onRemoveChip(token: ExprToken) {
+  query.value = removeToken(query.value, token)
+  handleSearchInput()
+  forceSearch()
+}
+
+function onApplyAdvancedForm(expression: string) {
+  query.value = expression
+  showAdvancedForm.value = false
+  handleSearchInput()
+  forceSearch()
+}
+
+// Authors and years stack as expression conditions; other facets keep the single-facet filter.
+function onFacetItem(id: string, value: string) {
+  if (facetType.value === 'authors') addCondition('author', value)
+  else if (facetType.value === 'years') addCondition('year', value)
+  else setFacet(facetType.value, id)
+}
+
+function addCondition(field: 'author' | 'year', value: string) {
+  query.value = appendCondition(query.value, field, value)
+  handleSearchInput()
+  forceSearch()
 }
 
 async function onAdvancedSearch(params: AdvancedSearchParams) {
@@ -186,6 +270,16 @@ function onAdvancedSetFavoriteRating(result: AdvancedSearchResult, rating: Favor
   void favorites.setRating(result.paper_id, rating)
 }
 
+// A shared ?mode=semantic URL can only run once the visitor is authenticated.
+watch(
+  [advancedAuthenticated, mode],
+  ([authed, current]) => {
+    if (authed && current === 'semantic' && query.value.trim() && !semanticSearched.value) {
+      void runSemanticSearch()
+    }
+  },
+)
+
 watch(
   () => route.query,
   () => {
@@ -193,7 +287,7 @@ watch(
   }
 )
 
-watch([query, page, pageSize, facet, facetId, facetByValue, sortBy], () => {
+watch([query, page, pageSize, facet, facetId, facetByValue, sortBy, mode], () => {
   syncToRoute()
 })
 
@@ -252,7 +346,7 @@ watch(facetQuery.error, (err) => {
               class="flex w-full items-center justify-between rounded-md px-2 py-1 text-left text-ink-600 hover:bg-ink-100"
               type="button"
               :aria-label="`Filter by author ${author.value}`"
-              @click="setFacet('authors', String(author.value), true)"
+              @click="addCondition('author', String(author.value))"
             >
               <span class="truncate">{{ author.value }}</span>
               <span>{{ author.paper_count }}</span>
@@ -267,9 +361,9 @@ watch(facetQuery.error, (err) => {
               tabindex="0"
               class="cursor-pointer"
               :aria-label="`Filter by year ${year.value}`"
-              @click="setFacet('years', String(year.value), true)"
-              @keydown.enter.prevent="setFacet('years', String(year.value), true)"
-              @keydown.space.prevent="setFacet('years', String(year.value), true)"
+              @click="addCondition('year', String(year.value))"
+              @keydown.enter.prevent="addCondition('year', String(year.value))"
+              @keydown.space.prevent="addCondition('year', String(year.value))"
             >
               {{ year.value }}
             </Badge>
@@ -321,7 +415,7 @@ watch(facetQuery.error, (err) => {
                   class="flex w-full items-center justify-between rounded-md px-2 py-1 text-left text-ink-600 hover:bg-ink-100"
                   type="button"
                   :aria-label="`Filter by ${facetLabel} ${item.value}`"
-                  @click="setFacet(facetType, String(item.id))"
+                  @click="onFacetItem(String(item.id), String(item.value))"
                 >
                   <span class="truncate">{{ item.value }}</span>
                   <span>{{ item.paper_count }}</span>
@@ -335,7 +429,7 @@ watch(facetQuery.error, (err) => {
                 class="flex w-full items-center justify-between rounded-md px-2 py-1 text-left text-ink-600 hover:bg-ink-100"
                 type="button"
                 :aria-label="`Filter by ${facetLabel} ${item.value}`"
-                @click="setFacet(facetType, String(item.id))"
+                @click="onFacetItem(String(item.id), String(item.value))"
               >
                 <span class="truncate">{{ item.value }}</span>
                 <span>{{ item.paper_count }}</span>
@@ -371,18 +465,90 @@ watch(facetQuery.error, (err) => {
 
     <section class="min-w-0 flex-1 space-y-4">
       <Card class="mt-2 shadow-elevated">
-        <CardContent class="pt-4">
+        <CardContent class="space-y-3 pt-4">
           <form class="flex flex-col gap-3 sm:flex-row sm:items-center" role="search" @submit.prevent="forceSearch">
             <Input
               v-model="query"
               class="h-11 text-base"
               :placeholder="t('searchPlaceholder')"
               aria-label="Search papers"
+              data-testid="search-input"
               @input="handleSearchInput"
             />
-            <Button type="submit" class="h-11 shrink-0">{{ t('search') }}</Button>
+            <Button type="submit" class="h-11 shrink-0" data-testid="search-submit">{{ t('search') }}</Button>
           </form>
-          <div class="mt-3 flex flex-wrap items-center gap-3 text-xs text-ink-500">
+
+          <div class="flex flex-wrap items-center gap-2">
+            <TooltipProvider>
+              <div
+                class="inline-flex items-center rounded-lg bg-muted p-1 text-muted-foreground"
+                role="radiogroup"
+                :aria-label="t('searchMode')"
+                data-testid="search-mode"
+              >
+                <button
+                  type="button"
+                  role="radio"
+                  :aria-checked="mode === 'keyword'"
+                  class="rounded-md px-3 py-1 text-sm font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  :class="mode === 'keyword' ? 'bg-background text-foreground shadow' : 'hover:text-foreground'"
+                  data-testid="search-mode-keyword"
+                  @click="setMode('keyword')"
+                >
+                  {{ t('modeKeyword') }}
+                </button>
+                <Tooltip :disabled="semanticAvailable">
+                  <TooltipTrigger as-child>
+                    <span :tabindex="semanticAvailable ? undefined : 0">
+                      <button
+                        type="button"
+                        role="radio"
+                        :aria-checked="mode === 'semantic'"
+                        :aria-disabled="!semanticAvailable"
+                        :disabled="!semanticAvailable"
+                        class="rounded-md px-3 py-1 text-sm font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                        :class="mode === 'semantic' ? 'bg-background text-foreground shadow' : 'hover:text-foreground'"
+                        data-testid="search-mode-semantic"
+                        @click="setMode('semantic')"
+                      >
+                        {{ t('modeSemantic') }}
+                      </button>
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent>{{ t('semanticNeedsAuthTip') }}</TooltipContent>
+                </Tooltip>
+              </div>
+            </TooltipProvider>
+            <Button
+              type="button"
+              variant="outline"
+              class="gap-1.5"
+              :aria-expanded="showAdvancedForm"
+              data-testid="search-advanced-toggle"
+              @click="showAdvancedForm = !showAdvancedForm"
+            >
+              <SlidersHorizontal />
+              <span>{{ t('searchAdvancedForm') }}</span>
+            </Button>
+            <div class="ml-auto">
+              <AdvancedSearchPanel />
+            </div>
+          </div>
+
+          <SearchAdvancedForm
+            v-if="showAdvancedForm"
+            @apply="onApplyAdvancedForm"
+            @cancel="showAdvancedForm = false"
+          />
+
+          <SearchChips
+            :tokens="parsedQuery.tokens"
+            :mode="mode"
+            :ignored="semanticQuery.ignored"
+            @remove="onRemoveChip"
+          />
+
+          <div v-if="mode === 'keyword'" class="flex flex-wrap items-center gap-3 text-xs text-ink-500">
             <span class="font-semibold text-ink-700">{{ t('sort') }}</span>
             <Select v-model="sortBy">
               <SelectTrigger class="h-8 w-[200px]">
@@ -411,54 +577,75 @@ watch(facetQuery.error, (err) => {
               </SelectContent>
             </Select>
           </div>
-          <div v-if="facet && facetId" class="mt-3 flex items-center gap-2 text-xs text-ink-500">
+          <div v-if="facet && facetId" class="flex flex-wrap items-center gap-2 text-xs text-ink-500" data-testid="facet-filter">
             <span>{{ t('facetFilter') }}</span>
-            <Badge>{{ facet }}: {{ facetId }}</Badge>
+            <Badge variant="navy" class="gap-1 pr-1">
+              {{ t('facetChip', { facet: facetName(facet), value: facetId }) }}
+              <button
+                type="button"
+                class="inline-flex h-4 w-4 items-center justify-center rounded-full hover:bg-black/10 dark:hover:bg-white/15"
+                :aria-label="t('chipRemove', { label: t('facetChip', { facet: facetName(facet), value: facetId }) })"
+                data-testid="facet-chip-remove"
+                @click="clearFacet"
+              >
+                <X class="h-3 w-3" />
+              </button>
+            </Badge>
             <Button size="icon-sm" variant="ghost" class="h-5 w-5" title="View Stats" @click="router.push(`/facet/${facet}/${encodeURIComponent(facetId)}`)">
               <BarChart2 class="h-3 w-3" />
             </Button>
-            <button class="text-xs text-accent-600" type="button" @click="clearFacet">{{ t('clear') }}</button>
           </div>
-          <div class="mt-3 text-xs text-ink-400">
+          <div class="text-xs text-ink-400">
             {{ t('shareTip') }}
           </div>
         </CardContent>
       </Card>
 
-      <AdvancedSearchPanel
-        :searching="advancedSearching"
-        @search="onAdvancedSearch"
-      />
+      <template v-if="mode === 'semantic'">
+        <div
+          v-if="!semanticAvailable"
+          class="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-500/40 dark:bg-amber-950/40 dark:text-amber-200"
+          data-testid="semantic-auth-notice"
+        >
+          {{ t('semanticNeedsAuth') }}
+        </div>
+        <div v-if="advancedSearching" class="space-y-3" role="status" aria-live="polite">
+          <Skeleton v-for="n in 3" :key="n" class="h-28 rounded-xl" />
+        </div>
+        <AdvancedSearchResults
+          v-else-if="semanticSearched || advancedResults.length"
+          :results="advancedResults"
+          :degraded="advancedDegraded"
+          :degradation-reason="advancedDegradationReason"
+          :degradation-message="advancedDegradationMessage"
+          :selected-ids="selection.selectedIds"
+          :selection-full="selection.isFull"
+          :favorite-ids="favorites.favoriteIds"
+          :favorite-ratings="favorites.ratingsById"
+          :highlight-terms="highlightTerms"
+          :removable-hints="chipHints"
+          @toggle-select="onAdvancedToggleSelect"
+          @toggle-favorite="onAdvancedToggleFavorite"
+          @set-favorite-rating="onAdvancedSetFavoriteRating"
+        />
+      </template>
 
-      <AdvancedSearchResults
-        :results="advancedResults"
-        :degraded="advancedDegraded"
-        :degradation-reason="advancedDegradationReason"
-        :degradation-message="advancedDegradationMessage"
-        :selected-ids="selection.selectedIds"
-        :selection-full="selection.isFull"
-        :favorite-ids="favorites.favoriteIds"
-        :favorite-ratings="favorites.ratingsById"
-        @toggle-select="onAdvancedToggleSelect"
-        @toggle-favorite="onAdvancedToggleFavorite"
-        @set-favorite-rating="onAdvancedSetFavoriteRating"
-      />
-
-      <div v-if="loading" class="space-y-3" role="status" aria-live="polite">
+      <div v-if="mode === 'keyword' && loading" class="space-y-3" role="status" aria-live="polite">
         <Skeleton v-for="n in 5" :key="n" class="h-28 rounded-xl" />
       </div>
       <div
-        v-else-if="error"
+        v-else-if="mode === 'keyword' && error"
         class="rounded-xl border border-red-200 bg-red-50 p-6 text-sm text-red-600"
         role="status"
       >
         {{ error }}
       </div>
 
-      <div v-if="results" class="space-y-3" :aria-busy="loading">
+      <div v-if="mode === 'keyword' && results" class="space-y-3" :aria-busy="loading">
         <div class="text-xs text-ink-500" aria-live="polite">
           {{ t('showingResults', { start: startResult, end: endResult, total: results.total }) }}
         </div>
+        <SearchEmptyState v-if="results.total === 0 && !loading" :hints="chipHints" />
         <SearchResultItem
           v-for="(item, index) in results.items"
           :key="item.paper_id"

@@ -2,9 +2,9 @@
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import type { AdvancedSearchResult } from '@/lib/advanced-search'
-import { Button } from '@/components/ui/button'
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
-import FavoriteRatingControl from '@/components/favorites/FavoriteRatingControl.vue'
+import SearchEmptyState from '@/components/search/SearchEmptyState.vue'
+import ResultActions from '@/components/search/ResultActions.vue'
+import { splitHighlight } from '@/lib/search-expression'
 import type { FavoriteRating } from '@/types/favorites'
 
 const props = defineProps<{
@@ -16,6 +16,10 @@ const props = defineProps<{
   selectionFull?: boolean
   favoriteIds?: Set<string>
   favoriteRatings?: Record<string, FavoriteRating>
+  /** Free-text terms of the query, highlighted inside the matched chunk. */
+  highlightTerms?: string[]
+  /** Labels of conditions the user could drop, shown in the empty state. */
+  removableHints?: string[]
 }>()
 
 const emit = defineEmits<{
@@ -26,6 +30,17 @@ const emit = defineEmits<{
 
 const router = useRouter()
 const { t } = useI18n()
+
+function scoreTitle(result: AdvancedSearchResult) {
+  const { dense, sparse, fused, reranker, final } = result.scores
+  return [
+    dense !== undefined && `dense ${dense.toFixed(4)}`,
+    sparse !== undefined && `sparse ${sparse.toFixed(2)}`,
+    `fused ${fused.toFixed(4)}`,
+    reranker !== undefined && `rerank ${reranker.toFixed(3)}`,
+    `final ${final.toFixed(3)}`,
+  ].filter(Boolean).join(' · ')
+}
 
 function openPaper(result: AdvancedSearchResult) {
   router.push({
@@ -39,8 +54,7 @@ function openPaper(result: AdvancedSearchResult) {
   })
 }
 
-function onToggleSelect(event: Event, result: AdvancedSearchResult) {
-  event.stopPropagation()
+function onToggleSelect(result: AdvancedSearchResult) {
   emit('toggleSelect', result)
 }
 
@@ -63,18 +77,16 @@ function onSetFavoriteRating(result: AdvancedSearchResult, rating: FavoriteRatin
       Results are degraded: {{ degradationMessage ?? degradationReason ?? 'unknown' }}
     </div>
 
-    <div
+    <SearchEmptyState
       v-if="results.length === 0"
-      class="rounded-lg border border-border/60 bg-card px-4 py-6 text-sm text-muted-foreground dark:border-ink-700 dark:bg-ink-900/80 dark:text-ink-300"
+      :hints="removableHints"
       data-testid="advanced-results-empty"
-    >
-      No results.
-    </div>
+    />
 
     <article
       v-for="result in results"
       :key="result.chunk_id"
-      class="cursor-pointer rounded-xl border border-border/60 bg-card p-4 text-card-foreground transition-all hover:border-border hover:shadow-card-hover dark:border-ink-700 dark:bg-ink-900/80 dark:hover:border-ink-600"
+      class="cursor-pointer rounded-xl border border-border/60 bg-card p-4 text-card-foreground shadow-elevated transition-all hover:border-primary/30 hover:shadow-elevated-lg dark:border-ink-700 dark:bg-ink-900/80 dark:hover:border-ink-600 sm:p-5"
       data-testid="advanced-result-card"
       role="link"
       tabindex="0"
@@ -82,64 +94,37 @@ function onSetFavoriteRating(result: AdvancedSearchResult, rating: FavoriteRatin
       @keydown.enter.prevent="openPaper(result)"
       @keydown.space.prevent="openPaper(result)"
     >
-      <h3 class="text-base font-semibold text-foreground dark:text-ink-100">{{ result.paper.title }}</h3>
-      <p class="mt-1 text-sm text-muted-foreground dark:text-ink-400">
-        {{ result.paper.authors.join(', ') }} · {{ result.paper.year }} · {{ result.paper.venue }}
+      <h3 class="font-display-serif text-lg font-semibold leading-snug tracking-tight text-foreground dark:text-ink-100">{{ result.paper.title }}</h3>
+      <p class="mt-1 text-xs text-muted-foreground dark:text-ink-400">
+        <span v-if="result.paper.authors.length">{{ result.paper.authors.join(', ') }} — </span>{{ [result.paper.venue, result.paper.year].filter(Boolean).join(' · ') }}
       </p>
-      <div class="mt-3 flex items-center justify-between gap-2">
-        <div class="text-xs text-muted-foreground dark:text-ink-400">{{ result.chunk.field_name }}</div>
-        <div class="flex items-center gap-1.5">
-          <FavoriteRatingControl
-            :is-favorite="favoriteIds?.has(result.paper_id) ?? false"
-            :rating="favoriteRatings?.[result.paper_id]"
-            @toggle-favorite="onToggleFavorite(result)"
-            @set-rating="onSetFavoriteRating(result, $event)"
-          />
-          <TooltipProvider>
-            <Tooltip v-if="selectionFull && !selectedIds?.has(result.paper_id)">
-              <TooltipTrigger as-child>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  data-testid="advanced-result-select"
-                  @click="onToggleSelect($event, result)"
-                >
-                  {{ t('select') }}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>{{ t('selectionLimitReached') }}</TooltipContent>
-            </Tooltip>
-            <Button
-              v-else
-              size="sm"
-              variant="outline"
-              data-testid="advanced-result-select"
-              @click="onToggleSelect($event, result)"
-            >
-              {{ selectedIds?.has(result.paper_id) ? t('selected_btn') : t('select') }}
-            </Button>
-          </TooltipProvider>
+      <p class="mt-2.5 text-sm leading-relaxed text-foreground/80 dark:text-ink-200">
+        <template v-for="(part, index) in splitHighlight(result.chunk.text, highlightTerms ?? [])" :key="index">
+          <mark
+            v-if="part.hit"
+            class="rounded bg-amber-300/80 px-0.5 font-semibold text-amber-950 dark:bg-amber-400/30 dark:text-amber-100"
+          >{{ part.text }}</mark>
+          <template v-else>{{ part.text }}</template>
+        </template>
+      </p>
+      <div class="mt-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t border-border/50 pt-2 dark:border-ink-700">
+        <div class="flex min-w-0 items-center gap-2 text-[11px] text-muted-foreground dark:text-ink-400">
+          <span class="truncate rounded bg-muted px-1.5 py-0.5 font-mono dark:bg-ink-800" :title="t('chunkSource', { source: result.chunk.field_name })">{{ result.chunk.field_name }}</span>
+          <span class="shrink-0 tabular-nums text-muted-foreground/60" :title="scoreTitle(result)" data-testid="advanced-result-score">
+            {{ t('scoreLabel', { score: result.scores.final.toFixed(3) }) }}
+          </span>
         </div>
+        <ResultActions
+          select-test-id="advanced-result-select"
+          :is-selected="selectedIds?.has(result.paper_id) ?? false"
+          :selection-full="selectionFull ?? false"
+          :is-favorite="favoriteIds?.has(result.paper_id) ?? false"
+          :favorite-rating="favoriteRatings?.[result.paper_id]"
+          @toggle-select="onToggleSelect(result)"
+          @toggle-favorite="onToggleFavorite(result)"
+          @set-favorite-rating="onSetFavoriteRating(result, $event)"
+        />
       </div>
-      <p class="mt-3 text-sm text-foreground/80 dark:text-ink-200">{{ result.chunk.text }}</p>
-      <dl class="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground dark:text-ink-400 sm:grid-cols-5">
-        <template v-if="result.scores.dense !== undefined">
-          <dt>dense</dt>
-          <dd>{{ result.scores.dense.toFixed(4) }}</dd>
-        </template>
-        <template v-if="result.scores.sparse !== undefined">
-          <dt>sparse</dt>
-          <dd>{{ result.scores.sparse.toFixed(2) }}</dd>
-        </template>
-        <dt>fused</dt>
-        <dd>{{ result.scores.fused.toFixed(4) }}</dd>
-        <template v-if="result.scores.reranker !== undefined">
-          <dt>rerank</dt>
-          <dd>{{ result.scores.reranker.toFixed(3) }}</dd>
-        </template>
-        <dt>final</dt>
-        <dd>{{ result.scores.final.toFixed(3) }}</dd>
-      </dl>
     </article>
   </section>
 </template>

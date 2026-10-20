@@ -299,8 +299,37 @@ function paginate(items, url) {
   return { page, page_size: pageSize, total: items.length, has_more: start + pageSize < items.length, pageItems }
 }
 
+// Minimal subset of the backend expression grammar: field:value (author/venue/keyword/tag/institution/title/year),
+// -exclusion and "phrases". Free words are plain substrings; AND/OR are ignored.
+const EXPR_FACET_FIELDS = { author: 'authors', venue: 'venues', keyword: 'keywords', tag: 'tags', institution: 'institutions' }
+
+function parseExpression(query) {
+  const conditions = []
+  const words = []
+  const re = /(-?)(?:([A-Za-z]+):)?(?:"([^"]*)"|(\S+))/g
+  for (const match of query.matchAll(re)) {
+    const [, minus, rawField, quoted, bare] = match
+    const value = (quoted ?? bare ?? '').trim()
+    const field = rawField?.toLowerCase()
+    const known = field && (field in EXPR_FACET_FIELDS || field === 'title' || field === 'year')
+    if (!value) continue
+    if (known) conditions.push({ field, value: value.toLowerCase(), negated: Boolean(minus) })
+    else if (minus) conditions.push({ field: 'text', value: value.toLowerCase(), negated: true })
+    else if (!/^(and|or)$/i.test(value)) words.push(value)
+  }
+  return { conditions, words }
+}
+
+function yearMatches(paperYear, value) {
+  const year = Number.parseInt(paperYear, 10)
+  if (!Number.isFinite(year)) return false
+  const [from, to] = value.includes('..') ? value.split('..') : [value, value]
+  return (!from || year >= Number(from)) && (!to || year <= Number(to))
+}
+
 function matchesQuery(paper, query) {
   if (!query) return true
+  const { conditions, words } = parseExpression(query)
   const haystack = [
     paper.title,
     paper.venue,
@@ -310,7 +339,15 @@ function matchesQuery(paper, query) {
     ...paper.keywords,
     ...paper.institutions,
   ].join(' ').toLowerCase()
-  return haystack.includes(query.toLowerCase())
+  if (!words.every((word) => haystack.includes(word.toLowerCase()))) return false
+  return conditions.every(({ field, value, negated }) => {
+    let hit
+    if (field === 'year') hit = yearMatches(paper.year, value)
+    else if (field === 'title') hit = paper.title.toLowerCase().includes(value)
+    else if (field === 'text') hit = haystack.includes(value)
+    else hit = facetValues(paper, EXPR_FACET_FIELDS[field]).some((item) => String(item).toLowerCase().includes(value))
+    return negated ? !hit : hit
+  })
 }
 
 function sortPapers(papers, sort) {

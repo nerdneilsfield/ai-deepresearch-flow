@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto'
-import { flushPromises, shallowMount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { clearToken, getToken, setToken } from '@/lib/token-db'
@@ -86,6 +86,7 @@ vi.mock('@/composables/useSearch', async () => {
   const facetPageSize = ref(20)
   const facetSearch = ref('')
   const sortBy = ref('year_desc')
+  const mode = ref<'keyword' | 'semantic'>('keyword')
   const searchQuery = {
     data: ref({
       items: [{ paper_id: 'basic-1', paper_index: 1 }],
@@ -113,6 +114,7 @@ vi.mock('@/composables/useSearch', async () => {
       facetPageSize,
       facetSearch,
       sortBy,
+      mode,
       effectiveSort: computed(() => sortBy.value),
       syncFromRoute: vi.fn(),
       syncToRoute: vi.fn(),
@@ -166,7 +168,20 @@ function mockAdvancedFetch(
   })
 }
 
-async function settle(wrapper: ReturnType<typeof shallowMount>) {
+async function runSemantic(wrapper: ReturnType<typeof mount>, q: string) {
+  await wrapper.find('[data-testid="search-input"]').setValue(q)
+  await wrapper.find('[data-testid="search-mode-semantic"]').trigger('click')
+  await settle(wrapper)
+}
+
+async function verifyToken(wrapper: ReturnType<typeof mount>, token: string) {
+  await wrapper.find('[data-testid="advanced-panel-toggle"]').trigger('click')
+  await wrapper.find('[data-testid="advanced-token-input"]').setValue(token)
+  await wrapper.find('[data-testid="advanced-verify-button"]').trigger('click')
+  await settle(wrapper)
+}
+
+async function settle(wrapper: ReturnType<typeof mount>) {
   await flushPromises()
   await new Promise((resolve) => setTimeout(resolve, 0))
   await wrapper.vm.$nextTick()
@@ -174,15 +189,14 @@ async function settle(wrapper: ReturnType<typeof shallowMount>) {
 
 async function mountView() {
   const { default: SearchView } = await import('@/views/SearchView.vue')
-  return shallowMount(SearchView, {
+  const wrapper = mount(SearchView, {
     global: {
-      stubs: {
-        AdvancedSearchPanel: false,
-        AdvancedSearchResults: false,
-        SearchResultItem: false,
-      },
+      stubs: { RecycleScroller: true, 'router-link': true },
     },
   })
+  // The mocked search state is shared between tests; always start in keyword mode.
+  await wrapper.find('[data-testid="search-mode-keyword"]').trigger('click')
+  return wrapper
 }
 
 beforeEach(async () => {
@@ -262,19 +276,19 @@ describe('SearchView advanced search integration', () => {
     await settle(wrapper)
     expect(wrapper.findAll('[data-testid="basic-result-stub"]')).toHaveLength(1)
 
-    await wrapper.find('[data-testid="advanced-panel-toggle"]').trigger('click')
-    await wrapper.find('[data-testid="advanced-token-input"]').setValue('secret')
-    await wrapper.find('[data-testid="advanced-verify-button"]').trigger('click')
-    await settle(wrapper)
-    await wrapper.find('[data-testid="advanced-query-input"]').setValue('vision')
-    await wrapper.find('[data-testid="advanced-search-button"]').trigger('click')
-    await settle(wrapper)
+    await verifyToken(wrapper, 'secret')
+    await runSemantic(wrapper, 'vision')
 
     expect(wrapper.find('[data-testid="advanced-result-card"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('Advanced Paper')
     expect(wrapper.text()).toContain('advanced chunk body')
     expect(await getToken()).toBe('secret')
+    // Only one kind of result is shown per mode.
+    expect(wrapper.findAll('[data-testid="basic-result-stub"]')).toHaveLength(0)
+
+    await wrapper.find('[data-testid="search-mode-keyword"]').trigger('click')
     expect(wrapper.findAll('[data-testid="basic-result-stub"]')).toHaveLength(1)
+    expect(wrapper.find('[data-testid="advanced-result-card"]').exists()).toBe(false)
   })
 
   it('returning user auto-verifies stored token on mount and pre-fills the input', async () => {
@@ -316,9 +330,7 @@ describe('SearchView advanced search integration', () => {
     await vi.waitFor(() => {
       expect(wrapper.find('[data-testid="advanced-token-status-verified"]').exists()).toBe(true)
     })
-    await wrapper.find('[data-testid="advanced-query-input"]').setValue('vision')
-    await wrapper.find('[data-testid="advanced-search-button"]').trigger('click')
-    await settle(wrapper)
+    await runSemantic(wrapper, 'vision')
 
     await vi.waitFor(() => {
       expect(pushToastMock).toHaveBeenCalledWith(
@@ -327,7 +339,7 @@ describe('SearchView advanced search integration', () => {
       )
     })
     expect(wrapper.find('[data-testid="advanced-token-status-verified"]').exists()).toBe(false)
-    expect((wrapper.find('[data-testid="advanced-search-button"]').element as HTMLButtonElement).disabled).toBe(true)
+    expect((wrapper.find('[data-testid="search-mode-semantic"]').element as HTMLButtonElement).disabled).toBe(true)
     expect(await getToken()).toBeNull()
   })
 
@@ -342,7 +354,7 @@ describe('SearchView advanced search integration', () => {
     await settle(wrapper)
 
     expect(wrapper.find('[data-testid="advanced-token-status-invalid"]').exists()).toBe(true)
-    expect((wrapper.find('[data-testid="advanced-search-button"]').element as HTMLButtonElement).disabled).toBe(true)
+    expect((wrapper.find('[data-testid="search-mode-semantic"]').element as HTMLButtonElement).disabled).toBe(true)
     expect(await getToken()).toBeNull()
   })
 
@@ -403,17 +415,49 @@ describe('SearchView advanced search integration', () => {
 
     const wrapper = await mountView()
     await settle(wrapper)
-    await wrapper.find('[data-testid="advanced-panel-toggle"]').trigger('click')
-    await wrapper.find('[data-testid="advanced-token-input"]').setValue('secret')
-    await wrapper.find('[data-testid="advanced-verify-button"]').trigger('click')
-    await settle(wrapper)
-    await wrapper.find('[data-testid="advanced-query-input"]').setValue('vision')
-    await wrapper.find('[data-testid="advanced-search-button"]').trigger('click')
-    await settle(wrapper)
+    await verifyToken(wrapper, 'secret')
+    await runSemantic(wrapper, 'vision')
 
     expect(pushToastMock).toHaveBeenCalledWith(
       'Reranking failed; results fall back to fused ranking.',
       'warning',
     )
+  })
+
+  it('semantic mode sends parsed expression conditions as filters and the rest as q', async () => {
+    mockAdvancedFetch(
+      [{ status: 200, body: { valid: true } }],
+      [{
+        status: 200,
+        body: {
+          success: true,
+          trace_id: 't-filters',
+          query: { raw: 'vision', normalized: 'vision', applied_filters: {} },
+          results: [],
+          metadata: {
+            counts: {}, fusion: 'rrf', reranker: { applied: false, model: null },
+            mmr: { applied: true, lambda: 0.6 }, embedding: { model: 'bge-m3', dimensions: 1024 }, latency_ms: {},
+          },
+          degraded: false,
+          degradation: null,
+        },
+      }],
+    )
+
+    const wrapper = await mountView()
+    await settle(wrapper)
+    await verifyToken(wrapper, 'secret')
+    await runSemantic(wrapper, 'vision author:"Geoffrey Hinton" year:2019..2021 -bert')
+
+    const searchCall = fetchMock.mock.calls.map((call) => String(call[0])).find((url) => url.includes('/search/advanced?'))
+    expect(searchCall).toBeDefined()
+    const params = new URL(searchCall as string, 'http://localhost').searchParams
+    expect(params.get('q')).toBe('vision')
+    expect(params.getAll('filters.authors')).toEqual(['geoffrey hinton'])
+    expect(params.get('filters.year')).toBe('2019..2021')
+    // The exclusion cannot be applied in semantic mode and is flagged on its chip.
+    const ignored = wrapper.findAll('[data-testid="search-chip"][data-ignored="true"]')
+    expect(ignored).toHaveLength(1)
+    expect(ignored[0]!.text()).toContain('bert')
   })
 })

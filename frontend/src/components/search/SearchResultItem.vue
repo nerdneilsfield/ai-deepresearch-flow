@@ -3,10 +3,9 @@ import { computed } from 'vue'
 import type { SearchResponse } from '@/lib/api'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { ChevronDown, ChevronUp } from 'lucide-vue-next'
 import RenderedMarkdown from '@/components/RenderedMarkdown.vue'
-import FavoriteRatingControl from '@/components/favorites/FavoriteRatingControl.vue'
+import ResultActions from '@/components/search/ResultActions.vue'
 import { resolveStaticBaseUrl } from '@/lib/static-base'
 import { normalizeSummaryText, summaryParagraphs } from '@/lib/summary-text'
 import { useRuntimeConfigStore } from '@/stores/runtime-config'
@@ -64,47 +63,24 @@ function formatAuthors(authors?: string[]) {
 </script>
 
 <template>
-  <div class="group rounded-xl border border-border/60 bg-card p-5 shadow-elevated transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-elevated-lg">
-    <div class="flex flex-col gap-3">
-      <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div class="space-y-1">
-          <router-link
-            :to="{ name: 'paper', params: { paperId: item.paper_id } }"
-            class="font-display-serif text-lg font-semibold leading-snug tracking-tight text-foreground transition-colors hover:text-primary"
-          >
-            {{ item.title }}
-          </router-link>
-          <div class="text-xs text-muted-foreground">{{ item.venue }} · {{ item.year }}</div>
-          <div v-if="item.authors?.length" class="text-xs text-muted-foreground/80">
-            {{ formatAuthors(item.authors) }}
-          </div>
-        </div>
-        <div class="flex flex-row gap-2 sm:flex-col sm:items-end">
-          <TooltipProvider>
-            <Tooltip v-if="selectionFull && !isSelected">
-              <TooltipTrigger as-child>
-                <Button size="sm" variant="outline" @click="emit('toggleSelect')">
-                  {{ t('select') }}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>{{ t('selectionLimitReached') }}</TooltipContent>
-            </Tooltip>
-            <Button v-else size="sm" variant="outline" @click="emit('toggleSelect')">
-              {{ isSelected ? t('selected_btn') : t('select') }}
-            </Button>
-          </TooltipProvider>
-          <FavoriteRatingControl
-            :is-favorite="isFavorite"
-            :rating="favoriteRating"
-            @toggle-favorite="emit('toggleFavorite')"
-            @set-rating="emit('setFavoriteRating', $event)"
-          />
-          <Badge variant="slate">#{{ displayIndex }}</Badge>
+  <div class="group rounded-xl border border-border/60 bg-card p-4 shadow-elevated transition-all duration-200 hover:border-primary/30 hover:shadow-elevated-lg sm:p-5">
+    <div class="flex flex-col gap-2.5">
+      <div class="min-w-0 space-y-1">
+        <router-link
+          :to="{ name: 'paper', params: { paperId: item.paper_id } }"
+          class="font-display-serif text-lg font-semibold leading-snug tracking-tight text-foreground transition-colors hover:text-primary"
+        >
+          {{ item.title }}
+        </router-link>
+        <div class="text-xs text-muted-foreground" data-testid="result-meta">
+          <span v-if="item.authors?.length">{{ formatAuthors(item.authors) }}</span>
+          <span v-if="item.authors?.length && (item.venue || item.year)"> — </span>
+          <span>{{ [item.venue, item.year].filter(Boolean).join(' · ') }}</span>
         </div>
       </div>
 
       <div class="flex items-start gap-3">
-        <div class="flex-1">
+        <div class="min-w-0 flex-1">
           <RenderedMarkdown
             v-if="expanded && expandedMarkdown"
             :markdown="expandedMarkdown"
@@ -124,24 +100,36 @@ function formatAuthors(authors?: string[]) {
           </div>
         </div>
         <Button
-          size="sm"
-          variant="outline"
+          size="icon-sm"
+          variant="ghost"
           class="shrink-0"
           @click="emit('toggleSummary')"
           :aria-label="expanded ? t('collapseSummary') : t('expandSummary')"
+          :title="expanded ? t('collapseSummary') : t('expandSummary')"
         >
-          <span v-if="expandedLoading">{{ t('loading') }}</span>
+          <span v-if="expandedLoading" class="text-[10px]">…</span>
           <ChevronUp v-else-if="expanded" />
           <ChevronDown v-else />
         </Button>
       </div>
 
-      <div class="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
-        <span class="font-semibold text-foreground/70">{{ t('resources') }}</span>
-        <Badge v-if="item.has_pdf" variant="pdf">PDF</Badge>
-        <Badge v-if="item.has_source" variant="teal">Source</Badge>
-        <Badge v-if="item.has_translated" variant="violet">Translated</Badge>
-        <Badge v-if="item.preferred_summary_template" variant="navy">Summary</Badge>
+      <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t border-border/50 pt-2">
+        <div class="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+          <Badge v-if="item.has_pdf" variant="pdf">PDF</Badge>
+          <Badge v-if="item.has_source" variant="teal">Source</Badge>
+          <Badge v-if="item.has_translated" variant="violet">Translated</Badge>
+          <Badge v-if="item.preferred_summary_template" variant="navy">Summary</Badge>
+        </div>
+        <ResultActions
+          :is-selected="isSelected"
+          :selection-full="selectionFull"
+          :is-favorite="isFavorite"
+          :favorite-rating="favoriteRating"
+          :display-index="displayIndex"
+          @toggle-select="emit('toggleSelect')"
+          @toggle-favorite="emit('toggleFavorite')"
+          @set-favorite-rating="emit('setFavoriteRating', $event)"
+        />
       </div>
     </div>
   </div>

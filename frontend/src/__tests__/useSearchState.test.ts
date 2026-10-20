@@ -67,4 +67,18 @@ describe('useSearchState', () => {
       facet_by_value: '1',
     })
   })
+
+  it('round-trips the search mode through the URL', () => {
+    routeMock.query = { q: 'vit', mode: 'semantic' }
+    const state = useSearchState()
+    state.syncFromRoute()
+    expect(state.mode.value).toBe('semantic')
+
+    state.syncToRoute()
+    expect(replaceMock.mock.calls[0]?.[0].query).toMatchObject({ q: 'vit', mode: 'semantic' })
+
+    state.mode.value = 'keyword'
+    state.syncToRoute()
+    expect(replaceMock.mock.calls[1]?.[0].query).not.toHaveProperty('mode')
+  })
 })

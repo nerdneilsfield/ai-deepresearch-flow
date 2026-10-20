@@ -128,6 +128,18 @@ const searchModes = computed(() => [
   },
 ])
 
+const expressionRows = computed(() => [
+  { syntax: 'deep learning · "deep learning" · a OR b', meaning: t('helpExprRow1') + ' ' + t('helpExprRow2') },
+  { syntax: 'author:hinton · author:"geoffrey hinton"', meaning: t('helpExprRow3') },
+  { syntax: 'venue: keyword: tag: institution:', meaning: t('helpExprRow4') },
+  { syntax: 'title:transformer', meaning: t('helpExprRow5') },
+  { syntax: 'year:2019 · year:2019..2023 · year:2019.. · year:..2023', meaning: t('helpExprRow6') },
+  { syntax: '-word · -"a phrase" · -author:lecun', meaning: t('helpExprRow7') },
+  { syntax: 'foo:bar', meaning: t('helpExprRow8') },
+  { syntax: 'author:hinton year:2012..', meaning: t('helpExprRow9') },
+  { syntax: t('modeSemantic'), meaning: t('helpExprRow10') },
+])
+
 const workflows = computed(() => [
   {
     title: t('helpWorkflow1Title'),
@@ -391,6 +403,37 @@ const operationsTips = computed(() => [
               </div>
             </div>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card class="border-ink-200 dark:border-ink-700" data-testid="help-expression-table">
+        <CardHeader>
+          <CardTitle class="text-lg text-ink-900 dark:text-ink-100">
+            {{ t('helpExprTitle') }}
+          </CardTitle>
+          <CardDescription class="text-sm leading-7 text-ink-600 dark:text-ink-400">
+            {{ t('helpExprIntro') }}
+          </CardDescription>
+        </CardHeader>
+        <CardContent class="overflow-x-auto">
+          <table class="w-full min-w-[32rem] text-left text-sm">
+            <thead>
+              <tr class="border-b border-ink-200 text-xs uppercase text-ink-500 dark:border-ink-700 dark:text-ink-400">
+                <th class="py-2 pr-4 font-semibold">{{ t('helpExprColSyntax') }}</th>
+                <th class="py-2 font-semibold">{{ t('helpExprColMeaning') }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="row in expressionRows"
+                :key="row.syntax"
+                class="border-b border-ink-100 align-top last:border-0 dark:border-ink-800"
+              >
+                <td class="py-2 pr-4"><code class="whitespace-pre-wrap rounded bg-ink-100 px-1.5 py-0.5 text-xs text-ink-800 dark:bg-ink-800 dark:text-ink-100">{{ row.syntax }}</code></td>
+                <td class="py-2 leading-6 text-ink-600 dark:text-ink-400">{{ row.meaning }}</td>
+              </tr>
+            </tbody>
+          </table>
         </CardContent>
       </Card>
 

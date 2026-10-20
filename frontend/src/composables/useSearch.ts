@@ -106,6 +106,7 @@ export function useSearchState() {
   const facetPageSize = ref(50)
   const facetSearch = ref('')
   const sortBy = ref('relevance')
+  const mode = ref<'keyword' | 'semantic'>('keyword')
 
   const pageSizeNum = computed(() => Number(pageSize.value) || DEFAULT_PAGE_SIZE)
   const effectiveSort = computed(() => {
@@ -129,6 +130,7 @@ export function useSearchState() {
     }
     
     query.value = typeof route.query.q === 'string' ? route.query.q : ''
+    mode.value = route.query.mode === 'semantic' ? 'semantic' : 'keyword'
     page.value = route.query.page ? Number(route.query.page) || 1 : 1
     const pageSizeRaw = route.query.page_size ? Number(route.query.page_size) : DEFAULT_PAGE_SIZE
     pageSize.value = String(Number.isFinite(pageSizeRaw) && pageSizeRaw > 0 ? pageSizeRaw : DEFAULT_PAGE_SIZE)
@@ -144,6 +146,7 @@ export function useSearchState() {
     if (syncing.value) return
     const queryParams: Record<string, string> = {}
     if (query.value) queryParams.q = query.value
+    if (mode.value === 'semantic') queryParams.mode = 'semantic'
     if (page.value > 1) queryParams.page = String(page.value)
     if (pageSizeNum.value !== DEFAULT_PAGE_SIZE) queryParams.page_size = String(pageSizeNum.value)
     if (facet.value) queryParams.facet = facet.value
@@ -200,6 +203,7 @@ export function useSearchState() {
     facetPageSize,
     facetSearch,
     sortBy,
+    mode,
     effectiveSort,
     syncFromRoute,
     syncToRoute,
@@ -221,6 +225,10 @@ export function useSearchData(state: ReturnType<typeof useSearchState>) {
     placeholderData: keepPreviousData,
     staleTime: QUERY_CACHE_POLICY.search.staleTime,
     gcTime: QUERY_CACHE_POLICY.search.gcTime,
+    // Semantic mode runs through /search/advanced; the list endpoint stays idle.
+    enabled: computed(() => state.mode.value === 'keyword'),
+    // A 400 invalid_query is the user's typo, not a transient failure.
+    retry: (count, error) => !error.message.includes('invalid_query') && count < 2,
   })
 
   watch(

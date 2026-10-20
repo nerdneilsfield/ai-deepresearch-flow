@@ -81,4 +81,24 @@ describe('dev mock paper server', () => {
     expect(facet.items.length).toBeGreaterThan(0)
     expect(facet.items[0].paper_count).toBeGreaterThan(0)
   })
+
+  it('answers the minimal search expression subset over HTTP', async () => {
+    const { startMockPaperServer } = await import('../../dev/mock-paper-server.mjs')
+    const handle = await startMockPaperServer({ host: '127.0.0.1', port: 0, quiet: true })
+    handles.push(handle)
+
+    const all = await (await fetch(`${handle.url}/api/v1/search?page_size=200`)).json()
+    const sample = all.items.find((item) => item.authors.length)
+    const search = async (q) => (await fetch(`${handle.url}/api/v1/search?page_size=200&q=${encodeURIComponent(q)}`)).json()
+
+    const byAuthor = await search(`author:"${sample.authors[0]}"`)
+    expect(byAuthor.items.map((i) => i.paper_id)).toContain(sample.paper_id)
+    expect(byAuthor.total).toBeLessThanOrEqual(all.total)
+
+    const excluded = await search(`-author:"${sample.authors[0]}"`)
+    expect(excluded.items.map((i) => i.paper_id)).not.toContain(sample.paper_id)
+
+    const future = await search('year:2999..')
+    expect(future.total).toBe(0)
+  })
 })

@@ -79,34 +79,24 @@ describe('AdvancedSearchPanel', () => {
     const wrapper = mount(AdvancedSearchPanel)
     await wrapper.find('[data-testid="advanced-panel-toggle"]').trigger('click')
 
-    expect(wrapper.find('[data-testid="advanced-panel"]').classes().some((name) => name.startsWith('dark:bg-'))).toBe(true)
+    expect(wrapper.find('[data-testid="advanced-panel-body"]').classes().some((name) => name.startsWith('dark:bg-'))).toBe(true)
     expect(wrapper.find('[data-testid="advanced-panel-toggle"]').classes().some((name) => name.startsWith('dark:text-'))).toBe(true)
     expect(wrapper.find('[data-testid="advanced-token-input"]').classes().some((name) => name.startsWith('dark:bg-'))).toBe(true)
-    expect(wrapper.find('[data-testid="advanced-query-input"]').classes().some((name) => name.startsWith('dark:bg-'))).toBe(true)
   })
 
-  it('search button disabled when not verified', async () => {
-    const { default: AdvancedSearchPanel } = await import('@/components/AdvancedSearchPanel.vue')
-    const wrapper = mount(AdvancedSearchPanel)
-    await wrapper.find('[data-testid="advanced-panel-toggle"]').trigger('click')
-    expect((wrapper.find('[data-testid="advanced-search-button"]').element as HTMLButtonElement).disabled).toBe(true)
-  })
-
-  it('verify then search emits event', async () => {
+  it('verifying a token marks the panel as authenticated', async () => {
     verifyTokenMock.mockResolvedValueOnce({ valid: true })
     const { default: AdvancedSearchPanel } = await import('@/components/AdvancedSearchPanel.vue')
     const wrapper = mount(AdvancedSearchPanel)
     await flushPromises()
+    expect(wrapper.find('[data-testid="advanced-panel-authenticated"]').exists()).toBe(false)
     await wrapper.find('[data-testid="advanced-panel-toggle"]').trigger('click')
     await wrapper.find('[data-testid="advanced-token-input"]').setValue('secret')
     await wrapper.find('[data-testid="advanced-verify-button"]').trigger('click')
     await flushPromises()
     await wrapper.vm.$nextTick()
-    await wrapper.find('[data-testid="advanced-query-input"]').setValue('vision transformer')
-    await wrapper.find('[data-testid="advanced-search-button"]').trigger('click')
-    const events = wrapper.emitted('search')
-    expect(events).toBeTruthy()
-    expect((events as unknown[][])[0]?.[0]).toMatchObject({ q: 'vision transformer' })
+    expect(wrapper.find('[data-testid="advanced-token-status-verified"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="advanced-panel-authenticated"]').exists()).toBe(true)
   })
 
   it('invalid token shows error indicator', async () => {
@@ -120,7 +110,7 @@ describe('AdvancedSearchPanel', () => {
     await flushPromises()
     await wrapper.vm.$nextTick()
     expect(wrapper.find('[data-testid="advanced-token-status-invalid"]').exists()).toBe(true)
-    expect((wrapper.find('[data-testid="advanced-search-button"]').element as HTMLButtonElement).disabled).toBe(true)
+    expect(wrapper.find('[data-testid="advanced-panel-authenticated"]').exists()).toBe(false)
   })
 
   it('verify button disabled for blank token input', async () => {
@@ -140,24 +130,8 @@ describe('AdvancedSearchPanel', () => {
     await wrapper.find('[data-testid="advanced-panel-toggle"]').trigger('click')
     await vi.waitFor(() => {
       expect((wrapper.find('[data-testid="advanced-token-input"]').element as HTMLInputElement).value).toBe('stored-good')
-      expect((wrapper.find('[data-testid="advanced-query-input"]').element as HTMLInputElement).disabled).toBe(false)
+      expect(wrapper.find('[data-testid="advanced-panel-authenticated"]').exists()).toBe(true)
     })
-  })
-
-  it('searching prop puts button in loading state and disables it', async () => {
-    verifyTokenMock.mockResolvedValueOnce({ valid: true })
-    const { default: AdvancedSearchPanel } = await import('@/components/AdvancedSearchPanel.vue')
-    const wrapper = mount(AdvancedSearchPanel, { props: { searching: false } })
-    await flushPromises()
-    await wrapper.find('[data-testid="advanced-panel-toggle"]').trigger('click')
-    await wrapper.find('[data-testid="advanced-token-input"]').setValue('secret')
-    await wrapper.find('[data-testid="advanced-verify-button"]').trigger('click')
-    await flushPromises()
-    await wrapper.vm.$nextTick()
-    await wrapper.setProps({ searching: true })
-    const button = wrapper.find('[data-testid="advanced-search-button"]')
-    expect((button.element as HTMLButtonElement).disabled).toBe(true)
-    expect(button.text()).toContain('Searching')
   })
 
   it('transient verify failure shows a toast and keeps the current input', async () => {
@@ -194,7 +168,7 @@ describe('AdvancedSearchPanel', () => {
     await wrapper.find('[data-testid="advanced-panel-toggle"]').trigger('click')
 
     expect(wrapper.find('[data-testid="advanced-github-user"]').text()).toContain('octocat')
-    expect((wrapper.find('[data-testid="advanced-search-button"]').element as HTMLButtonElement).disabled).toBe(false)
+    expect(wrapper.find('[data-testid="advanced-panel-authenticated"]').exists()).toBe(true)
 
     await wrapper.find('[data-testid="advanced-github-logout"]').trigger('click')
     await settle(wrapper)
