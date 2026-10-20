@@ -23,12 +23,12 @@ from deepresearch_flow.paper.snapshot.common import (
     _open_ro_conn,
     _table_exists,
 )
-from deepresearch_flow.paper.snapshot.text import (
-    merge_adjacent_markers,
-    remove_cjk_spaces,
-    rewrite_search_query,
-    same_field_search_query,
+from deepresearch_flow.paper.snapshot.search_expression import (
+    SearchExpressionError,
+    compile_search_expression,
+    parse_search_expression,
 )
+from deepresearch_flow.paper.snapshot.text import merge_adjacent_markers, remove_cjk_spaces
 
 _WHITESPACE_RE = re.compile(r"\s+")
 _MCP_CANONICAL_PATHS = {
@@ -516,165 +516,99 @@ def _api_search(request: Request) -> Response:
 
     if sort_raw and sort_raw not in _SEARCH_SORTS and sort_raw != "relevance":
         return _json_error(400, error="invalid_sort", detail="unsupported sort value")
-    sort_key = sort_raw
-    if not sort_key:
-        sort_key = "relevance" if q else "year_desc"
-    if not q and sort_key == "relevance":
+    try:
+        plan = compile_search_expression(parse_search_expression(q))
+    except SearchExpressionError as exc:
+        return _json_error(400, error="invalid_query", detail=str(exc))
+    sort_key = sort_raw or ("relevance" if q else "year_desc")
+    if sort_key == "relevance" and not plan.match:
         sort_key = "year_desc"
 
     offset = (page - 1) * page_size
+
+    if q and plan.is_empty:
+        return JSONResponse(
+            {"page": page, "page_size": page_size, "total": 0, "has_more": False, "items": []}
+        )
+
+    where = ["paper_fts MATCH ?", *plan.filters] if plan.match else list(plan.filters)
+    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+    params: list[Any] = [plan.match] if plan.match else []
+    params.extend(plan.params)
+    if plan.match:
+        from_sql = "paper_fts JOIN paper p ON p.paper_id = paper_fts.paper_id"
+        extra_select = """,
+                  snippet(paper_fts, -1, '[[[', ']]]', '…', 30) AS snippet_markdown,
+                  bm25(paper_fts, 5.0, 3.0, 1.0, 1.0, 2.0) AS rank"""
+    else:
+        from_sql = "paper p"
+        extra_select = ""
+    order_by = "rank" if sort_key == "relevance" else _SEARCH_SORTS[sort_key]
 
     conn = _open_ro_conn(cfg.snapshot_db)
     try:
         build_id = _snapshot_build_id(conn)
         items: list[dict[str, Any]] = []
-        total = 0
 
-        if q:
-            match_expr = same_field_search_query(rewrite_search_query(q))
-            if not match_expr:
-                return JSONResponse(
-                    {
-                        "page": page,
-                        "page_size": page_size,
-                        "total": 0,
-                        "has_more": False,
-                        "items": [],
-                    }
-                )
+        total_row = conn.execute(
+            f"SELECT COUNT(*) AS c FROM {from_sql} {where_sql}", params
+        ).fetchone()
+        total = int(total_row["c"]) if total_row else 0
+        rows = conn.execute(
+            f"""
+            SELECT p.paper_id, p.title, p.year, p.venue, p.preferred_summary_template,
+                   p.summary_preview, p.paper_index, p.pdf_content_hash,
+                   p.source_md_content_hash{extra_select}
+            FROM {from_sql}
+            {where_sql}
+            ORDER BY {order_by}
+            LIMIT ? OFFSET ?
+            """,
+            [*params, page_size, offset],
+        ).fetchall()
 
-            total_row = conn.execute(
-                "SELECT COUNT(*) AS c FROM paper_fts WHERE paper_fts MATCH ?",
-                (match_expr,),
-            ).fetchone()
-            total = int(total_row["c"]) if total_row else 0
-
-            order_by = (
-                "rank"
-                if sort_key == "relevance"
-                else _SEARCH_SORTS.get(sort_key, _SEARCH_SORTS["year_desc"])
+        for row in rows:
+            paper_id = str(row["paper_id"])
+            translated_rows = conn.execute(
+                "SELECT lang, md_content_hash FROM paper_translation WHERE paper_id = ?",
+                (paper_id,),
+            ).fetchall()
+            translated = {str(r["lang"]): str(r["md_content_hash"]) for r in translated_rows}
+            authors = _list_facet_values(
+                conn,
+                paper_id=paper_id,
+                join_table="paper_author",
+                facet_table="author",
+                facet_id="author_id",
             )
-            rows = conn.execute(
-                f"""
-                SELECT
-                  p.paper_id,
-                  p.title,
-                  p.year,
-                  p.venue,
-                  p.preferred_summary_template,
-                  p.summary_preview,
-                  p.paper_index,
-                  p.pdf_content_hash,
-                  p.source_md_content_hash,
-                  snippet(paper_fts, -1, '[[[', ']]]', '…', 30) AS snippet_markdown,
-                  bm25(paper_fts, 5.0, 3.0, 1.0, 1.0, 2.0) AS rank
-                FROM paper_fts
-                JOIN paper p ON p.paper_id = paper_fts.paper_id
-                WHERE paper_fts MATCH ?
-                ORDER BY {order_by}
-                LIMIT ? OFFSET ?
-                """,
-                (match_expr, page_size, offset),
-            ).fetchall()
-
-            for row in rows:
-                paper_id = str(row["paper_id"])
-                snippet = str(row["snippet_markdown"] or "")
-                snippet = remove_cjk_spaces(snippet)
-                snippet = merge_adjacent_markers(snippet)
-                translated_rows = conn.execute(
-                    "SELECT lang, md_content_hash FROM paper_translation WHERE paper_id = ?",
-                    (paper_id,),
-                ).fetchall()
-                translated = {str(r["lang"]): str(r["md_content_hash"]) for r in translated_rows}
-                authors = _list_facet_values(
-                    conn,
-                    paper_id=paper_id,
-                    join_table="paper_author",
-                    facet_table="author",
-                    facet_id="author_id",
-                )
-                assets = _asset_urls(
-                    static_base_url=cfg.static_base_url,
-                    snapshot_build_id=build_id,
-                    paper_id=paper_id,
-                    pdf_hash=str(row["pdf_content_hash"]) if row["pdf_content_hash"] else None,
-                    source_md_hash=str(row["source_md_content_hash"])
-                    if row["source_md_content_hash"]
-                    else None,
-                    translated=translated,
-                )
-                items.append(
-                    {
-                        "paper_id": paper_id,
-                        "title": str(row["title"]),
-                        "year": str(row["year"]),
-                        "venue": str(row["venue"]),
-                        "snippet_markdown": snippet,
-                        "summary_preview": str(row["summary_preview"] or ""),
-                        "paper_index": int(row["paper_index"] or 0),
-                        "authors": authors,
-                        "preferred_summary_template": str(row["preferred_summary_template"] or ""),
-                        "has_pdf": bool(row["pdf_content_hash"]),
-                        "has_source": bool(row["source_md_content_hash"]),
-                        "has_translated": bool(translated),
-                        **assets,
-                    }
-                )
-        else:
-            total_row = conn.execute("SELECT COUNT(*) AS c FROM paper").fetchone()
-            total = int(total_row["c"]) if total_row else 0
-            order_by = _SEARCH_SORTS.get(sort_key, _SEARCH_SORTS["year_desc"])
-            rows = conn.execute(
-                f"""
-                SELECT p.paper_id, p.title, p.year, p.venue, p.preferred_summary_template, p.summary_preview, p.paper_index,
-                       p.pdf_content_hash, p.source_md_content_hash
-                FROM paper p
-                ORDER BY {order_by}
-                LIMIT ? OFFSET ?
-                """,
-                (page_size, offset),
-            ).fetchall()
-            for row in rows:
-                paper_id = str(row["paper_id"])
-                translated_rows = conn.execute(
-                    "SELECT lang, md_content_hash FROM paper_translation WHERE paper_id = ?",
-                    (paper_id,),
-                ).fetchall()
-                translated = {str(r["lang"]): str(r["md_content_hash"]) for r in translated_rows}
-                authors = _list_facet_values(
-                    conn,
-                    paper_id=paper_id,
-                    join_table="paper_author",
-                    facet_table="author",
-                    facet_id="author_id",
-                )
-                assets = _asset_urls(
-                    static_base_url=cfg.static_base_url,
-                    snapshot_build_id=build_id,
-                    paper_id=paper_id,
-                    pdf_hash=str(row["pdf_content_hash"]) if row["pdf_content_hash"] else None,
-                    source_md_hash=str(row["source_md_content_hash"])
-                    if row["source_md_content_hash"]
-                    else None,
-                    translated=translated,
-                )
-                items.append(
-                    {
-                        "paper_id": paper_id,
-                        "title": str(row["title"]),
-                        "year": str(row["year"]),
-                        "venue": str(row["venue"]),
-                        "summary_preview": str(row["summary_preview"] or ""),
-                        "paper_index": int(row["paper_index"] or 0),
-                        "authors": authors,
-                        "preferred_summary_template": str(row["preferred_summary_template"] or ""),
-                        "has_pdf": bool(row["pdf_content_hash"]),
-                        "has_source": bool(row["source_md_content_hash"]),
-                        "has_translated": bool(translated),
-                        **assets,
-                    }
-                )
+            assets = _asset_urls(
+                static_base_url=cfg.static_base_url,
+                snapshot_build_id=build_id,
+                paper_id=paper_id,
+                pdf_hash=str(row["pdf_content_hash"]) if row["pdf_content_hash"] else None,
+                source_md_hash=str(row["source_md_content_hash"])
+                if row["source_md_content_hash"]
+                else None,
+                translated=translated,
+            )
+            item: dict[str, Any] = {
+                "paper_id": paper_id,
+                "title": str(row["title"]),
+                "year": str(row["year"]),
+                "venue": str(row["venue"]),
+                "summary_preview": str(row["summary_preview"] or ""),
+                "paper_index": int(row["paper_index"] or 0),
+                "authors": authors,
+                "preferred_summary_template": str(row["preferred_summary_template"] or ""),
+                "has_pdf": bool(row["pdf_content_hash"]),
+                "has_source": bool(row["source_md_content_hash"]),
+                "has_translated": bool(translated),
+                **assets,
+            }
+            if plan.match:
+                snippet = remove_cjk_spaces(str(row["snippet_markdown"] or ""))
+                item["snippet_markdown"] = merge_adjacent_markers(snippet)
+            items.append(item)
 
         has_more = (page * page_size) < total and bool(items)
         return JSONResponse(
