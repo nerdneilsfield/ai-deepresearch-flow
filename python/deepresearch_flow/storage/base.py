@@ -16,6 +16,19 @@ class RemoteStorage(Protocol):
         """Check if a file exists. Raises StorageAuthError on auth failure."""
         ...
 
+    def list(
+        self,
+        remote_path: str = "",
+        *,
+        max_items: int | None = None,
+        after: str | None = None,
+    ) -> tuple[str, ...]:
+        """List one directory (depth 1). Paths are relative to the storage root; directories end with '/'.
+
+        Raises StorageAuthError on auth failure, HTTPStatusError (404) if the directory is missing.
+        """
+        ...
+
     def mkdir(self, remote_path: str) -> None:
         """Ensure a directory exists (idempotent). Raises StorageAuthError on auth failure."""
         ...

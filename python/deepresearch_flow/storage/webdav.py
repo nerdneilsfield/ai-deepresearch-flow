@@ -118,9 +118,10 @@ class WebDavStorage:
         Returned paths are relative to configured WebDAV endpoint and include
         a trailing slash for collections.  Callers can recurse explicitly.
         """
+        list_url = self._url_for(remote_path, trailing_slash=True, allow_empty=True)
         response = self._client.request(
             "PROPFIND",
-            self._url_for(remote_path, trailing_slash=True, allow_empty=True),
+            list_url,
             headers={"Depth": "1", "Content-Type": "application/xml"},
             content=(
                 b"<?xml version='1.0' encoding='utf-8' ?>"
@@ -134,8 +135,11 @@ class WebDavStorage:
             document = ElementTree.fromstring(response.content)
         except ElementTree.ParseError as exc:
             raise RuntimeError("WebDAV listing response is invalid") from exc
-        base_path = urlparse(self._base_url).path.rstrip("/")
+        base_path = unquote(urlparse(self._base_url).path).rstrip("/")
+        requested_path = unquote(urlparse(list_url).path).rstrip("/")
         entries: list[str] = []
+        foreign_hrefs = 0  # non-self responses outside the configured endpoint
+        inside_hrefs = 0
         for item in document.iter():
             if item.tag.rsplit("}", 1)[-1] != "response":
                 continue
@@ -151,6 +155,11 @@ class WebDavStorage:
                 continue
             parsed = urlparse(href)
             path = unquote(parsed.path)
+            if path.rstrip("/") != requested_path:
+                if not base_path or path.startswith(base_path + "/"):
+                    inside_hrefs += 1
+                else:
+                    foreign_hrefs += 1
             if base_path:
                 if path == base_path or not path.startswith(base_path + "/"):
                     continue
@@ -169,6 +178,11 @@ class WebDavStorage:
             if after is not None and normalized.rstrip("/") <= after.rstrip("/"):
                 continue
             entries.append(normalized)
+        if foreign_hrefs and not inside_hrefs:
+            raise RuntimeError(
+                "WebDAV listing hrefs do not match the configured endpoint path "
+                f"{base_path!r}; refusing to treat the directory as empty"
+            )
         ordered = sorted(set(entries))
         return tuple(ordered if max_items is None else ordered[:max_items])
 

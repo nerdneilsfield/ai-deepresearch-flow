@@ -10,6 +10,8 @@ from pathlib import Path
 from threading import Lock
 from typing import Callable
 
+import httpx
+
 from deepresearch_flow.storage.base import RemoteStorage, StorageAuthError
 
 logger = logging.getLogger(__name__)
@@ -41,6 +43,17 @@ def _top_dir(rel_path: str) -> str:
     """Extract the top-level directory (e.g. 'pdf/abc.pdf' -> 'pdf/')."""
     parts = rel_path.split("/", 1)
     return f"{parts[0]}/" if len(parts) > 1 else "(root)"
+
+
+def _remote_files_in(storage: RemoteStorage, directory: str) -> set[str]:
+    """Files directly under a remote directory; a missing directory (404) is empty."""
+    try:
+        entries = storage.list(directory)
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404:
+            return set()
+        raise
+    return {entry for entry in entries if not entry.endswith("/")}
 
 
 def _ensure_parents(
@@ -106,9 +119,36 @@ def push_static_files(
     if concurrency < 1:
         raise ValueError("concurrency must be at least 1")
 
+    # One listing per remote directory instead of one HEAD per file.
+    # StorageAuthError propagates immediately. A directory whose listing is untrustworthy
+    # (RuntimeError) fails all its files instead of being treated as empty, which would
+    # overwrite remote files.
+    directories = sorted({rel_path.rpartition("/")[0] for rel_path in all_files})
+
+    def list_directory(directory: str) -> tuple[set[str], str]:
+        try:
+            return _remote_files_in(storage, directory), ""
+        except StorageAuthError:
+            raise
+        except RuntimeError as exc:
+            return set(), str(exc)
+
+    with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="storage-list") as executor:
+        listings = list(executor.map(list_directory, directories))
+    remote_files: set[str] = set().union(*(files for files, _ in listings))
+    failed_directories = {
+        directory: error for directory, (_, error) in zip(directories, listings) if error
+    }
+
     def process_file(rel_path: str) -> None:
-        # Check existence — StorageAuthError propagates immediately.
-        exists = storage.exists(rel_path)
+        list_error = failed_directories.get(rel_path.rpartition("/")[0])
+        if list_error:
+            with stats_lock:
+                _record(stats, rel_path, "failed", f"remote listing failed: {list_error}")
+            if on_file_result:
+                on_file_result(rel_path, "failed", list_error)
+            return
+        exists = rel_path in remote_files
         if exists and not overwrite:
             with stats_lock:
                 _record(stats, rel_path, "skipped")

@@ -172,12 +172,78 @@ def test_list_ignores_responses_outside_configured_endpoint() -> None:
         "https://cdn.example.com/static",
         "user",
         "pass",
-        _transport=httpx.MockTransport(
-            lambda request: httpx.Response(207, content=xml)
-        ),
+        _transport=httpx.MockTransport(lambda request: httpx.Response(207, content=xml)),
     )
 
     assert storage.list() == ("pdf/inside.pdf",)
+
+
+def test_list_matches_percent_encoded_base_url() -> None:
+    xml = b"""
+    <d:multistatus xmlns:d='DAV:'>
+      <d:response><d:href>/my%20static/%E4%B8%AD%E6%96%87/</d:href>
+        <d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat>
+      </d:response>
+      <d:response><d:href>/my%20static/%E4%B8%AD%E6%96%87/a%20b.pdf</d:href>
+        <d:propstat><d:prop><d:resourcetype/></d:prop></d:propstat>
+      </d:response>
+    </d:multistatus>
+    """
+    requested: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(request.url.raw_path.decode())
+        return httpx.Response(207, content=xml)
+
+    storage = WebDavStorage(
+        "https://cdn.example.com/my%20static",
+        "user",
+        "pass",
+        _transport=httpx.MockTransport(handler),
+    )
+
+    assert storage.list("中文") == ("中文/", "中文/a b.pdf")
+    assert requested == ["/my%20static/%E4%B8%AD%E6%96%87/"]
+
+
+def test_list_raises_when_every_href_is_outside_configured_endpoint() -> None:
+    xml = b"""
+    <d:multistatus xmlns:d='DAV:'>
+      <d:response><d:href>/rewritten/pdf/</d:href>
+        <d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat>
+      </d:response>
+      <d:response><d:href>/rewritten/pdf/a.pdf</d:href>
+        <d:propstat><d:prop><d:resourcetype/></d:prop></d:propstat>
+      </d:response>
+    </d:multistatus>
+    """
+    storage = WebDavStorage(
+        "https://cdn.example.com/static",
+        "user",
+        "pass",
+        _transport=httpx.MockTransport(lambda request: httpx.Response(207, content=xml)),
+    )
+
+    with pytest.raises(RuntimeError, match="do not match"):
+        storage.list("pdf")
+
+
+def test_list_of_empty_directory_lists_only_itself() -> None:
+    xml = b"""
+    <d:multistatus xmlns:d='DAV:'>
+      <d:response><d:href>/static/pdf/</d:href>
+        <d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat>
+      </d:response>
+    </d:multistatus>
+    """
+    storage = WebDavStorage(
+        "https://cdn.example.com/static",
+        "user",
+        "pass",
+        _transport=httpx.MockTransport(lambda request: httpx.Response(207, content=xml)),
+    )
+
+    assert storage.list("pdf") == ("pdf/",)
 
 
 def test_list_applies_cursor_before_page_limit() -> None:
@@ -196,9 +262,7 @@ def test_list_applies_cursor_before_page_limit() -> None:
         "https://cdn.example.com/static",
         "user",
         "pass",
-        _transport=httpx.MockTransport(
-            lambda request: httpx.Response(207, content=xml)
-        ),
+        _transport=httpx.MockTransport(lambda request: httpx.Response(207, content=xml)),
     )
 
     assert storage.list(max_items=1, after="pdf/mid.pdf") == ("pdf/zzz.pdf",)

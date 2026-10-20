@@ -7,6 +7,7 @@ from pathlib import Path
 import threading
 import time
 
+import httpx
 import pytest
 
 from deepresearch_flow.storage.base import StorageAuthError
@@ -34,11 +35,33 @@ class FakeStorage:
         self._auth_fail = auth_fail
         self.uploaded: dict[str, bytes] = {}
         self.mkdirs: list[str] = []
+        self.exists_calls = 0
+        self.list_calls: list[str] = []
 
     def exists(self, remote_path: str) -> bool:
+        self.exists_calls += 1
         if self._auth_fail:
             raise StorageAuthError("Authentication failed")
         return remote_path in self._existing
+
+    def list(self, remote_path: str = "", **_kwargs: object) -> tuple[str, ...]:
+        self.list_calls.append(remote_path)
+        if self._auth_fail:
+            raise StorageAuthError("Authentication failed")
+        prefix = f"{remote_path}/" if remote_path else ""
+        children = {
+            prefix
+            + path[len(prefix) :].split("/", 1)[0]
+            + ("/" if "/" in path[len(prefix) :] else "")
+            for path in self._existing
+            if path.startswith(prefix)
+        }
+        if not children:
+            request = httpx.Request("PROPFIND", f"https://dav.example/{remote_path}")
+            raise httpx.HTTPStatusError(
+                "404", request=request, response=httpx.Response(404, request=request)
+            )
+        return tuple(sorted(children))
 
     def mkdir(self, remote_path: str) -> None:
         if self._auth_fail:
@@ -168,6 +191,25 @@ class TestPushStaticFiles:
         assert storage.exists("pdf/abc123.pdf") is True
         assert storage.uploaded == {}
 
+    def test_untrustworthy_listing_fails_that_directory_without_uploading(
+        self, tmp_path: Path
+    ) -> None:
+        root = _setup_static_dir(tmp_path)
+
+        class BrokenPdfListing(FakeStorage):
+            def list(self, remote_path: str = "", **kwargs: object) -> tuple[str, ...]:
+                if remote_path == "pdf":
+                    raise RuntimeError("WebDAV listing hrefs do not match")
+                return super().list(remote_path, **kwargs)
+
+        storage = BrokenPdfListing(existing={"pdf/abc123.pdf"})
+
+        stats = push_static_files(root, storage, overwrite=True)
+
+        assert [entry["path"] for entry in stats.failed_files] == ["pdf/abc123.pdf"]
+        assert "pdf/abc123.pdf" not in storage.uploaded
+        assert stats.uploaded == 3
+
     def test_record_failed_files(self, tmp_path: Path) -> None:
         root = _setup_static_dir(tmp_path)
         storage = FakeStorage(fail_uploads=True)
@@ -201,6 +243,41 @@ class TestPushStaticFiles:
         assert stats.uploaded == 0
         assert stats.skipped == 0
         assert stats.failed == 0
+
+    def test_existence_is_decided_by_directory_listings_not_per_file_requests(
+        self, tmp_path: Path
+    ) -> None:
+        root = tmp_path / "static_export"
+        (root / "images").mkdir(parents=True)
+        names = [f"images/{index}.png" for index in range(30)]
+        for name in names:
+            (root / name).write_bytes(b"x")
+        storage = FakeStorage(existing=set(names[:10]))
+
+        stats = push_static_files(root, storage, concurrency=4)
+
+        assert (stats.uploaded, stats.skipped, stats.failed) == (20, 10, 0)
+        assert storage.exists_calls == 0
+        assert len(storage.list_calls) < len(names)
+
+    def test_missing_remote_directory_counts_as_empty(self, tmp_path: Path) -> None:
+        root = _setup_static_dir(tmp_path)
+        # Only pdf/ exists remotely; images/, md/ and summary/paper1/ answer 404 to listing.
+        storage = FakeStorage(existing={"pdf/abc123.pdf"})
+
+        stats = push_static_files(root, storage)
+
+        assert (stats.uploaded, stats.skipped, stats.failed) == (3, 1, 0)
+        assert set(storage.uploaded) == set(discover_static_files(root)) - {"pdf/abc123.pdf"}
+
+    def test_directory_listing_auth_failure_aborts_before_any_upload(self, tmp_path: Path) -> None:
+        root = _setup_static_dir(tmp_path)
+        storage = FakeStorage(auth_fail=True)
+
+        with pytest.raises(StorageAuthError):
+            push_static_files(root, storage, concurrency=3)
+
+        assert storage.uploaded == {}
 
     def test_per_directory_stats(self, tmp_path: Path) -> None:
         root = _setup_static_dir(tmp_path)
