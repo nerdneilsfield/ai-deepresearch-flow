@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ipaddress
 import json
 import os
 import sqlite3
@@ -14,7 +13,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from deepresearch_flow.paper.snapshot.common import _open_ro_conn
+from deepresearch_flow.paper.snapshot.common import _is_private_http_host, _open_ro_conn
 from deepresearch_flow.storage.config import StorageConfig
 
 DEFAULT_BATCH_SIZE = 10
@@ -26,18 +25,6 @@ DEFAULT_SEMANTIC_RETRIES = 3
 DEFAULT_SEMANTIC_RETRY_BACKOFF_SECONDS = 2.0
 DEFAULT_PUSH_RETRIES = 2
 DEFAULT_PUSH_RETRY_BACKOFF_SECONDS = 1.0
-_LOCAL_HTTP_HOSTS = {"localhost", "127.0.0.1", "::1", "testserver"}
-
-
-def _is_private_http_host(host: str) -> bool:
-    normalized = host.removeprefix("[").removesuffix("]").lower()
-    if normalized in _LOCAL_HTTP_HOSTS:
-        return True
-    try:
-        address = ipaddress.ip_address(normalized)
-    except ValueError:
-        return False
-    return address.is_private or address.is_loopback or address.is_link_local or address.is_reserved
 
 
 @dataclass(frozen=True)
@@ -70,6 +57,49 @@ def _validate_authenticated_url(url: str) -> None:
         raise ValueError(
             "remote.api_base_url must use HTTPS when sending admin_token outside localhost"
         )
+
+
+class RemoteManifestUnavailableError(RuntimeError):
+    """The remote server has no manifest endpoint, i.e. it predates incremental push."""
+
+
+def get_remote_manifest(url: str, config: RemoteConfig, timeout: float) -> dict[str, Any]:
+    _validate_authenticated_url(url)
+    response = httpx.get(
+        url, headers={"Authorization": f"Bearer {config.admin_token}"}, timeout=timeout
+    )
+    if response.status_code == 404:
+        raise RemoteManifestUnavailableError(
+            f"remote server is too old (GET {url} returned 404); upgrade the server before pushing"
+        )
+    response.raise_for_status()
+    data = response.json()
+    if not isinstance(data, dict):
+        raise ValueError("manifest response must be a JSON object")
+    return data
+
+
+def fetch_remote_paper_manifest(config: RemoteConfig) -> tuple[dict[str, str], dict[str, str]]:
+    """Return ``({paper_id: source_hash}, {paper_key: paper_id})`` of the remote."""
+    data = get_remote_manifest(
+        f"{config.api_base_url}/api/v1/admin/papers/manifest", config, DEFAULT_TIMEOUT
+    )
+    papers = {str(key): str(value) for key, value in dict(data.get("papers") or {}).items()}
+    aliases = {str(key): str(value) for key, value in dict(data.get("aliases") or {}).items()}
+    return papers, aliases
+
+
+def read_local_paper_keys(db_path: Path) -> dict[str, list[str]]:
+    """Return ``{paper_id: [paper_key, ...]}`` from the local snapshot's paper_key_alias."""
+    conn = _open_ro_conn(db_path)
+    try:
+        rows = conn.execute("SELECT paper_id, paper_key FROM paper_key_alias").fetchall()
+    finally:
+        conn.close()
+    keys: dict[str, list[str]] = {}
+    for row in rows:
+        keys.setdefault(str(row["paper_id"]), []).append(str(row["paper_key"]))
+    return keys
 
 
 @dataclass

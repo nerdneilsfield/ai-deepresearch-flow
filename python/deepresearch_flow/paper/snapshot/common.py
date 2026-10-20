@@ -7,8 +7,43 @@ the snapshot REST API and the MCP server to avoid circular imports.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import ipaddress
 from pathlib import Path
 import sqlite3
+
+
+_LOCAL_HTTP_HOSTS = {"localhost", "127.0.0.1", "::1", "testserver"}
+# Explicit ranges only: ipaddress.is_reserved/is_private also match public NAT64 (64:ff9b::/96) etc.
+_PRIVATE_HTTP_NETWORKS = tuple(
+    ipaddress.ip_network(cidr)
+    for cidr in (
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "127.0.0.0/8",
+        "169.254.0.0/16",
+        "::1/128",
+        "fc00::/7",
+        "fe80::/10",
+    )
+)
+
+
+def _is_private_http_host(host: str) -> bool:
+    normalized = host.removeprefix("[").removesuffix("]").lower().rstrip(".")
+    if normalized in _LOCAL_HTTP_HOSTS:
+        return True
+    try:
+        address = ipaddress.ip_address(normalized)
+    except ValueError:
+        return False
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    return any(
+        address in network
+        for network in _PRIVATE_HTTP_NETWORKS
+        if network.version == address.version
+    )
 
 
 @dataclass(frozen=True)

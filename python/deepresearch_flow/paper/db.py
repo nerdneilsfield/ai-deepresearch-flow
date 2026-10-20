@@ -8,7 +8,7 @@ import json
 import re
 import shutil
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, NamedTuple
 import difflib
 
 from tqdm import tqdm
@@ -83,7 +83,7 @@ def _load_api_push_retry_report(path: Path) -> tuple[str, list[Any]]:
 
 
 def _semantic_group_key(chunk: dict[str, Any]) -> tuple[str, str]:
-    return str(chunk.get("doc_id") or ""), str(chunk.get("template_tag") or "")
+    return str(chunk.get("doc_id") or ""), str(chunk.get("template_tag") or "_shared")
 
 
 def _sort_semantic_chunks(chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -99,19 +99,62 @@ def _sort_semantic_chunks(chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     )
 
 
-def _expand_semantic_chunk_window(
-    chunks: list[dict[str, Any]],
+class _PendingSemantic(NamedTuple):
+    chunks: list[dict[str, Any]]
+    local_chunk_count: int
+    selected_group_count: int
+    remote_group_count: int
+    pending_group_count: int
+
+
+def _pending_semantic_chunks(
+    embed_path: Path,
+    config: Any,
+    doc_ids: set[str] | None = None,
     *,
-    start_chunk_idx: int,
-    end_chunk_idx: int,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], set[tuple[str, str]]]:
-    ordered_chunks = _sort_semantic_chunks(chunks)
-    selected_window = _slice_by_index_range(ordered_chunks, start_chunk_idx, end_chunk_idx)
-    selected_groups = {_semantic_group_key(chunk) for chunk in selected_window}
-    expanded_chunks = [
-        chunk for chunk in ordered_chunks if _semantic_group_key(chunk) in selected_groups
-    ]
-    return ordered_chunks, expanded_chunks, selected_groups
+    start_chunk_idx: int = 0,
+    end_chunk_idx: int = -1,
+) -> _PendingSemantic:
+    """Chunks of the windowed local groups that are missing from (or differ on) the remote.
+
+    The chunk window is applied to all local chunks (metadata only); the remote manifest only
+    filters the groups the window selected. Vectors are read just for the pending groups.
+    """
+    from deepresearch_flow.paper.snapshot.push_semantic import fetch_remote_semantic_manifest
+    from deepresearch_flow.paper.vector_store import (
+        compute_group_fingerprint,
+        open_store,
+        read_chunk_metadata,
+        read_chunks_for_groups,
+    )
+
+    store = open_store(embed_path)
+    metadata = read_chunk_metadata(store)
+    if doc_ids is not None:
+        metadata = [row for row in metadata if str(row.get("doc_id") or "") in doc_ids]
+    ordered = _sort_semantic_chunks(metadata)
+    window = _slice_by_index_range(ordered, start_chunk_idx, end_chunk_idx)
+    selected_groups = {_semantic_group_key(row) for row in window}
+    pairs_by_group: dict[tuple[str, str], list[tuple[str, str]]] = {}
+    for row in ordered:
+        key = _semantic_group_key(row)
+        if key in selected_groups:
+            pairs_by_group.setdefault(key, []).append(
+                (str(row.get("id") or ""), str(row.get("content_hash") or ""))
+            )
+    try:
+        remote_fingerprints = fetch_remote_semantic_manifest(config)
+    except Exception as exc:
+        raise click.ClickException(f"Fetching remote semantic manifest failed: {exc}") from exc
+    pending = sorted(
+        key
+        for key, pairs in pairs_by_group.items()
+        if remote_fingerprints.get(key) != compute_group_fingerprint(pairs)
+    )
+    chunks = _sort_semantic_chunks(read_chunks_for_groups(store, pending))
+    return _PendingSemantic(
+        chunks, len(ordered), len(selected_groups), len(remote_fingerprints), len(pending)
+    )
 
 
 def load_json_payload(path: Path) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
@@ -1566,7 +1609,9 @@ def register_db_commands(db_group: click.Group) -> None:
         from deepresearch_flow.paper.snapshot.push import (
             PushStats,
             extract_papers_from_db,
+            fetch_remote_paper_manifest,
             load_remote_config,
+            read_local_paper_keys,
             push_papers,
         )
 
@@ -1662,6 +1707,46 @@ def register_db_commands(db_group: click.Group) -> None:
                 console.print("[yellow]Nothing to push[/yellow]")
                 return
 
+            try:
+                remote_papers, remote_aliases = fetch_remote_paper_manifest(config)
+            except Exception as exc:
+                raise click.ClickException(f"Fetching remote paper manifest failed: {exc}") from exc
+            local_keys = read_local_paper_keys(db_path)
+            all_count = len(papers)
+
+            def remote_paper_ids(paper: dict[str, Any]) -> set[str]:
+                ids = {paper["paper_id"]} & remote_papers.keys()
+                ids.update(
+                    remote_aliases[key]
+                    for key in local_keys.get(paper["paper_id"], [])
+                    if key in remote_aliases
+                )
+                return ids
+
+            remote_ids = {p["paper_id"]: remote_paper_ids(p) for p in papers}
+            for paper_id, ids in remote_ids.items():
+                if len(ids) > 1:
+                    console.print(
+                        f"[yellow]Warning: local paper {paper_id} matches multiple remote "
+                        f"papers: {', '.join(sorted(ids))}; the remote has duplicate records[/yellow]"
+                    )
+            papers = [
+                p
+                for p in papers
+                if not remote_ids[p["paper_id"]]
+                or (
+                    overwrite
+                    and any(
+                        remote_papers.get(rid) != (p.get("source_hash") or "")
+                        for rid in remote_ids[p["paper_id"]]
+                    )
+                )
+            ]
+            console.print(
+                f"Remote has {len(remote_papers)}, pushing {len(papers)} "
+                f"(skipped {all_count - len(papers)} already present)"
+            )
+
             templates_count = sum(1 for p in papers if p.get("templates"))
             console.print(
                 f"[cyan]Papers with summary payloads:[/cyan] {templates_count}/{len(papers)}"
@@ -1683,6 +1768,10 @@ def register_db_commands(db_group: click.Group) -> None:
                 console.print(table)
                 return
 
+            if not papers:
+                console.print("[yellow]Nothing to push[/yellow]")
+
+        if should_push_api and papers:
             console.print("[cyan]Pushing to remote...[/cyan]")
 
             def on_batch(batch_idx: int, batch_size: int, data: dict) -> None:
@@ -1827,14 +1916,11 @@ def register_db_commands(db_group: click.Group) -> None:
             from deepresearch_flow.paper.snapshot.push_semantic import (
                 SemanticPushError,
                 group_chunks_for_push,
+                optimize_remote_semantic,
                 push_semantic_chunks,
                 write_error_report as write_semantic_error_report,
             )
-            from deepresearch_flow.paper.vector_store import (
-                load_index_meta,
-                open_store,
-                read_all_chunks,
-            )
+            from deepresearch_flow.paper.vector_store import load_index_meta
 
             embed_path = Path(embed_db)
             if not embed_path.exists():
@@ -1854,14 +1940,12 @@ def register_db_commands(db_group: click.Group) -> None:
                     len(list(request.get("chunks") or [])) for request in semantic_requests
                 )
             else:
-                embed_store = open_store(embed_path)
-                all_chunks = read_all_chunks(embed_store)
-                if selected_doc_ids is not None:
-                    all_chunks = [
-                        chunk
-                        for chunk in all_chunks
-                        if str(chunk.get("doc_id") or "") in selected_doc_ids
-                    ]
+                pending = _pending_semantic_chunks(embed_path, config, selected_doc_ids)
+                all_chunks = pending.chunks
+                console.print(
+                    f"Semantic: remote has {pending.remote_group_count} groups, "
+                    f"pushing {pending.pending_group_count}"
+                )
                 semantic_cfg = config.semantic
                 semantic_requests = group_chunks_for_push(
                     all_chunks,
@@ -1954,6 +2038,12 @@ def register_db_commands(db_group: click.Group) -> None:
                     f"ins={semantic_stats.inserted} upd={semantic_stats.updated} "
                     f"skip={semantic_stats.skipped} del={semantic_stats.deleted}"
                 )
+                if semantic_stats.batches_sent > 0:
+                    try:
+                        optimize_remote_semantic(config)
+                    except Exception as exc:
+                        raise click.ClickException(f"Semantic optimize failed: {exc}") from exc
+                    console.print("[green]Semantic:[/green] remote optimize done")
             else:
                 console.print("[yellow]No semantic chunks to push.[/yellow]")
 
@@ -2007,14 +2097,11 @@ def register_db_commands(db_group: click.Group) -> None:
         from deepresearch_flow.paper.snapshot.push_semantic import (
             SemanticPushError,
             group_chunks_for_push,
+            optimize_remote_semantic,
             push_semantic_chunks,
             write_error_report as write_semantic_error_report,
         )
-        from deepresearch_flow.paper.vector_store import (
-            load_index_meta,
-            open_store,
-            read_all_chunks,
-        )
+        from deepresearch_flow.paper.vector_store import load_index_meta
 
         console = Console()
 
@@ -2066,18 +2153,22 @@ def register_db_commands(db_group: click.Group) -> None:
             all_chunks: list[dict[str, Any]] = []
             console.print(f"[cyan]Retrying semantic requests:[/cyan] {len(semantic_requests)}")
         else:
-            embed_store = open_store(embed_path)
-            local_chunks = read_all_chunks(embed_store)
-            ordered_chunks, all_chunks, selected_groups = _expand_semantic_chunk_window(
-                local_chunks,
+            pending = _pending_semantic_chunks(
+                embed_path,
+                config,
                 start_chunk_idx=start_chunk_idx,
                 end_chunk_idx=end_chunk_idx,
             )
+            all_chunks = pending.chunks
+            console.print(
+                f"Semantic: remote has {pending.remote_group_count} groups, "
+                f"pushing {pending.pending_group_count}"
+            )
             semantic_chunk_total = len(all_chunks)
-            console.print(f"[cyan]Local semantic chunks:[/cyan] {len(ordered_chunks)}")
-            slice_end = end_chunk_idx if end_chunk_idx != -1 else len(ordered_chunks)
+            console.print(f"[cyan]Local semantic chunks:[/cyan] {pending.local_chunk_count}")
+            slice_end = end_chunk_idx if end_chunk_idx != -1 else pending.local_chunk_count
             console.print(f"[cyan]Chunk window:[/cyan] [{start_chunk_idx}, {slice_end})")
-            console.print(f"[cyan]Selected groups:[/cyan] {len(selected_groups)}")
+            console.print(f"[cyan]Selected groups:[/cyan] {pending.selected_group_count}")
             console.print(f"[cyan]Expanded chunks:[/cyan] {semantic_chunk_total}")
             if not all_chunks:
                 console.print("[yellow]Nothing to push.[/yellow]")
@@ -2164,6 +2255,12 @@ def register_db_commands(db_group: click.Group) -> None:
             f"ins={semantic_stats.inserted} upd={semantic_stats.updated} "
             f"skip={semantic_stats.skipped} del={semantic_stats.deleted}"
         )
+        if semantic_stats.batches_sent > 0:
+            try:
+                optimize_remote_semantic(config)
+            except Exception as exc:
+                raise click.ClickException(f"Semantic optimize failed: {exc}") from exc
+            console.print("[green]Semantic:[/green] remote optimize done")
 
     @db_group.command("append-bibtex")
     @click.option("-i", "--input", "input_path", required=True, help="Input JSON file path")

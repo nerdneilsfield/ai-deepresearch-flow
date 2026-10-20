@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from dataclasses import replace
 from importlib.metadata import PackageNotFoundError, version as package_version
@@ -498,7 +499,7 @@ def _parse_pagination(request: Request, limits: ApiLimits) -> tuple[int, int] | 
     return page, page_size
 
 
-async def _api_search(request: Request) -> Response:
+def _api_search(request: Request) -> Response:
     cfg: SnapshotApiConfig = request.app.state.cfg
     pagination = _parse_pagination(request, cfg.limits)
     if isinstance(pagination, JSONResponse):
@@ -689,7 +690,7 @@ async def _api_search(request: Request) -> Response:
         conn.close()
 
 
-async def _api_paper_detail(request: Request) -> Response:
+def _api_paper_detail(request: Request) -> Response:
     cfg: SnapshotApiConfig = request.app.state.cfg
     paper_id = str(request.path_params["paper_id"])
     conn = _open_ro_conn(cfg.snapshot_db)
@@ -789,7 +790,7 @@ async def _api_paper_detail(request: Request) -> Response:
         conn.close()
 
 
-async def _api_paper_bibtex(request: Request) -> Response:
+def _api_paper_bibtex(request: Request) -> Response:
     cfg: SnapshotApiConfig = request.app.state.cfg
     paper_id = str(request.path_params["paper_id"])
     conn = _open_ro_conn(cfg.snapshot_db)
@@ -852,13 +853,13 @@ async def _api_match_bibtex(request: Request) -> Response:
     )
 
     # Enforce batch size limit (spec: up to 50 entries per request)
-    entries = _parse_bibtex_entries(bibtex_raw)
+    entries = await asyncio.to_thread(_parse_bibtex_entries, bibtex_raw)
     if len(entries) > 50:
         return _json_error(
             400, error="too_many_entries", detail=f"batch limit is 50 entries, got {len(entries)}"
         )
 
-    result = match_bibtex_entries(bibtex_raw, cfg.snapshot_db)
+    result = await asyncio.to_thread(match_bibtex_entries, bibtex_raw, cfg.snapshot_db)
 
     return JSONResponse(
         {
@@ -891,7 +892,7 @@ async def _api_match_bibtex(request: Request) -> Response:
     )
 
 
-async def _api_facet_list(request: Request) -> Response:
+def _api_facet_list(request: Request) -> Response:
     cfg: SnapshotApiConfig = request.app.state.cfg
     facet = str(request.path_params["facet"])
     pagination = _parse_pagination(request, cfg.limits)
@@ -1011,7 +1012,7 @@ async def _api_facet_list(request: Request) -> Response:
         conn.close()
 
 
-async def _api_facet_papers(request: Request) -> Response:
+def _api_facet_papers(request: Request) -> Response:
     cfg: SnapshotApiConfig = request.app.state.cfg
     facet = str(request.path_params["facet"])
     facet_id = str(request.path_params["facet_id"])
@@ -1200,7 +1201,7 @@ def _facet_stats_for_node(
     }
 
 
-async def _api_facet_by_value_papers(request: Request) -> Response:
+def _api_facet_by_value_papers(request: Request) -> Response:
     cfg: SnapshotApiConfig = request.app.state.cfg
     facet = str(request.path_params["facet"])
     raw_value = str(request.path_params["value"])
@@ -1298,7 +1299,7 @@ async def _api_facet_by_value_papers(request: Request) -> Response:
         conn.close()
 
 
-async def _api_facet_by_value_stats(request: Request) -> Response:
+def _api_facet_by_value_stats(request: Request) -> Response:
     cfg: SnapshotApiConfig = request.app.state.cfg
     facet = str(request.path_params["facet"])
     raw_value = str(request.path_params["value"])
@@ -1313,7 +1314,7 @@ async def _api_facet_by_value_stats(request: Request) -> Response:
         conn.close()
 
 
-async def _api_facet_stats(request: Request) -> Response:
+def _api_facet_stats(request: Request) -> Response:
     cfg: SnapshotApiConfig = request.app.state.cfg
     facet = str(request.path_params["facet"])
     facet_id = str(request.path_params["facet_id"])
@@ -1351,7 +1352,7 @@ async def _api_facet_stats(request: Request) -> Response:
         conn.close()
 
 
-async def _api_stats(request: Request) -> Response:
+def _api_stats(request: Request) -> Response:
     cfg: SnapshotApiConfig = request.app.state.cfg
     conn = _open_ro_conn(cfg.snapshot_db)
     try:
@@ -1412,7 +1413,7 @@ async def _api_stats(request: Request) -> Response:
         conn.close()
 
 
-async def _api_config(request: Request) -> Response:
+def _api_config(request: Request) -> Response:
     cfg: SnapshotApiConfig = request.app.state.cfg
     advanced = getattr(request.app.state, "advanced", None)
     auth_methods: list[str] = []
@@ -1567,7 +1568,11 @@ def create_app(
     # Keep optional pipeline routes physically absent unless both the feature
     # and existing admin authentication are configured.  Importing and
     # constructing queue services is intentionally lazy for public installs.
-    if admin_token and pipeline_config is not None and bool(getattr(pipeline_config, "enabled", False)):
+    if (
+        admin_token
+        and pipeline_config is not None
+        and bool(getattr(pipeline_config, "enabled", False))
+    ):
         from deepresearch_flow.pipeline.api import create_pipeline_admin_app
         from deepresearch_flow.pipeline.artifacts import ArtifactStore
         from deepresearch_flow.pipeline.state import PipelineState

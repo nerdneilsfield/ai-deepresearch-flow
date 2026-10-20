@@ -12,7 +12,7 @@ from typing import Any, Callable
 import httpx
 
 from deepresearch_flow.paper.llm import backoff_delay
-from deepresearch_flow.paper.snapshot.push import RemoteConfig
+from deepresearch_flow.paper.snapshot.push import RemoteConfig, get_remote_manifest
 from deepresearch_flow.paper.vector_store import compute_group_hash, encode_vector_b64
 
 logger = logging.getLogger(__name__)
@@ -242,3 +242,24 @@ def push_semantic_chunks(
                     raise SemanticPushError(failure, stats) from exc
 
     return stats
+
+
+def optimize_remote_semantic(config: RemoteConfig) -> None:
+    """Ask the remote admin API to compact its LanceDB store after a push."""
+    response = httpx.post(
+        f"{config.api_base_url}/api/v1/admin/semantic/optimize",
+        headers={"Authorization": f"Bearer {config.admin_token}"},
+        timeout=config.semantic.timeout,
+    )
+    response.raise_for_status()
+
+
+def fetch_remote_semantic_manifest(config: RemoteConfig) -> dict[tuple[str, str], str]:
+    """Return ``{(doc_id, template_key): fingerprint}`` for groups already on the remote."""
+    data = get_remote_manifest(
+        f"{config.api_base_url}/api/v1/admin/semantic/manifest", config, config.semantic.timeout
+    )
+    return {
+        (str(group["doc_id"]), str(group["template_key"])): str(group["fingerprint"])
+        for group in list(data.get("groups") or [])
+    }

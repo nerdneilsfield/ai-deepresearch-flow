@@ -7,6 +7,7 @@ import hashlib
 import json
 import shutil
 import struct
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -91,6 +92,12 @@ def build_chunk_id(doc_id: str, template_tag: str, chunk_type: str, chunk_index:
 
 def compute_group_hash(content_hashes: list[str]) -> str:
     payload = "\n".join(sorted(content_hashes))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def compute_group_fingerprint(pairs: Iterable[tuple[str, str]]) -> str:
+    """Fingerprint of a group's ``(chunk id, content_hash)`` pairs, shared by server and client."""
+    payload = "\n".join(sorted(f"{chunk_id}\t{content_hash}" for chunk_id, content_hash in pairs))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -356,6 +363,22 @@ def write_chunks(db: lancedb.DBConnection, rows: list[ChunkRow], *, dimensions: 
         ensure_admin_scalar_indices(db)
 
 
+def optimize_store(vector_dir: Path) -> None:
+    """Compact the chunks table and drop versions older than 10 minutes."""
+    db = open_store(vector_dir)
+    if _CHUNKS_TABLE not in _table_names(db):
+        return
+    table = db.open_table(_CHUNKS_TABLE)
+    for attempt in range(4):
+        try:
+            table.optimize(cleanup_older_than=timedelta(minutes=10))
+            return
+        except RuntimeError as exc:
+            # Concurrent writes make optimize lose the commit race; observed with lancedb 0.33.
+            if "Retryable commit conflict" not in str(exc) or attempt == 3:
+                raise
+
+
 def delete_groups(db: lancedb.DBConnection, groups: list[tuple[str, str]]) -> None:
     if not groups or _CHUNKS_TABLE not in _table_names(db):
         return
@@ -365,16 +388,30 @@ def delete_groups(db: lancedb.DBConnection, groups: list[tuple[str, str]]) -> No
         table.delete(_group_filter(doc_id, tag))
 
 
-def read_group_hashes(db: lancedb.DBConnection) -> dict[tuple[str, str], str]:
+def read_group_fingerprints(db: lancedb.DBConnection) -> dict[tuple[str, str], str]:
     if _CHUNKS_TABLE not in _table_names(db):
         return {}
     table = db.open_table(_CHUNKS_TABLE)
-    rows = table.search().select(["doc_id", "template_tag", "content_hash"]).to_list()
-    grouped: dict[tuple[str, str], list[str]] = {}
+    rows = table.search().select(["id", "doc_id", "template_tag", "content_hash"]).to_list()
+    grouped: dict[tuple[str, str], list[tuple[str, str]]] = {}
     for row in rows:
         template_key = row.get("template_tag") or _SHARED_KEY
-        grouped.setdefault((row["doc_id"], template_key), []).append(row["content_hash"])
-    return {key: compute_group_hash(values) for key, values in grouped.items()}
+        grouped.setdefault((row["doc_id"], template_key), []).append(
+            (str(row["id"]), str(row["content_hash"]))
+        )
+    return {key: compute_group_fingerprint(pairs) for key, pairs in grouped.items()}
+
+
+def read_chunk_metadata(db: lancedb.DBConnection) -> list[dict[str, Any]]:
+    """All chunks without vectors and text, enough to sort, window and hash groups."""
+    if _CHUNKS_TABLE not in _table_names(db):
+        return []
+    table = db.open_table(_CHUNKS_TABLE)
+    return (
+        table.search()
+        .select(["id", "doc_id", "template_tag", "chunk_type", "chunk_index", "content_hash"])
+        .to_list()
+    )
 
 
 def read_group_hashes_for_doc(db: lancedb.DBConnection, doc_id: str) -> dict[str, str]:
@@ -420,6 +457,17 @@ def read_chunks_for_group(
         return []
     table = db.open_table(_CHUNKS_TABLE)
     return table.search().where(_group_filter(doc_id, template_tag)).to_list()
+
+
+def read_chunks_for_groups(
+    db: lancedb.DBConnection, groups: list[tuple[str, str]]
+) -> list[dict[str, Any]]:
+    """Read chunks of ``(doc_id, template_key)`` groups, where ``_shared`` means an empty tag."""
+    rows: list[dict[str, Any]] = []
+    for doc_id, template_key in groups:
+        tag = "" if template_key == _SHARED_KEY else template_key
+        rows.extend(read_chunks_for_group(db, doc_id, tag))
+    return rows
 
 
 def read_admin_ingest_state(

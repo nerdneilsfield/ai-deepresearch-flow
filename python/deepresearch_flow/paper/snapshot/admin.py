@@ -22,7 +22,12 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from deepresearch_flow.paper.vector_store import SHARED_TEMPLATE_KEY
+from deepresearch_flow.paper.vector_store import (
+    SHARED_TEMPLATE_KEY,
+    open_store,
+    optimize_store,
+    read_group_fingerprints,
+)
 from deepresearch_flow.paper.snapshot.bibtex_utils import (
     extract_canonical_doi,
     extract_current_bibtex_payload,
@@ -34,13 +39,12 @@ from deepresearch_flow.paper.snapshot.identity import (
     paper_id_for_key,
 )
 from deepresearch_flow.paper.snapshot.schema import (
-    init_snapshot_db,
     recompute_facet_counts,
-    recompute_facet_edges,
     recompute_paper_index,
 )
 from deepresearch_flow.paper.snapshot.text import insert_cjk_spaces, markdown_to_plain_text
 from deepresearch_flow.paper.snapshot.publication import InsertStats, insert_paper_metadata
+from deepresearch_flow.paper.snapshot.transaction import snapshot_transaction
 from deepresearch_flow.paper.snapshot.update import (
     _canonical_template_tag,
     _choose_preferred_template,
@@ -442,8 +446,58 @@ def _delete_paper(conn: sqlite3.Connection, paper_id: str) -> bool:
     conn.execute("DELETE FROM paper_fts WHERE paper_id = ?", (paper_id,))
     conn.execute("DELETE FROM paper_fts_trigram WHERE paper_id = ?", (paper_id,))
 
+    # Insert increments facet_edge incrementally, so delete must decrement the
+    # same pairs to stay equal to a full recompute_facet_edges.
+    node_ids = sorted(
+        int(row[0])
+        for row in conn.execute("SELECT node_id FROM paper_facet WHERE paper_id = ?", (paper_id,))
+    )
+    if len(node_ids) > 1:
+        conn.executemany(
+            "UPDATE facet_edge SET paper_count = paper_count - 1 WHERE node_id_a = ? AND node_id_b = ?",
+            [(left, right) for idx, left in enumerate(node_ids) for right in node_ids[idx + 1 :]],
+        )
+        conn.execute("DELETE FROM facet_edge WHERE paper_count <= 0")
+
     cursor = conn.execute("DELETE FROM paper WHERE paper_id = ?", (paper_id,))
     return cursor.rowcount > 0
+
+
+def apply_paper_batch(snapshot_db: Path, papers: list[Any], overwrite: bool) -> InsertStats:
+    """Insert one batch in a single BEGIN IMMEDIATE transaction (blocking; run in a thread)."""
+    stats = InsertStats()
+    with snapshot_transaction(snapshot_db) as conn:
+        for idx, paper in enumerate(papers):
+            if not isinstance(paper, dict):
+                stats.errors.append({"index": idx, "error": "paper must be an object"})
+                continue
+            savepoint = f"paper_{idx}"
+            conn.execute(f"SAVEPOINT {savepoint}")
+            try:
+                paper_payload: dict[str, Any] = {str(key): value for key, value in paper.items()}
+                insert_paper_metadata(conn, paper_payload, idx, stats, overwrite=overwrite)
+            except Exception as exc:
+                conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+                logger.exception("Failed to insert paper at index %d", idx)
+                stats.errors.append({"index": idx, "error": str(exc)})
+            else:
+                conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+
+        if stats.added > 0 or stats.updated > 0:
+            recompute_paper_index(conn)
+            recompute_facet_counts(conn)
+    return stats
+
+
+def delete_paper_and_recount(snapshot_db: Path, paper_id: str) -> bool:
+    """Delete one paper in a BEGIN IMMEDIATE transaction (blocking; run in a thread)."""
+    with snapshot_transaction(snapshot_db) as conn:
+        deleted = _delete_paper(conn, paper_id)
+        if deleted:
+            recompute_paper_index(conn)
+            recompute_facet_counts(conn)
+    return deleted
 
 
 # ---------------------------------------------------------------------------
@@ -482,44 +536,15 @@ async def _admin_add_papers(request: Request) -> JSONResponse:
         )
 
     cfg: AdminConfig = request.app.state.admin_cfg
-    stats = InsertStats()
-    conn = _open_rw_conn(cfg.snapshot_db)
     try:
-        init_snapshot_db(conn)
-        for idx, paper in enumerate(papers):
-            if not isinstance(paper, dict):
-                stats.errors.append({"index": idx, "error": "paper must be an object"})
-                continue
-            savepoint = f"paper_{idx}"
-            conn.execute(f"SAVEPOINT {savepoint}")
-            try:
-                paper_payload: dict[str, Any] = {
-                    str(key): value for key, value in paper.items()
-                }
-                insert_paper_metadata(conn, paper_payload, idx, stats, overwrite=overwrite)
-            except Exception as exc:
-                conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
-                conn.execute(f"RELEASE SAVEPOINT {savepoint}")
-                logger.exception("Failed to insert paper at index %d", idx)
-                stats.errors.append({"index": idx, "error": str(exc)})
-            else:
-                conn.execute(f"RELEASE SAVEPOINT {savepoint}")
-
-        if stats.added > 0 or stats.updated > 0:
-            recompute_paper_index(conn)
-            recompute_facet_counts(conn)
-            recompute_facet_edges(conn)
-
-        conn.commit()
-    except Exception as exc:
-        conn.rollback()
+        async with request.app.state.paper_write_lock:
+            stats = await asyncio.to_thread(apply_paper_batch, cfg.snapshot_db, papers, overwrite)
+    except Exception:
         logger.exception("Admin add papers failed")
         return JSONResponse(
             {"error": "internal_error", "detail": "batch insert failed"},
             status_code=500,
         )
-    finally:
-        conn.close()
 
     return JSONResponse(
         {
@@ -539,23 +564,15 @@ async def _admin_delete_paper(request: Request) -> JSONResponse:
     paper_id = request.path_params["paper_id"]
 
     cfg: AdminConfig = request.app.state.admin_cfg
-    conn = _open_rw_conn(cfg.snapshot_db)
     try:
-        deleted = _delete_paper(conn, paper_id)
-        if deleted:
-            recompute_paper_index(conn)
-            recompute_facet_counts(conn)
-            recompute_facet_edges(conn)
-        conn.commit()
-    except Exception as exc:
-        conn.rollback()
+        async with request.app.state.paper_write_lock:
+            deleted = await asyncio.to_thread(delete_paper_and_recount, cfg.snapshot_db, paper_id)
+    except Exception:
         logger.exception("Admin delete paper failed: %s", paper_id)
         return JSONResponse(
             {"error": "internal_error", "detail": "delete operation failed"},
             status_code=500,
         )
-    finally:
-        conn.close()
 
     if not deleted:
         return JSONResponse(
@@ -809,6 +826,18 @@ def _apply_semantic_chunk_batch(
         ),
     )
 
+    incoming_hash_by_id = {
+        str(chunk.get("id") or ""): str(chunk.get("content_hash") or "") for chunk in all_chunks
+    }
+    if existing_by_id and existing_by_id == incoming_hash_by_id:
+        return {
+            "received": len(all_chunks),
+            "inserted": 0,
+            "updated": 0,
+            "skipped": len(all_chunks),
+            "deleted": 0,
+        }
+
     inserted = 0
     updated = 0
     skipped = 0
@@ -997,7 +1026,16 @@ async def _admin_ingest_semantic_chunks(request: Request) -> JSONResponse:
         _log_semantic_phase(doc_id, template_tag, "wait_for_lock", lock_wait_started_at)
         if part_count > 1:
             phase_started_at = time.perf_counter()
-            _stage_part(cfg, doc_id, template_tag, group_hash, part_index, part_count, chunks)
+            await asyncio.to_thread(
+                _stage_part,
+                cfg,
+                doc_id,
+                template_tag,
+                group_hash,
+                part_index,
+                part_count,
+                chunks,
+            )
             _log_semantic_phase(
                 doc_id,
                 template_tag,
@@ -1005,7 +1043,9 @@ async def _admin_ingest_semantic_chunks(request: Request) -> JSONResponse:
                 phase_started_at,
                 detail=f"part={part_index + 1}/{part_count} staged_chunks={len(chunks)}",
             )
-            staged_parts = _count_staged_parts(cfg, doc_id, template_tag, group_hash)
+            staged_parts = await asyncio.to_thread(
+                _count_staged_parts, cfg, doc_id, template_tag, group_hash
+            )
             if staged_parts < part_count:
                 logger.info(
                     "semantic batch staged doc=%s tag=%s part=%d/%d staged_parts=%d/%d waiting_for_more_parts=1",
@@ -1035,7 +1075,9 @@ async def _admin_ingest_semantic_chunks(request: Request) -> JSONResponse:
                 part_count,
             )
             phase_started_at = time.perf_counter()
-            all_chunks = _collect_staged_parts(cfg, doc_id, template_tag, group_hash)
+            all_chunks = await asyncio.to_thread(
+                _collect_staged_parts, cfg, doc_id, template_tag, group_hash
+            )
             _log_semantic_phase(
                 doc_id,
                 template_tag,
@@ -1083,7 +1125,7 @@ async def _admin_ingest_semantic_chunks(request: Request) -> JSONResponse:
             raise
 
         if part_count > 1:
-            _clear_staged_parts(cfg, doc_id, template_tag, group_hash)
+            await asyncio.to_thread(_clear_staged_parts, cfg, doc_id, template_tag, group_hash)
         total_request_elapsed = time.perf_counter() - request_started_at
         done_log_fn = (
             logger.warning if total_request_elapsed >= _SLOW_SEMANTIC_BATCH_SECONDS else logger.info
@@ -1097,6 +1139,61 @@ async def _admin_ingest_semantic_chunks(request: Request) -> JSONResponse:
             total_request_elapsed * 1000.0,
         )
         return JSONResponse(result)
+
+
+def _read_paper_manifest(snapshot_db: Path) -> tuple[dict[str, str], dict[str, str]]:
+    conn = _open_ro_conn(snapshot_db)
+    try:
+        rows = conn.execute("SELECT paper_id, source_hash FROM paper").fetchall()
+        alias_rows = conn.execute("SELECT paper_key, paper_id FROM paper_key_alias").fetchall()
+    finally:
+        conn.close()
+    return (
+        {str(row["paper_id"]): str(row["source_hash"] or "") for row in rows},
+        {str(row["paper_key"]): str(row["paper_id"]) for row in alias_rows},
+    )
+
+
+def _read_semantic_manifest(embed_db: Path) -> list[dict[str, str]]:
+    fingerprints = read_group_fingerprints(open_store(embed_db))
+    return [
+        {"doc_id": doc_id, "template_key": template_key, "fingerprint": digest}
+        for (doc_id, template_key), digest in fingerprints.items()
+    ]
+
+
+async def _admin_papers_manifest(request: Request) -> JSONResponse:
+    if not _check_auth(request):
+        return _AUTH_ERROR
+
+    cfg: AdminConfig = request.app.state.admin_cfg
+    papers, aliases = await asyncio.to_thread(_read_paper_manifest, cfg.snapshot_db)
+    return JSONResponse({"papers": papers, "aliases": aliases})
+
+
+async def _admin_semantic_manifest(request: Request) -> JSONResponse:
+    if not _check_auth(request):
+        return _AUTH_ERROR
+
+    cfg: AdminConfig = request.app.state.admin_cfg
+    if cfg.embed_db is None:
+        return JSONResponse({"error": "semantic_storage_unavailable"}, status_code=503)
+
+    groups = await asyncio.to_thread(_read_semantic_manifest, cfg.embed_db)
+    return JSONResponse({"groups": groups})
+
+
+async def _admin_optimize_semantic(request: Request) -> JSONResponse:
+    if not _check_auth(request):
+        return _AUTH_ERROR
+
+    cfg: AdminConfig = request.app.state.admin_cfg
+    if cfg.embed_db is None:
+        return JSONResponse({"error": "semantic_storage_unavailable"}, status_code=503)
+
+    async with request.app.state.semantic_ingest_lock:
+        await asyncio.to_thread(optimize_store, cfg.embed_db)
+    return JSONResponse({"ok": True})
 
 
 # ---------------------------------------------------------------------------
@@ -1123,11 +1220,15 @@ def create_admin_app(
 
     routes = [
         Route("/papers", _admin_add_papers, methods=["POST"]),
+        Route("/papers/manifest", _admin_papers_manifest, methods=["GET"]),
         Route("/papers/{paper_id:str}", _admin_delete_paper, methods=["DELETE"]),
         Route("/semantic/chunks/batch", _admin_ingest_semantic_chunks, methods=["POST"]),
+        Route("/semantic/manifest", _admin_semantic_manifest, methods=["GET"]),
+        Route("/semantic/optimize", _admin_optimize_semantic, methods=["POST"]),
     ]
 
     app = Starlette(routes=routes)
     app.state.admin_cfg = cfg
     app.state.semantic_ingest_lock = asyncio.Lock()
+    app.state.paper_write_lock = asyncio.Lock()
     return app

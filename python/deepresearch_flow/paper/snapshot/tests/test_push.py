@@ -269,6 +269,41 @@ class TestLoadRemoteConfig(TestCase):
                 cfg = load_remote_config(Path(f.name))
             assert cfg.api_base_url == url
 
+    def test_trailing_dot_hosts_are_treated_like_their_dotless_form(self) -> None:
+        for url in ("http://localhost.:8080", "http://10.0.0.1.:8080", "http://192.168.1.5.:8080"):
+            with tempfile.NamedTemporaryFile(suffix=".toml", mode="w", delete=False) as f:
+                f.write(f'[remote]\napi_base_url = "{url}"\nadmin_token = "tok"\n')
+                f.flush()
+                cfg = load_remote_config(Path(f.name))
+            assert cfg.api_base_url == url
+        with tempfile.NamedTemporaryFile(suffix=".toml", mode="w", delete=False) as f:
+            f.write('[remote]\napi_base_url = "http://8.8.8.8.:8080"\nadmin_token = "tok"\n')
+            f.flush()
+            with self.assertRaises(ValueError):
+                load_remote_config(Path(f.name))
+
+    def test_ipv4_mapped_and_ula_http_urls_allowed(self) -> None:
+        for url in ("http://[::ffff:10.1.2.3]:8080", "http://[fd00::1]:8080", "http://10.1.2.3"):
+            with tempfile.NamedTemporaryFile(suffix=".toml", mode="w", delete=False) as f:
+                f.write(f'[remote]\napi_base_url = "{url}"\nadmin_token = "tok"\n')
+                f.flush()
+                cfg = load_remote_config(Path(f.name))
+            assert cfg.api_base_url == url
+
+    def test_public_addresses_http_urls_rejected(self) -> None:
+        for url in (
+            "http://[64:ff9b::808:808]:8080",  # NAT64 of 8.8.8.8
+            "http://[::ffff:8.8.8.8]:8080",
+            "http://8.8.8.8",
+            "http://[2001:4860:4860::8888]",
+            "http://172.32.0.1",
+        ):
+            with tempfile.NamedTemporaryFile(suffix=".toml", mode="w", delete=False) as f:
+                f.write(f'[remote]\napi_base_url = "{url}"\nadmin_token = "tok"\n')
+                f.flush()
+                with self.assertRaises(ValueError):
+                    load_remote_config(Path(f.name))
+
     def test_missing_url_raises(self) -> None:
         with tempfile.NamedTemporaryFile(suffix=".toml", mode="w", delete=False) as f:
             f.write('[remote]\nadmin_token = "tok"\n')
