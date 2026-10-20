@@ -244,45 +244,49 @@ def init_snapshot_db(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE paper_summary ADD COLUMN content_hash TEXT")
 
 
+_FACET_COUNT_TABLES = (
+    ("author", "author_id", "paper_author"),
+    ("keyword", "keyword_id", "paper_keyword"),
+    ("institution", "institution_id", "paper_institution"),
+    ("tag", "tag_id", "paper_tag"),
+    ("venue", "venue_id", "paper_venue"),
+    ("facet_node", "node_id", "paper_facet"),
+)
+
+
 def recompute_facet_counts(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        "UPDATE author SET paper_count = (SELECT COUNT(*) FROM paper_author WHERE author_id = author.author_id);"
-    )
-    conn.execute(
-        "UPDATE keyword SET paper_count = (SELECT COUNT(*) FROM paper_keyword WHERE keyword_id = keyword.keyword_id);"
-    )
-    conn.execute(
-        "UPDATE institution SET paper_count = (SELECT COUNT(*) FROM paper_institution WHERE institution_id = institution.institution_id);"
-    )
-    conn.execute(
-        "UPDATE tag SET paper_count = (SELECT COUNT(*) FROM paper_tag WHERE tag_id = tag.tag_id);"
-    )
-    conn.execute(
-        "UPDATE venue SET paper_count = (SELECT COUNT(*) FROM paper_venue WHERE venue_id = venue.venue_id);"
-    )
-    conn.execute(
-        "UPDATE facet_node SET paper_count = (SELECT COUNT(*) FROM paper_facet WHERE node_id = facet_node.node_id);"
-    )
+    """Refresh paper_count columns, writing only the rows whose count changed."""
+    for table, id_col, join_table in _FACET_COUNT_TABLES:
+        conn.execute(
+            f"""
+            UPDATE {table} SET paper_count = counts.n
+            FROM (SELECT {id_col} AS id, COUNT(*) AS n FROM {join_table} GROUP BY {id_col}) AS counts
+            WHERE {table}.{id_col} = counts.id AND {table}.paper_count IS NOT counts.n
+            """
+        )
+        conn.execute(
+            f"""
+            UPDATE {table} SET paper_count = 0
+            WHERE paper_count IS NOT 0
+              AND NOT EXISTS (SELECT 1 FROM {join_table} WHERE {join_table}.{id_col} = {table}.{id_col})
+            """
+        )
 
-    conn.execute("DELETE FROM year_count;")
-    conn.execute(
-        """
-        INSERT INTO year_count(year, paper_count)
-        SELECT year, COUNT(*) AS paper_count
-        FROM paper
-        GROUP BY year
-        """
-    )
-
-    conn.execute("DELETE FROM month_count;")
-    conn.execute(
-        """
-        INSERT INTO month_count(month, paper_count)
-        SELECT month, COUNT(*) AS paper_count
-        FROM paper
-        GROUP BY month
-        """
-    )
+    for table, column in (("year_count", "year"), ("month_count", "month")):
+        conn.execute(
+            f"""
+            INSERT INTO {table}({column}, paper_count)
+            SELECT {column}, COUNT(*) AS n FROM paper WHERE true GROUP BY {column}
+            ON CONFLICT({column}) DO UPDATE SET paper_count = excluded.paper_count
+            WHERE {table}.paper_count IS NOT excluded.paper_count
+            """
+        )
+        conn.execute(
+            f"""
+            DELETE FROM {table}
+            WHERE NOT EXISTS (SELECT 1 FROM paper WHERE paper.{column} = {table}.{column})
+            """
+        )
 
 
 def recompute_facet_edges(conn: sqlite3.Connection) -> None:
@@ -300,13 +304,15 @@ def recompute_facet_edges(conn: sqlite3.Connection) -> None:
 
 
 def recompute_paper_index(conn: sqlite3.Connection) -> None:
+    """Renumber paper_index by paper_id, writing only rows whose number changed."""
     conn.execute(
         """
         WITH ordered AS (
           SELECT paper_id, ROW_NUMBER() OVER (ORDER BY paper_id ASC) AS idx
           FROM paper
         )
-        UPDATE paper
-        SET paper_index = (SELECT idx FROM ordered WHERE ordered.paper_id = paper.paper_id);
+        UPDATE paper SET paper_index = ordered.idx
+        FROM ordered
+        WHERE paper.paper_id = ordered.paper_id AND paper.paper_index IS NOT ordered.idx
         """
     )

@@ -29,7 +29,6 @@ from deepresearch_flow.paper.snapshot.publication import (
 )
 from deepresearch_flow.paper.snapshot.schema import (
     recompute_facet_counts,
-    recompute_facet_edges,
     recompute_paper_index,
 )
 from deepresearch_flow.paper.snapshot.text import markdown_to_plain_text
@@ -495,7 +494,6 @@ def publish_bundle(
                     )
                     recompute_paper_index(conn)
                     recompute_facet_counts(conn)
-                    recompute_facet_edges(conn)
                     _guard_check(guard, lease_check)
                     conn.commit()
             except PublicationCancelled:
