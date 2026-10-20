@@ -700,6 +700,10 @@ def extract(
     help="Max paper documents prepared for global embedding concurrency",
 )
 @click.option(
+    "--tpm", "tpm_limit", type=int, default=None, help="Estimated embedding tokens per minute"
+)
+@click.option("--rpm", "rpm_limit", type=int, default=None, help="Embedding requests per minute")
+@click.option(
     "--template-tag", "template_tag", default=None, help="Override template tag for all JSON inputs"
 )
 @click.option("--force", is_flag=True, help="Delete existing index and rebuild from scratch")
@@ -715,6 +719,8 @@ def embed(
     embedding_override: str | None,
     max_concurrency: int | None,
     document_window: int | None,
+    tpm_limit: int | None,
+    rpm_limit: int | None,
     template_tag: str | None,
     force: bool,
     verbose: bool,
@@ -736,6 +742,10 @@ def embed(
         raise click.ClickException("--max-concurrency must be positive")
     if document_window is not None and document_window <= 0:
         raise click.ClickException("--document-window must be positive")
+    if tpm_limit is not None and tpm_limit <= 0:
+        raise click.ClickException("--tpm must be positive")
+    if rpm_limit is not None and rpm_limit <= 0:
+        raise click.ClickException("--rpm must be positive")
     if embedding_override:
         provider, model = _resolve_provider_model_override(
             config.embedding.providers,
@@ -782,6 +792,8 @@ def embed(
                 template_tag_override=template_tag,
                 max_concurrency_override=max_concurrency,
                 document_window_override=document_window,
+                tpm_limit=tpm_limit,
+                rpm_limit=rpm_limit,
                 verbose=verbose,
             )
         )

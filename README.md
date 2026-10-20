@@ -400,6 +400,10 @@ uv run deepresearch-flow paper embed \
   --output-embed-db ./paper_vectors
 ```
 
+Add `--rpm 60` or `--tpm 200000` to throttle the embedding provider; both are
+optional and unset by default. `--tpm` counts estimated input tokens (characters
+÷ 4) over a rolling minute.
+
 Serve with semantic search enabled:
 
 ```bash

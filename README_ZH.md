@@ -412,6 +412,9 @@ uv run deepresearch-flow paper embed \
   --output-embed-db ./paper_vectors
 ```
 
+需要限流时加 `--rpm 60` 或 `--tpm 200000`；两者都可选，不传则不限速。
+`--tpm` 按估算输入 token（字符数 ÷ 4）计算滑动的每分钟额度。
+
 启动时开启语义搜索：
 
 ```bash

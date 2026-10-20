@@ -21,7 +21,7 @@ from deepresearch_flow.paper.chunker import (
 )
 from deepresearch_flow.paper.config import PaperConfig
 from deepresearch_flow.paper.embed_source import EmbedDocument, load_from_json, load_from_snapshot
-from deepresearch_flow.paper.embedding import call_embedding_with_route_pool
+from deepresearch_flow.paper.embedding import EmbeddingRateLimiter, call_embedding_with_route_pool
 from deepresearch_flow.paper.routing import RoutePool
 from deepresearch_flow.paper.vector_store import (
     ChunkRow,
@@ -248,6 +248,8 @@ async def run_embed_pipeline(
     template_tag_override: str | None = None,
     max_concurrency_override: int | None = None,
     document_window_override: int | None = None,
+    tpm_limit: int | None = None,
+    rpm_limit: int | None = None,
     snapshot_paper_ids: tuple[str, ...] | None = None,
     verbose: bool = False,
 ) -> None:
@@ -273,6 +275,7 @@ async def run_embed_pipeline(
 
     provider_config, model_config = embedding_config.resolve_active()
     route_pool = RoutePool.from_embedding_provider(config.embedding, verbose=verbose)
+    rate_limiter = EmbeddingRateLimiter(tpm=tpm_limit, rpm=rpm_limit)
     max_concurrency = (
         max_concurrency_override
         if max_concurrency_override is not None
@@ -414,6 +417,7 @@ async def run_embed_pipeline(
                                 texts=batch,
                                 dimensions=embedding_config.dimensions,
                                 client=client,
+                                rate_limiter=rate_limiter,
                             )
                         if len(result.vectors) != len(batch):
                             raise ValueError(

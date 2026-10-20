@@ -5,6 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from click.testing import CliRunner
+import pytest
 
 from deepresearch_flow.cli import cli
 from deepresearch_flow.paper.config import (
@@ -192,6 +193,59 @@ def test_paper_embed_passes_max_concurrency_override(tmp_path: Path, monkeypatch
     assert result.exit_code == 0
     assert seen["max_concurrency_override"] == 3
     assert seen["document_window_override"] == 5
+
+
+def test_paper_embed_passes_rate_limits(tmp_path: Path, monkeypatch) -> None:
+    runner = CliRunner()
+    config_path = _write_embed_config(tmp_path)
+    json_path = tmp_path / "papers.json"
+    json_path.write_text("[]", encoding="utf-8")
+    seen: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "deepresearch_flow.paper.vector_store.preflight_vector_store", lambda *args, **kwargs: None
+    )
+
+    async def fake_run_embed_pipeline(**kwargs):  # noqa: ANN003
+        seen.update(kwargs)
+
+    monkeypatch.setattr(
+        "deepresearch_flow.paper.embed_pipeline.run_embed_pipeline", fake_run_embed_pipeline
+    )
+    result = runner.invoke(
+        cli,
+        [
+            "paper",
+            "embed",
+            "-c",
+            str(config_path),
+            "-i",
+            str(json_path),
+            "--tpm",
+            "1200",
+            "--rpm",
+            "6",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert seen["tpm_limit"] == 1200
+    assert seen["rpm_limit"] == 6
+
+
+@pytest.mark.parametrize("option", ["--tpm", "--rpm"])
+def test_paper_embed_rejects_nonpositive_rate_limit(tmp_path: Path, option: str) -> None:
+    runner = CliRunner()
+    config_path = _write_embed_config(tmp_path)
+    json_path = tmp_path / "papers.json"
+    json_path.write_text("[]", encoding="utf-8")
+
+    result = runner.invoke(
+        cli, ["paper", "embed", "-c", str(config_path), "-i", str(json_path), option, "0"]
+    )
+
+    assert result.exit_code != 0
+    assert f"{option} must be positive" in result.output
 
 
 def test_paper_embed_rejects_nonpositive_max_concurrency(tmp_path: Path) -> None:

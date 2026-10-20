@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from dataclasses import dataclass
+import time
 from typing import Any
 
 import httpx
 
 from deepresearch_flow.paper.llm import backoff_delay
 from deepresearch_flow.paper.routing import RoutePool
+from deepresearch_flow.paper.utils import estimate_tokens
 
 
 @dataclass(frozen=True)
@@ -79,17 +82,59 @@ async def call_embedding(
     )
 
 
+class EmbeddingRateLimiter:
+    """Limit embedding requests and estimated input tokens over a rolling minute."""
+
+    def __init__(self, *, tpm: int | None = None, rpm: int | None = None) -> None:
+        if tpm is not None and tpm <= 0:
+            raise ValueError("TPM limit must be positive")
+        if rpm is not None and rpm <= 0:
+            raise ValueError("RPM limit must be positive")
+        self.tpm = tpm
+        self.rpm = rpm
+        self._events: deque[tuple[float, int]] = deque()
+        self._lock = asyncio.Lock()
+
+    async def acquire(self, texts: list[str]) -> None:
+        if self.tpm is None and self.rpm is None:
+            return
+        token_count = sum(estimate_tokens(len(text)) for text in texts)
+        if self.tpm is not None and token_count > self.tpm:
+            raise ValueError(
+                f"Embedding batch needs about {token_count} tokens, more than the "
+                f"{self.tpm} tokens/minute limit"
+            )
+
+        while True:
+            async with self._lock:
+                now = time.monotonic()
+                cutoff = now - 60.0
+                while self._events and self._events[0][0] <= cutoff:
+                    self._events.popleft()
+                used_tokens = sum(tokens for _, tokens in self._events)
+                request_limit_hit = self.rpm is not None and len(self._events) >= self.rpm
+                token_limit_hit = self.tpm is not None and used_tokens + token_count > self.tpm
+                if not request_limit_hit and not token_limit_hit:
+                    self._events.append((now, token_count))
+                    return
+                wait_until = self._events[0][0] + 60.0
+            await asyncio.sleep(max(0.0, wait_until - time.monotonic()))
+
+
 async def call_embedding_with_route_pool(
     *,
     route_pool: RoutePool[Any, Any],
     texts: list[str],
     dimensions: int | None = None,
     client: httpx.AsyncClient,
+    rate_limiter: EmbeddingRateLimiter | None = None,
 ) -> EmbeddingResult:
     """Select a concrete weighted route and execute one embedding request."""
 
     last_error: Exception | None = None
     max_attempts = max(route_pool.candidate_count * 2, 3)
+    if rate_limiter is not None:
+        await rate_limiter.acquire(texts)
     for attempt in range(max_attempts):
         route = await route_pool.get()
         try:
