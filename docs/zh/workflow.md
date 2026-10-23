@@ -239,6 +239,8 @@ uv run deepresearch-flow paper db snapshot build ...
 # 如果只是加翻译，也可以用 snapshot supplement
 ```
 
+翻译中断后重新运行同一条命令即可续译。每译完一个节点（Node），翻译结果就写入输出目录下的 `.translate_cache/<输出文件名>.json`；再次运行时，已缓存的节点不再请求模型。文档的译文写出后，这份缓存自动删除。缓存按「原文 + 源语言 + 目标语言」匹配，换语言不会误用。加 `--force` 会忽略缓存，整篇重译。
+
 `paper db snapshot export-missing` 支持的导出类型：
 
 | 类型 | 说明 |

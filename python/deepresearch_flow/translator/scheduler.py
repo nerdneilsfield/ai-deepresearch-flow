@@ -17,6 +17,7 @@ from deepresearch_flow.paper.providers.base import ProviderError
 from deepresearch_flow.paper.routing import RoutePool, RuntimeRoute
 from deepresearch_flow.paper.utils import short_hash
 from deepresearch_flow.translator.engine import KeyRotator, MarkdownTranslator, RequestThrottle
+from deepresearch_flow.translator.node_cache import NodeCache
 from deepresearch_flow.translator.placeholder import PlaceHolderStore
 from deepresearch_flow.translator.progress import ProgressReporter
 from deepresearch_flow.translator.segment import Node, Segment
@@ -98,6 +99,7 @@ class DocumentContext:
     stage_group_counts: dict[str, int] = field(default_factory=dict)
     retry_rounds: int = 0
     request_log: list[dict[str, Any]] = field(default_factory=list)
+    cache: NodeCache | None = None
 
 
 @dataclass(frozen=True)
@@ -197,6 +199,9 @@ class DocumentActor:
                     translated_text="",
                 )
 
+        if event.ok and self.ctx.cache is not None:
+            self._cache_succeeded_nodes(event.node_ids)
+
         stage_key = event.stage.value
         self.ctx.pending_counts[stage_key] = max(self.ctx.pending_counts.get(stage_key, 0) - 1, 0)
         if self._progress is not None:
@@ -205,6 +210,19 @@ class DocumentActor:
         await self._emit_available()
         if self.ctx.pending_counts.get(stage_key, 0) == 0 and not self._pending_groups:
             await self._advance_after_stage(event.stage)
+
+    def _cache_succeeded_nodes(self, node_ids: tuple[int, ...]) -> None:
+        cache = self.ctx.cache
+        assert cache is not None
+        changed = False
+        for nid in node_ids:
+            node = self.ctx.translated_nodes[nid]
+            if self._translator._collect_failed_nodes({nid: node}):
+                continue
+            cache.put(self.ctx.store.restore_all(node.origin_text), node.translated_text)
+            changed = True
+        if changed:
+            cache.save()
 
     async def _emit_available(self) -> None:
         queue = self._queue_map[self.ctx.stage]
@@ -285,7 +303,11 @@ class Scheduler:
         client: httpx.AsyncClient,
         throttle: RequestThrottle | None,
         timeout: float,
+        node_cache: bool = False,
+        reuse_node_cache: bool = True,
     ) -> None:
+        self._node_cache = node_cache
+        self._reuse_node_cache = reuse_node_cache
         self._translator = translator
         self._document_window = max(1, document_window)
         self._global_sem = global_semaphore
@@ -412,6 +434,23 @@ class Scheduler:
             format_enabled=format_enabled,
             request_log=request_log,
         )
+        cache: NodeCache | None = None
+        initial_groups = result.initial_groups
+        if self._node_cache:
+            cfg = self._translator.cfg
+            cache = NodeCache.for_output(
+                output_path, cfg.source_lang, cfg.target_lang, load=self._reuse_node_cache
+            )
+            restored = 0
+            for node in result.nodes.values():
+                if not node.translated_text:
+                    cached = cache.get(result.placeholder_store.restore_all(node.origin_text))
+                    if cached is not None:
+                        node.translated_text = cached
+                        restored += 1
+            if restored:
+                logger.info("Restored %d cached nodes for %s", restored, path.name)
+                initial_groups = self._translator._group_nodes(result.nodes)
         translated_nodes = {
             nid: Node(
                 nid=nid,
@@ -432,10 +471,11 @@ class Scheduler:
             store=result.placeholder_store,
             total_nodes=result.total_nodes,
             skip_count=result.skip_count,
-            initial_groups_count=len(result.initial_groups),
-            initial_groups=result.initial_groups,
+            initial_groups_count=len(initial_groups),
+            initial_groups=initial_groups,
             translated_nodes=translated_nodes,
             request_log=request_log or [],
+            cache=cache,
         )
 
     def _build_initial_group_tasks(self, ctx: DocumentContext) -> list[GroupTask]:
@@ -518,6 +558,8 @@ class Scheduler:
             )
             ctx.output_path.parent.mkdir(parents=True, exist_ok=True)
             ctx.output_path.write_text(result, encoding="utf-8")
+            if ctx.cache is not None:
+                ctx.cache.discard()
             if debug_root is not None:
                 debug_tag = f"{ctx.source_path.stem}.{short_hash(str(ctx.source_path))}"
                 if dump_protected:

@@ -814,6 +814,8 @@ def translate(
                     client=client,
                     throttle=throttle,
                     timeout=timeout,
+                    node_cache=True,
+                    reuse_node_cache=not force,
                 )
                 failed_files[:] = await scheduler.run(
                     paths=to_process,
