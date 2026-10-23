@@ -42,7 +42,7 @@ from deepresearch_flow.paper.snapshot.schema import (
     recompute_facet_counts,
     recompute_paper_index,
 )
-from deepresearch_flow.paper.snapshot.text import insert_cjk_spaces, markdown_to_plain_text
+from deepresearch_flow.paper.snapshot.text import title_search_text, insert_cjk_spaces, markdown_to_plain_text
 from deepresearch_flow.paper.snapshot.publication import InsertStats, insert_paper_metadata
 from deepresearch_flow.paper.snapshot.transaction import snapshot_transaction
 from deepresearch_flow.paper.snapshot.update import (
@@ -416,7 +416,7 @@ def _insert_paper_metadata_impl(
         "INSERT INTO paper_fts(paper_id, title, summary, source, translated, metadata) VALUES (?, ?, ?, ?, ?, ?)",
         (
             paper_id,
-            insert_cjk_spaces(title),
+            insert_cjk_spaces(title_search_text(title)),
             insert_cjk_spaces(summary_text),
             "",
             "",

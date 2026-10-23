@@ -241,6 +241,12 @@ def _normalize_title_key(title: str) -> str:
     value = value.replace("×", "x")
     value = re.sub(r"\$([^$]+)\$", r" \1 ", value)
     value = re.sub(r"\\[a-zA-Z]+\\*?\s*\{([^{}]*)\}", r" \1 ", value)
+    # File names lose the backslash ("$mathbf{SC}^2$"), so strip bare font commands too.
+    value = re.sub(
+        r"\b(?:mathbf|mathrm|mathit|mathcal|mathbb|mathsf|boldsymbol|textbf|textit|text|bm)\s*\{([^{}]*)\}",
+        r" \1 ",
+        value,
+    )
     value = re.sub(r"\\[a-zA-Z]+\\*?", " ", value)
     value = value.replace("^", " ")
     greek_map = {

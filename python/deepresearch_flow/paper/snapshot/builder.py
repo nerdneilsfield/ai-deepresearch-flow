@@ -42,6 +42,7 @@ from deepresearch_flow.paper.snapshot.schema import (
     recompute_paper_index,
 )
 from deepresearch_flow.paper.snapshot.text import (
+    title_search_text,
     insert_cjk_spaces,
     markdown_to_plain_text,
 )
@@ -1389,7 +1390,7 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
                     """,
                     (
                         paper_id,
-                        insert_cjk_spaces(title),
+                        insert_cjk_spaces(title_search_text(title)),
                         insert_cjk_spaces(summary_text),
                         insert_cjk_spaces(source_text),
                         insert_cjk_spaces(translated_text),

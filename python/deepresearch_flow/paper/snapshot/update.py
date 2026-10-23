@@ -26,7 +26,7 @@ from deepresearch_flow.paper.snapshot.identity import (
 )
 from deepresearch_flow.paper.snapshot.image_utils import rewrite_markdown_images, _hash_bytes
 from deepresearch_flow.paper.snapshot.schema import recompute_facet_counts, recompute_paper_index
-from deepresearch_flow.paper.snapshot.text import insert_cjk_spaces, markdown_to_plain_text
+from deepresearch_flow.paper.snapshot.text import title_search_text, insert_cjk_spaces, markdown_to_plain_text
 from deepresearch_flow.paper.snapshot.publication import open_snapshot_connection
 from deepresearch_flow.paper.utils import stable_hash
 
@@ -677,7 +677,7 @@ def _add_new_paper(
         """,
         (
             paper_id,
-            insert_cjk_spaces(title),
+            insert_cjk_spaces(title_search_text(title)),
             insert_cjk_spaces(summary_text),
             insert_cjk_spaces(source_text),
             insert_cjk_spaces(translated_text),

@@ -24,6 +24,13 @@ def _is_cjk_char(ch: str) -> bool:
     )
 
 
+def title_search_text(title: str) -> str:
+    """Title text for FTS: keep the original and append a TeX-free form ("$\\mathbf{SC^2}$-PCR" -> "SC2-PCR")."""
+    plain = re.sub(r"\$([^$]*)\$", lambda m: re.sub(r"\\[A-Za-z]+|[{}^_\s]", "", m.group(1)), title)
+    plain = re.sub(r"(?<=\w) +-(?=\w)", "-", plain)
+    return title if plain == title else f"{title} {plain}"
+
+
 def insert_cjk_spaces(text: str) -> str:
     out: list[str] = []
     prev_cjk = False
