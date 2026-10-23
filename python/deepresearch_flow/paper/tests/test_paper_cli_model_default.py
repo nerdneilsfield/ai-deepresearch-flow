@@ -122,3 +122,21 @@ def test_paper_extract_model_flag_overrides_config_main_model(tmp_path: Path, mo
     assert selector is not None
     assert selector.kind == "single"
     assert selector.fixed_model == "openai/gpt-4.1-mini"
+
+
+def test_paper_extract_exits_3_when_some_documents_failed(tmp_path: Path, monkeypatch) -> None:
+    config_path = _write_config(tmp_path)
+    input_path = tmp_path / "doc.md"
+    input_path.write_text("# test", encoding="utf-8")
+
+    async def fake_extract_documents(*args, **kwargs):
+        return 2
+
+    monkeypatch.setattr("deepresearch_flow.paper.cli.extract_documents", fake_extract_documents)
+
+    result = CliRunner().invoke(
+        cli,
+        ["paper", "extract", "--config", str(config_path), "--input", str(input_path)],
+    )
+
+    assert result.exit_code == 3, result.output

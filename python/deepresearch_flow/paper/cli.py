@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, replace
 import json
+import sys
 from pathlib import Path
 from typing import Any, Generic, TypeVar
 
@@ -12,6 +13,7 @@ import click
 from rich.console import Console
 from rich.table import Table
 
+from deepresearch_flow.exit_codes import PARTIAL_FAILURE
 from deepresearch_flow.paper.config import (
     EmbeddingModelConfig,
     EmbeddingProviderConfig,
@@ -620,7 +622,7 @@ def extract(
     configure_logging(verbose)
 
     with provider_window_error_as_click():
-        asyncio.run(
+        error_count = asyncio.run(
             extract_documents(
                 inputs=tuple(all_inputs) if all_inputs else inputs,
                 glob_pattern=glob_pattern,
@@ -660,6 +662,8 @@ def extract(
                 model_selector=model_selector,
             )
         )
+    if error_count:
+        sys.exit(PARTIAL_FAILURE)
 
 
 @paper.command()

@@ -68,6 +68,23 @@ class TestOcrCommand:
         mock_run.assert_called_once()
         assert mock_run.call_args.kwargs["max_workers"] == 4
 
+    def test_partial_failure_exits_3(
+        self, mock_load: object, mock_factory: object, mock_run: object, tmp_path: Path
+    ) -> None:
+        pdf = tmp_path / "test.pdf"
+        pdf.write_bytes(b"%PDF")
+
+        from deepresearch_flow.ocr.config import BackendConfig, GeneralConfig, OcrConfig
+
+        mock_load.return_value = OcrConfig(
+            general=GeneralConfig(output_dir=str(tmp_path / "output")),
+            backend=BackendConfig(type="paddle", api_url="https://x", token="t"),
+        )
+        mock_run.return_value = ({"processed": 1, "failed": 1, "skipped": 0}, [])
+
+        result = CliRunner().invoke(recognize, ["ocr", str(pdf), "--config", str(tmp_path / "o.toml")])
+        assert result.exit_code == 3
+
     def test_workers_option_overrides_default(
         self, mock_load: object, mock_factory: object, mock_run: object, tmp_path: Path
     ) -> None:

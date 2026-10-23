@@ -1169,7 +1169,7 @@ async def extract_documents(
     sleep_time: float | None,
     verbose: bool,
     model_selector: ParsedModelSelector | None = None,
-) -> None:
+) -> int:
     start_time = time.monotonic()
     runtime_selector = model_selector
     if runtime_selector is None:
@@ -1346,7 +1346,7 @@ async def extract_documents(
         table.add_row("Est total tokens", str(total_tokens))
         table.add_row("Est tokens/sec", _format_rate(tokens_per_sec, "tok/s"))
         Console().print(table)
-        return
+        return 0
 
     existing = load_existing(output_path)
     existing_by_path = {
@@ -2487,3 +2487,4 @@ async def extract_documents(
     table.add_row("Est total tokens", str(total_tokens))
     table.add_row("Est tokens/sec", _format_rate(tokens_per_sec, "tok/s"))
     Console().print(table)
+    return len(error_payload)

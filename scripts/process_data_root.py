@@ -13,6 +13,8 @@ import shutil
 import subprocess
 import sys
 
+PARTIAL_FAILURE = 3  # deepresearch_flow.exit_codes.PARTIAL_FAILURE
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -266,7 +268,9 @@ def main() -> int:
             # Inherit the terminal so each CLI keeps its live progress bars and colors.
             result = subprocess.run(prefix + command, cwd=workdir, env=env, check=False)
             entry["returncode"] = result.returncode
-            if result.returncode:
+            if result.returncode == PARTIAL_FAILURE:
+                announce(f"WARNING: {name} had failed items; see its error report")
+            elif result.returncode:
                 entry["status"] = "failed"
                 raise RuntimeError(f"{name} exited with {result.returncode}; see terminal output")
             entry["status"] = "completed"

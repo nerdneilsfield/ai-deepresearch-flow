@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 import logging
+import sys
 from pathlib import Path
 import time
 from typing import Any
@@ -15,6 +16,7 @@ import httpx
 from rich.console import Console
 from rich.table import Table
 
+from deepresearch_flow.exit_codes import PARTIAL_FAILURE
 from deepresearch_flow.paper.config import ProviderConfig, load_config, resolve_api_keys
 from deepresearch_flow.paper.routing import (
     parse_model_selector,
@@ -856,3 +858,5 @@ def translate(
     table.add_row("Duration", _format_duration(duration))
     table.add_row("Output suffix", f".{suffix}.md")
     Console().print(table)
+    if failed_files:
+        sys.exit(PARTIAL_FAILURE)

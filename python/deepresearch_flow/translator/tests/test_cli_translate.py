@@ -181,7 +181,7 @@ def test_translate_skips_failed_file_and_continues(tmp_path: Path, monkeypatch) 
         ],
     )
 
-    assert result.exit_code == 0, result.output
+    assert result.exit_code == 3, result.output
     assert "bad.md" in result.output
     assert "Failed" in result.output
     assert not (output_dir / "bad.zh.md").exists()

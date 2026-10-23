@@ -18,6 +18,7 @@ from rich.console import Console
 from rich.table import Table
 from tqdm import tqdm
 
+from deepresearch_flow.exit_codes import PARTIAL_FAILURE
 from deepresearch_flow.paper.config import load_config
 from deepresearch_flow.paper.routing import (
     parse_model_selector,
@@ -595,7 +596,7 @@ def ocr(
     )
 
     if stats["failed"] > 0:
-        raise click.ClickException(f"{stats['failed']} file(s) failed to process.")
+        sys.exit(PARTIAL_FAILURE)
 
 
 @recognize.command("ocr-migrate")
@@ -1462,6 +1463,8 @@ def recognize_fix_math(
         ("Report", _relative_path(report_target) if report_target else "-"),
     ]
     _print_summary("recognize fix-math", rows)
+    if error_records:
+        sys.exit(PARTIAL_FAILURE)
 
 
 @recognize.command("fix-mermaid")
@@ -1981,3 +1984,5 @@ def recognize_fix_mermaid(
         ("Report", _relative_path(report_target) if report_target else "-"),
     ]
     _print_summary("recognize fix-mermaid", rows)
+    if error_records:
+        sys.exit(PARTIAL_FAILURE)
