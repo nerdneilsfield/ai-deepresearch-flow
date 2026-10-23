@@ -1,6 +1,16 @@
 import { defineStore } from 'pinia'
 import { MAX_BATCH_SIZE } from '@/lib/config'
-import { loadAllItems, saveItem, deleteItem, clearAll } from '@/lib/selection-db'
+import {
+  loadAllItems,
+  saveItem,
+  deleteItem,
+  clearAll,
+  loadSelectionListsMeta,
+  saveSelectionListsMeta,
+  loadSelectionListItems,
+  saveSelectionListItems,
+  deleteSelectionListItems,
+} from '@/lib/selection-db'
 import type { SearchItem } from '@/types/api'
 
 // Fallback to localStorage for simple count tracking
@@ -26,6 +36,8 @@ function uniqueItems(items: SearchItem[]) {
 export const useSelectionStore = defineStore('selection', {
   state: () => ({ 
     items: [] as SearchItem[],
+    lists: [{ id: 'default', name: 'Default' }] as { id: string; name: string }[],
+    activeListId: 'default',
     _initialized: false 
   }),
   getters: {
@@ -39,7 +51,49 @@ export const useSelectionStore = defineStore('selection', {
       if (this._initialized) return
       const loaded = await loadAllItems()
       this.items = loaded.slice(0, MAX_BATCH_SIZE) as SearchItem[]
+      const meta = await loadSelectionListsMeta()
+      if (meta && meta.lists.some((list) => list.id === meta.activeId)) {
+        this.lists = meta.lists
+        this.activeListId = meta.activeId
+      }
       this._initialized = true
+    },
+    async _saveListsMeta() {
+      await saveSelectionListsMeta({ lists: this.lists.map((list) => ({ ...list })), activeId: this.activeListId })
+    },
+    async switchList(id: string) {
+      await this.init()
+      if (id === this.activeListId || !this.lists.some((list) => list.id === id)) return
+      await saveSelectionListItems(this.activeListId, [...this.items])
+      const next = await loadSelectionListItems(id)
+      await this.replace(next)
+      await deleteSelectionListItems(id)
+      this.activeListId = id
+      await this._saveListsMeta()
+    },
+    async createList(name: string) {
+      await this.init()
+      const id = `list-${Date.now().toString(36)}`
+      this.lists.push({ id, name })
+      await saveSelectionListItems(id, [])
+      await this.switchList(id)
+    },
+    async renameList(id: string, name: string) {
+      await this.init()
+      const list = this.lists.find((entry) => entry.id === id)
+      if (!list) return
+      list.name = name
+      await this._saveListsMeta()
+    },
+    async deleteList(id: string) {
+      await this.init()
+      if (this.lists.length <= 1) return
+      if (id === this.activeListId) {
+        await this.switchList(this.lists.find((list) => list.id !== id)!.id)
+      }
+      this.lists = this.lists.filter((list) => list.id !== id)
+      await deleteSelectionListItems(id)
+      await this._saveListsMeta()
     },
     async toggle(item: SearchItem) {
       await this.init()

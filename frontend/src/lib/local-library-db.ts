@@ -408,3 +408,33 @@ export async function clearP2pSyncMetadata(): Promise<void> {
 }
 
 export type { SearchItem }
+
+// Inactive selection lists live in the key-value store; the active list stays in the selection store.
+export interface SelectionListsMeta {
+  lists: { id: string; name: string }[]
+  activeId: string
+}
+
+export async function loadSelectionListsMeta(): Promise<SelectionListsMeta | null> {
+  return loadManualSyncValue<SelectionListsMeta>('selection-lists')
+}
+
+export async function saveSelectionListsMeta(meta: SelectionListsMeta): Promise<void> {
+  await saveManualSyncValue('selection-lists', meta)
+}
+
+export async function loadSelectionListItems(id: string): Promise<SearchItem[]> {
+  const raw = await loadManualSyncValue<unknown[]>(`selection-list:${id}`)
+  return (raw ?? []).flatMap((value) => {
+    const parsed = SearchItemSchema.safeParse(value)
+    return parsed.success ? [parsed.data] : []
+  })
+}
+
+export async function saveSelectionListItems(id: string, items: SearchItem[]): Promise<void> {
+  await saveManualSyncValue(`selection-list:${id}`, items)
+}
+
+export async function deleteSelectionListItems(id: string): Promise<void> {
+  await deleteManualSyncValue(`selection-list:${id}`)
+}
