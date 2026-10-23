@@ -760,8 +760,10 @@ def _print_build_summary(
 def build_snapshot(opts: SnapshotBuildOptions) -> None:
     _configure_build_logging(opts.verbose)
 
-    if opts.output_db.exists():
-        opts.output_db.unlink()
+    # Build beside the target and swap in at the end, so a failed build keeps the old DB.
+    tmp_db = opts.output_db.with_name(opts.output_db.name + ".tmp")
+    if tmp_db.exists():
+        tmp_db.unlink()
 
     papers = load_and_merge_papers(
         opts.input_paths,
@@ -815,7 +817,7 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
     )
 
     opts.output_db.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(opts.output_db))
+    conn = sqlite3.connect(str(tmp_db))
     conn.row_factory = sqlite3.Row
     try:
         init_snapshot_db(conn)
@@ -1417,6 +1419,8 @@ def build_snapshot(opts: SnapshotBuildOptions) -> None:
             stats.doi_bibtex_mismatches = doi_bibtex_mismatch_count
     finally:
         conn.close()
+
+    tmp_db.replace(opts.output_db)
 
     _print_build_summary(
         stats,
