@@ -10,6 +10,7 @@ import { resolveStaticBaseUrl } from '@/lib/static-base'
 import { normalizeSummaryText, summaryParagraphs } from '@/lib/summary-text'
 import { useRuntimeConfigStore } from '@/stores/runtime-config'
 import { useI18n } from 'vue-i18n'
+import { renderMathText } from '@/lib/math-text'
 import type { FavoriteRating } from '@/types/favorites'
 
 const props = withDefaults(defineProps<{
@@ -69,9 +70,8 @@ function formatAuthors(authors?: string[]) {
         <router-link
           :to="{ name: 'paper', params: { paperId: item.paper_id } }"
           class="font-display-serif text-lg font-semibold leading-snug tracking-tight text-foreground transition-colors hover:text-primary"
-        >
-          {{ item.title }}
-        </router-link>
+          v-html="renderMathText(item.title)"
+        />
         <div class="text-xs text-muted-foreground" data-testid="result-meta">
           <span v-if="item.authors?.length">{{ formatAuthors(item.authors) }}</span>
           <span v-if="item.authors?.length && (item.venue || item.year)"> — </span>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
+import { renderMathText } from '@/lib/math-text'
 import type { AdvancedSearchResult } from '@/lib/advanced-search'
 import SearchEmptyState from '@/components/search/SearchEmptyState.vue'
 import ResultActions from '@/components/search/ResultActions.vue'
@@ -94,7 +95,7 @@ function onSetFavoriteRating(result: AdvancedSearchResult, rating: FavoriteRatin
       @keydown.enter.prevent="openPaper(result)"
       @keydown.space.prevent="openPaper(result)"
     >
-      <h3 class="font-display-serif text-lg font-semibold leading-snug tracking-tight text-foreground dark:text-ink-100">{{ result.paper.title }}</h3>
+      <h3 class="font-display-serif text-lg font-semibold leading-snug tracking-tight text-foreground dark:text-ink-100" v-html="renderMathText(result.paper.title)"></h3>
       <p class="mt-1 text-xs text-muted-foreground dark:text-ink-400">
         <span v-if="result.paper.authors.length">{{ result.paper.authors.join(', ') }} — </span>{{ [result.paper.venue, result.paper.year].filter(Boolean).join(' · ') }}
       </p>

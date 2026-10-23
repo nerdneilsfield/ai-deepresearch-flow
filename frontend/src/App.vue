@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { plainMathText, renderMathText } from '@/lib/math-text'
 import { computed, onMounted, ref, watchEffect } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
@@ -75,7 +76,7 @@ const routeTitleKeys: Record<string, string> = {
 // pdf.js writes the PDF's own title into document.title; reassert ours on every route/title change.
 watchEffect(() => {
   const name = activeRoute.value
-  const page = isDetail.value ? detailTitle.value : routeTitleKeys[name] ? t(routeTitleKeys[name]) : ''
+  const page = isDetail.value ? plainMathText(detailTitle.value) : routeTitleKeys[name] ? t(routeTitleKeys[name]) : ''
   document.title = page ? `${page} · ${t('appTitle')}` : t('appTitle')
 })
 
@@ -174,7 +175,7 @@ onMounted(() => {
         </div>
 
         <div v-if="isDetail && detailTitle" class="flex max-w-[40vw] flex-col items-center px-2 text-center md:max-w-[48vw]">
-          <div class="line-clamp-2 text-xs font-semibold leading-tight text-foreground md:text-sm">{{ detailTitle }}</div>
+          <div class="line-clamp-2 text-xs font-semibold leading-tight text-foreground md:text-sm" v-html="renderMathText(detailTitle)"></div>
           <div v-if="detailSubtitle" class="line-clamp-1 text-[10px] text-muted-foreground md:text-xs">{{ detailSubtitle }}</div>
         </div>
         <div v-else class="hidden md:block"></div>

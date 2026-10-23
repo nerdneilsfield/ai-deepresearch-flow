@@ -5,6 +5,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import MarkdownContent from './MarkdownContent.vue'
 import { useUiStore } from '@/stores/ui'
 import { summaryParagraphs } from '@/lib/summary-text'
+import { renderMathText } from '@/lib/math-text'
 import { templateDescription, templateLabel } from '@/lib/template-label'
 
 const props = defineProps<{
@@ -57,7 +58,7 @@ function setTemplate(tag: string) {
         </button>
       </div>
       <div v-if="props.summaryMeta && props.summaryMeta.title" class="mt-4 space-y-3 text-sm text-ink-700 dark:text-ink-300">
-        <h2 class="text-xl font-semibold text-ink-900 dark:text-ink-100">{{ props.summaryMeta.title }}</h2>
+        <h2 class="text-xl font-semibold text-ink-900 dark:text-ink-100" v-html="renderMathText(props.summaryMeta.title)"></h2>
         <div v-if="props.summaryMeta.authors?.length">
           <span class="font-semibold">{{ t('authorsLabel') }}:</span>
           <span class="ml-2">{{ props.summaryMeta.authors.join(', ') }}</span>
@@ -87,9 +88,7 @@ function setTemplate(tag: string) {
         <div v-if="abstractParagraphs.length" class="mt-4">
           <div class="text-base font-semibold text-ink-900 dark:text-ink-100">{{ t('abstractLabel') }}</div>
           <div class="mt-2 space-y-2 text-ink-700 dark:text-ink-300">
-            <p v-for="(paragraph, index) in abstractParagraphs" :key="index" class="whitespace-pre-line">
-              {{ paragraph }}
-            </p>
+            <p v-for="(paragraph, index) in abstractParagraphs" :key="index" class="whitespace-pre-line" v-html="renderMathText(paragraph)"></p>
           </div>
         </div>
       </div>

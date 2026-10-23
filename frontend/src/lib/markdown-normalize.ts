@@ -9,5 +9,7 @@ export function normalizeMarkdown(source: string) {
     }
     return inner
   })
+  // OCR page breaks become "---" in the middle of a sentence; rejoin them.
+  normalized = normalized.replace(/([A-Za-z,;])[ \t]*\n+---[ \t]*\n+(?=[a-z])/g, '$1 ')
   return normalized
 }

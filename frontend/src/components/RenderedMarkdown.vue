@@ -78,6 +78,8 @@ config({
   },
   markdownItConfig(md) {
     md.use(resolveMarkdownItPlugin(footnote))
+    // Repeated citations render as [5] instead of markdown-it-footnote's [5:1].
+    md.renderer.rules.footnote_caption = (tokens, idx) => `[${Number(tokens[idx]!.meta.id) + 1}]`
     md.use(resolveMarkdownItPlugin(taskLists))
   }
 })
@@ -663,12 +665,18 @@ onBeforeUnmount(() => {
 :deep(.md-editor-preview) {
   color: inherit;
   font-family: inherit;
+  /* md-editor defaults to break-all, which splits English words mid-word. */
+  word-break: normal;
+  overflow-wrap: break-word;
   --md-theme-color: hsl(var(--foreground) / 0.9);
   --md-theme-bg-color: transparent;
   --md-theme-border-color: hsl(var(--border));
   --md-theme-code-block-bg-color: hsl(var(--card));
   --md-theme-code-inline-bg-color: hsl(var(--muted));
   --md-theme-link-color: hsl(var(--primary));
+}
+:deep(.md-editor) {
+  font-family: inherit;
 }
 :deep(.md-editor),
 :deep(.md-editor-preview-wrapper),
@@ -682,6 +690,15 @@ onBeforeUnmount(() => {
 :deep(.md-editor-preview th),
 :deep(.md-editor-preview blockquote) {
   color: hsl(var(--foreground) / 0.86);
+  font-family: inherit;
+}
+:deep(.md-editor-preview h1),
+:deep(.md-editor-preview h2),
+:deep(.md-editor-preview h3),
+:deep(.md-editor-preview h4),
+:deep(.md-editor-preview h5),
+:deep(.md-editor-preview h6) {
+  word-break: normal;
 }
 :deep(.md-editor-preview h1),
 :deep(.md-editor-preview h2),
