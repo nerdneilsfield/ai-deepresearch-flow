@@ -170,3 +170,92 @@ Notes:
 - `--md-root`, `--md-translated-root`, `--pdf-root` are optional.
 - Current inputs with DOI/BibTeX take priority; otherwise inherits from `--previous-snapshot-db`.
 - **Warning**: Only includes papers from input JSON — ensure all papers are included.
+
+## Repairing deployed metadata (delta upload)
+
+Use this after a fix to the build logic, for example BibTeX matching or the source of titles and authors. It updates the deployed data without re-uploading the whole static export.
+
+You do not need to rerun OCR, translation or extraction. Rebuild locally, upload only the static files that changed, then rewrite the remote database with `api update`.
+
+This works because of how static files are named:
+
+- `pdf/`, `images/`, `md/` and `md_translate/` are named by content hash. A file with the same name can stay as it is on the server. This also holds for PDFs you compressed after export.
+- `summary/` and `manifest/` are named by `paper_id` and contain metadata such as the title. A file with the same name can still change, so compare the content.
+
+For hand2, the full export is about 3 GB and the delta archive is about 2.4 MB.
+
+### 1. Deploy the new backend
+
+Deploy the new backend before the other steps. With the old backend, `api update` writes BibTeX as an empty shell with no fields.
+
+### 2. Rebuild locally
+
+Use the same JSON, BibTeX and roots as before, and write the new build to a new directory. Point `--previous-snapshot-db` at the deployed database so that `paper_id` values stay stable.
+
+```bash
+H=~/dengqi/pdfs/hand2
+uv run deepresearch-flow paper db snapshot build \
+  -i $H/simple.json -i $H/deep_read.json -b $H/hand2.bib \
+  --md-root $H/md_simple --md-translated-root $H/md_base64_translated --pdf-root $H/pdf \
+  --output-db /tmp/h2b/hand2.db --static-export-dir /tmp/h2b/static \
+  --previous-snapshot-db $H/dist/hand2.db
+```
+
+### 3. Build the delta archive
+
+`OLD` is the export directory you already uploaded. Its content must match the server. `NEW` is the new static directory.
+
+```bash
+OLD=$H/dist/hand2-export
+NEW=/tmp/h2b/static
+cd "$NEW"
+find . -type f | while read -r f; do
+  if [ ! -e "$OLD/$f" ]; then echo "$f"                                    # new file
+  elif [[ $f == *.json ]] && ! cmp -s "$f" "$OLD/$f"; then echo "$f"; fi   # changed summary/manifest
+done > /tmp/delta.list
+cut -d/ -f2 /tmp/delta.list | sort | uniq -c                               # count per directory
+tar -C "$NEW" -czf /tmp/hand2-delta.tar.gz -T /tmp/delta.list
+```
+
+### 4. Extract on the server
+
+In the static directory, extract over the existing files:
+
+```bash
+tar -xzf hand2-delta.tar.gz
+```
+
+You do not need to delete old files. The database no longer refers to them.
+
+### 5. Rewrite the remote metadata
+
+Run with `--dry-run` first to see how many papers will be updated, then run it for real:
+
+```bash
+uv run deepresearch-flow paper db api update \
+  --snapshot-db /tmp/h2b/hand2.db \
+  --static-export-dir /tmp/h2b/static \
+  --config remote.toml --dry-run
+```
+
+`api update` rewrites only the metadata of papers already on the remote: title, authors, BibTeX, facets and the search index. It does not touch static files or vectors.
+
+### 6. Handle papers whose `paper_id` changed
+
+A paper that had no BibTeX match before and matches now gets a new `paper_id`. `api update` skips it because the remote does not have it yet. Find these papers with:
+
+```bash
+OLD_DB=$H/dist/hand2.db NEW_DB=/tmp/h2b/hand2.db python3 - <<'PY'
+import os, sqlite3
+old = {r[0] for r in sqlite3.connect(os.environ["OLD_DB"]).execute("select paper_id from paper")}
+new = {r[0] for r in sqlite3.connect(os.environ["NEW_DB"]).execute("select paper_id from paper")}
+print("added:", sorted(new - old)); print("to delete:", sorted(old - new))
+PY
+```
+
+Push the added papers with `api push`. For each paper to delete, call `DELETE /papers/{paper_id}` on the admin API.
+
+### Notes
+
+- The delta is computed against the local `OLD` directory. If files on the server were changed and not synced back, the delta is wrong.
+- Repeat these steps for each dataset.
