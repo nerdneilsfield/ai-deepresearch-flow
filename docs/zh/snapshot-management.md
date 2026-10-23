@@ -171,3 +171,92 @@ uv run deepresearch-flow paper db snapshot build \
 - `--md-root`、`--md-translated-root`、`--pdf-root` 是可选的。
 - 当前输入中带有 DOI/BibTeX 的数据优先；否则从 `--previous-snapshot-db` 继承。
 - **注意**：只会包含输入 JSON 中的论文——请确保所有论文都已涵盖。
+
+## 修复已上线的元数据（只传差异）
+
+适用场景：修复了 build 逻辑（例如 BibTeX 匹配、标题和作者的来源），需要让已上线的数据跟着更新，又不想重新上传整份静态导出。
+
+OCR、翻译和抽取结果不用重跑。在本地重新 build，然后只上传静态文件里的差异部分，最后用 `api update` 改写线上的数据库。
+
+这个方法成立，是因为静态文件的命名规则：
+
+- `pdf/`、`images/`、`md/`、`md_translate/` 按内容哈希命名。文件名相同，就可以直接沿用服务器上的旧文件。PDF 在导出后另行压缩过也没关系。
+- `summary/` 和 `manifest/` 按 `paper_id` 命名，内容里记录了标题等元数据。同名文件也可能有变化，需要比对内容。
+
+以 hand2 为例，整份导出约 3 GB，差异包约 2.4 MB。
+
+### 1. 部署新后端
+
+先部署新后端，再执行后面的步骤。旧后端在 `api update` 时会把 BibTeX 写成没有字段的空壳。
+
+### 2. 本地重新 build
+
+输入沿用原来的 JSON、BibTeX 和各个 root，新 build 输出到新目录。`--previous-snapshot-db` 指向已上线的那份数据库，用来保持 `paper_id` 不变。
+
+```bash
+H=~/dengqi/pdfs/hand2
+uv run deepresearch-flow paper db snapshot build \
+  -i $H/simple.json -i $H/deep_read.json -b $H/hand2.bib \
+  --md-root $H/md_simple --md-translated-root $H/md_base64_translated --pdf-root $H/pdf \
+  --output-db /tmp/h2b/hand2.db --static-export-dir /tmp/h2b/static \
+  --previous-snapshot-db $H/dist/hand2.db
+```
+
+### 3. 打差异包
+
+`OLD` 是已上传的导出目录，它的内容必须和服务器一致。`NEW` 是新 build 的静态目录。
+
+```bash
+OLD=$H/dist/hand2-export
+NEW=/tmp/h2b/static
+cd "$NEW"
+find . -type f | while read -r f; do
+  if [ ! -e "$OLD/$f" ]; then echo "$f"                                    # 新文件
+  elif [[ $f == *.json ]] && ! cmp -s "$f" "$OLD/$f"; then echo "$f"; fi   # 内容变化的 summary/manifest
+done > /tmp/delta.list
+cut -d/ -f2 /tmp/delta.list | sort | uniq -c                               # 按目录统计，核对数量
+tar -C "$NEW" -czf /tmp/hand2-delta.tar.gz -T /tmp/delta.list
+```
+
+### 4. 在服务器上解压
+
+进入静态目录，覆盖解压：
+
+```bash
+tar -xzf hand2-delta.tar.gz
+```
+
+不需要删除旧文件，数据库已经不再引用它们。
+
+### 5. 改写线上元数据
+
+先用 `--dry-run` 查看将要更新的篇数，再正式执行：
+
+```bash
+uv run deepresearch-flow paper db api update \
+  --snapshot-db /tmp/h2b/hand2.db \
+  --static-export-dir /tmp/h2b/static \
+  --config remote.toml --dry-run
+```
+
+`api update` 只改写线上已有论文的元数据，包括标题、作者、BibTeX、facet 和搜索索引，不碰静态文件和向量。
+
+### 6. 处理 `paper_id` 变化的论文
+
+有的论文以前没有匹配上 BibTeX，这次匹配上了，它的 `paper_id` 会变。`api update` 会跳过这些论文，因为线上还没有它们。用下面的命令找出它们：
+
+```bash
+OLD_DB=$H/dist/hand2.db NEW_DB=/tmp/h2b/hand2.db python3 - <<'PY'
+import os, sqlite3
+old = {r[0] for r in sqlite3.connect(os.environ["OLD_DB"]).execute("select paper_id from paper")}
+new = {r[0] for r in sqlite3.connect(os.environ["NEW_DB"]).execute("select paper_id from paper")}
+print("新增:", sorted(new - old)); print("待删:", sorted(old - new))
+PY
+```
+
+新增的论文用 `api push` 推送。待删的论文对每个 id 调用 admin API 的 `DELETE /papers/{paper_id}`。
+
+### 注意
+
+- 差异的判断以本地 `OLD` 目录为准。服务器上的文件如果单独改过、没有同步回本地，判断就不准确。
+- 每个数据集分别按上面的流程处理。
