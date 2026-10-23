@@ -2057,6 +2057,111 @@ def register_db_commands(db_group: click.Group) -> None:
             else:
                 console.print("[yellow]No semantic chunks to push.[/yellow]")
 
+    @api_group.command("update")
+    @click.option(
+        "--snapshot-db", "snapshot_db", required=True, help="Path to local paper_snapshot.db"
+    )
+    @click.option(
+        "--config",
+        "config_path",
+        default="remote.toml",
+        show_default=True,
+        help="Path to remote config TOML file",
+    )
+    @click.option(
+        "--paper-id",
+        "paper_ids",
+        multiple=True,
+        help="Only update these local paper ids (repeatable); default: every paper the remote has",
+    )
+    @click.option(
+        "--static-export-dir",
+        "static_export_dir",
+        default=None,
+        help="Local static export dir; its summary JSONs keep full summary text in the remote search index",
+    )
+    @click.option("--dry-run", is_flag=True, default=False, help="List papers without updating")
+    def api_update(
+        snapshot_db: str,
+        config_path: str,
+        paper_ids: tuple[str, ...],
+        static_export_dir: str | None,
+        dry_run: bool,
+    ) -> None:
+        """Rewrite metadata (title, authors, BibTeX, facets, search index) of papers already on the remote.
+
+        Unlike ``api push --overwrite`` this ignores source_hash, so metadata-only fixes reach the
+        remote. Static files and semantic chunks are not touched; papers missing remotely are skipped.
+        """
+        from rich.console import Console
+
+        from deepresearch_flow.paper.snapshot.push import (
+            extract_papers_from_db,
+            fetch_remote_paper_manifest,
+            load_remote_config,
+            push_papers,
+            read_local_paper_keys,
+        )
+
+        console = Console()
+        config_file = Path(config_path)
+        if not config_file.exists():
+            raise click.ClickException(f"Config file not found: {config_file}")
+        db_path = Path(snapshot_db)
+        if not db_path.exists():
+            raise click.ClickException(f"Snapshot DB not found: {db_path}")
+        config = load_remote_config(config_file)
+
+        static_dir = Path(static_export_dir) if static_export_dir else None
+        if static_dir and not static_dir.exists():
+            raise click.ClickException(f"Static export dir not found: {static_dir}")
+        if not static_dir:
+            console.print(
+                "[yellow]No --static-export-dir: remote summary search falls back to previews[/yellow]"
+            )
+        papers = extract_papers_from_db(db_path, static_export_dir=static_dir)
+        if paper_ids:
+            wanted = set(paper_ids)
+            papers = [p for p in papers if p["paper_id"] in wanted]
+            missing = wanted - {p["paper_id"] for p in papers}
+            if missing:
+                raise click.ClickException(f"Not in local snapshot: {', '.join(sorted(missing))}")
+        try:
+            remote_papers, remote_aliases = fetch_remote_paper_manifest(config)
+        except Exception as exc:
+            raise click.ClickException(f"Fetching remote paper manifest failed: {exc}") from exc
+        local_keys = read_local_paper_keys(db_path)
+
+        def on_remote(paper: dict[str, Any]) -> bool:
+            keys = local_keys.get(paper["paper_id"], [])
+            return paper["paper_id"] in remote_papers or any(k in remote_aliases for k in keys)
+
+        targets = [p for p in papers if on_remote(p)]
+        console.print(
+            f"[cyan]Remote:[/cyan] {config.api_base_url} — updating {len(targets)} "
+            f"(skipped {len(papers) - len(targets)} not on remote)"
+        )
+        if dry_run:
+            for p in targets[:20]:
+                console.print(f"  {p['paper_id'][:16]}…  {str(p.get('paper_title') or '')[:70]}")
+            if len(targets) > 20:
+                console.print(f"  … and {len(targets) - 20} more")
+            return
+        if not targets:
+            return
+        try:
+            stats = push_papers(targets, config, overwrite=True)
+        except Exception as exc:
+            raise click.ClickException(f"Update failed: {exc}") from exc
+        console.print(
+            f"[green]Updated {stats.updated}[/green], added {stats.added}, "
+            f"errors {len(stats.errors)}"
+        )
+        if stats.errors:
+            for err in stats.errors[:10]:
+                console.print(f"  index={err.get('index')}: {err.get('error')}")
+            raise click.ClickException(f"{len(stats.errors)} paper(s) failed to update")
+
     @api_group.command("import-local")
     @click.option(
         "--from-snapshot-db",

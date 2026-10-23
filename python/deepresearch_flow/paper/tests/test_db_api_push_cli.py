@@ -2130,3 +2130,30 @@ class TestIncrementalPush:
         assert result.exit_code != 0
         mock_push_semantic.assert_not_called()
         assert "upgrade the server" in result.output
+
+
+def test_api_update_overwrites_only_remote_papers(tmp_path: Path) -> None:
+    config = tmp_path / "remote.toml"
+    _write_config(config)
+    db = tmp_path / "snap.db"
+    db.write_text("")
+    local = [{"paper_id": "on-remote", "paper_title": "A"}, {"paper_id": "local-only", "paper_title": "B"}]
+    with (
+        patch("deepresearch_flow.paper.snapshot.push.extract_papers_from_db", return_value=local),
+        patch(
+            "deepresearch_flow.paper.snapshot.push.fetch_remote_paper_manifest",
+            return_value=({"on-remote": "same-hash"}, {}),
+        ),
+        patch("deepresearch_flow.paper.snapshot.push.read_local_paper_keys", return_value={}),
+        patch(
+            "deepresearch_flow.paper.snapshot.push.push_papers",
+            return_value=PushStats(total=1, updated=1),
+        ) as push,
+    ):
+        result = CliRunner().invoke(
+            paper, ["db", "api", "update", "--snapshot-db", str(db), "--config", str(config)]
+        )
+    assert result.exit_code == 0, result.output
+    sent = push.call_args.args[0]
+    assert [p["paper_id"] for p in sent] == ["on-remote"]
+    assert push.call_args.kwargs["overwrite"] is True
