@@ -168,6 +168,10 @@ uv run python scripts/process_data_root.py DATA_ROOT \
 # Requires md_base64/ and both JSON files to exist
 uv run python scripts/process_data_root.py DATA_ROOT \
   --model openai/gpt-4o-mini --from-step translate
+
+# Only repair Mermaid in the existing deep-read JSON
+uv run python scripts/process_data_root.py DATA_ROOT \
+  --model openai/gpt-4o-mini --steps fix-mermaid-deep_read
 ```
 
 Available steps, in execution order:
@@ -185,6 +189,25 @@ Only selected steps require their configuration files and tools; translation alo
 needs neither PDFs nor OCR configuration nor `mmdc`. `--model` is required only for extraction, translation, formula repair, and Mermaid repair.
 OCR, formatting fixes, and organize can run without it.
 Add `--dry-run` to preview commands without creating files or calling providers.
+
+```text
+data_root/
+├── pdf/                       # PDFs you provide
+├── ocr/                       # raw OCR layout, then repaired in place
+├── md_simple/
+├── md_base64/
+├── simple.json
+├── deep_read.json
+├── md_base64_translated/
+└── logs/
+    ├── progress.json          # step status of the latest run
+    ├── pipeline.log           # run log, appended
+    ├── simple-errors.json
+    ├── deep_read-errors.json
+    ├── fix-math-*-errors.json
+    ├── fix-mermaid-deep_read-errors.json
+    └── deep_read/paper_stage_outputs/  # deep-read intermediate results
+```
 
 Error reports and intermediate artifacts stay under `DATA_ROOT/logs/`.
 Commands keep the caller working directory, except extraction, which runs under
