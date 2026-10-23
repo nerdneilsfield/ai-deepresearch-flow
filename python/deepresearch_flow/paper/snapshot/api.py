@@ -463,7 +463,7 @@ def _list_facet_values(
         FROM {join_table} j
         JOIN {facet_table} f ON f.{facet_id} = j.{facet_id}
         WHERE j.paper_id = ?
-        ORDER BY f.value ASC
+        ORDER BY {"j.rowid" if join_table == "paper_author" else "f.value"} ASC
         """,
         (paper_id,),
     ).fetchall()
@@ -539,6 +539,8 @@ def _api_search(request: Request) -> Response:
         from_sql = "paper_fts JOIN paper p ON p.paper_id = paper_fts.paper_id"
         extra_select = """,
                   snippet(paper_fts, -1, '[[[', ']]]', '…', 30) AS snippet_markdown,
+                  instr(highlight(paper_fts, 1, char(1), ''), char(1)) > 0 AS hit_title,
+                  instr(highlight(paper_fts, 2, char(1), ''), char(1)) > 0 AS hit_summary,
                   bm25(paper_fts, 5.0, 3.0, 1.0, 1.0, 2.0) AS rank"""
     else:
         from_sql = "paper p"
@@ -608,6 +610,10 @@ def _api_search(request: Request) -> Response:
             if plan.match:
                 snippet = remove_cjk_spaces(str(row["snippet_markdown"] or ""))
                 item["snippet_markdown"] = merge_adjacent_markers(snippet)
+                # Where the query matched, so the UI can flag full-text-only (e.g. reference list) hits.
+                item["match_scope"] = (
+                    "title" if row["hit_title"] else "summary" if row["hit_summary"] else "fulltext"
+                )
             items.append(item)
 
         has_more = (page * page_size) < total and bool(items)

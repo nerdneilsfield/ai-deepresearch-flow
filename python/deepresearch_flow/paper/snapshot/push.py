@@ -277,7 +277,7 @@ def _fetch_facet_values(
     rows = conn.execute(
         f"SELECT t.value FROM {table} t "
         f"JOIN {join_table} j ON t.{id_col} = j.{id_col} "
-        f"WHERE j.paper_id = ?",
+        f"WHERE j.paper_id = ? ORDER BY j.rowid",
         (paper_id,),
     ).fetchall()
     return [str(row["value"]) for row in rows]

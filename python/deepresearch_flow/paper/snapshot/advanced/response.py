@@ -32,7 +32,7 @@ def _hydrate_papers(conn: sqlite3.Connection, paper_ids: list[str]) -> dict[str,
         f"SELECT pa.paper_id, a.value "
         f"FROM paper_author pa JOIN author a ON a.author_id = pa.author_id "
         f"WHERE pa.paper_id IN ({placeholders}) "
-        f"ORDER BY pa.paper_id, a.author_id",
+        f"ORDER BY pa.paper_id, pa.rowid",
         paper_ids,
     ).fetchall()
     for row in author_rows:

@@ -38,7 +38,8 @@ def extract_current_bibtex_payload(
     if not isinstance(bib, dict):
         return None, None, None, None
 
-    raw_entry = bib.get("raw_entry")
+    # Pipeline bundles and push exports store the entry text as "raw".
+    raw_entry = bib.get("raw_entry") or bib.get("raw")
     raw = str(raw_entry).strip() if isinstance(raw_entry, str) else ""
     if not raw:
         raw = bibtex_entry_to_text(bib).strip()
