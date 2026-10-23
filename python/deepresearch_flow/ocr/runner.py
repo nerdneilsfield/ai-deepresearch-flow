@@ -97,7 +97,8 @@ def _reserve_output_dir(
         return candidate
 
     n = 0
-    while candidate.exists() or candidate in reserved:
+    # A directory without full.md is an interrupted run: reuse it instead of creating stem_1.
+    while (candidate / "full.md").is_file() or candidate in reserved:
         n += 1
         candidate = base / f"{stem}_{n}"
     reserved.add(candidate)
@@ -113,14 +114,13 @@ def _write_output(
     """Write merged markdown and images to the output directory."""
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Write full.md.
-    (output_dir / "full.md").write_text(markdown, encoding="utf-8")
-
-    # Write images.
+    # Write images first: full.md marks the output as complete for later skip checks.
     for rel_path, data in images.items():
         img_path = output_dir / rel_path
         img_path.parent.mkdir(parents=True, exist_ok=True)
         img_path.write_bytes(data)
+
+    (output_dir / "full.md").write_text(markdown, encoding="utf-8")
 
     # Log missing images.
     for path in missing:
