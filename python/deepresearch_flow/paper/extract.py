@@ -733,8 +733,10 @@ def load_existing(path: Path) -> list[dict[str, Any]]:
         return []
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return []
+    except json.JSONDecodeError as exc:
+        raise click.ClickException(
+            f"Existing output {path} is not valid JSON ({exc}); fix or remove it before rerunning"
+        ) from exc
     if isinstance(data, dict) and isinstance(data.get("papers"), list):
         return data["papers"]
     if isinstance(data, list):
@@ -2413,8 +2415,8 @@ async def extract_documents(
 
     final_results = filter_results_with_errors(raw_final_results, error_payload)
     output_payload = {"template_tag": template_tag, "papers": final_results}
-    write_json(output_path, output_payload)
-    write_json(errors_path, error_payload)
+    write_json_atomic(output_path, output_payload)
+    write_json_atomic(errors_path, error_payload)
 
     if shutdown_event.is_set():
         logger.warning(
