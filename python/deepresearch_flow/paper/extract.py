@@ -16,6 +16,7 @@ import logging
 import re
 import signal
 import time
+import unicodedata
 
 import coloredlogs
 import click
@@ -962,6 +963,29 @@ class RequestThrottle:
                 await asyncio.sleep(self.sleep_time)
 
 
+def _title_key(text: str) -> str:
+    text = unicodedata.normalize("NFKC", text).lower()
+    text = re.sub(r"\\[a-z]+|[${}^_\\]", "", text)
+    return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", text)
+
+
+def title_found_in_source(title: str, source_text: str) -> bool:
+    """Whether the extracted title appears in the paper head (catches translated/invented titles)."""
+    key = _title_key(title)
+    head = _title_key(source_text[:4000])
+    if not key:
+        return False
+    if key in head:
+        return True
+    # OCR can break a word or two; accept when most title words appear.
+    words = [
+        w
+        for w in re.split(r"[^0-9a-z\u4e00-\u9fff]+", unicodedata.normalize("NFKC", title).lower())
+        if len(w) > 2
+    ]
+    return bool(words) and sum(1 for w in words if w in head) / len(words) >= 0.8
+
+
 async def call_with_retries(
     provider: ProviderConfig,
     model: str,
@@ -979,8 +1003,10 @@ async def call_with_retries(
     route_pool: RoutePool | None = None,
     throttle: RequestThrottle | None = None,
     stats: ExtractionStats | None = None,
+    source_text: str | None = None,
 ) -> tuple[dict[str, Any], ProviderConfig, str, str]:
     attempt = 0
+    base_messages = messages
     use_structured = structured_mode
     prompt_chars = _count_prompt_chars(messages)
     current_provider = provider
@@ -1078,6 +1104,26 @@ async def call_with_retries(
                 f"Schema validation failed: {errors_in_doc[0].message}",
                 error_type="validation_error",
             )
+
+        title = data.get("paper_title")
+        if source_text and isinstance(title, str) and not title_found_in_source(title, source_text):
+            # Keep the last answer once retries run out: the source head may simply lack a title.
+            logger.warning(
+                "paper_title not found in source (attempt %d/%d): %r", attempt, max_retries, title[:120]
+            )
+            if attempt < max_retries:
+                messages = base_messages + [
+                    {"role": "assistant", "content": response_text},
+                    {
+                        "role": "user",
+                        "content": (
+                            f"paper_title {title!r} does not appear in the paper. Copy the title "
+                            "exactly as printed in the paper, in its original language; do not "
+                            "translate it. Return the full JSON again."
+                        ),
+                    },
+                ]
+                continue
 
         return data, current_provider, current_model, current_structured
 
@@ -1523,6 +1569,7 @@ async def extract_documents(
                         route_pool=route_pool,
                         throttle=throttle,
                         stats=stats,
+                        source_text=truncated_content,
                     )
                 doc_provider = used_provider
                 doc_model = used_model
@@ -1837,6 +1884,7 @@ async def extract_documents(
                             route_pool=route_pool,
                             throttle=throttle,
                             stats=stats,
+                            source_text=ctx.truncated_content,
                         )
                     ctx.provider = used_provider
                     ctx.model_name = used_model
@@ -2260,6 +2308,7 @@ async def extract_documents(
                         route_pool=route_pool,
                         throttle=throttle,
                         stats=stats,
+                        source_text=ctx.truncated_content,
                     )
                 ctx.provider = used_provider
                 ctx.model_name = used_model
