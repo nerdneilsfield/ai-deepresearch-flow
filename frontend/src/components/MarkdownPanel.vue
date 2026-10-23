@@ -1,19 +1,8 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { fetchText, getTranslatedMarkdownCached } from '@/lib/api'
+import { cacheSet, markdownCache } from '@/lib/markdown-cache'
 import MarkdownContent from './MarkdownContent.vue'
-
-const MAX_CACHE_SIZE = 50
-const markdownCache = new Map<string, string>()
-
-function cacheSet(key: string, value: string) {
-  if (markdownCache.has(key)) markdownCache.delete(key)
-  markdownCache.set(key, value)
-  if (markdownCache.size > MAX_CACHE_SIZE) {
-    const oldest = markdownCache.keys().next().value
-    if (oldest) markdownCache.delete(oldest)
-  }
-}
 
 const props = defineProps<{
   url?: string | null

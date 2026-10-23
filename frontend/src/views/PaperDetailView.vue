@@ -19,6 +19,7 @@ import { resolveStaticBaseUrl } from '@/lib/static-base'
 import { normalizeSummaryText } from '@/lib/summary-text'
 import { prefetchPairedSummary } from '@/lib/summary-prefetch'
 import { defineSafeAsyncComponent } from '@/lib/async-component'
+import { prefetchMarkdown } from '@/lib/markdown-cache'
 import { ChevronLeft, ChevronRight } from 'lucide-vue-next'
 import FavoriteRatingControl from '@/components/favorites/FavoriteRatingControl.vue'
 import type { SearchItem } from '@/types/api'
@@ -131,6 +132,26 @@ const imagesBaseUrl = computed(() => {
   )
 })
 const hasPdf = computed(() => Boolean(detail.value?.pdf_url))
+
+// Warm the other tabs while the user reads the summary, so switching feels instant.
+// Static files are immutable-cached, so the PDF fetch lands in the HTTP cache pdf.js reads from.
+watch(
+  () => detail.value?.paper_id,
+  (id) => {
+    const d = detail.value
+    const conn = (navigator as { connection?: { saveData?: boolean } }).connection
+    if (!id || !d || conn?.saveData) return
+    const idle = window.requestIdleCallback ?? ((cb: () => void) => window.setTimeout(cb, 1500))
+    idle(() => {
+      if (detail.value?.paper_id !== id) return
+      void import('@/components/MarkdownPanel.vue')
+      void import('@/components/PdfViewer.vue')
+      if (d.source_md_url) prefetchMarkdown(d.source_md_url).catch(() => {})
+      if (d.pdf_url) fetch(d.pdf_url, { priority: 'low' } as RequestInit).catch(() => {})
+    })
+  },
+  { immediate: true },
+)
 const hasSource = computed(() => Boolean(detail.value?.source_md_url))
 const translatedLangs = computed(() => Object.keys(detail.value?.translated_md_urls || {}))
 const hasTranslated = computed(() => translatedLangs.value.length > 0)
