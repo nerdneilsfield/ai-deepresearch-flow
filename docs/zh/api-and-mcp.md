@@ -141,6 +141,19 @@ uv run deepresearch-flow paper db api push \
 - 远端多出来的论文和组不会被删除。
 - 远端是旧版本、没有 manifest 接口时命令会报错并提示先升级服务端，见部署指南的「升级到增量推送」。
 
+### 改写已上线论文的元数据
+
+`api update` 用本地 snapshot 改写远端已有论文的元数据，包括标题、作者、BibTeX、facet 和搜索索引，不比较 `source_hash`，也不推送静态文件和向量。远端没有的论文会被跳过。`--paper-id` 可重复，用来只更新指定论文；`--dry-run` 只打印将要更新的篇数。
+
+```bash
+uv run deepresearch-flow paper db api update \
+  --snapshot-db ./paper_snapshot.db \
+  --static-export-dir ./paper-static \
+  --config remote.toml --dry-run
+```
+
+完整的修复流程（重新 build、只传静态差异）见 [Snapshot 管理](snapshot-management.md) 的「修复已上线的元数据（只传差异）」。
+
 ### 仅推送 Semantic
 
 ```bash

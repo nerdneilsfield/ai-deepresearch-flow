@@ -141,6 +141,19 @@ uv run deepresearch-flow paper db api push \
 - Papers and groups that exist only on the remote are never deleted.
 - If the remote is an old version with no manifest endpoint, the command fails and tells you to upgrade the server first; see "Upgrading to incremental push" in the deployment guide.
 
+### Rewrite metadata of deployed papers
+
+`api update` rewrites the metadata of papers that already exist on the remote: title, authors, BibTeX, facets and the search index. It ignores `source_hash` and does not push static files or vectors. Papers missing on the remote are skipped. Repeat `--paper-id` to update only those papers. `--dry-run` only prints how many papers would be updated.
+
+```bash
+uv run deepresearch-flow paper db api update \
+  --snapshot-db ./paper_snapshot.db \
+  --static-export-dir ./paper-static \
+  --config remote.toml --dry-run
+```
+
+For the full repair procedure (rebuild, upload only the static delta), see "Repairing deployed metadata (delta upload)" in [Snapshot Management](snapshot-management.md).
+
 ### Push Semantic Only
 
 ```bash
