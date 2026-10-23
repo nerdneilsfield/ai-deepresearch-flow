@@ -14,16 +14,19 @@ import { useTheme } from './useTheme'
  *   // chartTheme.value.axis / .grid / .primary / .palette / .tooltip / .foreground
  */
 export function useChartTheme() {
-  const { themeMode } = useTheme()
+  const { isDark } = useTheme()
 
-  // Resolve a CSS variable to an hsl() string. ECharts accepts any valid CSS color.
-  const css = (name: string) => `hsl(var(--${name}))`
+  // ECharts paints on canvas and cannot resolve `var(--x)`; read the token value now.
+  const css = (name: string, alpha?: number) => {
+    const value = getComputedStyle(document.documentElement).getPropertyValue(`--${name}`).trim()
+    return alpha === undefined ? `hsl(${value})` : `hsl(${value} / ${alpha})`
+  }
 
   // themeMode is read here so the computed re-evaluates on theme switch,
   // forcing dependent `:option` computeds to produce a new object and re-render.
   const theme = computed(() => {
-    // touch the dependency
-    void themeMode.value
+    // touch the dependency; the dark class is already applied when isDark changes
+    void isDark.value
 
     return {
       /** Axis label / tick color */
@@ -62,12 +65,12 @@ export function useChartTheme() {
         css('chart-3'),
         css('chart-4'),
         css('chart-5'),
-        'hsl(var(--chart-1) / 0.75)',
-        'hsl(var(--chart-2) / 0.75)',
-        'hsl(var(--chart-3) / 0.75)',
-        'hsl(var(--chart-4) / 0.75)',
-        'hsl(var(--chart-5) / 0.75)',
-        'hsl(var(--chart-1) / 0.5)',
+        css('chart-1', 0.75),
+        css('chart-2', 0.75),
+        css('chart-3', 0.75),
+        css('chart-4', 0.75),
+        css('chart-5', 0.75),
+        css('chart-1', 0.5),
       ],
     }
   })

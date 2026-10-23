@@ -17,17 +17,19 @@ import {
   type SelectedDownloadOptions,
 } from '@/lib/selected-export'
 import { lazySaveAs, lazySnippet } from '@/lib/lazy'
+import { templateDescription, templateLabel } from '@/lib/template-label'
 import { readLocalLibraryImportText } from '@/lib/local-library-import'
 import { useExpandableSummary } from '@/composables/useExpandableSummary'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
+import { PaginationJump } from '@/components/ui/pagination'
 import SearchResultItem from '@/components/search/SearchResultItem.vue'
 import { Download, Upload, Save, Trash2, FileDown, FileUp } from 'lucide-vue-next'
 
 const selection = useSelectionStore()
 const favorites = useFavoriteStore()
 const ui = useUiStore()
-const { t } = useI18n()
+const { t, te } = useI18n()
 const downloading = ref(false)
 const progress = ref(0)
 const status = ref('')
@@ -53,6 +55,38 @@ lazySnippet().then(fn => {
   snippetRenderer.value = (val: string) => String(fn(val))
 })
 
+
+const PAGE_SIZE_OPTIONS = [10, 20, 50, 100]
+const listPageSize = ref(Number(globalThis.localStorage?.getItem('selected-page-size')) || 20)
+watch(listPageSize, (size) => {
+  globalThis.localStorage?.setItem('selected-page-size', String(size))
+  listPage.value = 1
+})
+const listPage = ref(1)
+const listTotalPages = computed(() => Math.max(1, Math.ceil(selection.items.length / listPageSize.value)))
+const pagedItems = computed(() => selection.items.slice((listPage.value - 1) * listPageSize.value, listPage.value * listPageSize.value))
+watch(() => selection.activeListId, () => {
+  listPage.value = 1
+})
+
+async function createSelectionList() {
+  const name = window.prompt(t('selectedListNewPrompt'))?.trim()
+  if (name) await selection.createList(name)
+}
+
+async function renameSelectionList() {
+  const current = selection.lists.find((list) => list.id === selection.activeListId)
+  const name = window.prompt(t('selectedListRenamePrompt'), current?.name)?.trim()
+  if (name) await selection.renameList(selection.activeListId, name)
+}
+
+async function deleteSelectionList() {
+  if (window.confirm(t('selectedListDeleteConfirm'))) await selection.deleteList(selection.activeListId)
+}
+// Keep the page valid after removals or Clear.
+watch(listTotalPages, (total) => {
+  if (listPage.value > total) listPage.value = total
+})
 
 const exportMode = ref<SelectedDownloadMode>('zip')
 const includeMetadata = ref(false)
@@ -182,7 +216,10 @@ watch(exportMode, (mode) => {
 
 function translateExportStatus(value: string): string {
   if (value.startsWith('Building JSONL')) return t('selectedExportBuildingJsonl')
-  if (value.startsWith('Fetching manifest')) return t('selectedExportFetchingManifest')
+  if (value.startsWith('Fetching manifest')) {
+    const [, current, total] = value.match(/\((\d+)\/(\d+)\)$/) ?? []
+    return current ? t('selectedExportFetchingPaper', { current, total }) : t('selectedExportFetchingManifest')
+  }
   if (value.startsWith('Compressing ZIP')) return t('selectedExportCompressingZip')
   return value
 }
@@ -495,6 +532,19 @@ async function handleBibFileLoad(event: Event) {
         <p class="text-sm text-muted-foreground dark:text-ink-400">
           {{ t('readingQueue') }} ({{ selection.count }} / {{ MAX_BATCH_SIZE }})
         </p>
+        <div class="mt-2 flex flex-wrap items-center gap-2 text-sm">
+          <select
+            :value="selection.activeListId"
+            class="rounded-md border border-border bg-background px-2 py-1 dark:border-ink-700 dark:bg-ink-900"
+            :aria-label="t('selectedList')"
+            @change="selection.switchList(($event.target as HTMLSelectElement).value)"
+          >
+            <option v-for="list in selection.lists" :key="list.id" :value="list.id">{{ list.name }}</option>
+          </select>
+          <Button variant="ghost" size="sm" @click="createSelectionList">{{ t('selectedListNew') }}</Button>
+          <Button variant="ghost" size="sm" @click="renameSelectionList">{{ t('selectedListRename') }}</Button>
+          <Button variant="ghost" size="sm" :disabled="selection.lists.length <= 1" @click="deleteSelectionList">{{ t('selectedListDelete') }}</Button>
+        </div>
       </div>
       <div class="flex flex-wrap gap-2">
         <input
@@ -538,7 +588,7 @@ async function handleBibFileLoad(event: Event) {
         </div>
         <div class="relative">
           <Button variant="outline" size="sm" @click="bibShowModePopover = !bibShowModePopover">
-            <FileUp class="mr-2 h-4 w-4" /> {{ t('importBibtex') || 'Import BibTeX' }}
+            <FileUp class="mr-2 h-4 w-4" /> {{ t('importBibtex') }}
           </Button>
           <div
             v-if="bibShowModePopover"
@@ -548,13 +598,13 @@ async function handleBibFileLoad(event: Event) {
               class="w-full rounded px-3 py-1.5 text-left text-sm hover:bg-muted dark:hover:bg-ink-800"
               @click="triggerBibImport('append')"
             >
-              Append
+              {{ t('bibImportAppend') }}
             </button>
             <button
               class="w-full rounded px-3 py-1.5 text-left text-sm hover:bg-muted dark:hover:bg-ink-800"
               @click="triggerBibImport('replace')"
             >
-              Replace
+              {{ t('bibImportReplace') }}
             </button>
           </div>
         </div>
@@ -641,7 +691,7 @@ async function handleBibFileLoad(event: Event) {
                   :checked="selectedSummaryTemplates.includes(template)"
                   @change="toggleSummaryTemplate(template)"
                 />
-                <span class="font-mono text-xs">{{ template }}</span>
+                <span :title="templateDescription(t, te, template)">{{ templateLabel(t, te, template) }}</span>
               </label>
             </div>
             <div v-else-if="includeSummaries" class="text-sm text-muted-foreground dark:text-ink-400">
@@ -683,7 +733,7 @@ async function handleBibFileLoad(event: Event) {
         class="flex w-full items-center justify-between text-sm font-medium text-amber-800"
         @click="bibShowUnmatched = !bibShowUnmatched"
       >
-        <span>⚠ {{ bibUnmatched.length }} papers not found in database</span>
+        <span>⚠ {{ t('bibUnmatchedCount', { count: bibUnmatched.length }) }}</span>
         <span class="text-xs">{{ bibShowUnmatched ? '▲' : '▼' }}</span>
       </button>
       <ul v-if="bibShowUnmatched" class="mt-2 space-y-1">
@@ -698,7 +748,7 @@ async function handleBibFileLoad(event: Event) {
             target="_blank"
             class="ml-2 shrink-0 text-xs text-blue-600 hover:underline"
           >
-            Search →
+            {{ t('bibUnmatchedSearch') }}
           </a>
         </li>
       </ul>
@@ -714,10 +764,10 @@ async function handleBibFileLoad(event: Event) {
 
     <div v-else class="space-y-3">
       <SearchResultItem
-        v-for="(item, index) in selection.items"
+        v-for="(item, index) in pagedItems"
         :key="item.paper_id"
         :item="item"
-        :display-index="index + 1"
+        :display-index="(listPage - 1) * listPageSize + index + 1"
         :is-selected="true"
         :selection-full="selection.isFull"
         :is-favorite="favorites.favoriteIds.has(item.paper_id)"
@@ -731,6 +781,22 @@ async function handleBibFileLoad(event: Event) {
         @set-favorite-rating="favorites.setRating(item.paper_id, $event)"
         @toggle-summary="toggleSummary(item)"
       />
+
+      <div class="flex flex-wrap items-center justify-between gap-2 pt-2 text-sm text-ink-500">
+        <Button variant="ghost" size="sm" :disabled="listPage <= 1" @click="listPage = Math.max(1, listPage - 1)">
+          {{ t('prev') }}
+        </Button>
+        <div class="flex items-center gap-2">
+          <span>{{ t('pageInfo', { page: listPage, total: listTotalPages }) }}</span>
+          <PaginationJump v-model="listPage" :total-pages="listTotalPages" />
+          <select v-model.number="listPageSize" class="rounded-md border border-border bg-background px-2 py-1 text-sm dark:border-ink-700 dark:bg-ink-900" :aria-label="t('selectedPageSize')">
+            <option v-for="size in PAGE_SIZE_OPTIONS" :key="size" :value="size">{{ t('selectedPerPage', { count: size }) }}</option>
+          </select>
+        </div>
+        <Button variant="ghost" size="sm" :disabled="listPage >= listTotalPages" @click="listPage = Math.min(listTotalPages, listPage + 1)">
+          {{ t('next') }}
+        </Button>
+      </div>
     </div>
   </div>
 </template>

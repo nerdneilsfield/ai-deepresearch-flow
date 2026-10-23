@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref, watchEffect } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { setLocale } from '@/i18n'
@@ -56,9 +56,28 @@ function switchLanguage(value: string) {
   setLocale(value)
 }
 
-function goto(path: string) {
-  router.push(path)
+const navOpen = ref(false)
+
+async function goto(path: string) {
+  await router.push(path)
+  navOpen.value = false
 }
+
+const routeTitleKeys: Record<string, string> = {
+  search: 'papers',
+  stats: 'stats',
+  selected: 'selectedTitle',
+  favorites: 'favoritesTitle',
+  sync: 'sync',
+  help: 'help',
+}
+
+// pdf.js writes the PDF's own title into document.title; reassert ours on every route/title change.
+watchEffect(() => {
+  const name = activeRoute.value
+  const page = isDetail.value ? detailTitle.value : routeTitleKeys[name] ? t(routeTitleKeys[name]) : ''
+  document.title = page ? `${page} · ${t('appTitle')}` : t('appTitle')
+})
 
 function scrollToTop() {
   window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -88,7 +107,7 @@ onMounted(() => {
           </button>
           <nav class="hidden items-center gap-0.5 text-sm md:flex">
             <button
-              class="rounded-md px-3 py-1.5 font-medium transition-colors"
+              class="whitespace-nowrap rounded-md px-3 py-1.5 font-medium transition-colors"
               :class="activeRoute === 'search' ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'"
               :aria-current="activeRoute === 'search' ? 'page' : undefined"
               type="button"
@@ -97,7 +116,7 @@ onMounted(() => {
               {{ t('papers') }}
             </button>
             <button
-              class="rounded-md px-3 py-1.5 font-medium transition-colors"
+              class="whitespace-nowrap rounded-md px-3 py-1.5 font-medium transition-colors"
               :class="activeRoute === 'stats' ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'"
               :aria-current="activeRoute === 'stats' ? 'page' : undefined"
               type="button"
@@ -106,7 +125,7 @@ onMounted(() => {
               {{ t('stats') }}
             </button>
             <button
-              class="rounded-md px-3 py-1.5 font-medium transition-colors"
+              class="whitespace-nowrap rounded-md px-3 py-1.5 font-medium transition-colors"
               :class="activeRoute === 'selected' ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'"
               :aria-current="activeRoute === 'selected' ? 'page' : undefined"
               type="button"
@@ -115,7 +134,7 @@ onMounted(() => {
               {{ t('selected', { count: selection.count }) }}
             </button>
             <button
-              class="rounded-md px-3 py-1.5 font-medium transition-colors"
+              class="whitespace-nowrap rounded-md px-3 py-1.5 font-medium transition-colors"
               :class="activeRoute === 'favorites' ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'"
               :aria-current="activeRoute === 'favorites' ? 'page' : undefined"
               type="button"
@@ -124,7 +143,7 @@ onMounted(() => {
               {{ t('favorites', { count: favorites.count }) }}
             </button>
             <button
-              class="rounded-md px-3 py-1.5 font-medium transition-colors"
+              class="whitespace-nowrap rounded-md px-3 py-1.5 font-medium transition-colors"
               :class="activeRoute === 'sync' ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'"
               :aria-current="activeRoute === 'sync' ? 'page' : undefined"
               type="button"
@@ -133,7 +152,7 @@ onMounted(() => {
               {{ t('sync') }}
             </button>
             <button
-              class="rounded-md px-3 py-1.5 font-medium transition-colors"
+              class="whitespace-nowrap rounded-md px-3 py-1.5 font-medium transition-colors"
               :class="activeRoute === 'help' ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'"
               :aria-current="activeRoute === 'help' ? 'page' : undefined"
               type="button"
@@ -143,7 +162,7 @@ onMounted(() => {
             </button>
             <button
               v-if="adminIsAuthenticated"
-              class="rounded-md px-3 py-1.5 font-medium transition-colors"
+              class="whitespace-nowrap rounded-md px-3 py-1.5 font-medium transition-colors"
               :class="activeRoute.startsWith('admin-pipeline') ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'"
               :aria-current="activeRoute.startsWith('admin-pipeline') ? 'page' : undefined"
               type="button"
@@ -194,7 +213,7 @@ onMounted(() => {
             </DropdownMenuContent>
           </DropdownMenu>
 
-          <Sheet>
+          <Sheet v-model:open="navOpen">
             <SheetTrigger class="md:hidden" aria-label="Open navigation menu" as-child>
               <Button variant="outline" size="sm">{{ t('menu') }}</Button>
             </SheetTrigger>

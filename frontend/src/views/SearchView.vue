@@ -46,6 +46,8 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
+// Desktop shows the sidebar expanded; narrower screens start collapsed.
+const sidebarOpen = ref(globalThis.matchMedia?.('(min-width: 1024px)').matches ?? true)
 const selection = useSelectionStore()
 const favorites = useFavoriteStore()
 const ui = useUiStore()
@@ -82,6 +84,12 @@ const {
 } = useAdvancedSearchAuth()
 
 const results = computed(() => searchQuery.data.value ?? null)
+// Offer a one-click title-scoped version of a plain free-text query (no field: syntax yet).
+const titleScopeQuery = computed(() => {
+  const q = query.value.trim()
+  if (!q || /\w+:/.test(q) || q.startsWith('-')) return ''
+  return /^".*"$/.test(q) ? `title:${q}` : `title:"${q}"`
+})
 const stats = computed(() => statsQuery.data.value ?? null)
 const facetList = computed(() => facetQuery.data.value ?? null)
 const loading = computed(() => searchQuery.isFetching.value)
@@ -327,8 +335,17 @@ watch(facetQuery.error, (err) => {
 </script>
 
 <template>
-  <div class="grid grid-cols-[280px_minmax(0,_1fr)] items-start gap-6 max-sm:grid-cols-1">
-    <aside class="space-y-4">
+  <div class="grid grid-cols-1 items-start gap-6 lg:grid-cols-[260px_minmax(0,_1fr)]">
+    <!-- Below lg the sidebar follows the results and stays collapsed; the search box must be first on phones. -->
+    <details
+      class="order-last space-y-4 lg:order-none"
+      :open="sidebarOpen"
+      @toggle="sidebarOpen = ($event.target as HTMLDetailsElement).open"
+    >
+      <summary class="cursor-pointer rounded-md border border-border px-3 py-2 text-sm font-medium text-foreground lg:hidden">
+        {{ t('statsAndFilters') }}
+      </summary>
+      <div class="mt-4 space-y-4 lg:mt-0">
       <Card>
         <CardHeader>
           <CardTitle class="text-sm">{{ t('stats') }}</CardTitle>
@@ -461,7 +478,8 @@ watch(facetQuery.error, (err) => {
           </div>
         </CardContent>
       </Card>
-    </aside>
+      </div>
+    </details>
 
     <section class="min-w-0 flex-1 space-y-4">
       <Card class="mt-2 shadow-elevated">
@@ -644,6 +662,12 @@ watch(facetQuery.error, (err) => {
       <div v-if="mode === 'keyword' && results" class="space-y-3" :aria-busy="loading">
         <div class="text-xs text-ink-500" aria-live="polite">
           {{ t('showingResults', { start: startResult, end: endResult, total: results.total }) }}
+          <template v-if="titleScopeQuery">
+            · <button type="button" class="text-primary underline" data-testid="scope-title" @click="query = titleScopeQuery">{{ t('searchTitleOnly') }}</button>
+          </template>
+          <template v-if="sortBy !== 'relevance' && query">
+            · <button type="button" class="text-primary underline" @click="sortBy = 'relevance'">{{ t('sortByRelevance') }}</button>
+          </template>
         </div>
         <SearchEmptyState v-if="results.total === 0 && !loading" :hints="chipHints" />
         <SearchResultItem

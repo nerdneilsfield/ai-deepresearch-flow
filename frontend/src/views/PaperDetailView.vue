@@ -101,7 +101,8 @@ const {
   tightenLeft,
 } =
   useSplitView()
-const showMetadata = ref(true)
+// Metadata collapses below lg so the reading pane keeps the screen.
+const showMetadata = ref(globalThis.matchMedia?.('(min-width: 1024px)').matches ?? true)
 const isZenMode = ref(false)
 const isLarge = useMediaQuery('(min-width: 1024px)')
 const panelRef = ref<HTMLElement | null>(null)
@@ -453,10 +454,10 @@ watch([viewMode, leftView, rightView, summaryTemplate], () => {
     <div
       :class="[
         'grid items-start gap-6',
-        showMetadata ? 'grid-cols-[320px_minmax(0,_1fr)] max-sm:grid-cols-1' : 'grid-cols-1',
+        showMetadata ? 'grid-cols-1 lg:grid-cols-[280px_minmax(0,_1fr)]' : 'grid-cols-1',
       ]"
     >
-      <aside v-if="showMetadata" class="space-y-4">
+      <aside v-if="showMetadata" class="order-last space-y-4 lg:order-none">
         <MetadataPanel
           :detail="detail"
           :translated-langs="translatedLangs"
@@ -481,11 +482,11 @@ watch([viewMode, leftView, rightView, summaryTemplate], () => {
             />
             <template v-if="selection.selectedIds.has(paperId)">
               <div class="flex items-center gap-1 border-r border-ink-200 pr-2 mr-1">
-                <Button size="icon-sm" variant="ghost" :disabled="!prevId" @click="navigateTo(prevId)" title="Previous in selection">
+                <Button size="icon-sm" variant="ghost" :disabled="!prevId" @click="navigateTo(prevId)" :title="t('prevPaper')">
                   <ChevronLeft class="h-4 w-4" />
                 </Button>
-                <span class="text-[10px] font-medium text-ink-400">Queue</span>
-                <Button size="icon-sm" variant="ghost" :disabled="!nextId" @click="navigateTo(nextId)" title="Next in selection">
+                <span class="text-[10px] font-medium text-ink-400">{{ t('queue') }}</span>
+                <Button size="icon-sm" variant="ghost" :disabled="!nextId" @click="navigateTo(nextId)" :title="t('nextPaper')">
                   <ChevronRight class="h-4 w-4" />
                 </Button>
               </div>

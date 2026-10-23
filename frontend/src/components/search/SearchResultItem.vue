@@ -76,6 +76,13 @@ function formatAuthors(authors?: string[]) {
           <span v-if="item.authors?.length">{{ formatAuthors(item.authors) }}</span>
           <span v-if="item.authors?.length && (item.venue || item.year)"> — </span>
           <span>{{ [item.venue, item.year].filter(Boolean).join(' · ') }}</span>
+          <span
+            v-if="item.match_scope"
+            class="ml-2 rounded px-1.5 py-0.5 text-[10px] font-medium"
+            :class="item.match_scope === 'fulltext' ? 'bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-200' : 'bg-primary/10 text-primary'"
+            :title="t('matchScopeHint')"
+            data-testid="match-scope"
+          >{{ t(`matchScope_${item.match_scope}`) }}</span>
         </div>
       </div>
 
@@ -98,6 +105,9 @@ function formatAuthors(authors?: string[]) {
               {{ paragraph }}
             </p>
           </div>
+          <p v-else class="text-sm italic text-muted-foreground">
+            {{ expandedLoading ? t('summaryLoading') : expanded ? t('summaryEmpty') : t('summaryCollapsedHint') }}
+          </p>
         </div>
         <Button
           size="icon-sm"

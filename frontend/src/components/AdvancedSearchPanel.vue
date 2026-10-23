@@ -121,6 +121,12 @@ function toggle() {
       class="absolute right-0 top-full z-30 mt-2 w-[min(24rem,calc(100vw-3rem))] space-y-3 rounded-xl border border-border/60 bg-card p-4 text-card-foreground shadow-elevated-lg dark:border-ink-700 dark:bg-ink-900"
       data-testid="advanced-panel-body"
     >
+      <p class="text-xs leading-relaxed text-muted-foreground" data-testid="advanced-access-help">
+        {{ t('semanticAccessHelp') }}
+        <template v-if="bearerEnabled"> {{ t('semanticAccessTokenHelp') }}</template>
+        <template v-if="githubEnabled"> {{ t('semanticAccessGithubHelp') }}</template>
+        <template v-if="!bearerEnabled && !githubEnabled"> {{ t('semanticAccessNone') }}</template>
+      </p>
       <div
         v-if="githubEnabled"
         class="flex flex-col gap-2 sm:flex-row sm:items-center"
@@ -149,8 +155,12 @@ function toggle() {
         </a>
       </div>
 
+      <label v-if="bearerEnabled" for="advanced-token-input" class="block text-xs font-medium text-foreground">
+        {{ t('advancedAccessToken') }}
+      </label>
       <div v-if="bearerEnabled" class="flex flex-col gap-2 sm:flex-row sm:items-center">
         <input
+          id="advanced-token-input"
           v-model="tokenInput"
           type="password"
           :placeholder="t('advancedAccessToken')"

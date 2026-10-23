@@ -195,6 +195,8 @@ export function resolveSummaryUrls(item: SearchItem, detail?: PaperDetail | null
   return urls
 }
 
+const TEMPLATE_DISCOVERY_CONCURRENCY = 8
+
 export async function discoverSummaryTemplates(
   items: SearchItem[],
   deps: Pick<SelectedExportDeps, 'getPaperDetailCached'> = defaultDeps,
@@ -202,21 +204,27 @@ export async function discoverSummaryTemplates(
   const templates = new Set<string>()
   const preferredTemplates = new Set<string>()
 
-  for (const item of items) {
-    if (item.preferred_summary_template) {
-      templates.add(item.preferred_summary_template)
-      preferredTemplates.add(item.preferred_summary_template)
-    } else if (item.summary_url) {
-      templates.add('default')
-      preferredTemplates.add('default')
-    }
+  let next = 0
+  const worker = async () => {
+    while (next < items.length) {
+      const item = items[next++]!
+      if (item.preferred_summary_template) {
+        templates.add(item.preferred_summary_template)
+        preferredTemplates.add(item.preferred_summary_template)
+      } else if (item.summary_url) {
+        templates.add('default')
+        preferredTemplates.add('default')
+      }
 
-    const detail = await resolvePaperDetail(item, deps)
-    const urls = resolveSummaryUrls(item, detail)
-    for (const template of Object.keys(urls)) templates.add(template)
-    const preferred = fallbackSummaryTemplate(item, detail)
-    if (urls[preferred]) preferredTemplates.add(preferred)
+      const detail = await resolvePaperDetail(item, deps)
+      const urls = resolveSummaryUrls(item, detail)
+      for (const template of Object.keys(urls)) templates.add(template)
+      const preferred = fallbackSummaryTemplate(item, detail)
+      if (urls[preferred]) preferredTemplates.add(preferred)
+    }
   }
+  // Serial detail fetches made large selections (hundreds of papers) appear stuck.
+  await Promise.all(Array.from({ length: Math.min(TEMPLATE_DISCOVERY_CONCURRENCY, items.length) }, worker))
 
   return {
     templates: [...templates].sort((a, b) => a.localeCompare(b)),
@@ -483,8 +491,8 @@ export async function downloadSelectedZip(
   const zip = await merged.createZip()
   let singleZipName = ''
 
-  for (const item of items) {
-    callbacks.onStatus?.(`Fetching manifest for ${item.paper_id}`)
+  for (const [index, item] of items.entries()) {
+    callbacks.onStatus?.(`Fetching manifest for ${item.paper_id} (${index + 1}/${items.length})`)
     let detail: PaperDetail | null = null
     let detailFailed = false
     try {

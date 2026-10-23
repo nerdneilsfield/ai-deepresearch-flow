@@ -6,10 +6,13 @@ const STORAGE_KEY = 'paperdb_theme'
 
 const themeMode = ref<ThemeMode>((localStorage.getItem(STORAGE_KEY) as ThemeMode) || 'system')
 
+/** Effective dark state after resolving 'system'; consumers that paint outside CSS (charts) watch it. */
+const isDark = ref(false)
+
 function applyTheme(mode: ThemeMode) {
-  const isDark =
+  isDark.value =
     mode === 'dark' || (mode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
-  document.documentElement.classList.toggle('dark', isDark)
+  document.documentElement.classList.toggle('dark', isDark.value)
 }
 
 // Listen for system preference changes
@@ -34,5 +37,5 @@ export function useTheme() {
     themeMode.value = mode
   }
 
-  return { themeMode, setTheme }
+  return { themeMode, isDark, setTheme }
 }

@@ -12,6 +12,7 @@ export const SearchItemSchema = z
     authors: z.array(z.string()).optional().default([]),
     summary_preview: z.string().optional(),
     snippet_markdown: z.string().optional(),
+    match_scope: z.enum(['title', 'summary', 'fulltext']).optional(),
     preferred_summary_template: z.string().optional(),
     has_pdf: z.boolean().optional(),
     has_source: z.boolean().optional(),

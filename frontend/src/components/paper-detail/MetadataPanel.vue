@@ -30,7 +30,8 @@ async function loadBibtex() {
   bibtexError.value = false
   try {
     const data = await getPaperBibtex(props.detail.paper_id)
-    bibtexRaw.value = data.bibtex_raw
+    // An entry with no `field = value` pairs (e.g. "@article{key,\n}") is not a usable citation.
+    bibtexRaw.value = /=/.test(data.bibtex_raw) ? data.bibtex_raw : ''
     bibtexLoaded.value = true
   } catch {
     bibtexError.value = true

@@ -7,6 +7,8 @@ const { selectionState, pushToastMock, discoverSummaryTemplatesMock, downloadSel
     items: [] as SearchItem[],
     get count() { return this.items.length },
     isFull: false,
+    lists: [{ id: 'default', name: 'Default' }],
+    activeListId: 'default',
     clear: vi.fn(),
     toggle: vi.fn(),
     merge: vi.fn(),
@@ -72,6 +74,7 @@ vi.mock('@/components/search/SearchResultItem.vue', () => ({
 vi.mock('vue-i18n', () => ({
   useI18n: () => ({
     t: (key: string, params?: Record<string, unknown>) => params?.count ? `${key} ${params.count}` : key,
+    te: () => false,
   }),
 }))
 

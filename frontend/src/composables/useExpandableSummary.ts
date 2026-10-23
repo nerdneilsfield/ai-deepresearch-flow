@@ -22,6 +22,7 @@ export function useExpandableSummary() {
 
     if ((!expandedMarkdown.value[id] || expandedSummaryUrls.value[id] !== item.summary_url) && item.summary_url) {
       expandedLoading.value = { ...expandedLoading.value, [id]: true }
+      expanded.value = { ...expanded.value, [id]: true }
       try {
         const template = item.preferred_summary_template || 'default'
         const data = await getSummaryPayloadCached(item.paper_id, template, item.summary_url) as { summary?: string }
@@ -32,6 +33,9 @@ export function useExpandableSummary() {
         expandedSummaryUrls.value = { ...expandedSummaryUrls.value, [id]: item.summary_url }
       } catch {
         ui.pushToast('Failed to load summary', 'error')
+        // Collapse so a second click retries the fetch.
+        expanded.value = { ...expanded.value, [id]: false }
+        return
       } finally {
         expandedLoading.value = { ...expandedLoading.value, [id]: false }
       }

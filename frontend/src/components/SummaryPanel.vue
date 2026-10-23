@@ -5,6 +5,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import MarkdownContent from './MarkdownContent.vue'
 import { useUiStore } from '@/stores/ui'
 import { summaryParagraphs } from '@/lib/summary-text'
+import { templateDescription, templateLabel } from '@/lib/template-label'
 
 const props = defineProps<{
   summaryUrls: Record<string, string>
@@ -16,7 +17,7 @@ const props = defineProps<{
 
 const model = defineModel<string>()
 const ui = useUiStore()
-const { t } = useI18n()
+const { t, te } = useI18n()
 
 const available = computed(() => {
   if (props.summaryAvailable.length) return props.summaryAvailable
@@ -36,8 +37,8 @@ function setTemplate(tag: string) {
 <template>
   <Tabs v-model="model" class="w-full">
     <TabsList class="flex flex-wrap gap-2">
-      <TabsTrigger v-for="(_, tag) in props.summaryUrls" :key="tag" :value="String(tag)">
-        {{ tag }}
+      <TabsTrigger v-for="(_, tag) in props.summaryUrls" :key="tag" :value="String(tag)" :title="templateDescription(t, te, String(tag))">
+        {{ templateLabel(t, te, String(tag)) }}
       </TabsTrigger>
     </TabsList>
     <TabsContent v-if="model" :value="String(model)">
@@ -49,9 +50,10 @@ function setTemplate(tag: string) {
           type="button"
           class="rounded-full border border-ink-200 px-2 py-0.5 text-xs dark:border-ink-700"
           :class="props.summaryUrls[tag] ? 'text-ink-700 hover:border-ink-400 dark:text-ink-300 dark:hover:border-ink-500' : 'opacity-40'"
+          :title="templateDescription(t, te, tag)"
           @click="setTemplate(tag)"
         >
-          {{ tag }}
+          {{ templateLabel(t, te, tag) }}
         </button>
       </div>
       <div v-if="props.summaryMeta && props.summaryMeta.title" class="mt-4 space-y-3 text-sm text-ink-700 dark:text-ink-300">
