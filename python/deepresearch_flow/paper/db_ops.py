@@ -619,6 +619,9 @@ def _paper_title_keys(paper: dict[str, Any]) -> list[str]:
     paper_title = str(paper.get("paper_title") or "")
     if paper_title:
         candidates.append(paper_title)
+    llm_title = str(paper.get("_llm_title") or "")
+    if llm_title:
+        candidates.append(llm_title)
 
     source_path = paper.get("source_path")
     if source_path:
@@ -1229,7 +1232,7 @@ def _build_cache_meta(
         return {"path": str(path), "mtime": stats.st_mtime, "size": stats.st_size}
 
     meta = {
-        "version": 1,
+        "version": 2,
         "inputs": [file_meta(path) for path in db_paths],
         "bibtex": file_meta(bibtex_path) if bibtex_path else None,
     }
@@ -1529,14 +1532,49 @@ def _parse_bibtex_file_lenient(bibtex_path: Path) -> Any:
         pybtex_errors.set_strict_mode(strict_before)
 
 
+def _file_stem_key(path: str) -> str:
+    return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", Path(path.strip()).stem.lower())
+
+
+def _bibtex_text(value: str) -> str:
+    from pylatexenc.latex2text import LatexNodes2Text
+
+    return re.sub(r"\s+", " ", LatexNodes2Text(math_mode="text").latex_to_text(value)).strip()
+
+
+def _apply_bibtex(paper: dict[str, Any], record: dict[str, Any], person_list: list[Any]) -> None:
+    """Attach the entry and make BibTeX the source of truth for title and authors."""
+    paper["bibtex"] = {k: v for k, v in record.items() if not k.startswith("_")}
+    bib_title = _bibtex_text(str(record["fields"].get("title") or ""))
+    if bib_title:
+        old_title = str(paper.get("paper_title") or "")
+        if old_title and old_title != bib_title:
+            paper["_llm_title"] = old_title
+        paper["paper_title"] = bib_title
+    authors = [
+        _bibtex_text(" ".join(p.first_names + p.middle_names + p.prelast_names + p.last_names))
+        for p in person_list
+    ]
+    authors = [a for a in authors if a]
+    if authors:
+        paper["paper_authors"] = authors
+
+
 def enrich_with_bibtex(papers: list[dict[str, Any]], bibtex_path: Path) -> None:
-    """Enrich papers with bibtex metadata."""
+    """Enrich papers with bibtex metadata.
+
+    Zotero exports carry the attached PDF path in `file`; the extraction source
+    is named after the same PDF, so match on that first. Title similarity is the
+    fallback because extracted titles can be translated or carry stray TeX.
+    """
     if not PYBTEX_AVAILABLE:
         raise RuntimeError("pybtex is required for --bibtex support")
 
     bib_data = _parse_bibtex_file_lenient(bibtex_path)
     entries: list[dict[str, Any]] = []
     by_prefix: dict[str, list[int]] = {}
+    by_file: dict[str, set[int]] = {}
+    persons_by_idx: list[list[Any]] = []
     for key, entry in bib_data.entries.items():
         fields = dict(entry.fields)
         title = str(fields.get("title") or "").strip()
@@ -1553,12 +1591,29 @@ def enrich_with_bibtex(papers: list[dict[str, Any]], bibtex_path: Path) -> None:
         record["raw_entry"] = bibtex_entry_to_text(record)
         idx = len(entries)
         entries.append(record)
+        persons_by_idx.append(list(entry.persons.get("author", [])))
         prefix = title_norm[:16]
         by_prefix.setdefault(prefix, []).append(idx)
+        for file_path in str(fields.get("file") or "").split(";"):
+            if file_path.strip().lower().endswith(".pdf"):
+                stem = _file_stem_key(file_path)
+                if stem:
+                    by_file.setdefault(stem, set()).add(idx)
 
     for paper in papers:
         if isinstance(paper.get("bibtex"), dict):
             continue
+        source_stem = _file_stem_key(str(paper.get("source_path") or ""))
+        if source_stem:
+            # Source names are truncated PDF names, so either side may be a prefix of the other.
+            hits: set[int] = set()
+            for stem, idxs in by_file.items():
+                if stem.startswith(source_stem) or source_stem.startswith(stem):
+                    hits |= idxs
+            if len(hits) == 1:
+                idx = next(iter(hits))
+                _apply_bibtex(paper, entries[idx], persons_by_idx[idx])
+                continue
         title = str(paper.get("paper_title") or "").strip()
         if not title:
             continue
@@ -1582,7 +1637,8 @@ def enrich_with_bibtex(papers: list[dict[str, Any]], bibtex_path: Path) -> None:
                 best = entry
 
         if best is not None and best_score >= 0.9:
-            paper["bibtex"] = {k: v for k, v in best.items() if not k.startswith("_")}
+            idx = entries.index(best)
+            _apply_bibtex(paper, best, persons_by_idx[idx])
 
 
 def load_and_merge_papers(
