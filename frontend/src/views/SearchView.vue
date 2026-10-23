@@ -299,9 +299,13 @@ watch([query, page, pageSize, facet, facetId, facetByValue, sortBy, mode], () =>
   syncToRoute()
 })
 
-watch(query, () => {
-  if (!query.value && sortBy.value === 'relevance') {
+watch(query, (next, prev) => {
+  if (!next && sortBy.value === 'relevance') {
     sortBy.value = 'year_desc'
+  }
+  // Starting a query from the unfiltered list: the list's year default is not a user choice.
+  if (next && !prev && sortBy.value === 'year_desc') {
+    sortBy.value = 'relevance'
   }
 })
 
@@ -648,7 +652,7 @@ watch(facetQuery.error, (err) => {
         />
       </template>
 
-      <div v-if="mode === 'keyword' && loading" class="space-y-3" role="status" aria-live="polite">
+      <div v-if="mode === 'keyword' && loading && !results" class="space-y-3" role="status" aria-live="polite">
         <Skeleton v-for="n in 5" :key="n" class="h-28 rounded-xl" />
       </div>
       <div
@@ -659,7 +663,12 @@ watch(facetQuery.error, (err) => {
         {{ error }}
       </div>
 
-      <div v-if="mode === 'keyword' && results" class="space-y-3" :aria-busy="loading">
+      <div
+        v-if="mode === 'keyword' && results"
+        class="space-y-3 transition-opacity duration-200"
+        :class="loading ? 'opacity-60 delay-150' : ''"
+        :aria-busy="loading"
+      >
         <div class="text-xs text-ink-500" aria-live="polite">
           {{ t('showingResults', { start: startResult, end: endResult, total: results.total }) }}
           <template v-if="titleScopeQuery">

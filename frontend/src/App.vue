@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { ref as vueRef } from 'vue'
+import { queryClient } from '@/lib/query-client'
 import { plainMathText, renderMathText } from '@/lib/math-text'
 import { computed, onMounted, ref, watchEffect } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -90,10 +92,22 @@ onMounted(() => {
   favorites.init()
   if (adminPipeline?.token && !adminPipeline.authenticated) void adminPipeline.restore()
 })
+const fetchingCount = vueRef(queryClient.isFetching())
+queryClient.getQueryCache().subscribe(() => {
+  fetchingCount.value = queryClient.isFetching()
+})
 </script>
 
 <template>
   <div class="flex min-h-screen flex-col">
+    <!-- Delayed so fast responses never flash; shows only when the wait is noticeable. -->
+    <div
+      class="pointer-events-none fixed inset-x-0 top-0 z-[60] h-0.5 overflow-hidden transition-opacity duration-300"
+      :class="fetchingCount > 0 ? 'opacity-100 delay-200' : 'opacity-0'"
+      aria-hidden="true"
+    >
+      <div class="h-full w-1/3 animate-[loadbar_1.2s_ease-in-out_infinite] bg-primary" />
+    </div>
     <header
       class="sticky top-0 z-50 border-b border-border/60 bg-background/80 backdrop-blur-md transition-shadow duration-200"
       :class="scrolled ? 'shadow-card' : 'shadow-none'"

@@ -310,3 +310,8 @@ body,
   height: 100%;
   width: 100%;
 }
+
+@keyframes loadbar {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(300%); }
+}

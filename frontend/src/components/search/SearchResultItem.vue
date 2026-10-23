@@ -11,6 +11,8 @@ import { normalizeSummaryText, summaryParagraphs } from '@/lib/summary-text'
 import { useRuntimeConfigStore } from '@/stores/runtime-config'
 import { useI18n } from 'vue-i18n'
 import { renderMathText } from '@/lib/math-text'
+import { getPaperDetailCached } from '@/lib/api'
+import { QUERY_CACHE_POLICY, queryClient } from '@/lib/query-client'
 import type { FavoriteRating } from '@/types/favorites'
 
 const props = withDefaults(defineProps<{
@@ -39,6 +41,15 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
+// Same key/fn as usePaperDetail, so the detail page renders from cache.
+function prefetchDetail() {
+  const paperId = props.item.paper_id
+  void queryClient.prefetchQuery({
+    queryKey: ['paper-detail', paperId],
+    queryFn: () => getPaperDetailCached(paperId),
+    staleTime: QUERY_CACHE_POLICY.detail.staleTime,
+  })
+}
 const translatedUrl = computed(() => Object.values(props.item.translated_md_urls || {})[0] || '')
 const normalizedSnippetMarkdown = computed(() => normalizeSummaryText(props.item.snippet_markdown))
 const previewParagraphs = computed(() => summaryParagraphs(props.item.summary_preview))
@@ -71,6 +82,8 @@ function formatAuthors(authors?: string[]) {
           :to="{ name: 'paper', params: { paperId: item.paper_id } }"
           class="font-display-serif text-lg font-semibold leading-snug tracking-tight text-foreground transition-colors hover:text-primary"
           v-html="renderMathText(item.title)"
+          @pointerenter="prefetchDetail"
+          @focus="prefetchDetail"
         />
         <div class="text-xs text-muted-foreground" data-testid="result-meta">
           <span v-if="item.authors?.length">{{ formatAuthors(item.authors) }}</span>
