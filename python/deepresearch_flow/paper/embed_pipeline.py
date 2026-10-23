@@ -39,7 +39,6 @@ from deepresearch_flow.paper.vector_store import (
 
 logger = logging.getLogger(__name__)
 _SHARED_KEY = "_shared"
-_CHECKPOINT_FILE = "embed_resume_checkpoint.json"
 
 
 @dataclass
@@ -48,7 +47,6 @@ class _EmbedGroupState:
     template_key: str
     group_hash: str
     should_replace_existing: bool
-    staged_rows: list[ChunkRow]
     pending_batch_count: int
     batch_results: dict[int, list[ChunkRow]] = field(default_factory=dict)
     finalized: bool = False
@@ -155,87 +153,6 @@ def _build_group_rows(
     return rows
 
 
-def _checkpoint_path(vector_dir: Path) -> Path:
-    return vector_dir / _CHECKPOINT_FILE
-
-
-def _serialize_chunk_row(row: ChunkRow) -> dict[str, object]:
-    return {
-        "id": row.id,
-        "doc_id": row.doc_id,
-        "source_path": row.source_path,
-        "template_tag": row.template_tag,
-        "chunk_type": row.chunk_type,
-        "chunk_index": row.chunk_index,
-        "field_name": row.field_name,
-        "lang": row.lang,
-        "text": row.text,
-        "content_hash": row.content_hash,
-        "vector": row.vector,
-        "title": row.title,
-        "year": row.year,
-        "authors": row.authors,
-        "venue": row.venue,
-        "tags": row.tags,
-    }
-
-
-def _deserialize_chunk_row(data: dict[str, object]) -> ChunkRow:
-    return ChunkRow(
-        id=str(data["id"]),
-        doc_id=str(data["doc_id"]),
-        source_path=str(data["source_path"]),
-        template_tag=str(data["template_tag"]),
-        chunk_type=str(data["chunk_type"]),
-        chunk_index=int(data["chunk_index"]),
-        field_name=str(data["field_name"]),
-        lang=str(data["lang"]),
-        text=str(data["text"]),
-        content_hash=str(data["content_hash"]),
-        vector=[float(v) for v in list(data["vector"])],
-        title=str(data["title"]),
-        year=int(data["year"]),
-        authors=str(data["authors"]),
-        venue=str(data["venue"]),
-        tags=str(data["tags"]),
-    )
-
-
-def _load_checkpoint(vector_dir: Path) -> dict[str, object] | None:
-    path = _checkpoint_path(vector_dir)
-    if not path.exists():
-        return None
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _save_checkpoint(
-    vector_dir: Path,
-    *,
-    doc_id: str,
-    template_key: str,
-    group_hash: str,
-    next_offset: int,
-    staged_rows: list[ChunkRow],
-) -> None:
-    vector_dir.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "doc_id": doc_id,
-        "template_key": template_key,
-        "group_hash": group_hash,
-        "next_offset": next_offset,
-        "staged_rows": [_serialize_chunk_row(row) for row in staged_rows],
-    }
-    _checkpoint_path(vector_dir).write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-
-
-def _clear_checkpoint(vector_dir: Path) -> None:
-    path = _checkpoint_path(vector_dir)
-    if path.exists():
-        path.unlink()
-
-
 async def run_embed_pipeline(
     *,
     config: PaperConfig,
@@ -311,7 +228,6 @@ async def run_embed_pipeline(
 
     written_chunk_count = 0
     embed_progress = tqdm(total=0, desc="embed chunks", unit="chunk")
-    checkpoint = _load_checkpoint(vector_dir)
     stop_requested = False
 
     previous_sigint = signal.getsignal(signal.SIGINT)
@@ -356,29 +272,12 @@ async def run_embed_pipeline(
                                 content_hashes=content_hashes,
                             )
                             should_replace_existing = template_key in existing_hashes
-                            staged_rows: list[ChunkRow] = []
-                            start_offset = 0
-                            if (
-                                should_replace_existing
-                                and checkpoint is not None
-                                and checkpoint.get("doc_id") == doc.doc_id
-                                and checkpoint.get("template_key") == template_key
-                                and checkpoint.get("group_hash") == group_hash
-                            ):
-                                start_offset = int(checkpoint.get("next_offset") or 0)
-                                staged_rows = [
-                                    _deserialize_chunk_row(item)
-                                    for item in list(checkpoint.get("staged_rows") or [])
-                                    if isinstance(item, dict)
-                                ]
                             batch_specs = [
                                 (
                                     start,
                                     pending_rows[start : start + embedding_config.batch_size],
                                 )
-                                for start in range(
-                                    start_offset, len(pending_rows), embedding_config.batch_size
-                                )
+                                for start in range(0, len(pending_rows), embedding_config.batch_size)
                             ]
                             embed_progress.total = (embed_progress.total or 0) + sum(
                                 len(batch_rows) for _, batch_rows in batch_specs
@@ -389,17 +288,8 @@ async def run_embed_pipeline(
                                 template_key=template_key,
                                 group_hash=group_hash,
                                 should_replace_existing=should_replace_existing,
-                                staged_rows=staged_rows,
                                 pending_batch_count=len(batch_specs),
                             )
-                            if not batch_specs and should_replace_existing and staged_rows:
-                                delete_groups(db, [(doc.doc_id, template_key)])
-                                write_chunks(
-                                    db, staged_rows, dimensions=embedding_config.dimensions
-                                )
-                                written_chunk_count += len(staged_rows)
-                                _clear_checkpoint(vector_dir)
-                                checkpoint = None
                             for start, batch_rows in batch_specs:
                                 batch_jobs.append(
                                     _EmbedBatchJob(group=group, start=start, batch_rows=batch_rows)
@@ -409,7 +299,7 @@ async def run_embed_pipeline(
                     semaphore = asyncio.Semaphore(max_concurrency)
 
                     async def embed_job(job: _EmbedBatchJob) -> None:
-                        nonlocal checkpoint, written_chunk_count
+                        nonlocal written_chunk_count
                         async with semaphore:
                             batch = [row.text for row in job.batch_rows]
                             result = await call_embedding_with_route_pool(
@@ -454,19 +344,10 @@ async def run_embed_pipeline(
                                 for start in sorted(group.batch_results)
                                 for row in group.batch_results[start]
                             ]
-                            rows_to_write = group.staged_rows + ordered_rows
                             if group.should_replace_existing:
                                 delete_groups(db, [(group.doc_id, group.template_key)])
-                                write_chunks(
-                                    db, rows_to_write, dimensions=embedding_config.dimensions
-                                )
-                                _clear_checkpoint(vector_dir)
-                                checkpoint = None
-                            else:
-                                write_chunks(
-                                    db, rows_to_write, dimensions=embedding_config.dimensions
-                                )
-                            written_chunk_count += len(rows_to_write)
+                            write_chunks(db, ordered_rows, dimensions=embedding_config.dimensions)
+                            written_chunk_count += len(ordered_rows)
                             group.finalized = True
                         embed_progress.update(len(job.batch_rows))
 
@@ -490,7 +371,6 @@ async def run_embed_pipeline(
     )
     if orphan_keys:
         delete_groups(db, list(orphan_keys))
-    _clear_checkpoint(vector_dir)
     update_index_meta_stats(vector_dir, db)
     if written_chunk_count == 0 and not orphan_keys:
         logger.info("No new chunks to embed.")
