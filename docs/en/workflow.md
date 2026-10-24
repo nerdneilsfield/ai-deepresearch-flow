@@ -16,10 +16,14 @@ export NOTIFY_URL='https://notify-host/api/<uuid>/get'   # optional
 chains in parallel tmux windows (`tmux -L drflow-<project> attach -t run` to watch them), and runs
 `build` after all three finish. `embed`, `api push` and `api update` are not in the script; run them yourself.
 
-- To rerun, execute `./run.sh` again. Finished chains leave `logs/<chain>.done` and are skipped.
-  Use `./run.sh --only ocr|simple|deep_read|translate|build` to run one part. Delete a `.done` file to force a chain again.
-- A failed chain writes `logs/<chain>.failed` and the script does not run `build`. Logs are in `logs/<chain>.log`.
-- The script is plain bash and safe to edit. All paths are relative to the project directory.
+- Each step is a function `s_<step>` in the script, one command per line. Edit that line to change a parameter.
+  `./run.sh list` prints all step names.
+- Name steps to run only those: `./run.sh fix-simple,fix-math-simple` (comma or space separated). They run
+  in the given order, even if a step already has a `.done` file, and the list stops at the first failure.
+- With no arguments the script runs the whole flow. On a rerun, finished steps (`logs/<step>.done`) are
+  skipped, so it resumes at the failed step.
+- A failed step writes `logs/<step>.failed` and the script does not run `build`. Logs are in `logs/<step>.log`.
+- The script is plain bash. All paths are relative to the project directory.
 - `NOTIFY_URL` is the `/api/<uuid>/get` endpoint of
   [simple-telegram-notification-bot](https://github.com/nerdneilsfield/simple-telegram-notification-bot).
   Without it, no message is sent.

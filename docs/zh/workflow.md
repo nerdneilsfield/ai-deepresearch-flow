@@ -13,13 +13,16 @@ export NOTIFY_URL='https://通知服务/api/<uuid>/get'   # 可选
 ```
 
 `run.sh` 的流程是：`ocr → fix → fix-math → organize`，然后 `simple`、`deep_read`、`translate`
-三条链在 tmux 里并行（`tmux -L drflow-<项目名> attach -t run` 查看），三条都完成后执行 `build`。
+三条链（每条链里的步骤顺序执行）在 tmux 里并行（`tmux -L drflow-<项目名> attach -t run` 查看），三条都完成后执行 `build`。
 `embed`、`api push`、`api update` 不在脚本里，需要手动执行。
 
-- 重跑直接再执行 `./run.sh`：已完成的链有 `logs/<链>.done`，会被跳过。只重跑某一段用
-  `./run.sh --only ocr|simple|deep_read|translate|build`。想强制重做某条链，删除对应的 `.done`。
-- 某条链失败会写 `logs/<链>.failed`，脚本不会执行 `build`。日志在 `logs/<链>.log`。
-- 脚本是普通 bash，可以直接编辑。路径全是相对于项目目录的。
+- 每个步骤是脚本里的一个函数 `s_<步骤名>`，一行一条命令，直接改那一行就能改参数。
+  `./run.sh list` 列出所有步骤名。
+- 指定步骤：`./run.sh fix-simple,fix-math-simple`（逗号或空格分隔），按给定顺序一个接一个跑，
+  即使该步骤已有 `.done` 也会重跑；某一步失败就停止，后面的不再执行。
+- 不带参数是完整流程。重跑时已完成的步骤（`logs/<步骤>.done`）会被跳过，从失败的那一步继续。
+- 某一步失败会写 `logs/<步骤>.failed`，脚本不会执行 `build`。日志在 `logs/<步骤>.log`。
+- 脚本是普通 bash，路径全是相对于项目目录的。
 - `NOTIFY_URL` 指向 [simple-telegram-notification-bot](https://github.com/nerdneilsfield/simple-telegram-notification-bot)
   的 `/api/<uuid>/get`；不设置则不通知。
 
