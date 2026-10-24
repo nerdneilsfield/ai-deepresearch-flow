@@ -2,6 +2,39 @@
 
 # 高级工作流
 
+## 一键生成整条流水线（init-run）
+
+准备一个项目目录，里面放 `pdf/` 和恰好一个 `.bib`，其余输出都写在这个目录下：
+
+```bash
+uv run deepresearch-flow utils init-run ~/pdfs/myproj -m provider/model
+export NOTIFY_URL='https://通知服务/api/<uuid>/get'   # 可选
+~/pdfs/myproj/run.sh
+```
+
+`run.sh` 的流程是：`ocr → fix → fix-math → organize`，然后 `simple`、`deep_read`、`translate`
+三条链在 tmux 里并行（`tmux -L drflow-<项目名> attach -t run` 查看），三条都完成后执行 `build`。
+`embed`、`api push`、`api update` 不在脚本里，需要手动执行。
+
+- 重跑直接再执行 `./run.sh`：已完成的链有 `logs/<链>.done`，会被跳过。只重跑某一段用
+  `./run.sh --only ocr|simple|deep_read|translate|build`。想强制重做某条链，删除对应的 `.done`。
+- 某条链失败会写 `logs/<链>.failed`，脚本不会执行 `build`。日志在 `logs/<链>.log`。
+- 脚本是普通 bash，可以直接编辑。路径全是相对于项目目录的。
+- `NOTIFY_URL` 指向 [simple-telegram-notification-bot](https://github.com/nerdneilsfield/simple-telegram-notification-bot)
+  的 `/api/<uuid>/get`；不设置则不通知。
+
+### 退出码约定
+
+批处理命令（`extract`、`translate`、`ocr`、`fix-math`、`fix-mermaid`）使用统一的退出码：
+
+| 退出码 | 含义 |
+|---|---|
+| 0 | 全部成功 |
+| 1 | 命令自身出错，重试没有意义 |
+| 3 | 输出和错误报告已写出，但部分条目失败，值得带 `--retry-failed`（`translate` 直接重跑）再试 |
+
+`run.sh` 对退出码 3 最多重试 3 轮（`--rounds` 修改），其他非零退出码直接终止该链。
+
 ## 增量构建 PDF 文献库
 
 如果你的 PDF 库在持续增长，不用每次都全量重建。下面的流程会找出新增的 PDF，只处理它们，然后合并回已有库中。

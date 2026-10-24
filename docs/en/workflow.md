@@ -2,6 +2,40 @@
 
 # Advanced Workflows
 
+## Generate the whole pipeline (init-run)
+
+Create a project directory that holds `pdf/` and exactly one `.bib`. All outputs go into that directory:
+
+```bash
+uv run deepresearch-flow utils init-run ~/pdfs/myproj -m provider/model
+export NOTIFY_URL='https://notify-host/api/<uuid>/get'   # optional
+~/pdfs/myproj/run.sh
+```
+
+`run.sh` runs `ocr → fix → fix-math → organize`, then the `simple`, `deep_read` and `translate`
+chains in parallel tmux windows (`tmux -L drflow-<project> attach -t run` to watch them), and runs
+`build` after all three finish. `embed`, `api push` and `api update` are not in the script; run them yourself.
+
+- To rerun, execute `./run.sh` again. Finished chains leave `logs/<chain>.done` and are skipped.
+  Use `./run.sh --only ocr|simple|deep_read|translate|build` to run one part. Delete a `.done` file to force a chain again.
+- A failed chain writes `logs/<chain>.failed` and the script does not run `build`. Logs are in `logs/<chain>.log`.
+- The script is plain bash and safe to edit. All paths are relative to the project directory.
+- `NOTIFY_URL` is the `/api/<uuid>/get` endpoint of
+  [simple-telegram-notification-bot](https://github.com/nerdneilsfield/simple-telegram-notification-bot).
+  Without it, no message is sent.
+
+### Exit codes
+
+Batch commands (`extract`, `translate`, `ocr`, `fix-math`, `fix-mermaid`) share these exit codes:
+
+| Code | Meaning |
+|---|---|
+| 0 | Everything succeeded |
+| 1 | The command itself failed; retrying will not help |
+| 3 | Outputs and the error report were written, but some items failed; retry with `--retry-failed` (rerun `translate` as is) |
+
+`run.sh` retries exit code 3 up to 3 rounds (change with `--rounds`). Any other non-zero code stops that chain.
+
 ## Incremental PDF Library Workflow
 
 Keep a growing PDF library in sync without reprocessing everything. This workflow identifies new PDFs, processes only the missing ones, and merges them back into the existing library.

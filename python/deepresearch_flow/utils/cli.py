@@ -13,6 +13,7 @@ import click
 import coloredlogs
 import httpx
 
+from deepresearch_flow.utils.init_run import init_run
 from deepresearch_flow.paper.config import (
     BaseConfig,
     KeyConfig,
@@ -43,6 +44,9 @@ def configure_logging(verbose: bool = False) -> None:
 @click.group()
 def utils() -> None:
     """Utility commands."""
+
+
+utils.add_command(init_run)
 
 
 def _toml_string(value: str) -> str:
