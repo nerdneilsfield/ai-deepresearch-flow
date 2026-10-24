@@ -213,10 +213,23 @@ OCR、organize 和修复等步骤保留启动脚本时的工作目录。仅 extr
 不重定向到日志文件；`pipeline.log` 只记录步骤开始、结束和失败状态。
 配置文件路径按启动脚本时的目录解析；配置中的自定义相对文件路径应改为绝对路径。
 
-命令以非零状态退出时，脚本停止并记录失败。部分现有命令会在单篇文档失败后
-仍返回零，因此 `progress.json` 的 `completed` 仅表示命令执行结束；还需检查
-终端输出和错误报告。重新运行会再次执行所选步骤（默认整条流程），沿用各命令的已有结果跳过规则，
+命令以非零状态退出时，脚本停止并记录失败，退出码 3 除外：批处理命令（`extract`、
+`translate`、`ocr`、`fix-math`、`fix-mermaid`）在执行完毕但部分条目失败时返回 3，
+脚本只给出警告，因此 `progress.json` 的 `completed` 仅表示命令执行结束；还需检查
+错误报告。重新运行会再次执行所选步骤（默认整条流程），沿用各命令的已有结果跳过规则，
 不会按 `progress.json` 跳过步骤。格式和公式修复会直接修改生成产物，不修改输入 PDF。
+
+#### 改用可手动编辑的 `run.sh`
+
+对一个包含 `pdf/` 和一个 `.bib` 的项目目录，`utils init-run` 会生成 `run.sh`，每个步骤是
+一个可直接修改的函数。三条抽取与翻译链在 tmux 里并行，失败条目自动重试，最后执行 `build`。
+用 `./run.sh fix-simple,fix-math-simple` 只跑指定步骤。详见
+[高级工作流](docs/zh/workflow.md#一键生成整条流水线init-run)。
+
+```bash
+uv run deepresearch-flow utils init-run ~/pdfs/myproj -m provider/model
+~/pdfs/myproj/run.sh
+```
 
 #### 步骤 1：对 PDF/图片执行 OCR
 

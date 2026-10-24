@@ -217,10 +217,24 @@ current terminal; output is not redirected to files. `progress.json` records the
 latest run, and `pipeline.log` records step start, completion, and failure events.
 Configuration paths resolve
 against the caller's directory; use absolute paths for custom file paths inside configs.
-Nonzero command exits stop the workflow. Some commands return zero despite per-file
-failures, so check error reports and terminal output even when progress says `completed`.
+Nonzero command exits stop the workflow, except exit code 3: batch commands (`extract`,
+`translate`, `ocr`, `fix-math`, `fix-mermaid`) use it when they finished but some items
+failed. The script only warns, so check the error reports even when progress says `completed`.
 Reruns execute the selected steps using each command's existing-output skip rules,
 not the progress file. Repairs modify generated outputs in place, not source PDFs.
+
+#### Generate an editable `run.sh` instead
+
+For one project directory that holds `pdf/` and one `.bib`, `utils init-run` writes a
+`run.sh` with one editable function per step. It runs the three extraction and translation
+chains in parallel tmux windows, retries failed items, and ends with `build`. Run chosen
+steps with `./run.sh fix-simple,fix-math-simple`. See
+[Advanced Workflows](docs/en/workflow.md#generate-the-whole-pipeline-init-run).
+
+```bash
+uv run deepresearch-flow utils init-run ~/pdfs/myproj -m provider/model
+~/pdfs/myproj/run.sh
+```
 
 #### Step 1: OCR PDFs or Images
 

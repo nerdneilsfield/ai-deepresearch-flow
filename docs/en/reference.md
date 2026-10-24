@@ -195,6 +195,13 @@ uv run deepresearch-flow paper extract \
   --input ./docs --model @main_model.json
 ```
 
+Generate a project `run.sh` (needs `pdf/` and one `.bib` in the directory; see
+[Advanced Workflows](workflow.md#generate-the-whole-pipeline-init-run)):
+```bash
+uv run deepresearch-flow utils init-run ~/pdfs/myproj -m openai/gpt-4o-mini \
+  [--target-lang zh] [--config config.toml] [--ocr-config ocr.toml] [--rounds 3]
+```
+
 Mode probing:
 ```bash
 uv run deepresearch-flow utils test-mode \

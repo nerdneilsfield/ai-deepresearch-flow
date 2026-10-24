@@ -196,6 +196,14 @@ uv run deepresearch-flow paper extract \
   --input ./docs --model @main_model.json
 ```
 
+生成项目的 `run.sh`（目录里需要有 `pdf/` 和一个 `.bib`，详见
+[高级工作流](workflow.md#一键生成整条流水线init-run)）：
+
+```bash
+uv run deepresearch-flow utils init-run ~/pdfs/myproj -m openai/gpt-4o-mini \
+  [--target-lang zh] [--config config.toml] [--ocr-config ocr.toml] [--rounds 3]
+```
+
 模式探测：
 
 ```bash
