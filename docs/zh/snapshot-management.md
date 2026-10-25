@@ -183,7 +183,9 @@ OCR、翻译和抽取结果不用重跑。在本地重新 build，然后只上�
 - `pdf/`、`images/`、`md/`、`md_translate/` 按内容哈希命名。文件名相同，就可以直接沿用服务器上的旧文件。PDF 在导出后另行压缩过也没关系。
 - `summary/` 和 `manifest/` 按 `paper_id` 命名，内容里记录了标题等元数据。同名文件也可能有变化，需要比对内容。
 
-以 hand2 为例，整份导出约 3 GB，差异包约 2.4 MB。
+在一份约 3 GB 的导出上，差异包约 2.4 MB。
+
+下面的命令假设项目目录是 `./myproj`，布局与 [从 PDF 到快照](pipeline.md) 相同，已上线的数据库和导出目录是 `myproj/dist/myproj.db` 与 `myproj/dist/myproj-export/`。
 
 ### 1. 部署新后端
 
@@ -191,31 +193,32 @@ OCR、翻译和抽取结果不用重跑。在本地重新 build，然后只上�
 
 ### 2. 本地重新 build
 
-输入沿用原来的 JSON、BibTeX 和各个 root，新 build 输出到新目录。`--previous-snapshot-db` 指向已上线的那份数据库，用来保持 `paper_id` 不变。
+输入沿用原来的 JSON、BibTeX 和各个 root，新 build 输出到 `rebuild/` 目录。`--previous-snapshot-db` 指向已上线的那份数据库，用来保持 `paper_id` 不变。
 
 ```bash
-H=~/dengqi/pdfs/hand2
+P=./myproj
 uv run deepresearch-flow paper db snapshot build \
-  -i $H/simple.json -i $H/deep_read.json -b $H/hand2.bib \
-  --md-root $H/md_simple --md-translated-root $H/md_base64_translated --pdf-root $H/pdf \
-  --output-db /tmp/h2b/hand2.db --static-export-dir /tmp/h2b/static \
-  --previous-snapshot-db $H/dist/hand2.db
+  -i $P/simple.json -i $P/deep_read.json -b $P/myproj.bib \
+  --md-root $P/md_simple --md-translated-root $P/md_base64_translated --pdf-root $P/pdf \
+  --output-db rebuild/myproj.db --static-export-dir rebuild/static \
+  --previous-snapshot-db $P/dist/myproj.db
 ```
 
 ### 3. 打差异包
 
-`OLD` 是已上传的导出目录，它的内容必须和服务器一致。`NEW` 是新 build 的静态目录。
+`OLD` 是已上传的导出目录，它的内容必须和服务器一致。`NEW` 是新 build 的静态目录。差异包 `delta.tar.gz` 和文件清单 `delta.list` 写在 `rebuild/` 下。
 
 ```bash
-OLD=$H/dist/hand2-export
-NEW=/tmp/h2b/static
+R=$(realpath rebuild)
+OLD=$(realpath $P/dist/myproj-export)
+NEW=$R/static
 cd "$NEW"
 find . -type f | while read -r f; do
   if [ ! -e "$OLD/$f" ]; then echo "$f"                                    # 新文件
   elif [[ $f == *.json ]] && ! cmp -s "$f" "$OLD/$f"; then echo "$f"; fi   # 内容变化的 summary/manifest
-done > /tmp/delta.list
-cut -d/ -f2 /tmp/delta.list | sort | uniq -c                               # 按目录统计，核对数量
-tar -C "$NEW" -czf /tmp/hand2-delta.tar.gz -T /tmp/delta.list
+done > "$R/delta.list"
+cut -d/ -f2 "$R/delta.list" | sort | uniq -c                              # 按目录统计，核对数量
+tar -C "$NEW" -czf "$R/delta.tar.gz" -T "$R/delta.list"
 ```
 
 ### 4. 在服务器上解压
@@ -223,7 +226,7 @@ tar -C "$NEW" -czf /tmp/hand2-delta.tar.gz -T /tmp/delta.list
 进入静态目录，覆盖解压：
 
 ```bash
-tar -xzf hand2-delta.tar.gz
+tar -xzf delta.tar.gz
 ```
 
 不需要删除旧文件，数据库已经不再引用它们。
@@ -234,8 +237,8 @@ tar -xzf hand2-delta.tar.gz
 
 ```bash
 uv run deepresearch-flow paper db api update \
-  --snapshot-db /tmp/h2b/hand2.db \
-  --static-export-dir /tmp/h2b/static \
+  --snapshot-db rebuild/myproj.db \
+  --static-export-dir rebuild/static \
   --config remote.toml --dry-run
 ```
 
@@ -246,7 +249,7 @@ uv run deepresearch-flow paper db api update \
 有的论文以前没有匹配上 BibTeX，这次匹配上了，它的 `paper_id` 会变。`api update` 会跳过这些论文，因为线上还没有它们。用下面的命令找出它们：
 
 ```bash
-OLD_DB=$H/dist/hand2.db NEW_DB=/tmp/h2b/hand2.db python3 - <<'PY'
+OLD_DB=$P/dist/myproj.db NEW_DB=rebuild/myproj.db python3 - <<'PY'
 import os, sqlite3
 old = {r[0] for r in sqlite3.connect(os.environ["OLD_DB"]).execute("select paper_id from paper")}
 new = {r[0] for r in sqlite3.connect(os.environ["NEW_DB"]).execute("select paper_id from paper")}
