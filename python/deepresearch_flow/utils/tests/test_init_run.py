@@ -17,7 +17,7 @@ def _project(tmp_path: Path, bibs: int = 1) -> Path:
 
 
 def _run(project: Path, *extra: str):
-    return CliRunner().invoke(cli, ["utils", "init-run", str(project), "-m", "p/m", *extra])
+    return CliRunner().invoke(cli, ["utils", "init-run", str(project), *extra])
 
 
 def test_writes_executable_script_with_valid_bash_syntax(tmp_path: Path) -> None:
@@ -162,3 +162,46 @@ def test_exit_code_other_than_3_is_not_retried(tmp_path: Path) -> None:
 
     assert "rc=1" in result.stdout
     assert _calls(script.parent) == ["first"]
+
+
+def test_every_model_option_is_a_placeholder(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    assert _run(project).exit_code == 0
+
+    text = (project / "run.sh").read_text(encoding="utf-8")
+    steps = text.split("# ---- steps:")[1].split("# ---- driver")[0]
+    lines = [line for line in steps.splitlines() if "--model" in line]
+    assert len(lines) == 8
+    assert all("--model PROVIDER/MODEL" in line for line in lines)
+
+
+def test_unreplaced_model_placeholder_stops_before_running(tmp_path: Path) -> None:
+    script = _script_with_stub(tmp_path, LOG_AND_SUCCEED)
+
+    result = subprocess.run([str(script), "fix-math-simple"], capture_output=True, text=True)
+
+    assert result.returncode == 1
+    assert "fix-math-simple" in result.stdout and "placeholder" in result.stdout
+    assert not (script.parent / "calls.log").exists()
+
+
+def test_step_without_model_runs_even_with_placeholders_elsewhere(tmp_path: Path) -> None:
+    script = _script_with_stub(tmp_path, LOG_AND_SUCCEED)
+
+    result = subprocess.run([str(script), "fix-simple"], capture_output=True, text=True)
+
+    assert result.returncode == 0, result.stdout
+    assert len(_calls(script.parent)) == 1
+
+
+def test_replaced_placeholder_runs(tmp_path: Path) -> None:
+    script = _script_with_stub(tmp_path, LOG_AND_SUCCEED)
+    script.write_text(
+        script.read_text(encoding="utf-8").replace("PROVIDER/MODEL", "openai/gpt-4.1"),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run([str(script), "fix-math-simple"], capture_output=True, text=True)
+
+    assert result.returncode == 0, result.stdout
+    assert "--model openai/gpt-4.1" in _calls(script.parent)[0]

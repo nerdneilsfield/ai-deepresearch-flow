@@ -15,6 +15,7 @@ _TEMPLATE = r"""#!/usr/bin/env bash
 #                                 Always runs them, even if logs/STEP.done exists.
 #   ./run.sh list                 print all step names
 #
+# Replace PROVIDER/MODEL on every --model line (8 of them) with a real provider/model.
 # Each step is a function s_<name> below, one command per line. Change a parameter by
 # editing that line. Skip a command by commenting it out.
 # A step that fails stops its chain (set -e). Exit code 3 means "some items failed":
@@ -26,11 +27,11 @@ _TEMPLATE = r"""#!/usr/bin/env bash
 
 # ---- settings ---------------------------------------------------------------
 NAME=@@NAME@@
-MODEL=@@MODEL@@
 LANG_TO=@@LANG@@
 CONFIG=@@CONFIG@@
 OCR_CONFIG=@@OCR_CONFIG@@
 ROUNDS=@@ROUNDS@@
+# Models: every LLM step uses main_model (translate: [translator_config].model) from $CONFIG.
 NOTIFY_URL=${NOTIFY_URL:-}      # optional, https://host/api/<uuid>/get
 REPO=@@REPO@@
 drflow() { uv run --project "$REPO" deepresearch-flow "$@"; }
@@ -46,6 +47,15 @@ ALL="$CHAIN_ocr $CHAIN_simple $CHAIN_deep_read $CHAIN_translate build"
 # ---- helpers (usually no need to edit) --------------------------------------
 cd "$(dirname "$0")" || exit 1
 ROOT=$(pwd)
+# A placeholder left in a step that is about to run would send a fake model name.
+check_placeholders() {
+  local s
+  for s in "$@"; do
+    if declare -f "s_$s" | grep -q -- "--model PROVIDER""/MODEL"; then
+      echo "step $s still has the model placeholder: edit run.sh"; return 1
+    fi
+  done
+}
 PARTIAL=3
 FORCE=""
 export PATH="$REPO/node_modules/.bin:$PATH"   # fix-mermaid needs mmdc
@@ -86,7 +96,7 @@ s_fix() {
 }
 s_fix-math() {
   retry drflow recognize fix-math --input ocr -r --in-place \
-    --config "$CONFIG" --model "$MODEL" --report logs/fix-math-ocr.json
+    --config "$CONFIG" --model PROVIDER/MODEL --report logs/fix-math-ocr.json
 }
 s_organize() {
   once drflow recognize organize --input ocr -r \
@@ -95,7 +105,7 @@ s_organize() {
 
 s_simple() {
   (cd logs/simple && retry drflow paper extract \
-    --input "$ROOT/md_simple" --config "$CONFIG" --model "$MODEL" --prompt-template simple \
+    --input "$ROOT/md_simple" --config "$CONFIG" --model PROVIDER/MODEL --prompt-template simple \
     --output "$ROOT/simple.json" --errors "$ROOT/logs/simple-errors.json")
 }
 s_fix-simple() {
@@ -103,12 +113,12 @@ s_fix-simple() {
 }
 s_fix-math-simple() {
   retry drflow recognize fix-math --input simple.json --json --in-place \
-    --config "$CONFIG" --model "$MODEL" --report logs/fix-math-simple.json
+    --config "$CONFIG" --model PROVIDER/MODEL --report logs/fix-math-simple.json
 }
 
 s_deep_read() {
   (cd logs/deep_read && retry drflow paper extract \
-    --input "$ROOT/md_simple" --config "$CONFIG" --model "$MODEL" --prompt-template deep_read \
+    --input "$ROOT/md_simple" --config "$CONFIG" --model PROVIDER/MODEL --prompt-template deep_read \
     --output "$ROOT/deep_read.json" --errors "$ROOT/logs/deep_read-errors.json")
 }
 s_fix-deep_read() {
@@ -116,15 +126,15 @@ s_fix-deep_read() {
 }
 s_fix-math-deep_read() {
   retry drflow recognize fix-math --input deep_read.json --json --in-place \
-    --config "$CONFIG" --model "$MODEL" --report logs/fix-math-deep_read.json
+    --config "$CONFIG" --model PROVIDER/MODEL --report logs/fix-math-deep_read.json
 }
 s_fix-mermaid-deep_read() {
   retry drflow recognize fix-mermaid --input deep_read.json --json --in-place \
-    --config "$CONFIG" --model "$MODEL" --report logs/fix-mermaid-deep_read.json
+    --config "$CONFIG" --model PROVIDER/MODEL --report logs/fix-mermaid-deep_read.json
 }
 
 s_translate() {
-  rerun drflow translator translate --input md_base64 --config "$CONFIG" --model "$MODEL" \
+  rerun drflow translator translate --input md_base64 --config "$CONFIG" --model PROVIDER/MODEL \
     --target-lang "$LANG_TO" --fix-level moderate \
     --output-dir md_base64_translated --debug-dir logs/translator
 }
@@ -133,7 +143,7 @@ s_fix-translated() {
 }
 s_fix-math-translated() {
   retry drflow recognize fix-math --input md_base64_translated -r --in-place \
-    --config "$CONFIG" --model "$MODEL" --report logs/fix-math-translated.json
+    --config "$CONFIG" --model PROVIDER/MODEL --report logs/fix-math-translated.json
 }
 
 s_build() {
@@ -177,9 +187,11 @@ if [ $# -gt 0 ]; then
     case " $ALL " in *" $s "*) ;; *) echo "unknown step: $s"; echo "steps: $ALL"; exit 1 ;; esac
   done
   FORCE=1
+  check_placeholders "${SEL[@]}" || exit 1
   run_seq "steps ${SEL[*]}" "${SEL[@]}"; exit $?
 fi
 
+check_placeholders $ALL || exit 1
 run_seq ocr $CHAIN_ocr || exit 1
 
 command -v tmux >/dev/null || { echo "tmux is required"; exit 1; }
@@ -222,7 +234,6 @@ def _find_bib(project: Path) -> Path:
 
 @click.command("init-run")
 @click.argument("project", type=click.Path(exists=True, file_okay=False, path_type=Path))
-@click.option("-m", "--model", required=True, help="provider/model used by every LLM step")
 @click.option("--target-lang", default="zh", show_default=True)
 @click.option("--config", "config_name", default="config.toml", show_default=True,
               help="LLM config; resolved against the current directory and stored as an absolute path")
@@ -231,7 +242,6 @@ def _find_bib(project: Path) -> Path:
 @click.option("--rounds", default=3, show_default=True, help="Retry rounds per step")
 def init_run(
     project: Path,
-    model: str,
     target_lang: str,
     config_name: str,
     ocr_config_name: str,
@@ -246,7 +256,6 @@ def init_run(
     script = _TEMPLATE
     for key, value in {
         "NAME": project.name,
-        "MODEL": model,
         "LANG": target_lang,
         "CONFIG": str(Path(config_name).resolve()),
         "OCR_CONFIG": str(Path(ocr_config_name).resolve()),
