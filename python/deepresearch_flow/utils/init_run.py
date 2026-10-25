@@ -26,14 +26,23 @@ _TEMPLATE = r"""#!/usr/bin/env bash
 
 # ---- settings ---------------------------------------------------------------
 NAME=@@NAME@@
-MODEL=@@MODEL@@
 LANG_TO=@@LANG@@
 CONFIG=@@CONFIG@@
 OCR_CONFIG=@@OCR_CONFIG@@
 ROUNDS=@@ROUNDS@@
+# One model per task, provider/model. Change them independently.
+# Empty MODEL_EXTRACT_* / MODEL_TRANSLATE: use main_model from the config file.
+# MODEL_FIX_MATH / MODEL_FIX_MERMAID must be set: those commands require a model.
+MODEL_EXTRACT_SIMPLE=@@MODEL@@
+MODEL_EXTRACT_DEEP=@@MODEL@@
+MODEL_TRANSLATE=@@MODEL@@
+MODEL_FIX_MATH=@@MODEL@@
+MODEL_FIX_MERMAID=@@MODEL@@
 NOTIFY_URL=${NOTIFY_URL:-}      # optional, https://host/api/<uuid>/get
 REPO=@@REPO@@
 drflow() { uv run --project "$REPO" deepresearch-flow "$@"; }
+# Use as ${M_X[@]}: expands to "--model VALUE", or to nothing when VALUE is empty.
+need_model() { [ -n "$2" ] || { echo "set $1 at the top of run.sh"; return 1; }; }
 
 # Order matters inside a chain. The chains in PARALLEL run side by side in tmux.
 CHAIN_ocr="ocr fix fix-math organize"
@@ -44,6 +53,9 @@ PARALLEL="simple deep_read translate"
 ALL="$CHAIN_ocr $CHAIN_simple $CHAIN_deep_read $CHAIN_translate build"
 
 # ---- helpers (usually no need to edit) --------------------------------------
+M_SIMPLE=(); [ -z "$MODEL_EXTRACT_SIMPLE" ] || M_SIMPLE=(--model "$MODEL_EXTRACT_SIMPLE")
+M_DEEP=(); [ -z "$MODEL_EXTRACT_DEEP" ] || M_DEEP=(--model "$MODEL_EXTRACT_DEEP")
+M_TRANSLATE=(); [ -z "$MODEL_TRANSLATE" ] || M_TRANSLATE=(--model "$MODEL_TRANSLATE")
 cd "$(dirname "$0")" || exit 1
 ROOT=$(pwd)
 PARTIAL=3
@@ -85,8 +97,9 @@ s_fix() {
   once drflow recognize fix --input ocr -r --in-place
 }
 s_fix-math() {
+  need_model MODEL_FIX_MATH "$MODEL_FIX_MATH" || return 1
   retry drflow recognize fix-math --input ocr -r --in-place \
-    --config "$CONFIG" --model "$MODEL" --report logs/fix-math-ocr.json
+    --config "$CONFIG" --model "$MODEL_FIX_MATH" --report logs/fix-math-ocr.json
 }
 s_organize() {
   once drflow recognize organize --input ocr -r \
@@ -95,36 +108,39 @@ s_organize() {
 
 s_simple() {
   (cd logs/simple && retry drflow paper extract \
-    --input "$ROOT/md_simple" --config "$CONFIG" --model "$MODEL" --prompt-template simple \
+    --input "$ROOT/md_simple" --config "$CONFIG" "${M_SIMPLE[@]}" --prompt-template simple \
     --output "$ROOT/simple.json" --errors "$ROOT/logs/simple-errors.json")
 }
 s_fix-simple() {
   once drflow recognize fix --input simple.json --json --in-place
 }
 s_fix-math-simple() {
+  need_model MODEL_FIX_MATH "$MODEL_FIX_MATH" || return 1
   retry drflow recognize fix-math --input simple.json --json --in-place \
-    --config "$CONFIG" --model "$MODEL" --report logs/fix-math-simple.json
+    --config "$CONFIG" --model "$MODEL_FIX_MATH" --report logs/fix-math-simple.json
 }
 
 s_deep_read() {
   (cd logs/deep_read && retry drflow paper extract \
-    --input "$ROOT/md_simple" --config "$CONFIG" --model "$MODEL" --prompt-template deep_read \
+    --input "$ROOT/md_simple" --config "$CONFIG" "${M_DEEP[@]}" --prompt-template deep_read \
     --output "$ROOT/deep_read.json" --errors "$ROOT/logs/deep_read-errors.json")
 }
 s_fix-deep_read() {
   once drflow recognize fix --input deep_read.json --json --in-place
 }
 s_fix-math-deep_read() {
+  need_model MODEL_FIX_MATH "$MODEL_FIX_MATH" || return 1
   retry drflow recognize fix-math --input deep_read.json --json --in-place \
-    --config "$CONFIG" --model "$MODEL" --report logs/fix-math-deep_read.json
+    --config "$CONFIG" --model "$MODEL_FIX_MATH" --report logs/fix-math-deep_read.json
 }
 s_fix-mermaid-deep_read() {
+  need_model MODEL_FIX_MERMAID "$MODEL_FIX_MERMAID" || return 1
   retry drflow recognize fix-mermaid --input deep_read.json --json --in-place \
-    --config "$CONFIG" --model "$MODEL" --report logs/fix-mermaid-deep_read.json
+    --config "$CONFIG" --model "$MODEL_FIX_MERMAID" --report logs/fix-mermaid-deep_read.json
 }
 
 s_translate() {
-  rerun drflow translator translate --input md_base64 --config "$CONFIG" --model "$MODEL" \
+  rerun drflow translator translate --input md_base64 --config "$CONFIG" "${M_TRANSLATE[@]}" \
     --target-lang "$LANG_TO" --fix-level moderate \
     --output-dir md_base64_translated --debug-dir logs/translator
 }
@@ -132,8 +148,9 @@ s_fix-translated() {
   once drflow recognize fix --input md_base64_translated -r --in-place
 }
 s_fix-math-translated() {
+  need_model MODEL_FIX_MATH "$MODEL_FIX_MATH" || return 1
   retry drflow recognize fix-math --input md_base64_translated -r --in-place \
-    --config "$CONFIG" --model "$MODEL" --report logs/fix-math-translated.json
+    --config "$CONFIG" --model "$MODEL_FIX_MATH" --report logs/fix-math-translated.json
 }
 
 s_build() {
@@ -222,7 +239,7 @@ def _find_bib(project: Path) -> Path:
 
 @click.command("init-run")
 @click.argument("project", type=click.Path(exists=True, file_okay=False, path_type=Path))
-@click.option("-m", "--model", required=True, help="provider/model used by every LLM step")
+@click.option("-m", "--model", default="", help="provider/model written into every MODEL_* variable at the top of run.sh; edit them there per task")
 @click.option("--target-lang", default="zh", show_default=True)
 @click.option("--config", "config_name", default="config.toml", show_default=True,
               help="LLM config; resolved against the current directory and stored as an absolute path")

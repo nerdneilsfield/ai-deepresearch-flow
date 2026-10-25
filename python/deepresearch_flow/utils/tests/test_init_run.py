@@ -20,6 +20,12 @@ def _run(project: Path, *extra: str):
     return CliRunner().invoke(cli, ["utils", "init-run", str(project), "-m", "p/m", *extra])
 
 
+def _set(script: Path, name: str, value: str) -> None:
+    lines = script.read_text(encoding="utf-8").split("\n")
+    lines = [f"{name}={value}" if line.startswith(f"{name}=") else line for line in lines]
+    script.write_text("\n".join(lines), encoding="utf-8")
+
+
 def test_writes_executable_script_with_valid_bash_syntax(tmp_path: Path) -> None:
     project = _project(tmp_path)
 
@@ -162,3 +168,50 @@ def test_exit_code_other_than_3_is_not_retried(tmp_path: Path) -> None:
 
     assert "rc=1" in result.stdout
     assert _calls(script.parent) == ["first"]
+
+
+def test_each_task_takes_its_own_model(tmp_path: Path) -> None:
+    script = _script_with_stub(tmp_path, LOG_AND_SUCCEED)
+    _set(script, "MODEL_EXTRACT_DEEP", "a/deep")
+    _set(script, "MODEL_FIX_MATH", "b/math")
+    _set(script, "MODEL_TRANSLATE", "c/tr")
+
+    result = subprocess.run(
+        [str(script), "deep_read,fix-math-simple,translate"], capture_output=True, text=True
+    )
+
+    assert result.returncode == 0, result.stdout
+    deep, math, tr = _calls(script.parent)
+    assert "--model a/deep" in deep
+    assert "--model b/math" in math
+    assert "--model c/tr" in tr
+
+
+def test_empty_extract_model_omits_the_flag(tmp_path: Path) -> None:
+    script = _script_with_stub(tmp_path, LOG_AND_SUCCEED)
+    _set(script, "MODEL_EXTRACT_SIMPLE", '""')
+
+    subprocess.run([str(script), "simple"], capture_output=True, text=True)
+
+    (call,) = _calls(script.parent)
+    assert "--model" not in call
+
+
+def test_model_with_spaces_is_passed_as_one_argument(tmp_path: Path) -> None:
+    script = _script_with_stub(tmp_path, 'printf "%s\\n" "$@" >> "$ROOT/calls.log"')
+    _set(script, "MODEL_EXTRACT_SIMPLE", "'[{\"model\": \"a/b\", \"weight\": 1}]'")
+
+    subprocess.run([str(script), "simple"], capture_output=True, text=True)
+
+    assert '[{"model": "a/b", "weight": 1}]' in _calls(script.parent)
+
+
+def test_required_model_empty_stops_with_a_message(tmp_path: Path) -> None:
+    script = _script_with_stub(tmp_path, LOG_AND_SUCCEED)
+    _set(script, "MODEL_FIX_MATH", '""')
+
+    result = subprocess.run([str(script), "fix-math-simple"], capture_output=True, text=True)
+
+    assert result.returncode == 1
+    assert "MODEL_FIX_MATH" in result.stdout
+    assert not (script.parent / "calls.log").exists()
