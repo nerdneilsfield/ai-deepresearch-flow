@@ -253,3 +253,5 @@ ocr.toml
 deep_read_LCDall.json
 
 .codex
+
+.cw/
