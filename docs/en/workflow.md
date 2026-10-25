@@ -1,52 +1,16 @@
-[← Back to README](../README.md)
+[← Back to README](../../README.md)
 
-# Advanced Workflows
+# Advanced workflows: work with existing data
 
-## Generate the whole pipeline (init-run)
-
-Create a project directory that holds `pdf/` and exactly one `.bib`. All outputs go into that directory:
-
-```bash
-uv run deepresearch-flow utils init-run ~/pdfs/myproj -m provider/model
-export NOTIFY_URL='https://notify-host/api/<uuid>/get'   # optional
-~/pdfs/myproj/run.sh
-```
-
-`run.sh` runs `ocr → fix → fix-math → organize`, then the `simple`, `deep_read` and `translate`
-chains in parallel tmux windows (`tmux -L drflow-<project> attach -t run` to watch them), and runs
-`build` after all three finish. `embed`, `api push` and `api update` are not in the script; run them yourself.
-
-- Each step is a function `s_<step>` in the script, one command per line. Edit that line to change a parameter.
-  `./run.sh list` prints all step names.
-- Name steps to run only those: `./run.sh fix-simple,fix-math-simple` (comma or space separated). They run
-  in the given order, even if a step already has a `.done` file, and the list stops at the first failure.
-- With no arguments the script runs the whole flow. On a rerun, finished steps (`logs/<step>.done`) are
-  skipped, so it resumes at the failed step.
-- A failed step writes `logs/<step>.failed` and the script does not run `build`. Logs are in `logs/<step>.log`.
-- The script is plain bash. All paths are relative to the project directory.
-- `NOTIFY_URL` is the `/api/<uuid>/get` endpoint of
-  [simple-telegram-notification-bot](https://github.com/nerdneilsfield/simple-telegram-notification-bot).
-  Without it, no message is sent.
-
-### Exit codes
-
-Batch commands (`extract`, `translate`, `ocr`, `fix-math`, `fix-mermaid`) share these exit codes:
-
-| Code | Meaning |
-|---|---|
-| 0 | Everything succeeded |
-| 1 | The command itself failed; retrying will not help |
-| 3 | Outputs and the error report were written, but some items failed; retry with `--retry-failed` (rerun `translate` as is) |
-
-`run.sh` retries exit code 3 up to 3 rounds (change with `--rounds`). Any other non-zero code stops that chain.
+This page shows how to build incrementally, merge, and supplement papers you have already processed. For the full flow that starts from PDFs, see [From PDFs to a snapshot](pipeline.md).
 
 ## Incremental PDF Library Workflow
 
 Keep a growing PDF library in sync without reprocessing everything. This workflow identifies new PDFs, processes only the missing ones, and merges them back into the existing library.
 
 > Prerequisite: an existing processed JSON library (for example,
-> `paper_infos.json`) and its associated assets. To initialize from only PDFs
-> and optional BibTeX, follow the Zero to Hero workflow in the README first.
+> `paper_infos.json`) and its associated assets. If you start from only PDFs
+> and a BibTeX file, follow [From PDFs to a snapshot](pipeline.md) first.
 
 ```bash
 # 1) Compare processed JSON vs new PDF library to find missing PDFs

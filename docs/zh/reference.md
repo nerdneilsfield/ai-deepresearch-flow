@@ -1,4 +1,4 @@
-[← 返回 README](../README_ZH.md)
+[← 返回 README](../../README_ZH.md)
 
 # 功能参考
 
@@ -196,14 +196,6 @@ uv run deepresearch-flow paper extract \
   --input ./docs --model @main_model.json
 ```
 
-生成项目的 `run.sh`（目录里需要有 `pdf/` 和一个 `.bib`，详见
-[高级工作流](workflow.md#一键生成整条流水线init-run)）：
-
-```bash
-uv run deepresearch-flow utils init-run ~/pdfs/myproj -m openai/gpt-4o-mini \
-  [--target-lang zh] [--config config.toml] [--ocr-config ocr.toml] [--rounds 3]
-```
-
 模式探测：
 
 ```bash
@@ -214,3 +206,100 @@ uv run deepresearch-flow utils test-mode \
 uv run deepresearch-flow utils test-mode \
   --config ./config.toml --model openai/gpt-4o-mini --write-back
 ```
+
+## 7. 语义搜索：paper embed
+
+`paper embed` 为摘要和 Markdown 构建 LanceDB 向量索引，供 `paper db serve` 和 API 服务的语义搜索使用。输入是已修复的摘要 JSON，或者已构建的快照数据库及其静态导出目录。`config.toml` 必须有 `[embedding]` 段，否则命令报错退出。
+
+```bash
+uv run deepresearch-flow paper embed \
+  --config ./config.toml \
+  --input ./deep_read.json \
+  --md-root ./md_simple \
+  --md-translated-root ./md_base64_translated \
+  --max-concurrency 4 \
+  --document-window 8 \
+  --output-embed-db ./paper_vectors
+```
+
+| 选项 | 说明 |
+|---|---|
+| `-i`, `--input` | 摘要 JSON，可重复。与 `--snapshot-db` 二选一，同时给出会报错 |
+| `--snapshot-db` | 从已构建的快照读取，代替 `--input`。必须同时给出 `--static-export-dir` |
+| `--static-export-dir` | 快照的静态导出目录 |
+| `--md-root`, `--md-translated-root` | 源 Markdown 与译文 Markdown 的根目录 |
+| `--output-embed-db` | 向量索引的输出目录 |
+| `--embedding` | 覆盖配置中的 embedding `provider/model` |
+| `--max-concurrency` | embedding 请求的并发数 |
+| `--document-window` | 同时准备的论文篇数上限 |
+| `--rpm` | 每分钟请求数上限。不传则不限速 |
+| `--tpm` | 每分钟估算 token 上限，按字符数 ÷ 4 估算输入 token，用滑动窗口计量。不传则不限速 |
+| `--force` | 删除已有索引并从头重建 |
+
+`paper db snapshot build` 在同一次构建中顺带建索引时，也接受 `--rpm` 和 `--tpm`。
+
+启用语义搜索的服务端启动方式见 [部署指南](deployment.md)。本地浏览时，在 `paper db serve` 后加 `--embed-db ./paper_vectors` 和 `--search-access-token <token>`。
+
+## 8. 校验摘要字段：paper db verify
+
+`paper db verify` 按 prompt 模板的 schema 检查摘要 JSON，列出字段缺失或为空的论文。它只读取 JSON，不需要数据库。
+
+```bash
+uv run deepresearch-flow paper db verify \
+  --input-json ./deep_read.json \
+  --prompt-template deep_read \
+  --output-json ./deep_read_verify.json
+```
+
+把校验报告传给 `paper extract --retry-list-json`，只重新抽取报告里列出的论文：
+
+```bash
+uv run deepresearch-flow paper extract \
+  --input ./md_simple \
+  --model <provider/model> \
+  --prompt-template deep_read \
+  --output ./deep_read.json \
+  --retry-list-json ./deep_read_verify.json
+```
+
+校验报告不要放在 `fix` 系列命令会扫描的目录里。
+
+## 9. 退出码
+
+批处理命令使用同一套退出码，脚本可以据此判断是否重试。
+
+| 命令 | 退出码 3 的触发条件 |
+|---|---|
+| `paper extract` | 有文档抽取失败，错误报告已写出 |
+| `translator translate` | 有文件翻译失败，其余文件已翻译完 |
+| `recognize ocr` | 有文件 OCR 失败 |
+| `recognize fix-math`、`recognize fix-mermaid` | 报告里有未修复的条目 |
+
+| 退出码 | 含义 |
+|---|---|
+| 0 | 全部成功 |
+| 1 | 命令自身出错，重试没有意义 |
+| 3 | 输出和错误报告已写出，但部分条目失败，值得重试 |
+
+退出码 3 之后的重试方式因命令而异：`paper extract`、`recognize fix-math`、`recognize fix-mermaid` 加 `--retry-failed`；`recognize ocr` 和 `translator translate` 直接重新运行同一条命令，它们会跳过已完成的文件。
+
+`translator translate` 原先在单个文件失败时返回 0，现在返回 3。
+
+## 10. utils init-run：生成 run.sh
+
+```text
+deepresearch-flow utils init-run PROJECT [--target-lang LANG] [--config PATH]
+                                 [--ocr-config PATH] [--rounds N]
+```
+
+在 `PROJECT` 目录下写入可执行的 `run.sh`。用法和流程见 [从 PDF 到快照](pipeline.md)。
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `PROJECT` | 必填 | 已存在的目录，须含 `pdf/` 子目录和恰好一个 `.bib` 文件。否则命令报错退出 |
+| `--target-lang` | `zh` | 译文的目标语言 |
+| `--config` | `config.toml` | LLM 配置路径。按当前目录解析为绝对路径后写入脚本 |
+| `--ocr-config` | `ocr.toml` | OCR 配置路径，处理方式同 `--config` |
+| `--rounds` | `3` | 每个步骤对失败条目的最多重试轮数 |
+
+命令没有 `--model` 参数。生成的脚本中，每个调用 LLM 的命令带 `--model PROVIDER/MODEL` 占位符，由使用者改写。命令覆盖已存在的 `run.sh`。

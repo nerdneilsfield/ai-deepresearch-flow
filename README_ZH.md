@@ -117,344 +117,54 @@ models = [
 
 密钥使用 `env:VAR_NAME` 语法，避免明文写入配置文件。支持 Ollama、Gemini、DashScope、Azure OpenAI 等多种 provider。完整配置选项（embedding、rerank、翻译器默认值、搜索）见 `config.example.toml`。
 
-### 3) 从零到一的流程
+### 3) 处理一批 PDF
 
-从 `./pdfs/` 和可选的 `./papers.bib` 开始。不需要已有的 JSON 文献库、SQLite 数据库或处理过的 Markdown 目录。
-
-本流程会生成以下目录和文件：
-
-```text
-pdfs/ + papers.bib
-  → ocr_output/
-  → md_simple/            # 图片保留为本地文件
-  → md_base64/            # 图片内嵌为 data URL
-  ├─ summary_json/<template>.json
-  └─ md_base64_translated/
-```
-
-#### 一键处理 `data_root`
-
-在仓库根目录准备好 `config.toml` 和 `ocr.toml`，将 PDF 放入
-`data_root/pdf/`。安装项目的 Node 依赖（`npm install`），供 Mermaid 校验使用，
-然后运行：
+准备一个项目目录，放入 `pdf/` 和恰好一个 `.bib` 文件，然后生成并运行 `run.sh`：
 
 ```bash
-uv run python scripts/process_data_root.py /path/to/data_root \
-  --config config.toml --ocr-config ocr.toml \
-  --model openai/gpt-4o-mini
+mkdir myproj
+cp -r /path/to/pdfs myproj/pdf
+cp /path/to/library.bib myproj/
+
+cp ocr.example.toml ocr.toml     # 填写 OCR 后端的 token
+uv run deepresearch-flow utils init-run ./myproj
 ```
 
-把 `--model` 替换为配置中可用的 `provider/model`。默认翻译成中文；
-可用 `--target-lang ja` 等选项指定目标语言。添加 `--dry-run` 可预览命令，
-不调用服务，也不创建文件。
-
-单独执行 OCR 或整理已有 OCR 结果，不需要 LLM 模型配置：
+打开 `myproj/run.sh`，把每处 `--model PROVIDER/MODEL` 替换为 `config.toml` 中已声明的 `provider/model`。各步骤可以用不同的模型。然后运行：
 
 ```bash
-uv run python scripts/process_data_root.py DATA_ROOT --steps ocr --ocr-config ocr.toml
-uv run python scripts/process_data_root.py DATA_ROOT --steps organize
+./myproj/run.sh
 ```
 
-可通过 `--steps` 选跑部分步骤，或通过 `--from-step` 从某一步开始运行到最后。
-两者不能同时使用；不指定时运行全部步骤。
+脚本依次完成 OCR、公式与格式修复、结构化摘要抽取、翻译，最后构建快照数据库，输出在 `myproj/dist/`。失败的条目会自动重试，中断后重新运行会从失败的那一步继续。完整说明见 [从 PDF 到快照](docs/zh/pipeline.md)。
 
-```bash
-# 只抽取两份 JSON 并翻译（需要已有 md_simple 和 md_base64）
-uv run python scripts/process_data_root.py /path/to/data_root \
-  --model openai/gpt-4o-mini --steps simple,deep_read,translate
+### 4) 浏览结果
 
-# 从翻译开始，随后修复两份 JSON 和译文（需要两份 JSON 已存在）
-uv run python scripts/process_data_root.py /path/to/data_root \
-  --model openai/gpt-4o-mini --from-step translate
-
-# 只修复现有深度阅读 JSON 的 Mermaid
-uv run python scripts/process_data_root.py /path/to/data_root \
-  --model openai/gpt-4o-mini --steps fix-mermaid-deep_read
-```
-
-可选步骤按执行顺序为：
-
-```text
-ocr, fix, fix-math, organize, simple, deep_read, translate,
-fix-simple, fix-math-simple, fix-deep_read, fix-math-deep_read,
-fix-translated, fix-math-translated, fix-mermaid-deep_read
-```
-
-`--steps` 使用逗号分隔；无论填写顺序如何，都按上述流程顺序执行，重复名称只运行一次。
-脚本不会自动补跑上游步骤。所选步骤依赖的输入必须已存在，或由前面的所选步骤生成。
-只检查所选步骤需要的配置和工具：例如单独翻译不需要 PDF、OCR 配置或 `mmdc`。
-仅抽取、翻译、公式和 Mermaid 修复需要 `--model`；单独运行 `ocr`、`fix`、`organize` 不需要。
-
-脚本依次执行 OCR、OCR 格式修复、公式修复、Markdown 整理、`simple` 抽取、
-`deep_read` 抽取和翻译。随后对两份 JSON 和译文执行格式与公式修复，
-最后仅对 `deep_read.json` 修复 Mermaid。
-
-```text
-data_root/
-├── pdf/                       # 用户提供的 PDF
-├── ocr/                       # 原始 OCR 布局，随后原地修复
-├── md_simple/
-├── md_base64/
-├── simple.json
-├── deep_read.json
-├── md_base64_translated/
-└── logs/
-    ├── progress.json          # 最近一次运行的步骤状态
-    ├── pipeline.log           # 运行记录，追加写入
-    ├── simple-errors.json
-    ├── deep_read-errors.json
-    ├── fix-math-*-errors.json
-    ├── fix-mermaid-deep_read-errors.json
-    └── deep_read/paper_stage_outputs/  # 深度阅读中间结果
-```
-
-OCR、organize 和修复等步骤保留启动脚本时的工作目录。仅 extract 在 `logs/` 下的
-独立目录运行，以收集其默认相对路径的中间产物；公式报告和翻译调试目录也指定在 `logs/` 内。每一步的输出、错误提示和原生进度条直接显示在当前终端，
-不重定向到日志文件；`pipeline.log` 只记录步骤开始、结束和失败状态。
-配置文件路径按启动脚本时的目录解析；配置中的自定义相对文件路径应改为绝对路径。
-
-命令以非零状态退出时，脚本停止并记录失败，退出码 3 除外：批处理命令（`extract`、
-`translate`、`ocr`、`fix-math`、`fix-mermaid`）在执行完毕但部分条目失败时返回 3，
-脚本只给出警告，因此 `progress.json` 的 `completed` 仅表示命令执行结束；还需检查
-错误报告。重新运行会再次执行所选步骤（默认整条流程），沿用各命令的已有结果跳过规则，
-不会按 `progress.json` 跳过步骤。格式和公式修复会直接修改生成产物，不修改输入 PDF。
-
-#### 改用可手动编辑的 `run.sh`
-
-对一个包含 `pdf/` 和一个 `.bib` 的项目目录，`utils init-run` 会生成 `run.sh`，每个步骤是
-一个可直接修改的函数。三条抽取与翻译链在 tmux 里并行，失败条目自动重试，最后执行 `build`。
-用 `./run.sh fix-simple,fix-math-simple` 只跑指定步骤。详见
-[高级工作流](docs/zh/workflow.md#一键生成整条流水线init-run)。
-
-```bash
-uv run deepresearch-flow utils init-run ~/pdfs/myproj -m provider/model
-~/pdfs/myproj/run.sh
-```
-
-#### 步骤 1：对 PDF/图片执行 OCR
-
-先复制并填写 OCR 配置：
-
-```bash
-cp ocr.example.toml ocr.toml
-# 设置: export PADDLE_OCR_TOKEN=xxx
-# 示例使用 PaddleOCR-VL-1.6 的异步 Job API。
-# 如有需要，可在 ocr.toml 中调整 poll_interval_seconds 和 job_timeout_seconds。
-
-uv run deepresearch-flow recognize ocr ./pdfs \
-  --config ocr.toml \
-  --output-dir ./ocr_output
-# 默认最多并发处理 4 个文件；可用 --workers 2 覆盖。
-```
-
-后端会写出兼容 MinerU 的布局：每篇文档有一个 `full.md` 和
-`images/` 目录。超时只会停止本地轮询，不会取消远端 PaddleOCR 任务。
-
-#### 步骤 2：修复嵌套的 OCR 产物
-
-每篇 OCR 文档都嵌套在 `ocr_output/` 下，两个修复命令都必须带 `-r`：
-
-```bash
-# 修复所有 OCR 文档的 Markdown 结构
-uv run deepresearch-flow recognize fix \
-  --input ./ocr_output -r --in-place
-
-# 修复所有 OCR 文档的 LaTeX 公式
-uv run deepresearch-flow recognize fix-math \
-  --input ./ocr_output -r \
-  --model openai/gpt-4o-mini \
-  --in-place
-```
-
-<p align="center">
-  <img src=".github/assets/fix.png" width="70%" alt="fix" />
-</p>
-
-<p align="center">
-  <img src=".github/assets/fix-math.png" width="70%" alt="fix math" />
-</p>
-
-#### 步骤 3：整理源 Markdown
-
-用一条命令同时生成两种源文件表示。为发现嵌套 OCR 布局，`organize`
-也必须带 `-r`。不要传 `--fix`，因为步骤 2 已经修复 OCR 源文件。
-
-```bash
-uv run deepresearch-flow recognize organize \
-  --input ./ocr_output -r \
-  --output-simple ./md_simple \
-  --output-base64 ./md_base64
-```
-
-`md_simple/` 会将图片保留在 `md_simple/images/`；`md_base64/`
-会内嵌图片，故它是翻译输入。
-
-#### 步骤 4：生成结构化摘要
-
-每个选用的 prompt template 生成一个 JSON 包。以下示例使用
-`deep_read`；其他模板也重复此操作，并将输出命名为
-`./summary_json/<template>.json`。
-
-```bash
-uv run deepresearch-flow paper extract \
-  --input ./md_simple \
-  --model openai/gpt-4o-mini \
-  --prompt-template deep_read \
-  --output ./summary_json/deep_read.json
-```
-
-<p align="center">
-  <img src=".github/assets/extract.png" width="70%" alt="extract" />
-</p>
-
-#### 步骤 4.1：校验并重试摘要字段
-
-校验报告放在 `summary_json/` 外，避免 JSON 修复扫描到报告文件。每个选用的
-template 都重复这一组命令。这里的 `paper db verify` 只校验 JSON 包，
-不需要数据库。
-
-```bash
-uv run deepresearch-flow paper db verify \
-  --input-json ./summary_json/deep_read.json \
-  --prompt-template deep_read \
-  --output-json ./summary_verify/deep_read.json
-
-uv run deepresearch-flow paper extract \
-  --input ./md_simple \
-  --model openai/gpt-4o-mini \
-  --prompt-template deep_read \
-  --output ./summary_json/deep_read.json \
-  --retry-list-json ./summary_verify/deep_read.json
-```
-
-<p align="center">
-  <img src=".github/assets/verify.png" width="70%" alt="verify" />
-</p>
-
-#### 步骤 5：翻译 Base64 Markdown
-
-```bash
-uv run deepresearch-flow translator translate \
-  --input ./md_base64 \
-  --target-lang zh \
-  --model openai/gpt-4o-mini \
-  --fix-level moderate \
-  --output-dir ./md_base64_translated
-```
-
-#### 步骤 6：修复生成产物
-
-在抽取和重试完成后，修复每一份摘要 JSON。JSON 输入须带 `--json`；
-目录内可能有多个 template JSON，故保留 `-r`。
-
-```bash
-uv run deepresearch-flow recognize fix \
-  --input ./summary_json --json -r --in-place
-
-uv run deepresearch-flow recognize fix-math \
-  --input ./summary_json --json -r \
-  --model openai/gpt-4o-mini \
-  --in-place
-
-uv run deepresearch-flow recognize fix-mermaid \
-  --input ./summary_json --json -r \
-  --model openai/gpt-4o-mini \
-  --in-place
-```
-
-<p align="center">
-  <img src=".github/assets/fix-mermaid.png" width="70%" alt="fix mermaid" />
-</p>
-
-译文 Markdown 单独修复；Mermaid 修复只属于摘要 JSON 分支。
-
-```bash
-uv run deepresearch-flow recognize fix \
-  --input ./md_base64_translated -r --in-place
-
-uv run deepresearch-flow recognize fix-math \
-  --input ./md_base64_translated -r \
-  --model openai/gpt-4o-mini \
-  --in-place
-```
-
-#### 步骤 7：构建 Snapshot 数据库或直接本地启动
-
-两条命令都读取已修复的摘要 JSON。每增加一份 `summary_json/` 中的文件，
-就增加一个 `--input`；二者不会读取对方的输出。
-
-构建持久的 SQLite snapshot 和静态资源：
-
-```bash
-uv run deepresearch-flow paper db snapshot build \
-  --input ./summary_json/deep_read.json \
-  --bibtex ./papers.bib \
-  --md-root ./md_simple \
-  --md-translated-root ./md_base64_translated \
-  --pdf-root ./pdfs \
-  --output-db ./dist/paper_snapshot.db \
-  --static-export-dir ./dist/paper-static
-```
-
-或者以相同输入直接启动本地 Web UI：
+`run.sh` 结束后，用本地 Web UI 查看：
 
 ```bash
 uv run deepresearch-flow paper db serve \
-  --input ./summary_json/deep_read.json \
-  --bibtex ./papers.bib \
-  --md-root ./md_simple \
-  --md-translated-root ./md_base64_translated \
-  --pdf-root ./pdfs \
-  --host 127.0.0.1
+  --input myproj/deep_read.json \
+  --bibtex myproj/library.bib \
+  --md-root myproj/md_simple \
+  --md-translated-root myproj/md_base64_translated \
+  --pdf-root myproj/pdf
 ```
 
-没有 BibTeX 文件时，省略 `--bibtex ./papers.bib`。
-
-#### 步骤 8：启用语义搜索（可选）
-
-从相同的已修复摘要和 Markdown 根目录构建 LanceDB 向量索引：
-
-```bash
-uv run deepresearch-flow paper embed \
-  --config ./config.toml \
-  --input ./summary_json/deep_read.json \
-  --md-root ./md_simple \
-  --md-translated-root ./md_base64_translated \
-  --max-concurrency 4 \
-  --document-window 8 \
-  --output-embed-db ./paper_vectors
-```
-
-需要限流时加 `--rpm 60` 或 `--tpm 200000`；两者都可选，不传则不限速。
-`--tpm` 按估算输入 token（字符数 ÷ 4）计算滑动的每分钟额度。
-`paper db snapshot build` 顺带建向量索引时也接受这两个选项。
-
-启动时开启语义搜索：
-
-```bash
-uv run deepresearch-flow paper db serve \
-  --input ./summary_json/deep_read.json \
-  --bibtex ./papers.bib \
-  --md-root ./md_simple \
-  --md-translated-root ./md_base64_translated \
-  --pdf-root ./pdfs \
-  --embed-db ./paper_vectors \
-  --search-access-token "your-token"
-```
-
-#### 步骤 9：MCP 集成（可选）
-
-项目通过 FastMCP 暴露有边界的 MCP 工具，供 AI Agent 访问。端点、鉴权和工具参考详见 [MCP 文档](docs/zh/api-and-mcp.md#mcp)。
+生产环境部署快照与静态资源，见 [部署指南](docs/zh/deployment.md)。
 
 ---
 
-## 延伸阅读
+## 文档
 
-- **[高级工作流](docs/zh/workflow.md)** — 增量构建、合并 JSON/BibTeX、补充模板
-- **[部署指南](docs/zh/deployment.md)** — CDN 部署、Nginx/Caddy 配置、Docker、Compose
-- **[API & MCP](docs/zh/api-and-mcp.md)** — Admin API、推送、MCP 端点、鉴权与工具
-- **[功能参考](docs/zh/reference.md)** — Translator、Extract、DB、Recognize 详解
-- **[Snapshot 管理](docs/zh/snapshot-management.md)** — Snapshot 迁移、补充、更新
+| 文档 | 内容 |
+|---|---|
+| [从 PDF 到快照](docs/zh/pipeline.md) | 用 `run.sh` 处理一个项目：步骤、重试、退出码、通知 |
+| [高级工作流](docs/zh/workflow.md) | 对已有数据做增量构建、合并、补充模板和翻译 |
+| [功能参考](docs/zh/reference.md) | Translator、Extract、Recognize、语义搜索、退出码、`init-run` 的选项 |
+| [Snapshot 管理](docs/zh/snapshot-management.md) | Snapshot 的迁移、补充和更新 |
+| [部署指南](docs/zh/deployment.md) | CDN、Nginx/Caddy、Docker、Compose、Admin 流水线 |
+| [API 与 MCP](docs/zh/api-and-mcp.md) | Admin API、推送、MCP 端点、鉴权与工具 |
 
 ---
 

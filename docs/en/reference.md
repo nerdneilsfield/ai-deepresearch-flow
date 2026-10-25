@@ -1,4 +1,4 @@
-[← Back to README](../README.md)
+[← Back to README](../../README.md)
 
 # Reference
 
@@ -195,13 +195,6 @@ uv run deepresearch-flow paper extract \
   --input ./docs --model @main_model.json
 ```
 
-Generate a project `run.sh` (needs `pdf/` and one `.bib` in the directory; see
-[Advanced Workflows](workflow.md#generate-the-whole-pipeline-init-run)):
-```bash
-uv run deepresearch-flow utils init-run ~/pdfs/myproj -m openai/gpt-4o-mini \
-  [--target-lang zh] [--config config.toml] [--ocr-config ocr.toml] [--rounds 3]
-```
-
 Mode probing:
 ```bash
 uv run deepresearch-flow utils test-mode \
@@ -211,3 +204,100 @@ uv run deepresearch-flow utils test-mode \
 uv run deepresearch-flow utils test-mode \
   --config ./config.toml --model openai/gpt-4o-mini --write-back
 ```
+
+## 7. Semantic search: paper embed
+
+`paper embed` builds a LanceDB vector index over summaries and Markdown. `paper db serve` and the API server use the index for semantic search. The input is either repaired summary JSON files or a built snapshot database with its static export directory. `config.toml` must have an `[embedding]` section, otherwise the command exits with an error.
+
+```bash
+uv run deepresearch-flow paper embed \
+  --config ./config.toml \
+  --input ./deep_read.json \
+  --md-root ./md_simple \
+  --md-translated-root ./md_base64_translated \
+  --max-concurrency 4 \
+  --document-window 8 \
+  --output-embed-db ./paper_vectors
+```
+
+| Option | Description |
+|---|---|
+| `-i`, `--input` | Summary JSON file; repeatable. Mutually exclusive with `--snapshot-db`; giving both is an error |
+| `--snapshot-db` | Read from a built snapshot instead of `--input`. Requires `--static-export-dir` |
+| `--static-export-dir` | Static export directory of the snapshot |
+| `--md-root`, `--md-translated-root` | Root directories of the source and translated Markdown |
+| `--output-embed-db` | Output directory of the vector index |
+| `--embedding` | Override the embedding `provider/model` from the configuration |
+| `--max-concurrency` | Number of concurrent embedding requests |
+| `--document-window` | Maximum number of papers prepared at the same time |
+| `--rpm` | Requests-per-minute limit. No limit if omitted |
+| `--tpm` | Estimated tokens-per-minute limit. Input tokens are estimated as characters ÷ 4 and counted in a sliding window. No limit if omitted |
+| `--force` | Delete the existing index and rebuild it from scratch |
+
+`paper db snapshot build` also accepts `--rpm` and `--tpm` when it builds the index in the same pass.
+
+For how to start a server with semantic search, see the [Deployment Guide](deployment.md). For local browsing, add `--embed-db ./paper_vectors` and `--search-access-token <token>` to `paper db serve`.
+
+## 8. Verify summary fields: paper db verify
+
+`paper db verify` checks summary JSON against the schema of a prompt template and lists papers whose fields are missing or empty. It reads only the JSON; no database is needed.
+
+```bash
+uv run deepresearch-flow paper db verify \
+  --input-json ./deep_read.json \
+  --prompt-template deep_read \
+  --output-json ./deep_read_verify.json
+```
+
+Pass the report to `paper extract --retry-list-json` to extract only the papers it lists:
+
+```bash
+uv run deepresearch-flow paper extract \
+  --input ./md_simple \
+  --model <provider/model> \
+  --prompt-template deep_read \
+  --output ./deep_read.json \
+  --retry-list-json ./deep_read_verify.json
+```
+
+Do not put the report in a directory that the `fix` commands scan.
+
+## 9. Exit codes
+
+The batch commands share one set of exit codes, so a script can decide whether to retry.
+
+| Command | When it exits with 3 |
+|---|---|
+| `paper extract` | Some documents failed to extract; the error report was written |
+| `translator translate` | Some files failed to translate; the other files were translated |
+| `recognize ocr` | Some files failed OCR |
+| `recognize fix-math`, `recognize fix-mermaid` | The report lists items that were not fixed |
+
+| Code | Meaning |
+|---|---|
+| 0 | Everything succeeded |
+| 1 | The command itself failed; retrying will not help |
+| 3 | Outputs and the error report were written, but some items failed; a retry is worthwhile |
+
+How to retry after exit code 3 depends on the command. For `paper extract`, `recognize fix-math`, and `recognize fix-mermaid`, add `--retry-failed`. For `recognize ocr` and `translator translate`, run the same command again; they skip finished files.
+
+`translator translate` used to exit with 0 when a single file failed. It now exits with 3.
+
+## 10. utils init-run: generate run.sh
+
+```text
+deepresearch-flow utils init-run PROJECT [--target-lang LANG] [--config PATH]
+                                 [--ocr-config PATH] [--rounds N]
+```
+
+Writes an executable `run.sh` into `PROJECT`. For usage and the flow, see [From PDFs to a snapshot](pipeline.md).
+
+| Argument | Default | Description |
+|---|---|---|
+| `PROJECT` | required | An existing directory with a `pdf/` subdirectory and exactly one `.bib` file. Otherwise the command exits with an error |
+| `--target-lang` | `zh` | Target language of the translation |
+| `--config` | `config.toml` | Path of the LLM configuration. Resolved against the current directory and written into the script as an absolute path |
+| `--ocr-config` | `ocr.toml` | Path of the OCR configuration, handled like `--config` |
+| `--rounds` | `3` | Maximum retry rounds per step for failed items |
+
+The command has no `--model` option. In the generated script, every command that calls an LLM carries the placeholder `--model PROVIDER/MODEL`, which you replace. The command overwrites an existing `run.sh`.

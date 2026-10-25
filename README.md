@@ -117,357 +117,54 @@ models = [
 
 Keys use `env:VAR_NAME` syntax to keep secrets out of config files. Multiple providers (Ollama, Gemini, DashScope, Azure OpenAI) are supported. For full configuration options (embedding, rerank, translator defaults, search), see `config.example.toml`.
 
-### 3) The "Zero to Hero" Workflow
+### 3) Process a batch of PDFs
 
-Start with `./pdfs/` and, optionally, `./papers.bib`. You do not need an
-existing JSON library, SQLite database, or processed Markdown directory.
-
-The workflow produces these roots:
-
-```text
-pdfs/ + papers.bib
-  → ocr_output/
-  → md_simple/            # local image files
-  → md_base64/            # images embedded as data URLs
-  ├─ summary_json/<template>.json
-  └─ md_base64_translated/
-```
-
-#### Run the data-root script
-
-Place PDFs in `DATA_ROOT/pdf/`. From the repository root, prepare `config.toml`
-and `ocr.toml`, then install the Node dependencies with `npm install` for Mermaid validation.
-Run the full workflow:
+Prepare a project directory that holds `pdf/` and exactly one `.bib` file, then generate and run `run.sh`:
 
 ```bash
-uv run python scripts/process_data_root.py DATA_ROOT \
-  --config config.toml --ocr-config ocr.toml --model openai/gpt-4o-mini
+mkdir myproj
+cp -r /path/to/pdfs myproj/pdf
+cp /path/to/library.bib myproj/
+
+cp ocr.example.toml ocr.toml     # fill in the OCR backend token
+uv run deepresearch-flow utils init-run ./myproj
 ```
 
-Replace the model with a configured `provider/model`. Outputs are `ocr/`,
-`md_simple/`, `md_base64/`, `simple.json`, `deep_read.json`, and
-`md_base64_translated/`, all under `DATA_ROOT`. The script repairs OCR before
-organizing Markdown. After extraction and translation, it repairs formatting and
-formulas in both JSON files and translated Markdown, then repairs Mermaid only
-in `deep_read.json`. Translation defaults to Chinese; use `--target-lang` to change it.
-
-OCR and organize can run independently without an LLM model:
+Open `myproj/run.sh` and replace each `--model PROVIDER/MODEL` with a `provider/model` declared in `config.toml`. Different steps can use different models. Then run:
 
 ```bash
-uv run python scripts/process_data_root.py DATA_ROOT --steps ocr --ocr-config ocr.toml
-uv run python scripts/process_data_root.py DATA_ROOT --steps organize
+./myproj/run.sh
 ```
 
-Select steps with `--steps`, or run from one step through the end with `--from-step`:
+The script runs OCR, formula and format repair, structured summary extraction, and translation, and finally builds the snapshot database in `myproj/dist/`. Failed items are retried automatically, and a rerun after an interruption resumes at the failed step. For details, see [From PDFs to a snapshot](docs/en/pipeline.md).
 
-```bash
-# Requires existing md_simple/ and md_base64/
-uv run python scripts/process_data_root.py DATA_ROOT \
-  --model openai/gpt-4o-mini --steps simple,deep_read,translate
+### 4) Browse the result
 
-# Requires md_base64/ and both JSON files to exist
-uv run python scripts/process_data_root.py DATA_ROOT \
-  --model openai/gpt-4o-mini --from-step translate
-
-# Only repair Mermaid in the existing deep-read JSON
-uv run python scripts/process_data_root.py DATA_ROOT \
-  --model openai/gpt-4o-mini --steps fix-mermaid-deep_read
-```
-
-Available steps, in execution order:
-
-```text
-ocr, fix, fix-math, organize, simple, deep_read, translate,
-fix-simple, fix-math-simple, fix-deep_read, fix-math-deep_read,
-fix-translated, fix-math-translated, fix-mermaid-deep_read
-```
-
-The two selection options are mutually exclusive. `--steps` accepts comma-separated
-names, runs them in workflow order, and runs duplicate names only once. It does not
-add upstream steps. Inputs must exist or be produced by an earlier selected step.
-Only selected steps require their configuration files and tools; translation alone
-needs neither PDFs nor OCR configuration nor `mmdc`. `--model` is required only for extraction, translation, formula repair, and Mermaid repair.
-OCR, formatting fixes, and organize can run without it.
-Add `--dry-run` to preview commands without creating files or calling providers.
-
-```text
-data_root/
-├── pdf/                       # PDFs you provide
-├── ocr/                       # raw OCR layout, then repaired in place
-├── md_simple/
-├── md_base64/
-├── simple.json
-├── deep_read.json
-├── md_base64_translated/
-└── logs/
-    ├── progress.json          # step status of the latest run
-    ├── pipeline.log           # run log, appended
-    ├── simple-errors.json
-    ├── deep_read-errors.json
-    ├── fix-math-*-errors.json
-    ├── fix-mermaid-deep_read-errors.json
-    └── deep_read/paper_stage_outputs/  # deep-read intermediate results
-```
-
-Error reports and intermediate artifacts stay under `DATA_ROOT/logs/`.
-Commands keep the caller working directory, except extraction, which runs under
-`logs/` to contain its relative intermediate-output directory.
-Each command displays its output, errors, and native progress bars directly in the
-current terminal; output is not redirected to files. `progress.json` records the
-latest run, and `pipeline.log` records step start, completion, and failure events.
-Configuration paths resolve
-against the caller's directory; use absolute paths for custom file paths inside configs.
-Nonzero command exits stop the workflow, except exit code 3: batch commands (`extract`,
-`translate`, `ocr`, `fix-math`, `fix-mermaid`) use it when they finished but some items
-failed. The script only warns, so check the error reports even when progress says `completed`.
-Reruns execute the selected steps using each command's existing-output skip rules,
-not the progress file. Repairs modify generated outputs in place, not source PDFs.
-
-#### Generate an editable `run.sh` instead
-
-For one project directory that holds `pdf/` and one `.bib`, `utils init-run` writes a
-`run.sh` with one editable function per step. It runs the three extraction and translation
-chains in parallel tmux windows, retries failed items, and ends with `build`. Run chosen
-steps with `./run.sh fix-simple,fix-math-simple`. See
-[Advanced Workflows](docs/en/workflow.md#generate-the-whole-pipeline-init-run).
-
-```bash
-uv run deepresearch-flow utils init-run ~/pdfs/myproj -m provider/model
-~/pdfs/myproj/run.sh
-```
-
-#### Step 1: OCR PDFs or Images
-
-Copy and configure the OCR settings:
-
-```bash
-cp ocr.example.toml ocr.toml
-# Set: export PADDLE_OCR_TOKEN=xxx
-# The example uses PaddleOCR-VL-1.6's asynchronous Job API.
-# Adjust poll_interval_seconds and job_timeout_seconds in ocr.toml if needed.
-
-uv run deepresearch-flow recognize ocr ./pdfs \
-  --config ocr.toml \
-  --output-dir ./ocr_output
-# Processes up to 4 files concurrently by default; override with --workers 2.
-```
-
-The backend writes MinerU-compatible layouts: one `full.md` and `images/`
-directory per document. The configured timeout stops local polling only; it does
-not cancel the remote PaddleOCR job.
-
-#### Step 2: Repair Nested OCR Outputs
-
-Each OCR document is nested below `ocr_output/`, so both repair commands must
-use `-r`:
-
-```bash
-# Repair Markdown structure in every OCR document
-uv run deepresearch-flow recognize fix \
-  --input ./ocr_output -r --in-place
-
-# Repair LaTeX formulas in every OCR document
-uv run deepresearch-flow recognize fix-math \
-  --input ./ocr_output -r \
-  --model openai/gpt-4o-mini \
-  --in-place
-```
-
-<p align="center">
-  <img src=".github/assets/fix.png" width="70%" alt="fix" />
-</p>
-
-<p align="center">
-  <img src=".github/assets/fix-math.png" width="70%" alt="fix math" />
-</p>
-
-#### Step 3: Organize Source Markdown
-
-Create both source representations in one pass. `organize` also needs `-r`
-to discover nested OCR layouts. Do not pass `--fix`: Step 2 has already
-repaired the OCR source.
-
-```bash
-uv run deepresearch-flow recognize organize \
-  --input ./ocr_output -r \
-  --output-simple ./md_simple \
-  --output-base64 ./md_base64
-```
-
-`md_simple/` keeps image files under `md_simple/images/`; `md_base64/`
-embeds images, so it is the translation input.
-
-#### Step 4: Generate Structured Summaries
-
-Generate one JSON bundle per selected prompt template. This example uses
-`deep_read`; repeat it for every template you need, naming each output
-`./summary_json/<template>.json`.
-
-```bash
-uv run deepresearch-flow paper extract \
-  --input ./md_simple \
-  --model openai/gpt-4o-mini \
-  --prompt-template deep_read \
-  --output ./summary_json/deep_read.json
-```
-
-<p align="center">
-  <img src=".github/assets/extract.png" width="70%" alt="extract" />
-</p>
-
-#### Step 4.1: Verify and Retry Summary Fields
-
-Keep verification reports outside `summary_json/` so JSON repair scans only
-summary bundles. `paper db verify` validates the JSON bundle; it does not
-require a database. Repeat this unit for every selected template.
-
-```bash
-uv run deepresearch-flow paper db verify \
-  --input-json ./summary_json/deep_read.json \
-  --prompt-template deep_read \
-  --output-json ./summary_verify/deep_read.json
-
-uv run deepresearch-flow paper extract \
-  --input ./md_simple \
-  --model openai/gpt-4o-mini \
-  --prompt-template deep_read \
-  --output ./summary_json/deep_read.json \
-  --retry-list-json ./summary_verify/deep_read.json
-```
-
-<p align="center">
-  <img src=".github/assets/verify.png" width="70%" alt="verify" />
-</p>
-
-#### Step 5: Translate Base64 Markdown
-
-```bash
-uv run deepresearch-flow translator translate \
-  --input ./md_base64 \
-  --target-lang zh \
-  --model openai/gpt-4o-mini \
-  --fix-level moderate \
-  --output-dir ./md_base64_translated
-```
-
-#### Step 6: Repair Generated Artifacts
-
-Repair every summary JSON after extraction and retry. JSON inputs require
-`--json`; keep `-r` because the directory can contain multiple template
-bundles.
-
-```bash
-uv run deepresearch-flow recognize fix \
-  --input ./summary_json --json -r --in-place
-
-uv run deepresearch-flow recognize fix-math \
-  --input ./summary_json --json -r \
-  --model openai/gpt-4o-mini \
-  --in-place
-
-uv run deepresearch-flow recognize fix-mermaid \
-  --input ./summary_json --json -r \
-  --model openai/gpt-4o-mini \
-  --in-place
-```
-
-<p align="center">
-  <img src=".github/assets/fix-mermaid.png" width="70%" alt="fix mermaid" />
-</p>
-
-Repair the translated Markdown separately. Mermaid repair is only part of the
-summary JSON branch.
-
-```bash
-uv run deepresearch-flow recognize fix \
-  --input ./md_base64_translated -r --in-place
-
-uv run deepresearch-flow recognize fix-math \
-  --input ./md_base64_translated -r \
-  --model openai/gpt-4o-mini \
-  --in-place
-```
-
-#### Step 7: Build a Snapshot Database or Serve Locally
-
-Both commands consume the repaired summary JSON. Add one `--input` option for
-each additional file in `summary_json/`; neither command consumes the other
-command's output.
-
-Build a persistent SQLite snapshot and static assets:
-
-```bash
-uv run deepresearch-flow paper db snapshot build \
-  --input ./summary_json/deep_read.json \
-  --bibtex ./papers.bib \
-  --md-root ./md_simple \
-  --md-translated-root ./md_base64_translated \
-  --pdf-root ./pdfs \
-  --output-db ./dist/paper_snapshot.db \
-  --static-export-dir ./dist/paper-static
-```
-
-Or start the local web UI directly from the same inputs:
+After `run.sh` finishes, open the local web UI:
 
 ```bash
 uv run deepresearch-flow paper db serve \
-  --input ./summary_json/deep_read.json \
-  --bibtex ./papers.bib \
-  --md-root ./md_simple \
-  --md-translated-root ./md_base64_translated \
-  --pdf-root ./pdfs \
-  --host 127.0.0.1
+  --input myproj/deep_read.json \
+  --bibtex myproj/library.bib \
+  --md-root myproj/md_simple \
+  --md-translated-root myproj/md_base64_translated \
+  --pdf-root myproj/pdf
 ```
 
-If you have no BibTeX file, omit `--bibtex ./papers.bib`.
-
-#### Step 8: Add Semantic Search (Optional)
-
-Build a LanceDB vector index from the same repaired summaries and Markdown
-roots:
-
-```bash
-uv run deepresearch-flow paper embed \
-  --config ./config.toml \
-  --input ./summary_json/deep_read.json \
-  --md-root ./md_simple \
-  --md-translated-root ./md_base64_translated \
-  --max-concurrency 4 \
-  --document-window 8 \
-  --output-embed-db ./paper_vectors
-```
-
-Add `--rpm 60` or `--tpm 200000` to throttle the embedding provider; both are
-optional and unset by default. `--tpm` counts estimated input tokens (characters
-÷ 4) over a rolling minute. The same two options exist on
-`paper db snapshot build` when it is asked to build the vector index.
-
-Serve with semantic search enabled:
-
-```bash
-uv run deepresearch-flow paper db serve \
-  --input ./summary_json/deep_read.json \
-  --bibtex ./papers.bib \
-  --md-root ./md_simple \
-  --md-translated-root ./md_base64_translated \
-  --pdf-root ./pdfs \
-  --embed-db ./paper_vectors \
-  --search-access-token "your-token"
-```
-
-#### Step 9: MCP Integration (Optional)
-
-The project exposes bounded MCP tools for AI agent access via FastMCP. See the [MCP documentation](docs/en/api-and-mcp.md#mcp) for endpoint, auth, and tool reference.
+To deploy the snapshot and static assets in production, see the [Deployment Guide](docs/en/deployment.md).
 
 ---
 
-## Further Reading
+## Documentation
 
-- **[Advanced Workflows](docs/en/workflow.md)** — Incremental builds, merging JSON/BibTeX, supplementing templates
-- **[Deployment](docs/en/deployment.md)** — CDN serving, Nginx/Caddy config, Docker, Compose
-- **[API & MCP](docs/en/api-and-mcp.md)** — Admin API, push/push-semantic, MCP endpoints, auth, and tools
-- **[Reference](docs/en/reference.md)** — Translator, Extract, DB & Recognize in detail
-- **[Snapshot Management](docs/en/snapshot-management.md)** — Snapshot migration, supplement, update
+| Document | Content |
+|---|---|
+| [From PDFs to a snapshot](docs/en/pipeline.md) | Process one project with `run.sh`: steps, retries, exit codes, notifications |
+| [Advanced workflows](docs/en/workflow.md) | Incremental builds, merging, supplementing templates and translations for existing data |
+| [Reference](docs/en/reference.md) | Translator, Extract, Recognize, semantic search, exit codes, `init-run` options |
+| [Snapshot management](docs/en/snapshot-management.md) | Migrate, supplement, and update snapshots |
+| [Deployment guide](docs/en/deployment.md) | CDN, Nginx/Caddy, Docker, Compose, admin pipeline |
+| [API and MCP](docs/en/api-and-mcp.md) | Admin API, push, MCP endpoints, auth, and tools |
 
 ---
 

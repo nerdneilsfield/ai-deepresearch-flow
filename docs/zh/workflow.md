@@ -1,49 +1,15 @@
-[← 返回 README](../README_ZH.md)
+[← 返回 README](../../README_ZH.md)
 
-# 高级工作流
+# 高级工作流：处理已有数据
 
-## 一键生成整条流水线（init-run）
-
-准备一个项目目录，里面放 `pdf/` 和恰好一个 `.bib`，其余输出都写在这个目录下：
-
-```bash
-uv run deepresearch-flow utils init-run ~/pdfs/myproj -m provider/model
-export NOTIFY_URL='https://通知服务/api/<uuid>/get'   # 可选
-~/pdfs/myproj/run.sh
-```
-
-`run.sh` 的流程是：`ocr → fix → fix-math → organize`，然后 `simple`、`deep_read`、`translate`
-三条链（每条链里的步骤顺序执行）在 tmux 里并行（`tmux -L drflow-<项目名> attach -t run` 查看），三条都完成后执行 `build`。
-`embed`、`api push`、`api update` 不在脚本里，需要手动执行。
-
-- 每个步骤是脚本里的一个函数 `s_<步骤名>`，一行一条命令，直接改那一行就能改参数。
-  `./run.sh list` 列出所有步骤名。
-- 指定步骤：`./run.sh fix-simple,fix-math-simple`（逗号或空格分隔），按给定顺序一个接一个跑，
-  即使该步骤已有 `.done` 也会重跑；某一步失败就停止，后面的不再执行。
-- 不带参数是完整流程。重跑时已完成的步骤（`logs/<步骤>.done`）会被跳过，从失败的那一步继续。
-- 某一步失败会写 `logs/<步骤>.failed`，脚本不会执行 `build`。日志在 `logs/<步骤>.log`。
-- 脚本是普通 bash，路径全是相对于项目目录的。
-- `NOTIFY_URL` 指向 [simple-telegram-notification-bot](https://github.com/nerdneilsfield/simple-telegram-notification-bot)
-  的 `/api/<uuid>/get`；不设置则不通知。
-
-### 退出码约定
-
-批处理命令（`extract`、`translate`、`ocr`、`fix-math`、`fix-mermaid`）使用统一的退出码：
-
-| 退出码 | 含义 |
-|---|---|
-| 0 | 全部成功 |
-| 1 | 命令自身出错，重试没有意义 |
-| 3 | 输出和错误报告已写出，但部分条目失败，值得带 `--retry-failed`（`translate` 直接重跑）再试 |
-
-`run.sh` 对退出码 3 最多重试 3 轮（`--rounds` 修改），其他非零退出码直接终止该链。
+本文说明如何在已有的论文数据上做增量构建、合并和补充。从 PDF 开始的完整流程见 [从 PDF 到快照](pipeline.md)。
 
 ## 增量构建 PDF 文献库
 
 如果你的 PDF 库在持续增长，不用每次都全量重建。下面的流程会找出新增的 PDF，只处理它们，然后合并回已有库中。
 
 > 前提：已有处理完成的 JSON 文献库（例如 `paper_infos.json`）及其关联资源。
-> 若起点只有 PDF 和可选 BibTeX，请先走 README 的从零流程。
+> 若起点只有 PDF 和 BibTeX，请先按 [从 PDF 到快照](pipeline.md) 处理。
 
 ```bash
 # 1) 对比已处理的 JSON 和新 PDF 库，找出缺失的 PDF
@@ -183,7 +149,7 @@ uv run deepresearch-flow paper db extract \
 
 ## 补充缺失的模板和翻译
 
-处理大型文献库时，有些论文可能缺少某个模板（比如 deep read 结果），或者缺了翻译。下面两种方法可以帮你找出并补齐这些缺口 —— 可以从源 Markdown 重新提取，也可以直接在现有快照上原地补充。
+处理大型文献库时，有些论文可能缺少某个模板（比如 deep read 结果），或者缺了翻译。下面两种方法可以找出并补齐这些缺口：从源 Markdown 重新提取，或者直接在现有快照上原地补充。
 
 ### 方法一：定位缺口 → 提取 → 重建
 
@@ -287,5 +253,5 @@ uv run deepresearch-flow paper db snapshot build ...
 
 ## 相关文档
 
-- [部署指南](deployment.md) — 通过 HTTP 对外提供文献库浏览服务
-- [快照管理](snapshot-management.md) – 构建、查询和维护论文快照
+- [部署指南](deployment.md)：通过 HTTP 对外提供文献库浏览服务
+- [快照管理](snapshot-management.md)：构建、查询和维护论文快照

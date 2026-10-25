@@ -1,0 +1,197 @@
+[← 返回 README](../../README_ZH.md)
+
+# 从 PDF 到快照：用 run.sh 处理一个项目
+
+本文说明如何把一批 PDF 和一个 BibTeX 文件处理成可部署的快照数据库。做法是让 `utils init-run` 生成一个 `run.sh`，再运行它。
+
+完成后，项目目录里有 OCR 结果、两份摘要 JSON、译文，以及 `dist/` 下的快照数据库和静态资源。
+
+## 开始之前
+
+你需要：
+
+- 源码仓库的检出目录。`run.sh` 通过 `uv run --project <仓库根目录> deepresearch-flow` 调用命令，仓库根目录在生成时写入脚本。
+- `config.toml`：LLM provider 与 `main_model`，格式见 [README](../../README_ZH.md) 的“配置”一节。
+- `ocr.toml`：OCR 后端配置，从 `ocr.example.toml` 复制，并设置其中引用的 token。
+- `tmux`：完整流程用它并行运行三条链。
+- `mmdc`（Mermaid 命令行）：`fix-mermaid-deep_read` 步骤用它校验图表。在仓库根目录执行 `npm install` 安装；`run.sh` 会把 `<仓库根目录>/node_modules/.bin` 加进 `PATH`。
+
+## 准备项目目录
+
+手动创建一个目录，放入 `pdf/` 和恰好一个 `.bib` 文件：
+
+```text
+myproj/
+├── pdf/          # 全部 PDF
+└── myproj.bib    # BibTeX，目录里只能有一个 .bib
+```
+
+之后所有输出都写在这个目录里，路径全部是相对路径，所以可以整个目录打包搬走。
+
+## 生成并运行
+
+在仓库根目录执行：
+
+```bash
+uv run deepresearch-flow utils init-run ./myproj
+```
+
+命令生成 `myproj/run.sh`。`init-run` 不接收模型参数：脚本里每个调用 LLM 的命令都带一个占位符 `--model PROVIDER/MODEL`，需要你逐条改成真实的 `provider/model`。各步骤可以使用不同的模型。
+
+用编辑器打开 `run.sh`，把每处 `PROVIDER/MODEL` 替换为 `config.toml` 中已声明的模型，例如 `openai/gpt-4o-mini`。共有 8 处，分布在 `fix-math`、`simple`、`fix-math-simple`、`deep_read`、`fix-math-deep_read`、`fix-mermaid-deep_read`、`translate`、`fix-math-translated` 这些步骤里。
+
+对已存在 `run.sh` 的目录再次执行 `init-run`，会直接覆盖该文件，你改过的模型和参数随之丢失。需要保留修改时，先备份 `run.sh`。
+
+要运行的步骤里仍有占位符时，`run.sh` 在执行任何命令之前停止，并指出是哪个步骤。
+
+然后运行：
+
+```bash
+./myproj/run.sh
+```
+
+### init-run 的选项
+
+| 选项 | 默认值 | 作用 |
+|---|---|---|
+| `PROJECT` | 无，必填 | 项目目录。必须已存在，且含 `pdf/` 和恰好一个 `.bib` |
+| `--target-lang` | `zh` | 译文的目标语言 |
+| `--config` | `config.toml` | LLM 配置。按当前目录解析，以绝对路径写入脚本 |
+| `--ocr-config` | `ocr.toml` | OCR 配置，处理方式同 `--config` |
+| `--rounds` | `3` | 每个步骤对失败条目的最多重试轮数 |
+
+配置文件路径以绝对路径写入脚本。把项目搬到另一台机器后，修改 `run.sh` 开头的 `CONFIG`、`OCR_CONFIG` 和 `REPO` 三个变量。
+
+## 流程
+
+完整流程分三段：
+
+1. `ocr` 链依次执行 `ocr`、`fix`、`fix-math`、`organize`。
+2. 三条链在 tmux 里并行：`simple` 链、`deep_read` 链、`translate` 链。每条链内部按顺序执行。
+3. 三条链都完成后，执行 `build`。
+
+`embed`、`api push`、`api update` 不在脚本里，需要手动执行。
+
+脚本只在 `ocr` 链完成之后才启动 tmux。查看并行链的进度：
+
+```bash
+tmux -L drflow-myproj attach -t run
+```
+
+其中 `myproj` 是项目目录名。每个项目使用独立的 tmux 服务，所以 shell 里的 API key 和 `NOTIFY_URL` 会传给各条链。
+
+## 只运行指定步骤
+
+在命令行列出步骤名，用逗号或空格分隔：
+
+```bash
+./myproj/run.sh fix-simple,fix-math-simple
+```
+
+指定步骤时：
+
+- 按给定顺序一个接一个运行，不使用 tmux。
+- 即使 `logs/<步骤>.done` 已存在，也重新运行。
+- 某一步失败就停止，后面的步骤不再运行。
+- 步骤名拼错时，在运行任何步骤之前报错并列出全部步骤名。
+
+`./myproj/run.sh list` 打印全部步骤名。
+
+## 失败后怎么办
+
+每个步骤的结果记录在 `logs/` 下：
+
+| 文件 | 含义 |
+|---|---|
+| `logs/<步骤>.log` | 该步骤的完整输出 |
+| `logs/<步骤>.done` | 该步骤已成功 |
+| `logs/<步骤>.failed` | 该步骤失败 |
+
+完整流程中，某一步失败会终止所在的链，且不会执行 `build`。修复原因后重新运行 `./myproj/run.sh`：已有 `.done` 的步骤被跳过，流程从失败的那一步继续。要重做某个已完成的步骤，删除它的 `.done` 文件，或者在命令行指定它。
+
+### 退出码
+
+批处理命令（`extract`、`translate`、`ocr`、`fix-math`、`fix-mermaid`）使用同一套退出码：
+
+| 退出码 | 含义 | `run.sh` 的处理 |
+|---|---|---|
+| 0 | 全部成功 | 步骤成功 |
+| 1 | 命令自身出错，重试没有意义 | 步骤失败 |
+| 3 | 输出和错误报告已写出，但部分条目失败 | 按步骤的重试方式再运行，最多 `ROUNDS` 轮 |
+
+其他非零退出码按失败处理。
+
+重试方式有三种，写在每个步骤命令的前面：
+
+- `retry`：再运行同一条命令，并加上 `--retry-failed`，只处理失败的条目。用于 `fix-math`、`fix-mermaid` 和 `extract`。
+- `rerun`：再运行完全相同的命令。用于 `ocr` 和 `translate`，它们本来就会跳过已完成的文件，没有 `--retry-failed`。
+- `once`：只打印警告，不重试。用于 `fix` 和 `organize`。
+
+重试用尽后仍有失败条目时，脚本打印警告并继续。这时到 `logs/` 下的错误报告里查看失败的条目。
+
+## 通知
+
+设置环境变量 `NOTIFY_URL` 后，每条链结束、任一步骤失败、`build` 完成时，脚本发送一条通知：
+
+```bash
+export NOTIFY_URL='https://<通知服务>/api/<uuid>/get'
+```
+
+通知服务是 [simple-telegram-notification-bot](https://github.com/nerdneilsfield/simple-telegram-notification-bot)。URL 中的 `<uuid>` 相当于密码，所以脚本只从环境变量读取它，不写进文件。未设置 `NOTIFY_URL` 时不发送通知。发送失败不影响流程。
+
+## 步骤参考
+
+下表的“输入”和“输出”都是相对于项目目录的路径。标有“LLM”的步骤需要把占位符替换为真实模型。
+
+| 步骤 | 命令 | LLM | 输入 | 输出 | 重试方式 |
+|---|---|---|---|---|---|
+| `ocr` | `recognize ocr` | 否 | `pdf/` | `ocr/` | `rerun` |
+| `fix` | `recognize fix` | 否 | `ocr/` | 原地修改 | `once` |
+| `fix-math` | `recognize fix-math` | 是 | `ocr/` | 原地修改，报告 `logs/fix-math-ocr.json` | `retry` |
+| `organize` | `recognize organize` | 否 | `ocr/` | `md_simple/`、`md_base64/` | `once` |
+| `simple` | `paper extract` | 是 | `md_simple/` | `simple.json`，错误 `logs/simple-errors.json` | `retry` |
+| `fix-simple` | `recognize fix` | 否 | `simple.json` | 原地修改 | `once` |
+| `fix-math-simple` | `recognize fix-math` | 是 | `simple.json` | 原地修改，报告 `logs/fix-math-simple.json` | `retry` |
+| `deep_read` | `paper extract` | 是 | `md_simple/` | `deep_read.json`，错误 `logs/deep_read-errors.json` | `retry` |
+| `fix-deep_read` | `recognize fix` | 否 | `deep_read.json` | 原地修改 | `once` |
+| `fix-math-deep_read` | `recognize fix-math` | 是 | `deep_read.json` | 原地修改，报告 `logs/fix-math-deep_read.json` | `retry` |
+| `fix-mermaid-deep_read` | `recognize fix-mermaid` | 是 | `deep_read.json` | 原地修改，报告 `logs/fix-mermaid-deep_read.json` | `retry` |
+| `translate` | `translator translate` | 是 | `md_base64/` | `md_base64_translated/` | `rerun` |
+| `fix-translated` | `recognize fix` | 否 | `md_base64_translated/` | 原地修改 | `once` |
+| `fix-math-translated` | `recognize fix-math` | 是 | `md_base64_translated/` | 原地修改，报告 `logs/fix-math-translated.json` | `retry` |
+| `build` | `paper db snapshot build` | 否 | 上面的 JSON、Markdown、`pdf/`、`.bib` | `dist/<项目名>.db`、`dist/<项目名>-export/` | 无 |
+
+补充说明：
+
+- `fix-mermaid` 只作用于 `deep_read.json`。
+- `simple` 和 `deep_read` 在 `logs/simple/`、`logs/deep_read/` 目录下运行，因为 `paper extract` 把中间结果写到当前目录的 `paper_stage_outputs/`。
+- `build` 在 `dist/<项目名>.db` 已存在时，加上 `--previous-snapshot-db`，使重建后的 `paper_id` 保持不变。
+- `translate` 把调试信息写到 `logs/translator/`。
+
+## 手动逐步运行
+
+`run.sh` 里的每个步骤只是一条普通命令。需要脱离脚本时，直接复制对应的行。这里以 `deep_read` 链为例，命令在项目目录下执行：
+
+```bash
+mkdir -p logs/deep_read
+(cd logs/deep_read && uv run deepresearch-flow paper extract \
+  --input ../../md_simple --config <config.toml 的路径> \
+  --model PROVIDER/MODEL --prompt-template deep_read \
+  --output ../../deep_read.json --errors ../../logs/deep_read-errors.json)
+
+uv run deepresearch-flow recognize fix --input deep_read.json --json --in-place
+
+uv run deepresearch-flow recognize fix-math --input deep_read.json --json --in-place \
+  --config <config.toml 的路径> --model PROVIDER/MODEL --report logs/fix-math-deep_read.json
+```
+
+`<config.toml 的路径>` 和 `PROVIDER/MODEL` 是占位符，运行前替换。命令返回 3 时，在同一条命令后加 `--retry-failed` 再运行一次。
+
+## 后续步骤
+
+`run.sh` 结束于 `build`。之后：
+
+- 构建向量索引：见 [功能参考](reference.md) 中的语义搜索。
+- 部署快照与静态资源：见 [部署指南](deployment.md)。
+- 把快照推送到远端或更新已有论文：见 [API 与 MCP](api-and-mcp.md)。
+- 对已有数据做增量构建、合并或补充：见 [高级工作流](workflow.md)。
