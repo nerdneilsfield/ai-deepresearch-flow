@@ -1,4 +1,4 @@
-[← 返回 README](../README_ZH.md)
+[← 返回 README](../../README_ZH.md)
 
 # API 与 MCP
 

@@ -23,27 +23,24 @@ The recommended production setup is **front/back separation**:
 
 ## 1. Build Snapshot + Static Export
 
-Run this after the bootstrap workflow has generated repaired summary JSON,
-`md_simple/`, and `md_base64_translated/`. No existing snapshot database is
-required; the build host must be able to read the original PDF and Markdown
-roots. The CDN only needs the exported directory.
+Run this after the flow in [From PDFs to a snapshot](pipeline.md) has produced repaired summary JSON, `md_simple/`, and `md_base64_translated/`. The `build` step of `run.sh` already runs the same command; use this one to rebuild on another machine or to change parameters. No existing snapshot database is required. The build host must be able to read the original PDF and Markdown roots. The CDN only needs the exported directory.
 
 ```bash
 uv run deepresearch-flow paper db snapshot build \
-  --input ./summary_json/deep_read.json \
+  --input ./deep_read.json \
   --bibtex ./papers.bib \
   --md-root ./md_simple \
   --md-translated-root ./md_base64_translated \
-  --pdf-root ./pdfs \
+  --pdf-root ./pdf \
   --output-db ./dist/paper_snapshot.db \
   --static-export-dir /data/paper-static
 ```
 
 Notes:
 
-- Add one `--input ./summary_json/<template>.json` for each additional repaired
+- Add one `--input ./<template>.json` for each additional repaired
   summary template.
-- `--pdf-root` should point to the directory containing original PDF files.
+- `--pdf-root` should point to the directory containing original PDF files, which is `pdf/` in the project.
 - `--md-root` / `--md-translated-root` should point to `md_simple/` and
   `md_base64_translated/`, respectively.
 - `--static-export-dir` is the output directory for static assets. Copy or mount this to your CDN.

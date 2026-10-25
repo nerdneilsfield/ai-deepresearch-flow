@@ -1,26 +1,26 @@
 # Snapshot Management
 
-[← Back to README](../README.md)
+[← Back to README](../../README.md)
 
 ## Building a Production Snapshot
 
-Build a production-quality snapshot (SQLite + static assets) after the bootstrap
-workflow has produced repaired summary JSON. This command consumes those JSON
+Build a production-quality snapshot (SQLite + static assets) after the flow in
+[From PDFs to a snapshot](pipeline.md) has produced repaired summary JSON. This command consumes those JSON
 bundles; it does not create them from PDFs or BibTeX.
 
 ```bash
 uv run deepresearch-flow paper db snapshot build \
-  --input ./summary_json/deep_read.json \
+  --input ./deep_read.json \
   --bibtex ./papers.bib \
   --md-root ./md_simple \
   --md-translated-root ./md_base64_translated \
-  --pdf-root ./pdfs \
+  --pdf-root ./pdf \
   --output-db ./dist/paper_snapshot.db \
   --static-export-dir ./dist/paper-static
 ```
 
 Notes:
-- Add one `--input ./summary_json/<template>.json` for each additional repaired
+- Add one `--input ./<template>.json` for each additional repaired
   summary template.
 - Build host must be able to read the original PDF/Markdown roots.
 - CDN server only needs the exported directory (e.g. `/data/paper-static`).
