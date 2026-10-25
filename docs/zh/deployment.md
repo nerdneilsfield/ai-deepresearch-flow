@@ -404,10 +404,13 @@ docker exec <container> deepresearch-flow paper db api import-local \
 - 导入时不要同时进行远程 push：两者对论文的写入没有互斥。
 - 静态资源不在导入范围内，需要另行放进 `/static` 或推送到外部静态存储。
 
-## 6. 可选 Admin PDF 流水线
+## 6. 可选：Admin PDF 流水线
 
-上传/审核流程默认关闭。既有容器仍只启动 API + Nginx；须同时配置 TOML
-与进程桥接变量才会启用：
+Admin PDF 流水线让管理员在网页上传 PDF，经审核后发布到快照。它默认关闭。要启用，必须同时满足两个条件：`config.toml` 里 `[pipeline].enabled = true`，并且设置环境变量 `PAPER_PIPELINE_ENABLED=1`。两者不一致时，服务拒绝启动。
+
+### 6.1 配置
+
+在 `config.toml` 中加入 `[pipeline]` 段：
 
 ```toml
 [pipeline]
@@ -421,13 +424,11 @@ formal_gc_batch_size = 100
 formal_gc_grace_seconds = 86400
 ```
 
-完整注释例见 `config.example.toml`，含上传限制、OCR/Extract/Translate
-allowlist/default、固定 extract template、翻译语言、lease/heartbeat、重试、
-保留期及 supporting-model fingerprint。所选模型必须在相应 allowlist 内。
-队列只保存非秘密的模型标识、路径、端点及配置 fingerprint；provider key、
-WebDAV 密码须用环境变量或容器 secret，勿写入 TOML。
+`config.example.toml` 里有带注释的完整示例，包括上传限制、OCR/Extract/Translate 的模型 allowlist 与默认值、固定的 extract template、翻译语言、lease 与 heartbeat、重试、保留期，以及辅助模型的 fingerprint。所选模型必须在对应的 allowlist 内。
 
-部署镜像启用时设置：
+队列只保存非秘密的模型标识、路径、端点和配置 fingerprint。provider key 和 WebDAV 密码用环境变量或容器 secret 提供，不要写进 TOML。
+
+### 6.2 用部署镜像启动
 
 ```bash
 mkdir -p pipeline-work/work pipeline-work/previews pipeline-static
@@ -446,59 +447,100 @@ docker run --rm -p 127.0.0.1:8899:8899 \
   ghcr.io/nerdneilsfield/deepresearch-flow:deploy-latest
 ```
 
-API 与 Worker 共用 `PAPER_DB_CONFIG`、queue DB、work root、preview root、Snapshot
-DB、正式 static root。`PAPER_PIPELINE_ENABLED=1` 仅控制 Supervisor 是否物化
-Worker，不能把 TOML 中关闭的 pipeline 偷开；两者不一致即 fail closed。TOML 开启时
-必须提供 `PAPER_DB_ADMIN_TOKEN`。启动会验证 work、preview、queue、Snapshot 与
-`/static` 路径为绝对、可写；Docker 中还须位于非 root 的持久挂载边界。启动前先
-创建 `work/` 与 `previews/`；持久挂载缺失即拒绝启动。`pipeline-work` 必须私有，
-内含上传原件、中间产物和受保护预览，绝不作为 Nginx alias。预览只能由受保护
-Admin artifact API 读取，不进入 `/static`；正式 local 输出只写入 `/static`。
-首次启用启动时，会校验并迁移历史 static root 下已登记的 legacy preview 到
-`preview_root`；损坏、越界或 symlink 登记会在 API/Worker 启动前 fail closed。迁移可
-跨重启幂等执行，不扫描或删除无登记的 static 文件。
+启动前先创建 `work/` 和 `previews/` 目录。持久挂载缺失时，服务拒绝启动。
 
-Nginx 默认允许 `500m` multipart 上传；可用经校验的 `1g` 等值设置
-`PAPER_DB_NGINX_BODY_LIMIT`。Admin pipeline location 使用较长上传/预览 timeout。
-前端 token 只存 `sessionStorage`，并先请求 `/api/v1/admin/pipeline/config` 验证。
+TOML 开启流水线时，必须提供 `PAPER_DB_ADMIN_TOKEN`。`PAPER_PIPELINE_ENABLED=1` 只决定 Supervisor 是否启动 Worker，不能打开 TOML 中已关闭的流水线。
 
-Supervisor 仅在桥接变量与 TOML 一致时启动一个持久 Worker。每个 queue deployment
-只运行一个 pipeline Worker 进程；发布与 formal-GC serialization lock 在进程内，依赖此
-拓扑。Worker 轮询处理与待发布任务，使用 SQLite WAL lease，持续写 idle/active
-heartbeat；重启后恢复过期的 `running`/`publishing`/`indexing` lease，收到 `TERM`
-则在处理步骤边界停止。正在进行的远端处理调用可能完成；其 checkpoint 会提交，lease
-原子重排队，且不再领取下一篇。不可逆发布可能完成，随后停止轮询，不再领取下一篇。
-Admin config 根据 heartbeat 年龄报告 `online`、`degraded` 或 `offline`。逐篇查看
-受保护 PDF/source/summary/translation；处理 BibTeX 歧义（或明确选择无 BibTeX），
-再执行 retry、reject、publish 或批量发布。发布带 revision CAS，旧页面会收到冲突。
-Supervisor 将五秒内崩溃视为初次启动失败，最多重试三次；Worker 启动后使用
-`autorestart=false`：运行时失败会保持停止，heartbeat 过期后 Admin API/UI 报告
-`offline`，Supervisor 不会无限崩溃重启。管理员须刻意重启 Worker，随后由 lease expiry/
-heartbeat recovery 恢复队列任务。配置持续无效时会进入 Supervisor startup failure，需
-管理员修复，不会伪造数据状态迁移。
+API 与 Worker 共用同一组配置：`PAPER_DB_CONFIG`、queue DB、work root、preview root、Snapshot DB 和正式 static root。
 
-`published`、`published_with_warning`、`rejected`、`cancelled` 终态 work 与 preview
-中间产物默认保留七日；清理按批次执行，不删除正式发布资源、失败/待审核任务或
-WebDAV 对象。另有有界、按引用的正式资源 GC：只删除通过 digest 校验、且早于
-`formal_gc_grace_seconds`、未被当前 Snapshot、publication receipt 或 manifest 引用的
-对象；仅与 Snapshot publication receipt 配对的 manifest 才有保活权。若 receipt/manifest
-不完整，或 WebDAV 不支持安全 list/delete，则只报告 warning，不删除对象；有界 cursor
-跨 Worker 重启持久化，避免已引用前缀令后续候选饥饿。若需立即丢弃终态上传，先用受保护 Admin 操作确认状态，再执行有界
-清理（或只删除该 UUID 的 private `work/` 与 `previews/` 目录）；勿手删正式
-static root。
+启动时服务检查 work、preview、queue、Snapshot 和 `/static` 的路径，要求它们是绝对路径且可写；在 Docker 中还要求它们位于非 root 的持久挂载内。
 
-发布先向本地正式目录或 WebDAV 幂等写入 content-addressed 文件，再写 Snapshot
-publication receipt，最后增量更新 LanceDB；WebDAV 当前 bundle 的资源会先暂存到
-private 临时目录，仅加载/更新当前论文，索引完成即清理。WebDAV 上传成功即足够，
-不强制 HEAD。receipt 写入后若进程崩溃，重启会安全续跑。Embedding 失败时论文仍
-保留，状态为 `published_with_warning`；修复向量配置后可只重试 indexing，不重复
-发布 Snapshot/静态资源。队列只保存小型 publication manifest；正式的
-content-addressed 资源（WebDAV 发布时亦保留在正式 static root 的本地 cache）与
-私有 pipeline work 分离，故七日清理 work/preview 后仍可只重试 indexing。Worker 会
-对本地及具备能力的 WebDAV 执行有界引用 GC；绝不遍历 private root，亦不删除当前
-Snapshot、receipt 或 manifest 引用对象。旧的 `published_with_warning` 记录若缺少可
-精确验证的 manifest/cache，会返回可行动的 409，保持原状态，不进入必失败 retry。
+### 6.3 目录与访问边界
 
-禁用/回滚：停止容器，取消设置或设 `PAPER_PIPELINE_ENABLED=0`，并将
-`[pipeline].enabled = false`。既有公开检索/API 与 CLI Snapshot 行为不变。恢复时
-保留 queue/work volume，用相同路径启动 Worker，等待 lease expiry 与 heartbeat recovery。
+| 目录 | 内容 | 对外访问 |
+|---|---|---|
+| `pipeline-work/`（work 与 preview） | 上传原件、中间产物、受保护的预览 | 不可。不要把它作为 Nginx alias |
+| `/static` | 正式发布的静态资源 | 可以 |
+
+预览只能通过需要鉴权的 Admin artifact 接口读取，不会出现在 `/static` 下。只有正式的 local 输出才写入 `/static`。
+
+首次启用时，服务会把历史 static root 下已登记的旧预览迁移到 `preview_root`。迁移前先做检查：
+
+- 登记记录损坏、路径越界或是符号链接时，API 和 Worker 都不启动。
+- 在 UUID 目录下发现符合预览文件名格式、却没有登记的残留文件时，同样不启动。这类文件通常来自崩溃。
+- 迁移只移动已登记的旧预览，不扫描也不删除其他 static 文件。迁移可以在重启后重复执行。
+
+### 6.4 上传大小与前端
+
+Nginx 默认允许最大 `500m` 的 multipart 上传。要调大，设置 `PAPER_DB_NGINX_BODY_LIMIT`，值须是合法的 Nginx 大小，例如 `1g`。Admin 流水线路径使用较长的上传与预览超时。
+
+前端只把 Admin token 保存在 `sessionStorage`，并先请求 `/api/v1/admin/pipeline/config` 验证它。
+
+### 6.5 Worker 的运行方式
+
+每个 queue deployment 只能运行一个 pipeline Worker 进程。发布锁和正式资源 GC 的串行锁都在进程内，依赖这一点。
+
+Worker 的行为如下：
+
+- 轮询待处理任务和待发布任务。
+- 用 SQLite WAL lease 领取任务，并持续写 idle 或 active heartbeat。
+- 重启后恢复已过期的 `running`、`publishing`、`indexing` lease。
+- 收到 `TERM` 后，在步骤边界停止。正在进行的远端处理调用可能完成，它的 checkpoint 会提交，lease 原子地重新入队，Worker 不再领取下一个任务。正在进行的不可逆发布可能完成，之后 Worker 停止轮询。
+
+Admin config 接口按 heartbeat 的年龄报告 Worker 状态：`online`、`degraded` 或 `offline`。
+
+Supervisor 对启动失败和运行时失败的处理不同：
+
+| 情形 | 处理 |
+|---|---|
+| 启动后 5 s 内崩溃 | 视为初次启动失败，最多重试 3 次 |
+| 配置持续无效 | 进入 Supervisor 启动失败，须管理员修复，不会伪造数据状态迁移 |
+| Worker 启动后在运行时失败 | `autorestart=false`，Worker 保持停止；heartbeat 过期后 Admin API 和 UI 报告 `offline`；Supervisor 不会无限重启 |
+
+运行时失败后，管理员须手动重启 Worker。重启后，由 lease 过期与 heartbeat 恢复机制接着处理队列中的任务。
+
+### 6.6 审核与发布
+
+管理员在 UI 中逐篇查看受保护的 PDF、源文、摘要和译文，处理 BibTeX 有歧义的情况（或明确选择不使用 BibTeX），然后执行重试、拒绝、发布或批量发布。发布带有 revision 校验，页面数据过期时返回冲突。
+
+发布分三步：
+
+1. 把带内容哈希的文件幂等地写入本地正式目录或 WebDAV。
+2. 写入 Snapshot publication receipt。
+3. 增量更新 LanceDB 索引。
+
+补充几点：
+
+- WebDAV 当前论文的资源会先暂存到私有临时目录，只加载并更新这一篇，索引完成后清理暂存。
+- WebDAV 上传成功即可，不要求再发 HEAD 请求。
+- receipt 写入后进程崩溃，重启后可以安全续跑。
+- embedding 失败时，论文仍然保留，状态为 `published_with_warning`。修复向量配置后，可以只重试索引，不会重复发布 Snapshot 和静态资源。
+- 队列只保存很小的 publication manifest。正式的带内容哈希的资源保留在正式 static root 的本地目录里（WebDAV 发布时，本地也保留一份 cache），与私有 work 分开。因此七日清理之后，仍然可以只重试索引。
+- 旧的 `published_with_warning` 记录如果缺少可精确验证的 manifest 或 cache，会返回可操作的 409，保持原状态，不进入注定失败的重试。
+
+### 6.7 保留与清理
+
+处于 `published`、`published_with_warning`、`rejected`、`cancelled` 终态的任务，其 work 与 preview 中间产物默认保留七日。清理按批次执行，不会删除正式发布的资源、失败或待审核的任务，也不会删除 WebDAV 对象。
+
+另有一个有界、按引用判断的正式资源 GC。它只删除同时满足以下条件的对象：
+
+- 通过 digest 校验；
+- 早于 `formal_gc_grace_seconds`；
+- 没有被当前 Snapshot、publication receipt 或 manifest 引用。
+
+只有与 Snapshot publication receipt 配对的 manifest 才能证明对象仍在使用。receipt 或 manifest 不完整，或者 WebDAV 不支持安全的 list 与 delete 时，GC 只报告 warning，不删除对象。有界 cursor 在 Worker 重启后保留，避免已被引用的前缀让后面的候选一直排不上。Worker 对本地存储和具备能力的 WebDAV 都执行这个 GC，不会遍历私有目录。
+
+要立即丢弃一个终态的上传：
+
+1. 先在受保护的 Admin 接口里确认它的状态。
+2. 执行有界清理，或者只删除该 UUID 在私有 `work/` 和 `previews/` 下的目录。
+
+不要手动删除正式 static root。
+
+### 6.8 停用与回滚
+
+1. 停止容器。
+2. 取消设置 `PAPER_PIPELINE_ENABLED`，或把它设为 `0`。
+3. 在配置中设置 `[pipeline].enabled = false`。
+
+公开的检索与 API，以及 CLI 的 Snapshot 行为都不受影响。要恢复时，保留 queue 和 work 卷，用相同的路径启动 Worker，然后等待 lease 过期与 heartbeat 恢复。

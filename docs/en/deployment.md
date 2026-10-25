@@ -403,10 +403,13 @@ docker exec <container> deepresearch-flow paper db api import-local \
 - Do not run a remote push at the same time: paper writes of the two are not coordinated.
 - Static assets are not imported; put them in `/static` or push them to the external static storage separately.
 
-## 6. Optional Admin PDF pipeline
+## 6. Optional: Admin PDF pipeline
 
-The upload/review workflow is opt-in. Existing containers remain API + Nginx
-only until both `config.toml` and the process bridge enable it:
+The Admin PDF pipeline lets an administrator upload PDFs in the web UI, review them, and publish them to the snapshot. It is off by default. To enable it, both conditions must hold: `[pipeline].enabled = true` in `config.toml`, and the environment variable `PAPER_PIPELINE_ENABLED=1`. If the two disagree, the service refuses to start.
+
+### 6.1 Configuration
+
+Add a `[pipeline]` section to `config.toml`:
 
 ```toml
 [pipeline]
@@ -420,15 +423,11 @@ formal_gc_batch_size = 100
 formal_gc_grace_seconds = 86400
 ```
 
-Use the commented `[pipeline]` example in `config.example.toml` for limits,
-allowlisted OCR/Extract/Translate model keys, fixed extract templates,
-translation language, lease/heartbeat, retry, retention, and supporting-model
-fingerprints. A selected model must be in its corresponding allowlist. Only
-nonsecret identifiers, paths, endpoints, and configuration fingerprints are
-stored in the queue; provider keys and WebDAV passwords stay in environment
-variables or the container secret mechanism.
+`config.example.toml` has a commented full example. It covers upload limits, the OCR/Extract/Translate model allowlists and defaults, the fixed extract template, the translation language, lease and heartbeat, retries, retention, and the fingerprints of supporting models. A selected model must be in its allowlist.
 
-Set all of the following when enabling the deployment image:
+The queue stores only nonsecret model identifiers, paths, endpoints, and configuration fingerprints. Provide provider keys and WebDAV passwords through environment variables or container secrets. Do not put them in the TOML file.
+
+### 6.2 Start with the deployment image
 
 ```bash
 mkdir -p pipeline-work/work pipeline-work/previews pipeline-static
@@ -447,90 +446,100 @@ docker run --rm -p 127.0.0.1:8899:8899 \
   ghcr.io/nerdneilsfield/deepresearch-flow:deploy-latest
 ```
 
-The same `PAPER_DB_CONFIG`, queue DB, work root, Snapshot DB, and formal static
-root are used by API and Worker. `PAPER_PIPELINE_ENABLED=1` is only a
-Supervisor materialization bridge: it cannot turn on a TOML-disabled pipeline,
-and disagreement fails closed. `PAPER_DB_ADMIN_TOKEN` is required when TOML
-enables the feature. Startup verifies that work, preview, queue, Snapshot, and
-`/static` paths are absolute, writable, and (in Docker) below a non-root
-mounted boundary. Create `work/` and `previews/` before startup; missing
-durability mounts fail closed. Keep `pipeline-work` private; it contains
-uploads, intermediates, and protected previews and is never an Nginx alias.
-Protected previews are served only through authenticated Admin artifact routes,
-never from `/static`; formal local output alone is written under `/static`.
-On first enabled startup, registered legacy previews found under the historical
-static root are validated and moved into `preview_root`; corrupt, outside, or
-symlinked registrations fail closed before routes/Worker start. The migration
-is idempotent across restart and scans only the exact UUID/preview artifact
-shape for unregistered crash orphans; it never deletes unrelated static files.
+Create the `work/` and `previews/` directories before startup. If a durable mount is missing, the service refuses to start.
 
-Nginx accepts multipart uploads up to `500m` by default. Override with a
-validated positive Nginx size such as `PAPER_DB_NGINX_BODY_LIMIT=1g`; the
-protected Admin pipeline location has long upload/preview timeouts. The
-frontend keeps the Admin token only in `sessionStorage` and validates it
-against `/api/v1/admin/pipeline/config`.
+`PAPER_DB_ADMIN_TOKEN` is required when the TOML enables the pipeline. `PAPER_PIPELINE_ENABLED=1` only tells the Supervisor whether to start the Worker. It cannot turn on a pipeline that the TOML disables.
 
-Supervisor starts one durable Worker only when the bridge and TOML agree. Run
-exactly one pipeline Worker process per queue deployment; the publication and
-formal-GC serialization lock is in-process and assumes this topology. The
-Worker polls processing and queued publication jobs, uses SQLite WAL leases,
-writes idle and active heartbeats, recovers expired
-`running`/`publishing`/`indexing` leases after restart, and stops between
-processing step boundaries on `TERM`.
-Supervisor classifies a crash before five seconds as a failed initial start
-and bounds those starts to three retries. After startup, the Worker uses
-`autorestart=false`: a runtime failure leaves it stopped, its heartbeat ages
-out, and the Admin API/UI report `offline`; Supervisor does not enter an
-unlimited crash loop. An operator must deliberately restart the Worker, after
-which lease expiry/heartbeat recovery resumes queued work. A persistently
-invalid configuration becomes a Supervisor startup failure requiring operator
-action, not a successful data-state transition.
-An in-flight remote processing call may finish; its completed checkpoint is
-committed, the lease is atomically requeued, and no next Job is claimed.
-An in-flight irreversible publication may finish, then publication polling
-stops before claiming another Job.
-The Admin config endpoint reports `online`, `degraded`, or `offline` from the
-heartbeat age. Review each protected PDF/source/summary/translation, resolve
-BibTeX ambiguity (or explicitly choose no BibTeX), then retry, reject, publish,
-or batch-publish ready jobs. A publish action is revision-aware and returns a
-conflict for stale UI data.
+The API and the Worker share one set of settings: `PAPER_DB_CONFIG`, the queue DB, the work root, the preview root, the Snapshot DB, and the formal static root.
 
-Terminal work and protected-preview artifacts for `published`,
-`published_with_warning`, `rejected`, and `cancelled` jobs are retained for
-seven days by default. Cleanup is batched and never
-touches formal published resources, failed/review-ready work, or WebDAV
-objects. A separate bounded reference-based formal GC may remove only
-digest-verified, unreferenced objects older than `formal_gc_grace_seconds`;
-unknown receipt/manifest metadata or unsupported WebDAV listing/deletion is
-reported as a warning and causes no deletion. Only a manifest joined to a
-Snapshot publication receipt authorizes liveness; a bounded cursor persists
-across Worker restarts so referenced prefixes cannot starve later candidates.
-To discard an unwanted terminal upload immediately, use the
-authenticated reject/cancel action and run the bounded local cleanup task (or
-remove only its UUID directories under both private `work/` and `previews/`
-after confirming status in the Admin API); never delete the formal static root
-by hand.
+At startup the service checks the work, preview, queue, Snapshot, and `/static` paths. They must be absolute and writable, and in Docker they must be below a non-root persistent mount.
 
-Publication writes immutable content-addressed files to the configured local
-formal root or WebDAV, then commits a Snapshot publication receipt before
-incremental LanceDB indexing. For WebDAV, the current bundle's
-content-addressed resources are staged in a temporary private directory and
-only that paper is loaded/upserted; the stage is removed after indexing.
-WebDAV upload success is sufficient; no HEAD probe is required. A crash after
-the receipt is safe to retry. If embedding fails, the paper remains published
-as `published_with_warning`; retry indexing only after fixing vector
-configuration. The queue keeps only a small publication manifest; formal
-content-addressed resources remain in the local formal root (including a
-local cache alongside WebDAV publication), so index-only retry still works
-after seven-day private work/preview cleanup. The Worker runs bounded,
-reference-based GC against both local and capable WebDAV stores; it never
-traverses private roots or removes objects referenced by current Snapshot,
-publication receipts, or manifests. Legacy `published_with_warning` rows that
-lack an exact manifest/cache fail with an actionable 409 instead of entering a
-doomed retry.
+### 6.3 Directories and access
 
-To disable or roll back, stop the container, set `PAPER_PIPELINE_ENABLED` unset
-or `0`, and use a config with `[pipeline].enabled = false`. Existing public
-search/API routes and CLI Snapshot behavior remain unchanged. Keep the queue
-and work volumes when recovering; restart Worker with the same paths so lease
-expiry and heartbeat recovery can proceed.
+| Directory | Content | Public access |
+|---|---|---|
+| `pipeline-work/` (work and preview) | Uploads, intermediate files, protected previews | No. Never use it as an Nginx alias |
+| `/static` | Formally published static assets | Yes |
+
+Previews are served only through authenticated Admin artifact routes, never from `/static`. Only formal local output is written to `/static`.
+
+On the first enabled startup, the service moves registered legacy previews from the historical static root into `preview_root`. It checks before it moves anything:
+
+- If a registration is corrupt, outside the configured roots, or a symlink, neither the API nor the Worker starts.
+- If a file under a UUID directory has the preview file-name shape but is not registered, they do not start either. Such files usually come from a crash.
+- The migration moves only registered legacy previews. It does not scan or delete other static files. It can run again after a restart.
+
+### 6.4 Upload size and frontend
+
+Nginx accepts multipart uploads up to `500m` by default. To raise the limit, set `PAPER_DB_NGINX_BODY_LIMIT` to a valid Nginx size such as `1g`. The Admin pipeline location uses longer upload and preview timeouts.
+
+The frontend keeps the Admin token only in `sessionStorage` and validates it against `/api/v1/admin/pipeline/config`.
+
+### 6.5 How the Worker runs
+
+Run exactly one pipeline Worker process per queue deployment. The publication lock and the formal-GC serialization lock are in-process and depend on this.
+
+The Worker:
+
+- polls processing jobs and jobs waiting for publication;
+- claims jobs with SQLite WAL leases and writes idle or active heartbeats;
+- recovers expired `running`, `publishing`, and `indexing` leases after a restart;
+- stops at a step boundary when it receives `TERM`. An in-flight remote processing call may finish, its checkpoint is committed, the lease is atomically requeued, and the Worker claims no next job. An in-flight irreversible publication may finish, and then the Worker stops polling.
+
+The Admin config endpoint reports the Worker state from the heartbeat age: `online`, `degraded`, or `offline`.
+
+The Supervisor treats startup failures and runtime failures differently:
+
+| Situation | Behavior |
+|---|---|
+| Crash within 5 s of start | Counts as a failed initial start; retried at most 3 times |
+| Persistently invalid configuration | Becomes a Supervisor startup failure; an administrator must fix it; no data state is changed |
+| Worker fails at runtime after startup | `autorestart=false`: the Worker stays stopped, its heartbeat ages out, the Admin API and UI report `offline`, and the Supervisor does not restart it in a loop |
+
+After a runtime failure, an administrator must restart the Worker. Lease expiry and heartbeat recovery then resume the queued work.
+
+### 6.6 Review and publish
+
+In the UI, the administrator inspects each protected PDF, source, summary, and translation, resolves BibTeX ambiguity (or explicitly chooses no BibTeX), and then retries, rejects, publishes, or batch-publishes. A publish action carries a revision check and returns a conflict if the page data is stale.
+
+Publication has three steps:
+
+1. Write content-addressed files idempotently to the local formal root or to WebDAV.
+2. Write the Snapshot publication receipt.
+3. Update the LanceDB index incrementally.
+
+Further details:
+
+- For WebDAV, the resources of the current paper are first staged in a private temporary directory. Only that paper is loaded and updated, and the stage is removed after indexing.
+- A successful WebDAV upload is enough. The service sends no HEAD request.
+- If the process crashes after the receipt is written, a restart resumes safely.
+- If embedding fails, the paper stays published with the status `published_with_warning`. After you fix the vector configuration, you can retry only the indexing. The Snapshot and the static assets are not published again.
+- The queue keeps only a small publication manifest. The formal content-addressed resources stay in the local formal static root (with WebDAV publication, a local cache is kept as well), apart from the private work files. Indexing can therefore still be retried after the seven-day cleanup.
+- A legacy `published_with_warning` record without an exactly verifiable manifest or cache returns an actionable 409. It keeps its state and does not enter a retry that cannot succeed.
+
+### 6.7 Retention and cleanup
+
+Work and preview intermediates of jobs in the terminal states `published`, `published_with_warning`, `rejected`, and `cancelled` are kept for seven days by default. Cleanup runs in batches. It never removes formally published resources, failed or review-ready jobs, or WebDAV objects.
+
+A separate bounded, reference-based formal GC removes an object only if all of these hold:
+
+- its digest verifies;
+- it is older than `formal_gc_grace_seconds`;
+- no current Snapshot, publication receipt, or manifest references it.
+
+Only a manifest paired with a Snapshot publication receipt proves that an object is still in use. If a receipt or manifest is incomplete, or if WebDAV does not support safe listing and deletion, the GC reports a warning and deletes nothing. A bounded cursor survives Worker restarts, so referenced prefixes cannot starve later candidates. The Worker runs this GC on local storage and on WebDAV stores that support it, and never traverses the private roots.
+
+To discard a terminal upload immediately:
+
+1. Confirm its state in the protected Admin API.
+2. Run the bounded cleanup, or remove only that UUID's directories under the private `work/` and `previews/`.
+
+Never delete the formal static root by hand.
+
+### 6.8 Disable and roll back
+
+1. Stop the container.
+2. Unset `PAPER_PIPELINE_ENABLED`, or set it to `0`.
+3. Set `[pipeline].enabled = false` in the configuration.
+
+Public search, the API, and the CLI Snapshot behavior are not affected. To recover, keep the queue and work volumes, start the Worker with the same paths, and wait for lease expiry and heartbeat recovery.
