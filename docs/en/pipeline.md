@@ -135,8 +135,11 @@ The settings block at the top of the script has four values to adjust:
 | `BATCH_SIZE` | 10 | Formulas or diagrams per request |
 | `MAX_CONCURRENCY` | 4 | Concurrent requests of `paper extract` |
 | `OCR_WORKERS` | 4 | Files OCR'd at the same time |
+| `EXTRACT_TIMEOUT` | 360 | Timeout in seconds per `paper extract` request |
 
-These four control concurrency and batch size. The models are not here: each step has its own `--model` in its command line, and you change that one line.
+These control concurrency, batch size, and the request timeout. The models are not here: each step has its own `--model` in its command line, and you change that one line.
+
+`EXTRACT_TIMEOUT` has to be generous. A 100k-token document takes about 90 s on `doubao-seed-2.1-pro`, and the multi-stage templates take longer. A request that runs out of time is cut off, and the error report names the timeout.
 
 ## After a failure
 

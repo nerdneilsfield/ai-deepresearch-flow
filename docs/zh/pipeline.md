@@ -135,8 +135,11 @@ Ctrl-C、Ctrl-Z 或 `kill` 都会停止整个流程，包括 tmux 里的三条�
 | `BATCH_SIZE` | 10 | 每个请求处理的公式或图表数 |
 | `MAX_CONCURRENCY` | 4 | `paper extract` 的并发请求数 |
 | `OCR_WORKERS` | 4 | 同时做 OCR 的文件数 |
+| `EXTRACT_TIMEOUT` | 360 | `paper extract` 每个请求的超时秒数 |
 
 改这几个值就能调并发和批大小。模型不在这里：每个步骤的命令行里有自己的 `--model`，单独改那一行。
+
+`EXTRACT_TIMEOUT` 要留够。一篇 10 万 token 的文档在 `doubao-seed-2.1-pro` 上要 90 秒左右，多阶段模板更久。超时太短时请求会被断开，错误报告里写明超时秒数。
 
 ## 失败后怎么办
 

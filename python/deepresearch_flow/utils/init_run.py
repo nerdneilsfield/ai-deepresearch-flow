@@ -47,7 +47,7 @@ NOTIFY_URL=${NOTIFY_URL:-}      # optional, https://host/api/<uuid>/get
 WORKERS=${WORKERS:-4}           # concurrent workers for fix-math/fix-mermaid
 BATCH_SIZE=${BATCH_SIZE:-10}     # formulas or diagrams per request
 MAX_CONCURRENCY=${MAX_CONCURRENCY:-4}   # concurrent requests for extract
-EXTRACT_TIMEOUT=${EXTRACT_TIMEOUT:-240} # seconds per extract request
+EXTRACT_TIMEOUT=${EXTRACT_TIMEOUT:-360} # seconds per extract request
 OCR_WORKERS=${OCR_WORKERS:-4}   # files OCR'd at the same time
 REPO=@@REPO@@
 drflow() { uv run --project "$REPO" deepresearch-flow "$@"; }
