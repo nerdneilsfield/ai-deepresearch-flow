@@ -310,6 +310,25 @@ def test_sigterm_stops_the_run_and_leaves_no_child(tmp_path: Path) -> None:
     assert not children
 
 
+def test_step_lock_rejects_a_second_runner(tmp_path: Path) -> None:
+    script = _script_with_stub(tmp_path, "sleep 300")
+    first = subprocess.Popen([str(script), "fix-simple"], start_new_session=True)
+    try:
+        deadline = time.monotonic() + 10
+        log = script.parent / "logs" / "fix-simple.log"
+        while time.monotonic() < deadline and not log.exists():
+            time.sleep(0.05)
+
+        second = subprocess.run(
+            [str(script), "fix-simple"], capture_output=True, text=True
+        )
+        assert second.returncode == 1
+        assert "already running" in second.stderr
+    finally:
+        first.send_signal(signal.SIGTERM)
+        assert first.wait(timeout=30) == 130
+
+
 def test_knobs_are_editable_at_the_top_of_the_script(tmp_path: Path) -> None:
     project = _project(tmp_path)
     assert _run(project).exit_code == 0

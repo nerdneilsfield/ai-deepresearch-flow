@@ -76,7 +76,6 @@ PARTIAL=3
 FORCE=""
 export PATH="$REPO/node_modules/.bin:$PATH"   # fix-mermaid needs mmdc
 mkdir -p logs logs/simple logs/deep_read      # extract writes ./paper_stage_outputs in its cwd
-: > "$ROOT/logs/pgids"                        # process groups to kill on interrupt
 
 T="tmux -L drflow-$NAME"; S=run
 
@@ -89,32 +88,21 @@ notify() {
 # show CMD...: print a command the way you can copy-paste it to rerun it.
 show() { printf '+'; printf ' %q' "$@"; printf '\n'; }
 
-# run_group CMD...: run a command in its own process group, so a signal can
-# reach the whole tree. Without this, bash waits for the command and only runs
-# the trap after it finishes, so Ctrl-C would not stop anything.
+# run_group CMD...: run a command in the current foreground process group.
 run_group() {
-  set -m
-  "$@" &
-  local pid=$!
-  # set -m gives the command its own process group. Remember it, so an
-  # interrupt can kill the group and everything the command started.
-  local pgid
-  pgid=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ')
-  [ -n "$pgid" ] && echo "$pgid" >> "$ROOT/logs/pgids"
-  # wait without the job-control notice: on an interrupt the trap kills this
-  # child, and bash would print a "Killed" line that says nothing new.
-  wait "$pid" 2>/dev/null
-  local rc=$?
-  set +m
-  return $rc
+  "$@"
 }
 
 # kill_tree PID: kill a process and everything under it. Children may be
-# stopped (Ctrl-Z) and would ignore TERM, so use KILL.
+# stopped (Ctrl-Z) and would ignore TERM, so use KILL. The process group is
+# killed as well, so a command that moved itself into its own group dies.
 kill_tree() {
-  local p
+  local p g self_g
+  g=$(ps -o pgid= -p "$1" 2>/dev/null | tr -d ' ')
+  self_g=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')
   for p in $(pgrep -P "$1" 2>/dev/null); do kill_tree "$p"; done
   kill -KILL "$1" 2>/dev/null
+  if [ -n "$g" ] && [ "$g" != "$self_g" ]; then kill -KILL -- "-$g" 2>/dev/null; fi
 }
 
 # Retry modes. Only some commands accept --retry-failed (extract, fix-math,
@@ -149,6 +137,7 @@ _again() {
 # shell's own children. Inside a --chain window only that chain stops; the
 # .failed file tells the main run to stop everything.
 CURRENT_STEP=""
+CURRENT_PID=""
 on_signal() {
   trap - INT TERM TSTP HUP
   echo "interrupted; stopping..."
@@ -167,12 +156,12 @@ on_signal() {
     [ -f "$f" ] || continue
     kill_tree "$(cat "$f")"
   done
-  # Every command that ran in its own process group, including the ones the
-  # chains started. Their groups are separate from the chain's own group.
-  for g in $(cat "$ROOT/logs/pgids" 2>/dev/null); do kill -KILL -- "-$g" 2>/dev/null; done
-  # The step may have started a process group that is not in the list, for
-  # example a chain that ran outside run_group. Kill every descendant of this
-  # shell as well.
+  if [ -n "$CURRENT_PID" ]; then
+    kill_tree "$CURRENT_PID"
+  fi
+  # Every descendant of this shell, including the command the step started and
+  # everything it spawned. The recorded process groups are not enough: a
+  # command sometimes shares the shell's group.
   for p in $(pgrep -P $$ 2>/dev/null); do kill_tree "$p"; done
   # Then this shell's own children, including the running command.
   for p in $(pgrep -P $$ 2>/dev/null); do kill_tree "$p"; done
@@ -268,31 +257,34 @@ s_build() {
 run_step() {
   local name=$1
   if [ -z "$FORCE" ] && [ -e "logs/$name.done" ]; then echo "[$name] already done"; return 0; fi
+  local lock_file="logs/$name.lock"
+  exec 9>"$lock_file"
+  if ! flock -n 9; then
+    echo "[$name] already running (lock: $lock_file)" >&2
+    exec 9>&-
+    return 1
+  fi
   rm -f "logs/$name.done" "logs/$name.failed"
   CURRENT_STEP="$name"
   notify "$name start"
   echo "[$name] start"
-  # The step runs as a background pipeline and the shell waits for it. A
-  # signal then reaches the trap right away, and the output still goes to the
-  # terminal while the step runs.
-  # The exit code of a pipeline is the last command's, and tee always
-  # succeeds. The step writes its own code to a file from an EXIT trap.
+  # Keep the pipeline interruptible while the parent waits. Do not enable
+  # job control here: it can move the step into a process group that does not
+  # receive the terminal's Ctrl-C. The signal trap kills this child tree.
   local rcf="$ROOT/logs/.rc-$name"
   rm -f "$rcf"
-  set -m
   ( set -e; trap 'echo $? > "$rcf"' EXIT; "s_$name" ) 2>&1 | tee -a "logs/$name.log" &
   local pipe=$!
-  # wait without the job-control notice: the trap kills this child, and bash
-  # would otherwise print a "Killed" line that says nothing new.
-  wait $pipe 2>/dev/null
+  CURRENT_PID="$pipe"
+  wait "$pipe" 2>/dev/null
   local rc
   rc=$(cat "$rcf" 2>/dev/null) || rc=1
   rm -f "$rcf"
-  set +m
+  CURRENT_PID=""
   if [ $rc -eq 0 ]; then
-    touch "logs/$name.done"; notify "$name done"; CURRENT_STEP=""; return 0
+    touch "logs/$name.done"; notify "$name done"; CURRENT_STEP=""; exec 9>&-; return 0
   else
-    touch "logs/$name.failed"; notify "$name FAILED, see logs/$name.log"; CURRENT_STEP=""; return 1
+    touch "logs/$name.failed"; notify "$name FAILED, see logs/$name.log"; CURRENT_STEP=""; exec 9>&-; return 1
   fi
 }
 

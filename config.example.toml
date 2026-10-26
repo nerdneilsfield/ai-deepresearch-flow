@@ -18,7 +18,7 @@ pause_threshold_seconds = 10.0
 truncate_strategy = "head_tail" # head | head_tail
 truncate_max_chars = 20000
 cost_estimate = true
-stage_dag = false
+stage_dag = true
 
 [render]
 # If omitted, the built-in markdown template is used.
@@ -35,11 +35,11 @@ model = "openai/gpt-4o-mini"
 fallback_model = "claude/claude-sonnet-4-5-20250929"
 # fallback_model_2 = "ollama/llama3.1"
 document_window = 8
-initial_workers = 4
+initial_workers = 3
 retry_workers = 2
 fallback_workers = 2
 fallback_2_workers = 2
-main_concurrency = 4
+main_concurrency = 3
 # Optional: omit to share main_concurrency with retry requests.
 # retry_concurrency = 2
 fallback_concurrency = 2

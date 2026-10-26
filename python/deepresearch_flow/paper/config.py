@@ -380,7 +380,7 @@ DEFAULT_EXTRACT = ExtractConfig(
     truncate_max_chars=20000,
     cost_estimate=True,
     schema_path=None,
-    stage_dag=False,
+    stage_dag=True,
 )
 
 DEFAULT_RENDER = RenderConfig(template_path=None)
