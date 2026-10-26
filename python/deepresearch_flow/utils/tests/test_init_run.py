@@ -318,3 +318,19 @@ def test_knobs_are_editable_at_the_top_of_the_script(tmp_path: Path) -> None:
     for knob in ("WORKERS", "BATCH_SIZE", "MAX_CONCURRENCY", "OCR_WORKERS"):
         assert f"{knob}=${{{knob}:-" in text, knob
 
+
+
+def test_existing_run_sh_is_not_overwritten(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    assert _run(project).exit_code == 0
+    script = project / "run.sh"
+    script.write_text("my edits\n", encoding="utf-8")
+
+    result = _run(project)
+
+    assert result.exit_code != 0
+    assert "already exists" in result.output
+    assert script.read_text(encoding="utf-8") == "my edits\n"
+
+    assert _run(project, "--force").exit_code == 0
+    assert script.read_text(encoding="utf-8") != "my edits\n"

@@ -91,10 +91,6 @@ show() { printf '+'; printf ' %q' "$@"; printf '\n'; }
 # run_group CMD...: run a command in its own process group, so a signal can
 # reach the whole tree. Without this, bash waits for the command and only runs
 # the trap after it finishes, so Ctrl-C would not stop anything.
-#
-# run_group CMD...: run a command in its own process group, so a signal can
-# reach the whole tree. Without this, bash waits for the command and only runs
-# the trap after it finishes, so Ctrl-C would not stop anything.
 run_group() {
   set -m
   "$@" &
@@ -104,7 +100,9 @@ run_group() {
   local pgid
   pgid=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ')
   [ -n "$pgid" ] && echo "$pgid" >> "$ROOT/logs/pgids"
-  wait "$pid"
+  # wait without the job-control notice: on an interrupt the trap kills this
+  # child, and bash would print a "Killed" line that says nothing new.
+  wait "$pid" 2>/dev/null
   local rc=$?
   set +m
   return $rc
@@ -121,7 +119,6 @@ kill_tree() {
 # Retry modes. Only some commands accept --retry-failed (extract, fix-math,
 # fix-mermaid); ocr and translate skip finished files on a plain rerun, so
 # rerun passes no extra flag. fix and organize cannot retry: once only warns.
-# once CMD...: run it, warn on exit code 3. fix and organize cannot retry.
 once() {
   local rc=0
   show "$@"; run_group "$@" || rc=$?
@@ -269,9 +266,23 @@ run_step() {
   CURRENT_STEP="$name"
   notify "$name start"
   echo "[$name] start"
-  "s_$name" >> "logs/$name.log" 2>&1
-  local rc=$?
-  cat "logs/$name.log"
+  # The step runs as a background pipeline and the shell waits for it. A
+  # signal then reaches the trap right away, and the output still goes to the
+  # terminal while the step runs.
+  # The exit code of a pipeline is the last command's, and tee always
+  # succeeds. The step writes its own code to a file from an EXIT trap.
+  local rcf="$ROOT/logs/.rc-$name"
+  rm -f "$rcf"
+  set -m
+  ( set -e; trap 'echo $? > "$rcf"' EXIT; "s_$name" ) 2>&1 | tee -a "logs/$name.log" &
+  local pipe=$!
+  # wait without the job-control notice: the trap kills this child, and bash
+  # would otherwise print a "Killed" line that says nothing new.
+  wait $pipe 2>/dev/null
+  local rc
+  rc=$(cat "$rcf" 2>/dev/null) || rc=1
+  rm -f "$rcf"
+  set +m
   if [ $rc -eq 0 ]; then
     touch "logs/$name.done"; notify "$name done"; CURRENT_STEP=""; return 0
   else
@@ -372,12 +383,14 @@ def _find_bib(project: Path) -> Path:
 @click.option("--ocr-config", "ocr_config_name", default="ocr.toml", show_default=True,
               help="OCR config; resolved like --config")
 @click.option("--rounds", default=3, show_default=True, help="Retry rounds per step")
+@click.option("--force", is_flag=True, help="Overwrite an existing run.sh")
 def init_run(
     project: Path,
     target_lang: str,
     config_name: str,
     ocr_config_name: str,
     rounds: int,
+    force: bool,
 ) -> None:
     """Write PROJECT/run.sh. PROJECT needs pdf/ and exactly one .bib."""
     project = project.resolve()
@@ -397,6 +410,12 @@ def init_run(
     }.items():
         script = script.replace(f"@@{key}@@", shlex.quote(value))
     target = project / "run.sh"
+    if target.exists() and not force:
+        # The script is meant to be edited: it holds the models and parameters
+        # of this project. Overwriting it would throw those away.
+        raise click.ClickException(
+            f"{target} already exists; it may hold your edits. Use --force to overwrite."
+        )
     target.write_text(script, encoding="utf-8")
     target.chmod(0o755)
     click.echo(f"wrote {target}")
