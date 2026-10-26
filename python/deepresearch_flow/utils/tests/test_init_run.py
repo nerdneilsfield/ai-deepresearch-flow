@@ -334,3 +334,18 @@ def test_existing_run_sh_is_not_overwritten(tmp_path: Path) -> None:
 
     assert _run(project, "--force").exit_code == 0
     assert script.read_text(encoding="utf-8") != "my edits\n"
+
+
+def test_deep_read_uses_the_stage_dag(tmp_path: Path) -> None:
+    script = _script_with_stub(tmp_path, LOG_AND_SUCCEED)
+    script.write_text(
+        script.read_text(encoding="utf-8").replace("PROVIDER/MODEL", "openai/gpt-4.1"),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run([str(script), "deep_read"], capture_output=True, text=True)
+
+    assert result.returncode == 0, result.stdout
+    call = _calls(script.parent)[0]
+    assert "--prompt-template deep_read" in call
+    assert "--stage-dag" in call

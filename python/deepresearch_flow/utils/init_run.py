@@ -215,8 +215,13 @@ s_fix-math-simple() {
 }
 
 s_deep_read() {
+  # deep_read is a multi-stage template: module_a, then module_d, then module_e.
+  # --stage-dag runs them in dependency order, so a stage does not start before
+  # the one it depends on is done, and a failed stage is retried on its own.
+  # It also reuses simple.json for module_a, which holds the same fields.
   (cd logs/deep_read && retry drflow paper extract \
     --input "$ROOT/md_simple" --config "$CONFIG" --model PROVIDER/MODEL --prompt-template deep_read \
+    --stage-dag \
     --max-concurrency "$MAX_CONCURRENCY" --timeout "$EXTRACT_TIMEOUT" \
     --output "$ROOT/deep_read.json" --errors "$ROOT/logs/deep_read-errors.json")
 }
