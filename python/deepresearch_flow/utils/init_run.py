@@ -14,6 +14,16 @@ _TEMPLATE = r"""#!/usr/bin/env bash
 #   ./run.sh STEP[,STEP...]       only these steps, in the order given, one after another.
 #                                 Always runs them, even if logs/STEP.done exists.
 #   ./run.sh list                 print all step names
+#   ./run.sh stop                 kill the tmux chains (from another terminal)
+#
+# Ctrl-C, Ctrl-Z, or `kill` stops everything: the running command and the tmux
+# chains. Use `kill` (SIGTERM) rather than `kill -INT`: bash ignores SIGINT
+# while it waits for a foreground command, so a targeted SIGINT does nothing.
+# Every command is printed with a '+' prefix; copy it to rerun it by hand.
+# A notify is sent before and after every step (needs NOTIFY_URL).
+# The knobs in the settings block (WORKERS, BATCH_SIZE, MAX_CONCURRENCY,
+# OCR_WORKERS) are the ones you tune by experience; each step also has its own
+# --model, so different steps can use different models.
 #
 # Replace PROVIDER/MODEL on every --model line (8 of them) with a real provider/model.
 # Each step is a function s_<name> below, one command per line. Change a parameter by
@@ -31,8 +41,13 @@ LANG_TO=@@LANG@@
 CONFIG=@@CONFIG@@
 OCR_CONFIG=@@OCR_CONFIG@@
 ROUNDS=@@ROUNDS@@
-# Models: every LLM step uses main_model (translate: [translator_config].model) from $CONFIG.
 NOTIFY_URL=${NOTIFY_URL:-}      # optional, https://host/api/<uuid>/get
+# Knobs to tune by experience. Every LLM step uses the model in its own command
+# line below, so change them one step at a time.
+WORKERS=${WORKERS:-4}           # concurrent workers for fix-math/fix-mermaid
+BATCH_SIZE=${BATCH_SIZE:-10}     # formulas or diagrams per request
+MAX_CONCURRENCY=${MAX_CONCURRENCY:-4}   # concurrent requests for extract
+OCR_WORKERS=${OCR_WORKERS:-4}   # files OCR'd at the same time
 REPO=@@REPO@@
 drflow() { uv run --project "$REPO" deepresearch-flow "$@"; }
 
@@ -60,6 +75,9 @@ PARTIAL=3
 FORCE=""
 export PATH="$REPO/node_modules/.bin:$PATH"   # fix-mermaid needs mmdc
 mkdir -p logs logs/simple logs/deep_read      # extract writes ./paper_stage_outputs in its cwd
+: > "$ROOT/logs/pgids"                        # process groups to kill on interrupt
+
+T="tmux -L drflow-$NAME"; S=run
 
 notify() {
   [ -n "$NOTIFY_URL" ] || return 0
@@ -67,36 +85,116 @@ notify() {
     --data-urlencode "format=text" --data-urlencode "msg=$NAME: $1" >/dev/null 2>&1 || true
 }
 
+# show CMD...: print a command the way you can copy-paste it to rerun it.
+show() { printf '+'; printf ' %q' "$@"; printf '\n'; }
+
+# run_group CMD...: run a command in its own process group, so a signal can
+# reach the whole tree. Without this, bash waits for the command and only runs
+# the trap after it finishes, so Ctrl-C would not stop anything.
+#
+# run_group CMD...: run a command in its own process group, so a signal can
+# reach the whole tree. Without this, bash waits for the command and only runs
+# the trap after it finishes, so Ctrl-C would not stop anything.
+run_group() {
+  set -m
+  "$@" &
+  local pid=$!
+  # set -m gives the command its own process group. Remember it, so an
+  # interrupt can kill the group and everything the command started.
+  local pgid
+  pgid=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ')
+  [ -n "$pgid" ] && echo "$pgid" >> "$ROOT/logs/pgids"
+  wait "$pid"
+  local rc=$?
+  set +m
+  return $rc
+}
+
+# kill_tree PID: kill a process and everything under it. Children may be
+# stopped (Ctrl-Z) and would ignore TERM, so use KILL.
+kill_tree() {
+  local p
+  for p in $(pgrep -P "$1" 2>/dev/null); do kill_tree "$p"; done
+  kill -KILL "$1" 2>/dev/null
+}
+
+# Retry modes. Only some commands accept --retry-failed (extract, fix-math,
+# fix-mermaid); ocr and translate skip finished files on a plain rerun, so
+# rerun passes no extra flag. fix and organize cannot retry: once only warns.
+# once CMD...: run it, warn on exit code 3. fix and organize cannot retry.
 once() {
   local rc=0
-  "$@" || rc=$?
+  show "$@"; run_group "$@" || rc=$?
   if [ $rc -eq $PARTIAL ]; then echo "WARNING: some items failed: $*"; return 0; fi
   return $rc
 }
+# retry CMD...: run it, and on exit code 3 rerun it with --retry-failed. Only
+# paper extract, recognize fix-math and recognize fix-mermaid accept that flag.
 retry() { _again " --retry-failed" "$@"; }
+# rerun CMD...: on exit code 3 rerun the same command. recognize ocr and
+# translator translate have no --retry-failed; they skip finished files.
 rerun() { _again "" "$@"; }
 _again() {
   local extra=$1; shift
   local rc=0 n=0
-  "$@" || rc=$?
+  show "$@"; run_group "$@" || rc=$?
   while [ $rc -eq $PARTIAL ] && [ $n -lt "$ROUNDS" ]; do
-    n=$((n+1)); echo "retry round $n: $*$extra"
-    rc=0; "$@" $extra || rc=$?
+    n=$((n+1)); echo "retry round $n/$ROUNDS"
+    if [ -n "$extra" ]; then show "$@" $extra; run_group "$@" $extra || rc=$?
+    else show "$@"; run_group "$@" || rc=$?; fi
   done
   if [ $rc -eq $PARTIAL ]; then echo "WARNING: still failed items after $ROUNDS rounds: $*"; return 0; fi
   return $rc
 }
 
+# Ctrl-C, kill, and Ctrl-Z stop the whole run: the tmux chains and this
+# shell's own children. Inside a --chain window only that chain stops; the
+# .failed file tells the main run to stop everything.
+CURRENT_STEP=""
+on_signal() {
+  trap - INT TERM TSTP HUP
+  echo "interrupted; stopping..."
+  if [ -n "$CURRENT_STEP" ]; then
+    touch "logs/$CURRENT_STEP.failed"
+    echo "[$CURRENT_STEP] FAILED (interrupted)"
+  fi
+  # Stop the tmux chains first, so they do not write more .done files.
+  $T kill-session -t "$S" 2>/dev/null
+  # Then the chain processes. kill-session alone leaves them running as
+  # orphans, because tmux starts them through a shell. Each chain wrote its own
+  # pid to logs/chain-<name>.pid, so they are killed by pid. Matching command
+  # lines with pkill is not safe: it would also hit the shell that started
+  # this script.
+  for f in logs/chain-*.pid; do
+    [ -f "$f" ] || continue
+    kill_tree "$(cat "$f")"
+  done
+  # Every command that ran in its own process group, including the ones the
+  # chains started. Their groups are separate from the chain's own group.
+  for g in $(cat "$ROOT/logs/pgids" 2>/dev/null); do kill -KILL -- "-$g" 2>/dev/null; done
+  # The step may have started a process group that is not in the list, for
+  # example a chain that ran outside run_group. Kill every descendant of this
+  # shell as well.
+  for p in $(pgrep -P $$ 2>/dev/null); do kill_tree "$p"; done
+  # Then this shell's own children, including the running command.
+  for p in $(pgrep -P $$ 2>/dev/null); do kill_tree "$p"; done
+  notify "$NAME interrupted"
+  exit 130
+}
+# Ctrl-Z stops the run as well; a suspended pipeline would keep running.
+trap on_signal INT TERM TSTP HUP
+
 # ---- steps: one command per line --------------------------------------------
 s_ocr() {
-  rerun drflow recognize ocr pdf --config "$OCR_CONFIG" --output-dir ocr
+  rerun drflow recognize ocr pdf --config "$OCR_CONFIG" --output-dir ocr --workers "$OCR_WORKERS"
 }
 s_fix() {
   once drflow recognize fix --input ocr -r --in-place
 }
 s_fix-math() {
   retry drflow recognize fix-math --input ocr -r --in-place \
-    --config "$CONFIG" --model PROVIDER/MODEL --report logs/fix-math-ocr.json
+    --config "$CONFIG" --model PROVIDER/MODEL \
+    --workers "$WORKERS" --batch-size "$BATCH_SIZE" --report logs/fix-math-ocr.json
 }
 s_organize() {
   once drflow recognize organize --input ocr -r \
@@ -106,6 +204,7 @@ s_organize() {
 s_simple() {
   (cd logs/simple && retry drflow paper extract \
     --input "$ROOT/md_simple" --config "$CONFIG" --model PROVIDER/MODEL --prompt-template simple \
+    --max-concurrency "$MAX_CONCURRENCY" \
     --output "$ROOT/simple.json" --errors "$ROOT/logs/simple-errors.json")
 }
 s_fix-simple() {
@@ -113,12 +212,14 @@ s_fix-simple() {
 }
 s_fix-math-simple() {
   retry drflow recognize fix-math --input simple.json --json --in-place \
-    --config "$CONFIG" --model PROVIDER/MODEL --report logs/fix-math-simple.json
+    --config "$CONFIG" --model PROVIDER/MODEL \
+    --workers "$WORKERS" --batch-size "$BATCH_SIZE" --report logs/fix-math-simple.json
 }
 
 s_deep_read() {
   (cd logs/deep_read && retry drflow paper extract \
     --input "$ROOT/md_simple" --config "$CONFIG" --model PROVIDER/MODEL --prompt-template deep_read \
+    --max-concurrency "$MAX_CONCURRENCY" \
     --output "$ROOT/deep_read.json" --errors "$ROOT/logs/deep_read-errors.json")
 }
 s_fix-deep_read() {
@@ -126,11 +227,13 @@ s_fix-deep_read() {
 }
 s_fix-math-deep_read() {
   retry drflow recognize fix-math --input deep_read.json --json --in-place \
-    --config "$CONFIG" --model PROVIDER/MODEL --report logs/fix-math-deep_read.json
+    --config "$CONFIG" --model PROVIDER/MODEL \
+    --workers "$WORKERS" --batch-size "$BATCH_SIZE" --report logs/fix-math-deep_read.json
 }
 s_fix-mermaid-deep_read() {
   retry drflow recognize fix-mermaid --input deep_read.json --json --in-place \
-    --config "$CONFIG" --model PROVIDER/MODEL --report logs/fix-mermaid-deep_read.json
+    --config "$CONFIG" --model PROVIDER/MODEL \
+    --workers "$WORKERS" --batch-size "$BATCH_SIZE" --report logs/fix-mermaid-deep_read.json
 }
 
 s_translate() {
@@ -143,14 +246,15 @@ s_fix-translated() {
 }
 s_fix-math-translated() {
   retry drflow recognize fix-math --input md_base64_translated -r --in-place \
-    --config "$CONFIG" --model PROVIDER/MODEL --report logs/fix-math-translated.json
+    --config "$CONFIG" --model PROVIDER/MODEL \
+    --workers "$WORKERS" --batch-size "$BATCH_SIZE" --report logs/fix-math-translated.json
 }
 
 s_build() {
   mkdir -p dist
   local prev=()
   [ -f "dist/$NAME.db" ] && prev=(--previous-snapshot-db "dist/$NAME.db")   # keeps paper_id stable
-  drflow paper db snapshot build \
+  run1 drflow paper db snapshot build \
     -i simple.json -i deep_read.json -b @@BIB@@ \
     --md-root md_simple --md-translated-root md_base64_translated --pdf-root pdf \
     --output-db "dist/$NAME.db" --static-export-dir "dist/$NAME-export" "${prev[@]}"
@@ -162,26 +266,52 @@ run_step() {
   local name=$1
   if [ -z "$FORCE" ] && [ -e "logs/$name.done" ]; then echo "[$name] already done"; return 0; fi
   rm -f "logs/$name.done" "logs/$name.failed"
+  CURRENT_STEP="$name"
+  notify "$name start"
   echo "[$name] start"
-  ( set -e; "s_$name" ) 2>&1 | tee -a "logs/$name.log"
-  if [ "${PIPESTATUS[0]}" -eq 0 ]; then touch "logs/$name.done"; else touch "logs/$name.failed"; return 1; fi
+  "s_$name" >> "logs/$name.log" 2>&1
+  local rc=$?
+  cat "logs/$name.log"
+  if [ $rc -eq 0 ]; then
+    touch "logs/$name.done"; notify "$name done"; CURRENT_STEP=""; return 0
+  else
+    touch "logs/$name.failed"; notify "$name FAILED, see logs/$name.log"; CURRENT_STEP=""; return 1
+  fi
 }
 
 # run_seq LABEL STEP...: run steps one after another, stop at the first failure
 run_seq() {
   local label=$1; shift
-  local t0=$SECONDS s
+  local s
   for s in "$@"; do
-    run_step "$s" || { notify "$label FAILED at $s, see logs/$s.log"; return 1; }
+    run_step "$s" || { echo "$label FAILED at $s, see logs/$s.log"; return 1; }
   done
-  notify "$label done ($(( (SECONDS-t0)/60 )) min)"
 }
 
 # Entry point used inside the tmux windows.
-if [ "${1:-}" = --chain ]; then v="CHAIN_$2"; run_seq "$2" ${!v}; exit $?; fi
+if [ "${1:-}" = --chain ]; then
+  v="CHAIN_$2"; IN_CHAIN=1
+  # The parent kills this pid when the run is interrupted. tmux starts the
+  # chain through a shell, so killing the session alone is not enough.
+  echo $$ > "logs/chain-$2.pid"
+  trap 'rm -f "logs/chain-$2.pid"' EXIT
+  # Watch the parent. A plain `kill -INT <pid>` never reaches the parent trap,
+  # because bash ignores SIGINT while it waits for a background job. The
+  # parent writes its pid to logs/parent.pid; when it is gone, stop this chain.
+  ( while [ -f logs/parent.pid ] && kill -0 "$(cat logs/parent.pid)" 2>/dev/null; do sleep 5; done
+    echo "parent gone, stopping chain $2"; kill -KILL -- -$$ 2>/dev/null ) &
+  WATCHER=$!
+  run_seq "$2" ${!v}
+  kill "$WATCHER" 2>/dev/null
+  exit $?
+fi
 
 if [ $# -gt 0 ]; then
-  case $1 in -h|--help|list) echo "steps: $ALL"; exit 0 ;; esac
+  case $1 in
+    -h|--help|list) echo "steps: $ALL"; exit 0 ;;
+    stop) command -v tmux >/dev/null || { echo "no tmux chains to stop"; exit 0; }
+      $T kill-session -t "$S" 2>/dev/null; echo "stopped"; exit 0 ;;
+  esac
   IFS=', ' read -ra SEL <<< "$*"
   for s in "${SEL[@]}"; do
     case " $ALL " in *" $s "*) ;; *) echo "unknown step: $s"; echo "steps: $ALL"; exit 1 ;; esac
@@ -196,9 +326,9 @@ run_seq ocr $CHAIN_ocr || exit 1
 
 command -v tmux >/dev/null || { echo "tmux is required"; exit 1; }
 # A dedicated tmux server inherits this shell's environment (API keys, NOTIFY_URL).
-T="tmux -L drflow-$NAME"; S=run
 # kill-session, not kill-server: a new session started right after kill-server can vanish.
 $T kill-session -t "$S" 2>/dev/null
+echo $$ > logs/parent.pid
 $T new-session -d -s "$S" -n main "sleep 86400" >/dev/null 2>&1 </dev/null
 parallel_steps=""
 for c in $PARALLEL; do
@@ -213,11 +343,13 @@ while :; do
     [ -e "logs/$s.failed" ] && failed=1
     [ -e "logs/$s.done" ] || pending=1
   done
-  [ $failed -eq 1 ] && { echo "a step failed (see logs/*.failed); fix it and run ./run.sh again"; $T kill-window -t "$S:main" 2>/dev/null; exit 1; }
+  [ $failed -eq 1 ] && { echo "a step failed (see logs/*.failed); fix it and run ./run.sh again"; $T kill-session -t "$S" 2>/dev/null; exit 1; }
   [ $pending -eq 0 ] && break
-  sleep 10
+  # Background the sleep and wait for it: a signal then interrupts the wait at
+  # once, instead of after the sleep ends.
+  sleep 3 & wait $!
 done
-$T kill-window -t "$S:main" 2>/dev/null
+$T kill-session -t "$S" 2>/dev/null
 
 run_seq build build
 """
