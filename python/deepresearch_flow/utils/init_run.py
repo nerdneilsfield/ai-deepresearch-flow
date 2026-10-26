@@ -47,6 +47,7 @@ NOTIFY_URL=${NOTIFY_URL:-}      # optional, https://host/api/<uuid>/get
 WORKERS=${WORKERS:-4}           # concurrent workers for fix-math/fix-mermaid
 BATCH_SIZE=${BATCH_SIZE:-10}     # formulas or diagrams per request
 MAX_CONCURRENCY=${MAX_CONCURRENCY:-4}   # concurrent requests for extract
+EXTRACT_TIMEOUT=${EXTRACT_TIMEOUT:-240} # seconds per extract request
 OCR_WORKERS=${OCR_WORKERS:-4}   # files OCR'd at the same time
 REPO=@@REPO@@
 drflow() { uv run --project "$REPO" deepresearch-flow "$@"; }
@@ -201,7 +202,7 @@ s_organize() {
 s_simple() {
   (cd logs/simple && retry drflow paper extract \
     --input "$ROOT/md_simple" --config "$CONFIG" --model PROVIDER/MODEL --prompt-template simple \
-    --max-concurrency "$MAX_CONCURRENCY" \
+    --max-concurrency "$MAX_CONCURRENCY" --timeout "$EXTRACT_TIMEOUT" \
     --output "$ROOT/simple.json" --errors "$ROOT/logs/simple-errors.json")
 }
 s_fix-simple() {
@@ -216,7 +217,7 @@ s_fix-math-simple() {
 s_deep_read() {
   (cd logs/deep_read && retry drflow paper extract \
     --input "$ROOT/md_simple" --config "$CONFIG" --model PROVIDER/MODEL --prompt-template deep_read \
-    --max-concurrency "$MAX_CONCURRENCY" \
+    --max-concurrency "$MAX_CONCURRENCY" --timeout "$EXTRACT_TIMEOUT" \
     --output "$ROOT/deep_read.json" --errors "$ROOT/logs/deep_read-errors.json")
 }
 s_fix-deep_read() {

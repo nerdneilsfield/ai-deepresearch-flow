@@ -94,8 +94,16 @@ async def chat(
 
     try:
         response = await client.post(url, json=payload, headers=headers, timeout=timeout)
+    except httpx.TimeoutException as exc:
+        # str() of an httpx timeout is empty, which left the error report
+        # without any reason.
+        raise ProviderError(
+            f"request timed out after {timeout:g}s: {type(exc).__name__}",
+            retryable=True,
+        ) from exc
     except httpx.RequestError as exc:
-        raise ProviderError(str(exc), retryable=True) from exc
+        message = str(exc) or type(exc).__name__
+        raise ProviderError(message, retryable=True) from exc
 
     if response.status_code == 429:
         raise ProviderError(_extract_error_message(response), status_code=429, retryable=True)
