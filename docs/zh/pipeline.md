@@ -97,6 +97,47 @@ tmux -L drflow-myproj attach -t run
 
 `./myproj/run.sh list` 打印全部步骤名。
 
+从另一个终端结束整个流程：
+
+```bash
+./myproj/run.sh stop
+```
+
+它会杀掉 tmux 会话和正在跑的步骤。用 `kill`（SIGTERM）结束也可以；不要用 `kill -INT`，bash 在等前台命令时会忽略 SIGINT。
+
+## 停止运行
+
+Ctrl-C、Ctrl-Z 或 `kill` 都会停止整个流程，包括 tmux 里的三条链。脚本会：
+
+- 杀掉 tmux 会话和所有链进程，以及当前步骤启动的进程组；
+- 把当前步骤标记为失败（`logs/<步骤>.failed`），所以重跑会从这一步继续；
+- 发一条 interrupted 通知。
+
+停止后修好问题，重新运行 `./myproj/run.sh` 即可。已完成的步骤会被跳过。
+
+## 打印执行的命令
+
+每条实际执行的命令都以 `+` 开头打印，可以直接复制到终端里单独重跑：
+
+```text
++ drflow recognize fix-math --input ocr -r --in-place --config /path/config.toml --model openai/gpt-4o-mini --workers 4 --batch-size 10 --report logs/fix-math-ocr.json
+```
+
+命令也写进 `logs/<步骤>.log`。
+
+## 需要按经验调整的参数
+
+脚本开头的设置块里有四个可调项：
+
+| 变量 | 默认值 | 作用 |
+|---|---|---|
+| `WORKERS` | 4 | `fix-math` 和 `fix-mermaid` 的并发数 |
+| `BATCH_SIZE` | 10 | 每个请求处理的公式或图表数 |
+| `MAX_CONCURRENCY` | 4 | `paper extract` 的并发请求数 |
+| `OCR_WORKERS` | 4 | 同时做 OCR 的文件数 |
+
+改这几个值就能调并发和批大小。模型不在这里：每个步骤的命令行里有自己的 `--model`，单独改那一行。
+
 ## 失败后怎么办
 
 每个步骤的结果记录在 `logs/` 下：
@@ -121,11 +162,11 @@ tmux -L drflow-myproj attach -t run
 
 其他非零退出码按失败处理。
 
-重试方式有三种，写在每个步骤命令的前面：
+重试方式有三种，写在每个步骤命令的前面。它们对应各命令真正支持的能力：
 
-- `retry`：再运行同一条命令，并加上 `--retry-failed`，只处理失败的条目。用于 `fix-math`、`fix-mermaid` 和 `extract`。
-- `rerun`：再运行完全相同的命令。用于 `ocr` 和 `translate`，它们本来就会跳过已完成的文件，没有 `--retry-failed`。
-- `once`：只打印警告，不重试。用于 `fix` 和 `organize`。
+- `retry`：再运行同一条命令，并加上 `--retry-failed`，只处理失败的条目。只有 `paper extract`、`recognize fix-math` 和 `recognize fix-mermaid` 接受这个选项。
+- `rerun`：再运行完全相同的命令。`recognize ocr` 和 `translator translate` 没有 `--retry-failed`，但它们本来就会跳过已完成的文件，所以直接重跑即可。
+- `once`：只打印警告，不重试。`recognize fix` 和 `recognize organize` 没有重试能力。
 
 重试用尽后仍有失败条目时，脚本打印警告并继续。这时到 `logs/` 下的错误报告里查看失败的条目。
 

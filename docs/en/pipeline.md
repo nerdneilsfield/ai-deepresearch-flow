@@ -97,6 +97,47 @@ When you name steps:
 
 `./myproj/run.sh list` prints all step names.
 
+To stop the whole run from another terminal:
+
+```bash
+./myproj/run.sh stop
+```
+
+It kills the tmux session and the running step. `kill` (SIGTERM) works as well. Do not use `kill -INT`: bash ignores SIGINT while it waits for a foreground command.
+
+## Stopping the run
+
+Ctrl-C, Ctrl-Z, and `kill` all stop the whole run, including the three tmux chains. The script:
+
+- kills the tmux session, the chain processes, and the process groups the current step started;
+- marks the current step as failed (`logs/<step>.failed`), so a rerun resumes at that step;
+- sends an interrupted notification.
+
+After stopping, fix the cause and run `./myproj/run.sh` again. Steps that already finished are skipped.
+
+## The printed commands
+
+Every command that runs is printed with a `+` prefix, so you can copy it to a terminal and rerun it:
+
+```text
++ drflow recognize fix-math --input ocr -r --in-place --config /path/config.toml --model openai/gpt-4o-mini --workers 4 --batch-size 10 --report logs/fix-math-ocr.json
+```
+
+The commands also go to `logs/<step>.log`.
+
+## Knobs you tune by experience
+
+The settings block at the top of the script has four values to adjust:
+
+| Variable | Default | Effect |
+|---|---|---|
+| `WORKERS` | 4 | Concurrency of `fix-math` and `fix-mermaid` |
+| `BATCH_SIZE` | 10 | Formulas or diagrams per request |
+| `MAX_CONCURRENCY` | 4 | Concurrent requests of `paper extract` |
+| `OCR_WORKERS` | 4 | Files OCR'd at the same time |
+
+These four control concurrency and batch size. The models are not here: each step has its own `--model` in its command line, and you change that one line.
+
 ## After a failure
 
 The result of each step is recorded under `logs/`:
@@ -121,11 +162,11 @@ The batch commands (`extract`, `translate`, `ocr`, `fix-math`, `fix-mermaid`) sh
 
 Any other non-zero code counts as a failure.
 
-Each step command starts with one of three retry modes:
+Each step command starts with one of three retry modes. They match what the commands actually accept:
 
-- `retry` runs the same command again with `--retry-failed`, which processes only the failed items. It is used for `fix-math`, `fix-mermaid`, and `extract`.
-- `rerun` runs exactly the same command again. It is used for `ocr` and `translate`, which already skip finished files and have no `--retry-failed`.
-- `once` only prints a warning and does not retry. It is used for `fix` and `organize`.
+- `retry` runs the same command again with `--retry-failed`, which processes only the failed items. Only `paper extract`, `recognize fix-math`, and `recognize fix-mermaid` accept that option.
+- `rerun` runs exactly the same command again. `recognize ocr` and `translator translate` have no `--retry-failed`, but they already skip finished files, so running them again is enough.
+- `once` only prints a warning and does not retry. `recognize fix` and `recognize organize` cannot retry.
 
 If failed items remain after the last round, the script prints a warning and continues. Look in the error reports under `logs/` to see which items failed.
 
