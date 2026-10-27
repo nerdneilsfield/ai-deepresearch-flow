@@ -204,6 +204,44 @@ export NOTIFY_URL='https://<通知服务>/api/<uuid>/get'
 | `fix-translated` | `recognize fix` | 否 | `md_base64_translated/` | 原地修改 | `once` |
 | `fix-math-translated` | `recognize fix-math` | 是 | `md_base64_translated/` | 原地修改，报告 `logs/fix-math-translated.json` | `retry` |
 | `build` | `paper db snapshot build` | 否 | 上面的 JSON、Markdown、`pdf/`、`.bib` | `dist/<项目名>.db`、`dist/<项目名>-export/` | 无 |
+| `embed` | `paper embed` | 是 | `build` 生成的 snapshot 和静态导出目录 | `dist/<项目名>_embed/` | 需要 embedding 配置和 provider |
+| `push-api` | `paper db api push --only-api` | 是 | snapshot、静态导出目录、`remote.toml` | 远端 API | 只推送 API 数据 |
+| `push-storage` | `paper db api push --only-storage --storage-bundles` | 否 | 静态导出目录、`remote.toml`、`7z` | 本地 `dist/bundles/<batch-id>/` 和远端 `bundles/<batch-id>/` | 远端手动执行 `apply.sh` |
+
+### 分卷上传静态文件
+
+`push-storage` 不逐个上传静态文件。它使用 7-Zip 创建一个高压缩率的 solid archive，并以 50 MB 分卷上传到 WebDAV。压缩命令使用 LZMA2、最高压缩级别和多线程：
+
+```bash
+bash run.sh push-storage
+```
+
+生成的本地目录类似：
+
+```text
+dist/bundles/<batch-id>/
+├── bundle.7z.001
+├── bundle.7z.002
+├── apply.sh
+└── files.txt
+```
+
+远程目录位于 `remote.toml` 中配置的 WebDAV 根目录下：
+
+```text
+bundles/<batch-id>/
+├── bundle.7z.001
+├── bundle.7z.002
+└── apply.sh
+```
+
+在 WebDAV 服务器上安装 `7z` 后，进入远程批次目录并执行：
+
+```bash
+bash apply.sh /absolute/path/to/static-export
+```
+
+脚本只在解压成功后删除远程 `.7z.*` 分卷，并保留 `apply.sh`。本地分卷不会被删除。解压失败时，远程分卷仍然保留，可以重新执行脚本。
 
 补充说明：
 

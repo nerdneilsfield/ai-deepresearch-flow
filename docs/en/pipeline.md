@@ -204,6 +204,44 @@ In the table, "Input" and "Output" are paths relative to the project directory. 
 | `fix-translated` | `recognize fix` | No | `md_base64_translated/` | modified in place | `once` |
 | `fix-math-translated` | `recognize fix-math` | Yes | `md_base64_translated/` | modified in place; report `logs/fix-math-translated.json` | `retry` |
 | `build` | `paper db snapshot build` | No | the JSON files above, Markdown, `pdf/`, the `.bib` | `dist/<project>.db`, `dist/<project>-export/` | none |
+| `embed` | `paper embed` | Yes | the snapshot and static export from `build` | `dist/<project>_embed/` | requires embedding configuration and a provider |
+| `push-api` | `paper db api push --only-api` | Yes | the snapshot, static export, and `remote.toml` | remote API | pushes API data only |
+| `push-storage` | `paper db api push --only-storage --storage-bundles` | No | the static export, `remote.toml`, and `7z` | local `dist/bundles/<batch-id>/` and remote `bundles/<batch-id>/` | run `apply.sh` on the remote server |
+
+### Upload split static bundles
+
+`push-storage` does not upload static files one by one. It creates one high-compression solid 7z archive and uploads 50 MB split volumes to WebDAV. The archive uses LZMA2, the highest compression level, and multithreading.
+
+```bash
+bash run.sh push-storage
+```
+
+The local output looks like this:
+
+```text
+dist/bundles/<batch-id>/
+├── bundle.7z.001
+├── bundle.7z.002
+├── apply.sh
+└── files.txt
+```
+
+The remote directory is below the WebDAV root configured in `remote.toml`:
+
+```text
+bundles/<batch-id>/
+├── bundle.7z.001
+├── bundle.7z.002
+└── apply.sh
+```
+
+Install `7z` on the WebDAV server, enter the remote batch directory, and run:
+
+```bash
+bash apply.sh /absolute/path/to/static-export
+```
+
+The script deletes the remote `.7z.*` volumes only after extraction succeeds. It keeps `apply.sh`. The local volumes are never deleted. If extraction fails, the remote volumes remain available for another attempt.
 
 Notes:
 
