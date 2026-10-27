@@ -1602,6 +1602,18 @@ def register_db_commands(db_group: click.Group) -> None:
         help="Concurrent workers for static storage push",
     )
     @click.option(
+        "--storage-bundles", is_flag=True,
+        help="Upload static files as high-compression split 7z bundles",
+    )
+    @click.option(
+        "--bundle-size-mb", type=int, default=50, show_default=True,
+        help="Maximum size of each compressed 7z volume in MiB",
+    )
+    @click.option(
+        "--bundle-remote-dir", default="bundles", show_default=True,
+        help="Remote storage directory for split bundles and apply.sh",
+    )
+    @click.option(
         "--start-idx",
         "start_idx",
         type=int,
@@ -1627,6 +1639,9 @@ def register_db_commands(db_group: click.Group) -> None:
         only_storage: bool,
         only_api: bool,
         storage_concurrency: int,
+        storage_bundles: bool,
+        bundle_size_mb: int,
+        bundle_remote_dir: str,
         embed_db: str | None,
         start_idx: int,
         end_idx: int,
@@ -1675,6 +1690,12 @@ def register_db_commands(db_group: click.Group) -> None:
             embed_db = None
         if storage_concurrency < 1:
             raise click.ClickException("--storage-concurrency must be at least 1")
+        if bundle_size_mb < 1:
+            raise click.ClickException("--bundle-size-mb must be at least 1")
+        if storage_bundles and not only_storage:
+            raise click.ClickException("--storage-bundles requires --only-storage")
+        if storage_bundles and retry_failed_path:
+            raise click.ClickException("--storage-bundles cannot be combined with --retry-failed")
         if only_api and retry_failed_path:
             raise click.ClickException("--retry-failed cannot be used with --only-api")
         if retry_failed_path and not static_export_dir and not embed_db:
@@ -1707,6 +1728,10 @@ def register_db_commands(db_group: click.Group) -> None:
             raise click.ClickException("Semantic retry report requires --embed-db")
         if only_storage and not config.storage:
             raise click.ClickException("--only-storage requires [remote.storage] in config")
+        if storage_bundles and not static_dir:
+            raise click.ClickException("--storage-bundles requires --static-export-dir")
+        if storage_bundles and not config.storage:
+            raise click.ClickException("--storage-bundles requires [remote.storage] in config")
 
         console.print(f"[cyan]Remote:[/cyan] {config.api_base_url}")
         console.print(f"[cyan]Batch size:[/cyan] {config.batch_size}")
@@ -1836,6 +1861,26 @@ def register_db_commands(db_group: click.Group) -> None:
             )
             from deepresearch_flow.storage.base import StorageAuthError
             from deepresearch_flow.storage.factory import create_storage
+            if storage_bundles:
+                from deepresearch_flow.paper.snapshot.push_bundles import push_static_bundles
+
+                console.print(
+                    f"[cyan]Uploading 7z bundles:[/cyan] {bundle_size_mb} MB, "
+                    f"remote directory {bundle_remote_dir}"
+                )
+                with create_storage(config.storage) as storage:
+                    archives = push_static_bundles(
+                        static_dir,
+                        storage,
+                        bundle_size_mb=bundle_size_mb,
+                        remote_dir=bundle_remote_dir,
+                        local_root=db_path.resolve().parent / "bundles",
+                        overwrite=overwrite,
+                    )
+                for script_path in archives:
+                    console.print(f"[green]Uploaded split archive and script:[/green] {script_path}")
+                console.print("Run on the storage server: bash apply.sh /absolute/static/root")
+                return
 
             if retry_mode == "static":
                 only_files = retry_static_files

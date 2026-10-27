@@ -24,7 +24,7 @@ DEFAULT_SEMANTIC_TIMEOUT = 120.0
 DEFAULT_SEMANTIC_RETRIES = 3
 DEFAULT_SEMANTIC_RETRY_BACKOFF_SECONDS = 2.0
 DEFAULT_PUSH_RETRIES = 2
-DEFAULT_PUSH_RETRY_BACKOFF_SECONDS = 1.0
+DEFAULT_PUSH_RETRY_BACKOFF_SECONDS = 60.0
 
 
 @dataclass(frozen=True)
@@ -440,7 +440,7 @@ def _post_batch_with_retries(
             )
             if attempt < retries and _should_retry_status(resp.status_code):
                 attempt += 1
-                sleep_fn(retry_backoff_seconds * attempt)
+                sleep_fn(retry_backoff_seconds)
                 continue
             resp.raise_for_status()
             data = resp.json()
@@ -451,7 +451,7 @@ def _post_batch_with_retries(
             if attempt >= retries:
                 raise
             attempt += 1
-            sleep_fn(retry_backoff_seconds * attempt)
+            sleep_fn(retry_backoff_seconds)
 
 
 def push_papers(

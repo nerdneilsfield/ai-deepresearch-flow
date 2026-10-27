@@ -59,7 +59,7 @@ CHAIN_simple="simple fix-simple fix-math-simple"
 CHAIN_deep_read="deep_read fix-deep_read fix-math-deep_read fix-mermaid-deep_read"
 CHAIN_translate="translate fix-translated fix-math-translated"
 PARALLEL="simple deep_read translate"
-ALL="$CHAIN_ocr $CHAIN_simple $CHAIN_deep_read $CHAIN_translate build embed push-api"
+ALL="$CHAIN_ocr $CHAIN_simple $CHAIN_deep_read $CHAIN_translate build embed push-api push-storage"
 
 # ---- helpers (usually no need to edit) --------------------------------------
 ROOT=@@ROOT@@
@@ -259,6 +259,12 @@ s_embed() {
     --snapshot-db "$ROOT/dist/$NAME.db" --static-export-dir "$ROOT/dist/$NAME-export" \
     --output-embed-db "$ROOT/dist/${NAME}_embed" \
     --max-concurrency 2 --rpm 2000 --tpm 1000000
+}
+
+s_push-storage() {
+  once drflow paper db api push --only-storage --storage-bundles \
+    --bundle-size-mb 50 --config "$REMOTE_CONFIG" \
+    --snapshot-db "$ROOT/dist/$NAME.db" --static-export-dir "$ROOT/dist/$NAME-export"
 }
 
 s_push-api() {
