@@ -40,6 +40,7 @@ NAME=@@NAME@@
 LANG_TO=@@LANG@@
 CONFIG=@@CONFIG@@
 OCR_CONFIG=@@OCR_CONFIG@@
+REMOTE_CONFIG=@@REMOTE_CONFIG@@
 ROUNDS=@@ROUNDS@@
 NOTIFY_URL=${NOTIFY_URL:-}      # optional, https://host/api/<uuid>/get
 # Knobs to tune by experience. Every LLM step uses the model in its own command
@@ -58,11 +59,11 @@ CHAIN_simple="simple fix-simple fix-math-simple"
 CHAIN_deep_read="deep_read fix-deep_read fix-math-deep_read fix-mermaid-deep_read"
 CHAIN_translate="translate fix-translated fix-math-translated"
 PARALLEL="simple deep_read translate"
-ALL="$CHAIN_ocr $CHAIN_simple $CHAIN_deep_read $CHAIN_translate build"
+ALL="$CHAIN_ocr $CHAIN_simple $CHAIN_deep_read $CHAIN_translate build embed push-api"
 
 # ---- helpers (usually no need to edit) --------------------------------------
-cd "$(dirname "$0")" || exit 1
-ROOT=$(pwd)
+ROOT=@@ROOT@@
+cd "$ROOT" || exit 1
 # A placeholder left in a step that is about to run would send a fake model name.
 check_placeholders() {
   local s
@@ -173,34 +174,34 @@ trap on_signal INT TERM TSTP HUP
 
 # ---- steps: one command per line --------------------------------------------
 s_ocr() {
-  rerun drflow recognize ocr pdf --config "$OCR_CONFIG" --output-dir ocr --workers "$OCR_WORKERS"
+  rerun drflow recognize ocr "$ROOT/pdf" --config "$OCR_CONFIG" --output-dir "$ROOT/ocr" --workers "$OCR_WORKERS"
 }
 s_fix() {
-  once drflow recognize fix --input ocr -r --in-place
+  once drflow recognize fix --input "$ROOT/ocr" -r --in-place
 }
 s_fix-math() {
-  retry drflow recognize fix-math --input ocr -r --in-place \
+  retry drflow recognize fix-math --input "$ROOT/ocr" -r --in-place \
     --config "$CONFIG" --model PROVIDER/MODEL \
-    --workers "$WORKERS" --batch-size "$BATCH_SIZE" --report logs/fix-math-ocr.json
+    --workers "$WORKERS" --batch-size "$BATCH_SIZE" --report "$ROOT/logs/fix-math-ocr.json"
 }
 s_organize() {
-  once drflow recognize organize --input ocr -r \
-    --output-simple md_simple --output-base64 md_base64
+  once drflow recognize organize --input "$ROOT/ocr" -r \
+    --output-simple "$ROOT/md_simple" --output-base64 "$ROOT/md_base64"
 }
 
 s_simple() {
-  (cd logs/simple && retry drflow paper extract \
+  (cd "$ROOT/logs/simple" && retry drflow paper extract \
     --input "$ROOT/md_simple" --config "$CONFIG" --model PROVIDER/MODEL --prompt-template simple \
     --max-concurrency "$MAX_CONCURRENCY" --timeout "$EXTRACT_TIMEOUT" \
     --output "$ROOT/simple.json" --errors "$ROOT/logs/simple-errors.json")
 }
 s_fix-simple() {
-  once drflow recognize fix --input simple.json --json --in-place
+  once drflow recognize fix --input "$ROOT/simple.json" --json --in-place
 }
 s_fix-math-simple() {
-  retry drflow recognize fix-math --input simple.json --json --in-place \
+  retry drflow recognize fix-math --input "$ROOT/simple.json" --json --in-place \
     --config "$CONFIG" --model PROVIDER/MODEL \
-    --workers "$WORKERS" --batch-size "$BATCH_SIZE" --report logs/fix-math-simple.json
+    --workers "$WORKERS" --batch-size "$BATCH_SIZE" --report "$ROOT/logs/fix-math-simple.json"
 }
 
 s_deep_read() {
@@ -208,48 +209,61 @@ s_deep_read() {
   # --stage-dag runs them in dependency order, so a stage does not start before
   # the one it depends on is done, and a failed stage is retried on its own.
   # It also reuses simple.json for module_a, which holds the same fields.
-  (cd logs/deep_read && retry drflow paper extract \
+  (cd "$ROOT/logs/deep_read" && retry drflow paper extract \
     --input "$ROOT/md_simple" --config "$CONFIG" --model PROVIDER/MODEL --prompt-template deep_read \
     --stage-dag \
     --max-concurrency "$MAX_CONCURRENCY" --timeout "$EXTRACT_TIMEOUT" \
     --output "$ROOT/deep_read.json" --errors "$ROOT/logs/deep_read-errors.json")
 }
 s_fix-deep_read() {
-  once drflow recognize fix --input deep_read.json --json --in-place
+  once drflow recognize fix --input "$ROOT/deep_read.json" --json --in-place
 }
 s_fix-math-deep_read() {
-  retry drflow recognize fix-math --input deep_read.json --json --in-place \
+  retry drflow recognize fix-math --input "$ROOT/deep_read.json" --json --in-place \
     --config "$CONFIG" --model PROVIDER/MODEL \
-    --workers "$WORKERS" --batch-size "$BATCH_SIZE" --report logs/fix-math-deep_read.json
+    --workers "$WORKERS" --batch-size "$BATCH_SIZE" --report "$ROOT/logs/fix-math-deep_read.json"
 }
 s_fix-mermaid-deep_read() {
-  retry drflow recognize fix-mermaid --input deep_read.json --json --in-place \
+  retry drflow recognize fix-mermaid --input "$ROOT/deep_read.json" --json --in-place \
     --config "$CONFIG" --model PROVIDER/MODEL \
-    --workers "$WORKERS" --batch-size "$BATCH_SIZE" --report logs/fix-mermaid-deep_read.json
+    --workers "$WORKERS" --batch-size "$BATCH_SIZE" --report "$ROOT/logs/fix-mermaid-deep_read.json"
 }
 
 s_translate() {
-  rerun drflow translator translate --input md_base64 --config "$CONFIG" --model PROVIDER/MODEL \
+  rerun drflow translator translate --input "$ROOT/md_base64" --config "$CONFIG" --model PROVIDER/MODEL \
     --target-lang "$LANG_TO" --fix-level moderate \
-    --output-dir md_base64_translated --debug-dir logs/translator
+    --output-dir "$ROOT/md_base64_translated" --debug-dir "$ROOT/logs/translator"
 }
 s_fix-translated() {
-  once drflow recognize fix --input md_base64_translated -r --in-place
+  once drflow recognize fix --input "$ROOT/md_base64_translated" -r --in-place
 }
 s_fix-math-translated() {
-  retry drflow recognize fix-math --input md_base64_translated -r --in-place \
+  retry drflow recognize fix-math --input "$ROOT/md_base64_translated" -r --in-place \
     --config "$CONFIG" --model PROVIDER/MODEL \
-    --workers "$WORKERS" --batch-size "$BATCH_SIZE" --report logs/fix-math-translated.json
+    --workers "$WORKERS" --batch-size "$BATCH_SIZE" --report "$ROOT/logs/fix-math-translated.json"
 }
 
 s_build() {
-  mkdir -p dist
+  mkdir -p "$ROOT/dist"
   local prev=()
-  [ -f "dist/$NAME.db" ] && prev=(--previous-snapshot-db "dist/$NAME.db")   # keeps paper_id stable
-  run1 drflow paper db snapshot build \
-    -i simple.json -i deep_read.json -b @@BIB@@ \
-    --md-root md_simple --md-translated-root md_base64_translated --pdf-root pdf \
-    --output-db "dist/$NAME.db" --static-export-dir "dist/$NAME-export" "${prev[@]}"
+  [ -f "$ROOT/dist/$NAME.db" ] && prev=(--previous-snapshot-db "$ROOT/dist/$NAME.db")   # keeps paper_id stable
+  once drflow paper db snapshot build \
+    -i "$ROOT/simple.json" -i "$ROOT/deep_read.json" -b @@BIB@@ \
+    --md-root "$ROOT/md_simple" --md-translated-root "$ROOT/md_base64_translated" --pdf-root "$ROOT/pdf" \
+    --output-db "$ROOT/dist/$NAME.db" --static-export-dir "$ROOT/dist/$NAME-export" "${prev[@]}"
+}
+
+s_embed() {
+  once drflow paper embed --config "$CONFIG" \
+    --embedding siliconflow/Qwen/Qwen3-Embedding-4B \
+    --snapshot-db "$ROOT/dist/$NAME.db" --static-export-dir "$ROOT/dist/$NAME-export" \
+    --output-embed-db "$ROOT/dist/${NAME}_embed" \
+    --max-concurrency 2 --rpm 2000 --tpm 1000000
+}
+
+s_push-api() {
+  once drflow paper db api push --only-api --config "$REMOTE_CONFIG" \
+    --snapshot-db "$ROOT/dist/$NAME.db" --static-export-dir "$ROOT/dist/$NAME-export"
 }
 
 # ---- driver (usually no need to edit) ---------------------------------------
@@ -379,7 +393,9 @@ def _find_bib(project: Path) -> Path:
 @click.option("--config", "config_name", default="config.toml", show_default=True,
               help="LLM config; resolved against the current directory and stored as an absolute path")
 @click.option("--ocr-config", "ocr_config_name", default="ocr.toml", show_default=True,
-              help="OCR config; resolved like --config")
+               help="OCR config; resolved like --config")
+@click.option("--remote-config", "remote_config_name", default="remote.toml", show_default=True,
+              help="Remote config; resolved like --config")
 @click.option("--rounds", default=3, show_default=True, help="Retry rounds per step")
 @click.option("--force", is_flag=True, help="Overwrite an existing run.sh")
 def init_run(
@@ -387,6 +403,7 @@ def init_run(
     target_lang: str,
     config_name: str,
     ocr_config_name: str,
+    remote_config_name: str,
     rounds: int,
     force: bool,
 ) -> None:
@@ -402,9 +419,11 @@ def init_run(
         "LANG": target_lang,
         "CONFIG": str(Path(config_name).resolve()),
         "OCR_CONFIG": str(Path(ocr_config_name).resolve()),
+        "REMOTE_CONFIG": str(Path(remote_config_name).resolve()),
+        "ROOT": str(project),
         "ROUNDS": str(rounds),
         "REPO": str(repo),
-        "BIB": bib.name,
+        "BIB": str(bib),
     }.items():
         script = script.replace(f"@@{key}@@", shlex.quote(value))
     target = project / "run.sh"
