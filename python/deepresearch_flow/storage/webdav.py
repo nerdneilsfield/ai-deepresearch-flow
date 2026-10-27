@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from email.utils import parsedate_to_datetime
 from typing import Any
+from typing import Callable
+from pathlib import Path
 from urllib.parse import quote, unquote, urlparse
 from xml.etree import ElementTree
 
@@ -95,6 +97,23 @@ class WebDavStorage:
         self._check_auth(resp)
         if resp.status_code in (200, 201, 204):
             return
+        resp.raise_for_status()
+
+    def upload_file(
+        self, remote_path: str, path: Path, *, on_bytes: Callable[[int], None]
+    ) -> None:
+        """Stream a local file and report bytes consumed by the HTTP client."""
+        def chunks():
+            with path.open("rb") as source:
+                while chunk := source.read(256 * 1024):
+                    yield chunk
+                    on_bytes(len(chunk))
+
+        resp = self._client.put(
+            self._url_for(remote_path), content=chunks(),
+            headers={"Content-Length": str(path.stat().st_size)},
+        )
+        self._check_auth(resp)
         resp.raise_for_status()
 
     def download(self, remote_path: str) -> bytes:

@@ -4,10 +4,41 @@ from __future__ import annotations
 
 import subprocess
 import shlex
+import logging
+import time
+from typing import Callable
 from uuid import uuid4
 from pathlib import Path
 
 from deepresearch_flow.storage.base import RemoteStorage
+import httpx
+from tqdm import tqdm
+
+from deepresearch_flow.paper.snapshot.push import (
+    DEFAULT_PUSH_RETRIES,
+    DEFAULT_PUSH_RETRY_BACKOFF_SECONDS,
+    _should_retry_status,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def _with_cooldown(action: Callable[[], None], description: str) -> None:
+    for attempt in range(DEFAULT_PUSH_RETRIES + 1):
+        try:
+            action()
+            return
+        except httpx.HTTPStatusError as exc:
+            if not _should_retry_status(exc.response.status_code) or attempt == DEFAULT_PUSH_RETRIES:
+                raise
+        except httpx.TransportError:
+            if attempt == DEFAULT_PUSH_RETRIES:
+                raise
+        logger.warning(
+            "%s failed; cooling down %.0fs before retry %d/%d",
+            description, DEFAULT_PUSH_RETRY_BACKOFF_SECONDS, attempt + 1, DEFAULT_PUSH_RETRIES,
+        )
+        time.sleep(DEFAULT_PUSH_RETRY_BACKOFF_SECONDS)
 
 
 def _volume_size(size_mb: int) -> str:
@@ -65,16 +96,14 @@ def push_static_bundles(
     archive = local_dir / stem
     file_list = local_dir / "files.txt"
     file_list.write_text("\n".join(str(path) for path in files) + "\n", encoding="utf-8")
+    print(f"Compressing {len(files)} files → {local_dir}", flush=True)
     subprocess.run(
                 [
                     "7z", "a", "-t7z", "-mx=9", "-m0=lzma2", "-ms=on", "-mmt=on",
-                    f"-v{volume}", "-scsUTF-8", "-spd", str(archive), f"@{file_list}",
+                    f"-v{volume}", "-bb1", "-bsp1", "-scsUTF-8", "-spd", str(archive), f"@{file_list}",
                 ],
             cwd=static_export_dir,
             check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
         )
     volumes = sorted(local_dir.glob(f"{stem}.*"))
     script = local_dir / "apply.sh"
@@ -82,9 +111,22 @@ def push_static_bundles(
     script.chmod(0o755)
     from deepresearch_flow.paper.snapshot.push_static import _ensure_parents
 
-    _ensure_parents(storage, f"{remote_dir}/apply.sh")
-    for volume_path in volumes:
-        storage.upload(f"{remote_dir}/{volume_path.name}", volume_path.read_bytes())
+    _with_cooldown(
+        lambda: _ensure_parents(storage, f"{remote_dir}/apply.sh"),
+        f"Create {remote_dir}",
+    )
     # Publish the script last, once all volumes have been uploaded.
-    storage.upload(f"{remote_dir}/apply.sh", script.read_bytes())
+    uploads = [*volumes, script]
+    for index, path in enumerate(uploads, 1):
+        remote_path = f"{remote_dir}/{path.name}"
+        with tqdm(
+            total=path.stat().st_size, unit="B", unit_scale=True,
+            desc=f"Upload [{index}/{len(uploads)}] {path.name}",
+        ) as progress:
+            def upload_current() -> None:
+                progress.reset()
+                storage.upload_file(remote_path, path, on_bytes=progress.update)
+
+            _with_cooldown(upload_current, f"Upload {remote_path}")
+            tqdm.write(f"Uploaded [{index}/{len(uploads)}] {remote_path}")
     return [f"{remote_dir}/apply.sh"]

@@ -243,6 +243,8 @@ bash apply.sh /absolute/path/to/static-export
 
 The script deletes the remote `.7z.*` volumes only after extraction succeeds. It keeps `apply.sh`. The local volumes are never deleted. If extraction fails, the remote volumes remain available for another attempt.
 
+Directory creation and uploads retry network failures and retryable HTTP errors twice, with a fixed 60-second cooldown. Only the failed operation repeats. Successful volumes are not uploaded again, and compression does not restart. Authentication failures stop immediately. Ctrl-C interrupts the cooldown.
+
 Notes:
 
 - `fix-mermaid` works only on `deep_read.json`.

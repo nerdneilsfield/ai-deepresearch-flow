@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from typing import Protocol
+from typing import Callable
+from pathlib import Path
 
 
 class StorageAuthError(RuntimeError):
@@ -35,6 +37,12 @@ class RemoteStorage(Protocol):
 
     def upload(self, remote_path: str, data: bytes) -> None:
         """Upload bytes. Raises StorageAuthError on auth failure, HTTPStatusError on other failures."""
+        ...
+
+    def upload_file(
+        self, remote_path: str, path: Path, *, on_bytes: Callable[[int], None]
+    ) -> None:
+        """Stream a local file, reporting bytes consumed by the HTTP client."""
         ...
 
     def close(self) -> None:
