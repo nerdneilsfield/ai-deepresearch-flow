@@ -6,6 +6,8 @@ import asyncio
 import hashlib
 import json
 import math
+import os
+import tempfile
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -64,6 +66,10 @@ class ExtractionError:
     error_type: str
     error_message: str
     stage_name: str | None = None
+
+
+class SnapshotWriteError(RuntimeError):
+    """A checkpoint could not be persisted and the run must stop."""
 
 
 def _mask_key(value: str, *, keep: int = 4) -> str:
@@ -738,19 +744,41 @@ def load_existing(path: Path) -> list[dict[str, Any]]:
             f"Existing output {path} is not valid JSON ({exc}); fix or remove it before rerunning"
         ) from exc
     if isinstance(data, dict) and isinstance(data.get("papers"), list):
-        return data["papers"]
+        papers = data["papers"]
+        if not all(
+            isinstance(entry, dict) and isinstance(entry.get("source_path"), str)
+            and bool(entry["source_path"])
+            for entry in papers
+        ):
+            raise click.ClickException(
+                f"Existing output {path} contains an invalid paper entry"
+            )
+        return papers
     if isinstance(data, list):
+        if not all(
+            isinstance(entry, dict) and isinstance(entry.get("source_path"), str)
+            and bool(entry["source_path"])
+            for entry in data
+        ):
+            raise click.ClickException(
+                f"Existing output {path} contains an invalid paper entry"
+            )
         return data
-    return []
+    raise click.ClickException(
+        f"Existing output {path} has an invalid shape; expected a list or an object with 'papers' list"
+    )
 
 
 def load_errors(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return []
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise click.ClickException(f"Errors file {path} is not valid JSON ({exc})") from exc
+    if not isinstance(data, list) or not all(isinstance(item, dict) for item in data):
+        raise click.ClickException(f"Errors file {path} must contain a list of objects")
+    return data
 
 
 def _serialize_error(err: ExtractionError) -> dict[str, Any]:
@@ -914,9 +942,29 @@ def write_json(path: Path, data: Any) -> None:
 
 def write_json_atomic(path: Path, data: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    tmp_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp_path.replace(path)
+    payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        tmp_path.replace(path)
+        fd_dir = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(fd_dir)
+        finally:
+            os.close(fd_dir)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+def write_json_checkpoint(path: Path, data: Any) -> None:
+    try:
+        write_json_atomic(path, data)
+    except Exception as exc:
+        raise SnapshotWriteError(f"Could not persist checkpoint {path}: {exc}") from exc
 
 
 def build_stage_schema(base_schema: dict[str, Any], required_fields: list[str]) -> dict[str, Any]:
@@ -943,9 +991,12 @@ def load_stage_state(path: Path) -> dict[str, Any] | None:
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise click.ClickException(f"Stage state {path} is not valid JSON ({exc})") from exc
+    if not isinstance(data, dict) or not isinstance(data.get("stages"), dict):
+        raise click.ClickException(f"Stage state {path} must contain an object with a 'stages' object")
+    return data
 
 
 class RequestThrottle:
@@ -1179,6 +1230,15 @@ async def extract_documents(
         runtime_selector = _single_model_selector(provider, model)
     markdown_files = discover_markdown(inputs, glob_pattern, recursive=True)
     template_tag = prompt_template if not custom_prompt else "custom"
+    simple_prompt_hash = _compute_prompt_hash(
+        prompt_template=prompt_template,
+        output_language=output_language,
+        stage_name=None,
+        stage_fields=list(schema.get("properties", {})),
+        custom_prompt=custom_prompt,
+        prompt_system_path=prompt_system_path,
+        prompt_user_path=prompt_user_path,
+    )
 
     total_files = len(markdown_files)
     if start_idx != 0 or end_idx != -1:
@@ -1398,11 +1458,14 @@ async def extract_documents(
     stats = ExtractionStats(doc_bar=doc_bar)
 
     results_lock = asyncio.Lock()
+    snapshot_lock = asyncio.Lock()
     logger.info("Request timeout set to %.1fs", timeout_seconds)
 
     pause_gate: asyncio.Event | None = None
 
     shutdown_event = asyncio.Event()
+    fatal_event = asyncio.Event()
+    fatal_error: Exception | None = None
     shutdown_reason: str | None = None
 
     def request_shutdown(reason: str) -> None:
@@ -1443,21 +1506,24 @@ async def extract_documents(
         return drained
 
     async def wait_for_queue(queue: asyncio.Queue[Any], drain_lock: asyncio.Lock) -> None:
-        if shutdown_event.is_set():
+        if shutdown_event.is_set() or fatal_event.is_set():
             await drain_queue(queue, drain_lock)
-            await queue.join()
             return
         join_task = asyncio.create_task(queue.join())
         shutdown_task = asyncio.create_task(shutdown_event.wait())
+        fatal_task = asyncio.create_task(fatal_event.wait())
         done, _pending = await asyncio.wait(
-            [join_task, shutdown_task],
+            [join_task, shutdown_task, fatal_task],
             return_when=asyncio.FIRST_COMPLETED,
         )
-        if shutdown_task in done:
+        if shutdown_task in done or fatal_task in done:
             await drain_queue(queue, drain_lock)
-        await queue.join()
-        for task in (join_task, shutdown_task):
+            join_task.cancel()
+        else:
+            await queue.join()
+        for task in (join_task, shutdown_task, fatal_task):
             task.cancel()
+        await asyncio.gather(join_task, shutdown_task, fatal_task, return_exceptions=True)
 
     def build_output_payload() -> dict[str, Any]:
         final_results: list[dict[str, Any]] = []
@@ -1477,9 +1543,18 @@ async def extract_documents(
         return {"template_tag": template_tag, "papers": final_results}
 
     async def persist_output_snapshot() -> None:
-        async with results_lock:
-            payload = build_output_payload()
-        await asyncio.to_thread(write_json, output_path, payload)
+        async with snapshot_lock:
+            async with results_lock:
+                payload = build_output_payload()
+            try:
+                # Keep the durable write in this critical section.  A worker can
+                # be cancelled during shutdown, but cannot leave a background
+                # writer behind that later replaces a newer snapshot.
+                write_json_atomic(output_path, payload)
+            except Exception as exc:
+                raise SnapshotWriteError(
+                    f"Could not persist extraction checkpoint {output_path}: {exc}"
+                ) from exc
 
     def mark_attempted_full(source_path: str) -> None:
         attempted_full_paths.add(source_path)
@@ -1587,7 +1662,12 @@ async def extract_documents(
                     prompt_template=prompt_template if not custom_prompt else "custom",
                     output_language=output_language,
                 )
-                results[source_path] = data
+                data["prompt_hash"] = simple_prompt_hash
+                async with results_lock:
+                    results[source_path] = data
+                await persist_output_snapshot()
+            except SnapshotWriteError:
+                raise
             except ProviderError as exc:
                 log_extraction_failure(
                     source_path,
@@ -1647,14 +1727,24 @@ async def extract_documents(
                     path = doc_queue.get_nowait()
                 except asyncio.QueueEmpty:
                     return
-                await process_one(path)
-                doc_queue.task_done()
+                try:
+                    await process_one(path)
+                except Exception as exc:
+                    nonlocal fatal_error
+                    fatal_error = exc
+                    fatal_event.set()
+                    await drain_queue(doc_queue, drain_lock)
+                    return
+                finally:
+                    doc_queue.task_done()
 
         workers = [asyncio.create_task(worker()) for _ in range(max_concurrency)]
         if markdown_files:
             await wait_for_queue(doc_queue, drain_lock)
         for w in workers:
             w.cancel()
+        if fatal_error is not None:
+            raise fatal_error
 
     async def run_multi_stage(client: httpx.AsyncClient) -> None:
         metadata_fields = [
@@ -1841,9 +1931,12 @@ async def extract_documents(
             )
 
             if not needs_run:
-                if stage_bar:
-                    stage_bar.update(1)
-                await update_results(ctx)
+                try:
+                    if stage_bar:
+                        stage_bar.update(1)
+                    await update_results(ctx)
+                except Exception:
+                    raise
             else:
                 try:
                     previous_outputs = json.dumps(ctx.stages, ensure_ascii=False)
@@ -1895,7 +1988,7 @@ async def extract_documents(
                     ctx.stage_meta[current_stage] = {"prompt_hash": prompt_hash}
                     ctx.stage_state["stages"] = ctx.stages
                     ctx.stage_state["stage_meta"] = ctx.stage_meta
-                    write_json_atomic(ctx.stage_path, ctx.stage_state)
+                    write_json_checkpoint(ctx.stage_path, ctx.stage_state)
                     if stage_bar:
                         stage_bar.update(1)
                     await update_results(ctx)
@@ -1920,6 +2013,8 @@ async def extract_documents(
                         state.failed = True
                     if stage_bar:
                         stage_bar.update(1)
+                except SnapshotWriteError:
+                    raise
                 except Exception as exc:  # pragma: no cover - safety net
                     logger.exception("Unexpected error while processing %s", ctx.source_path)
                     errors.append(
@@ -1973,13 +2068,23 @@ async def extract_documents(
                     task = task_queue.get_nowait()
                 except asyncio.QueueEmpty:
                     return
-                await run_task(task)
-                task_queue.task_done()
+                try:
+                    await run_task(task)
+                except Exception as exc:
+                    nonlocal fatal_error
+                    fatal_error = exc
+                    fatal_event.set()
+                    await drain_queue(task_queue, drain_lock)
+                    return
+                finally:
+                    task_queue.task_done()
 
         workers = [asyncio.create_task(worker()) for _ in range(max_concurrency)]
         await wait_for_queue(task_queue, drain_lock)
         for w in workers:
             w.cancel()
+        if fatal_error is not None:
+            raise fatal_error
 
     async def run_multi_stage_dag(client: httpx.AsyncClient) -> None:
         metadata_fields = [
@@ -2320,7 +2425,7 @@ async def extract_documents(
                     ctx.stage_meta[current_stage] = {"prompt_hash": prompt_hash}
                     ctx.stage_state["stages"] = ctx.stages
                     ctx.stage_state["stage_meta"] = ctx.stage_meta
-                    write_json_atomic(ctx.stage_path, ctx.stage_state)
+                    write_json_checkpoint(ctx.stage_path, ctx.stage_state)
                 await update_results(ctx)
                 await finalize_stage(ctx, current_stage, failed=False)
             except ProviderError as exc:
@@ -2341,6 +2446,8 @@ async def extract_documents(
                     )
                 )
                 await finalize_stage(ctx, current_stage, failed=True)
+            except SnapshotWriteError:
+                raise
             except Exception as exc:  # pragma: no cover - safety net
                 logger.exception("Unexpected error while processing %s", ctx.source_path)
                 errors.append(
@@ -2357,7 +2464,7 @@ async def extract_documents(
 
         async def worker() -> None:
             while True:
-                if shutdown_event.is_set():
+                if shutdown_event.is_set() or fatal_event.is_set():
                     await drain_queue(task_queue, drain_lock)
                     return
                 await await_key_pool_ready()
@@ -2365,13 +2472,23 @@ async def extract_documents(
                     task = task_queue.get_nowait()
                 except asyncio.QueueEmpty:
                     return
-                await run_task(task)
-                task_queue.task_done()
+                try:
+                    await run_task(task)
+                except Exception as exc:
+                    nonlocal fatal_error
+                    fatal_error = exc
+                    fatal_event.set()
+                    await drain_queue(task_queue, drain_lock)
+                    return
+                finally:
+                    task_queue.task_done()
 
         workers = [asyncio.create_task(worker()) for _ in range(max_concurrency)]
         await wait_for_queue(task_queue, drain_lock)
         for w in workers:
             w.cancel()
+        if fatal_error is not None:
+            raise fatal_error
 
     try:
         async with httpx.AsyncClient() as client:
@@ -2418,12 +2535,6 @@ async def extract_documents(
     write_json_atomic(output_path, output_payload)
     write_json_atomic(errors_path, error_payload)
 
-    if shutdown_event.is_set():
-        logger.warning(
-            "Graceful shutdown completed (%s)",
-            shutdown_reason or "signal",
-        )
-
     if split:
         target_dir = split_dir or output_path.parent
         target_dir.mkdir(parents=True, exist_ok=True)
@@ -2448,6 +2559,11 @@ async def extract_documents(
         render_dir = render_output_dir or Path("rendered_md")
         rendered = render_papers(final_results, render_dir, template, output_language)
         click.echo(f"Rendered {rendered} markdown files")
+
+    if shutdown_event.is_set():
+        raise click.ClickException(
+            f"Extraction interrupted ({shutdown_reason or 'signal'}); checkpoints were saved"
+        )
 
     duration = time.monotonic() - start_time
     prompt_tokens = _estimate_tokens_for_chars(stats.prompt_chars)

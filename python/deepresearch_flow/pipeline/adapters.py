@@ -274,6 +274,11 @@ class ProductionAdapters(PipelineAdapters):
                     fallback_route_pool=None,
                     fallback_route_pool_2=None,
                 )
+            stats = getattr(result, "stats", None)
+            if stats is not None and getattr(stats, "failed_nodes", 0):
+                raise RuntimeError(
+                    f"translation completed with {stats.failed_nodes} failed nodes"
+                )
             return as_markdown(getattr(result, "translated_text", result))
 
         return cls(

@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import enum
+import inspect
 import json
 import logging
+import os
+import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -28,6 +32,25 @@ logger = logging.getLogger(__name__)
 
 class StateError(Exception):
     """Raised when a document state transition is invalid."""
+
+
+def _write_text_atomic(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        tmp.replace(path)
+        dir_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 class DocStage(enum.Enum):
@@ -322,6 +345,8 @@ class Scheduler:
         self._total_docs = 0
         self._done_count = 0
         self._all_done = asyncio.Event()
+        self._fatal_event = asyncio.Event()
+        self._fatal_error: Exception | None = None
         self._failed_files: list[Path] = []
         for qc in queue_configs:
             self._queues[qc.stage] = asyncio.Queue()
@@ -354,9 +379,18 @@ class Scheduler:
         ]
         dispatcher_task = asyncio.create_task(self._dispatcher())
         window_sem = asyncio.Semaphore(self._document_window)
+        fatal_task = asyncio.create_task(self._fatal_event.wait())
+        all_done_task: asyncio.Task[None] | None = None
+        acquire_task: asyncio.Task[bool] | None = None
         try:
             for path in paths:
-                await window_sem.acquire()
+                acquire_task = asyncio.create_task(window_sem.acquire())
+                done, _ = await asyncio.wait(
+                    [acquire_task, fatal_task], return_when=asyncio.FIRST_COMPLETED
+                )
+                if fatal_task in done:
+                    acquire_task.cancel()
+                    raise self._fatal_error or StateError("translation scheduler failed")
                 try:
                     ctx = await self._preprocess(
                         path=path,
@@ -396,26 +430,46 @@ class Scheduler:
                 self._actors[ctx.doc_id] = actor
                 await actor.start(self._build_initial_group_tasks(ctx))
 
-            await self._all_done.wait()
+            all_done_task = asyncio.create_task(self._all_done.wait())
+            done, _ = await asyncio.wait(
+                [all_done_task, fatal_task], return_when=asyncio.FIRST_COMPLETED
+            )
+            if fatal_task in done:
+                raise self._fatal_error or StateError("translation scheduler failed")
         finally:
-            for stage, queue in self._queues.items():
-                for _ in range(self._configs[stage].workers):
-                    await queue.put(_SENTINEL)
+            if acquire_task is not None and not acquire_task.done():
+                acquire_task.cancel()
+            if all_done_task is not None and not all_done_task.done():
+                all_done_task.cancel()
+            if self._fatal_event.is_set() or sys.exc_info()[0] is not None:
+                for task in worker_tasks:
+                    task.cancel()
+            else:
+                for stage, queue in self._queues.items():
+                    for _ in range(self._configs[stage].workers):
+                        await queue.put(_SENTINEL)
             await asyncio.gather(*worker_tasks, return_exceptions=True)
             dispatcher_task.cancel()
             try:
                 await dispatcher_task
-            except asyncio.CancelledError:
+            except (asyncio.CancelledError, Exception):
                 pass
+            fatal_task.cancel()
         return list(self._failed_files)
 
     async def _dispatcher(self) -> None:
         while True:
             event = await self._result_queue.get()
-            actor = self._actors.get(event.doc_id)
-            if actor is not None:
-                await actor.on_completion(event)
-            self._result_queue.task_done()
+            try:
+                actor = self._actors.get(event.doc_id)
+                if actor is not None:
+                    await actor.on_completion(event)
+            except Exception as exc:
+                self._fatal_error = exc
+                self._fatal_event.set()
+                raise
+            finally:
+                self._result_queue.task_done()
 
     async def _preprocess(
         self,
@@ -547,8 +601,11 @@ class Scheduler:
             for nid, node in ctx.translated_nodes.items():
                 if nid in ctx.nodes:
                     ctx.nodes[nid].translated_text = node.translated_text
-            for nid in self._translator._collect_failed_nodes(ctx.nodes):
-                ctx.nodes[nid].translated_text = ctx.nodes[nid].origin_text
+            failed = self._translator._collect_failed_nodes(ctx.nodes)
+            if failed:
+                raise StateError(
+                    f"Translation incomplete for {ctx.source_path}: {len(failed)} nodes failed"
+                )
             result = await self._translator.finalize_document(
                 reference_text=ctx.original_text,
                 segments=ctx.segments,
@@ -556,8 +613,7 @@ class Scheduler:
                 store=ctx.store,
                 format_enabled=format_enabled,
             )
-            ctx.output_path.parent.mkdir(parents=True, exist_ok=True)
-            ctx.output_path.write_text(result, encoding="utf-8")
+            _write_text_atomic(ctx.output_path, result)
             if ctx.cache is not None:
                 ctx.cache.discard()
             if debug_root is not None:
@@ -639,6 +695,19 @@ class Scheduler:
                     try:
                         async with config.provider_semaphore:
                             async with self._global_sem:
+                                call_kwargs: dict[str, Any] = {"route": route}
+                                signature = inspect.signature(self._translator._translate_group)
+                                if "quota_check" in signature.parameters or any(
+                                    parameter.kind is inspect.Parameter.VAR_KEYWORD
+                                    for parameter in signature.parameters.values()
+                                ):
+                                    call_kwargs["quota_check"] = (
+                                        (lambda exc: config.route_pool.mark_quota_exceeded(
+                                            route, str(exc), exc.status_code
+                                        ))
+                                        if config.route_pool is not None and route is not None
+                                        else None
+                                    )
                                 response = await self._translator._translate_group(
                                     task.group_text,
                                     config.provider,
@@ -653,7 +722,7 @@ class Scheduler:
                                     task.stage.value,
                                     task.group_index,
                                     None,
-                                    route=route,
+                                    **call_kwargs,
                                 )
                         break
                     except ProviderError as exc:

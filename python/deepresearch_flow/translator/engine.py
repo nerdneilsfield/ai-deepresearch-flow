@@ -10,7 +10,7 @@ import re
 import shutil
 import subprocess
 import time
-from typing import Any, Callable, Optional, Protocol
+from typing import Any, Awaitable, Callable, Optional, Protocol
 
 import httpx
 
@@ -767,6 +767,7 @@ class MarkdownTranslator:
         group_index: int,
         dump_callback: Callable[[DumpSnapshot], None] | None,
         route: RuntimeRoute | None = None,
+        quota_check: Callable[[ProviderError], Awaitable[bool]] | None = None,
     ) -> str:
         attempts = 0
         while True:
@@ -850,6 +851,8 @@ class MarkdownTranslator:
                         elapsed_ms,
                         exc,
                     )
+                if quota_check is not None and await quota_check(exc):
+                    raise
                 if exc.retryable and attempts < max_retries:
                     await asyncio.sleep(backoff_delay(1.0, attempts, 20.0))
                     continue
@@ -953,6 +956,13 @@ class MarkdownTranslator:
                                     idx,
                                     dump_callback,
                                     route=route,
+                                    quota_check=(
+                                        (lambda exc: route_pool_value.mark_quota_exceeded(
+                                            route, str(exc), exc.status_code
+                                        ))
+                                        if route_pool_value is not None and route is not None
+                                        else None
+                                    ),
                                 )
                             return idx, response
                         except ProviderError as exc:

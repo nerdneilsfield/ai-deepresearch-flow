@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import tempfile
 from pathlib import Path
 
 CACHE_DIR_NAME = ".translate_cache"
@@ -42,9 +44,23 @@ class NodeCache:
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(self._entries, ensure_ascii=False), encoding="utf-8")
-        tmp.replace(self.path)
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f".{self.path.name}.", suffix=".tmp", dir=self.path.parent
+        )
+        tmp = Path(tmp_name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                json.dump(self._entries, stream, ensure_ascii=False)
+                stream.flush()
+                os.fsync(stream.fileno())
+            tmp.replace(self.path)
+            dir_fd = os.open(self.path.parent, os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        finally:
+            tmp.unlink(missing_ok=True)
 
     def discard(self) -> None:
         self.path.unlink(missing_ok=True)

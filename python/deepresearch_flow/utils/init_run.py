@@ -112,12 +112,13 @@ kill_tree() {
 once() {
   local rc=0
   show "$@"; run_group "$@" || rc=$?
-  if [ $rc -eq $PARTIAL ]; then echo "WARNING: some items failed: $*"; return 0; fi
+  if [ $rc -eq $PARTIAL ]; then echo "WARNING: some items failed: $*"; fi
   return $rc
 }
 # retry CMD...: run it, and on exit code 3 rerun it with --retry-failed. Only
 # paper extract, recognize fix-math and recognize fix-mermaid accept that flag.
 retry() { _again " --retry-failed" "$@"; }
+retry_stages() { _again " --retry-failed-stages" "$@"; }
 # rerun CMD...: on exit code 3 rerun the same command. recognize ocr and
 # translator translate have no --retry-failed; they skip finished files.
 rerun() { _again "" "$@"; }
@@ -127,10 +128,11 @@ _again() {
   show "$@"; run_group "$@" || rc=$?
   while [ $rc -eq $PARTIAL ] && [ $n -lt "$ROUNDS" ]; do
     n=$((n+1)); echo "retry round $n/$ROUNDS"
+    rc=0
     if [ -n "$extra" ]; then show "$@" $extra; run_group "$@" $extra || rc=$?
     else show "$@"; run_group "$@" || rc=$?; fi
   done
-  if [ $rc -eq $PARTIAL ]; then echo "WARNING: still failed items after $ROUNDS rounds: $*"; return 0; fi
+  if [ $rc -eq $PARTIAL ]; then echo "WARNING: still failed items after $ROUNDS rounds: $*"; fi
   return $rc
 }
 
@@ -146,17 +148,10 @@ on_signal() {
     touch "logs/$CURRENT_STEP.failed"
     echo "[$CURRENT_STEP] FAILED (interrupted)"
   fi
-  # Stop the tmux chains first, so they do not write more .done files.
+  # Capture live tmux pane processes before closing the session.
+  panes=$($T list-panes -s -t "$S" -F '#{pane_pid}' 2>/dev/null) || panes=""
+  for p in $panes; do kill_tree "$p"; done
   $T kill-session -t "$S" 2>/dev/null
-  # Then the chain processes. kill-session alone leaves them running as
-  # orphans, because tmux starts them through a shell. Each chain wrote its own
-  # pid to logs/chain-<name>.pid, so they are killed by pid. Matching command
-  # lines with pkill is not safe: it would also hit the shell that started
-  # this script.
-  for f in logs/chain-*.pid; do
-    [ -f "$f" ] || continue
-    kill_tree "$(cat "$f")"
-  done
   if [ -n "$CURRENT_PID" ]; then
     kill_tree "$CURRENT_PID"
   fi
@@ -209,8 +204,7 @@ s_deep_read() {
   # deep_read is a multi-stage template: module_a, then module_d, then module_e.
   # --stage-dag runs them in dependency order, so a stage does not start before
   # the one it depends on is done, and a failed stage is retried on its own.
-  # It also reuses simple.json for module_a, which holds the same fields.
-  (cd "$ROOT/logs/deep_read" && retry drflow paper extract \
+  (cd "$ROOT/logs/deep_read" && retry_stages drflow paper extract \
     --input "$ROOT/md_simple" --config "$CONFIG" --model PROVIDER/MODEL --prompt-template deep_read \
     --language "$LANG_TO" \
     --stage-dag \
@@ -333,14 +327,17 @@ if [ "${1:-}" = --chain ]; then
     echo "parent gone, stopping chain $2"; kill -KILL -- -$$ 2>/dev/null ) &
   WATCHER=$!
   run_seq "$2" ${!v}
+  chain_rc=$?
   kill "$WATCHER" 2>/dev/null
-  exit $?
+  exit $chain_rc
 fi
 
 if [ $# -gt 0 ]; then
   case $1 in
     -h|--help|list) echo "steps: $ALL"; exit 0 ;;
     stop) command -v tmux >/dev/null || { echo "no tmux chains to stop"; exit 0; }
+      panes=$($T list-panes -s -t "$S" -F '#{pane_pid}' 2>/dev/null) || panes=""
+      for p in $panes; do kill_tree "$p"; done
       $T kill-session -t "$S" 2>/dev/null; echo "stopped"; exit 0 ;;
   esac
   IFS=', ' read -ra SEL <<< "$*"
@@ -360,12 +357,12 @@ command -v tmux >/dev/null || { echo "tmux is required"; exit 1; }
 # kill-session, not kill-server: a new session started right after kill-server can vanish.
 $T kill-session -t "$S" 2>/dev/null
 echo $$ > logs/parent.pid
-$T new-session -d -s "$S" -n main "sleep 86400" >/dev/null 2>&1 </dev/null
+$T new-session -d -s "$S" -n main "sleep 86400" >/dev/null 2>&1 </dev/null || { echo "failed to create tmux session" >&2; exit 1; }
 parallel_steps=""
 for c in $PARALLEL; do
   v="CHAIN_$c"; parallel_steps="$parallel_steps ${!v}"
   for s in ${!v}; do rm -f "logs/$s.failed"; done
-  $T new-window -d -t "$S:" -n "$c" "./run.sh --chain $c; echo; echo '[$c] finished, press Enter'; read"
+  $T new-window -d -t "$S:" -n "$c" "./run.sh --chain $c; echo; echo '[$c] finished, press Enter'; read" || { echo "failed to create tmux window $c" >&2; $T kill-session -t "$S" 2>/dev/null; exit 1; }
 done
 echo "$T attach -t $S   (windows: $PARALLEL)"
 while :; do
