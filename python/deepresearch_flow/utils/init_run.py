@@ -192,6 +192,7 @@ s_organize() {
 s_simple() {
   (cd "$ROOT/logs/simple" && retry drflow paper extract \
     --input "$ROOT/md_simple" --config "$CONFIG" --model PROVIDER/MODEL --prompt-template simple \
+    --language "$LANG_TO" \
     --max-concurrency "$MAX_CONCURRENCY" --timeout "$EXTRACT_TIMEOUT" \
     --output "$ROOT/simple.json" --errors "$ROOT/logs/simple-errors.json")
 }
@@ -211,6 +212,7 @@ s_deep_read() {
   # It also reuses simple.json for module_a, which holds the same fields.
   (cd "$ROOT/logs/deep_read" && retry drflow paper extract \
     --input "$ROOT/md_simple" --config "$CONFIG" --model PROVIDER/MODEL --prompt-template deep_read \
+    --language "$LANG_TO" \
     --stage-dag \
     --max-concurrency "$MAX_CONCURRENCY" --timeout "$EXTRACT_TIMEOUT" \
     --output "$ROOT/deep_read.json" --errors "$ROOT/logs/deep_read-errors.json")

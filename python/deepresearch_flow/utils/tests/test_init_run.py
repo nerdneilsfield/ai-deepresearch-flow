@@ -6,6 +6,7 @@ import subprocess
 import time
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from deepresearch_flow.cli import cli
@@ -36,10 +37,10 @@ def test_requires_pdf_directory(tmp_path: Path) -> None:
     assert _run(project).exit_code != 0
 
 
-def _script_with_stub(tmp_path: Path, stub_body: str) -> Path:
+def _script_with_stub(tmp_path: Path, stub_body: str, *extra: str) -> Path:
     """Generated script whose `drflow` is replaced by a stub that logs its arguments."""
     project = _project(tmp_path)
-    assert _run(project).exit_code == 0
+    assert _run(project, *extra).exit_code == 0
     script = project / "run.sh"
     text = script.read_text(encoding="utf-8")
     start = text.index("drflow() {")
@@ -55,6 +56,27 @@ def _calls(project: Path) -> list[str]:
 
 
 LOG_AND_SUCCEED = 'echo "$*" >> "$ROOT/calls.log"'
+
+
+@pytest.mark.parametrize("extra,language", [((), "zh"), (("--target-lang", "fr"), "fr")])
+def test_summary_steps_receive_target_language(tmp_path: Path, extra, language: str) -> None:
+    script = _script_with_stub(tmp_path, LOG_AND_SUCCEED, *extra)
+    script.write_text(
+        script.read_text(encoding="utf-8").replace("PROVIDER/MODEL", "stub/model"),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [str(script), "simple,deep_read"], capture_output=True, text=True,
+        env={**os.environ, "NOTIFY_URL": ""},
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = _calls(script.parent)
+    assert len(calls) == 2
+    for call, template in zip(calls, ("simple", "deep_read")):
+        assert f"--prompt-template {template}" in call
+        assert f"--language {language}" in call
 
 
 def test_unknown_step_is_rejected_before_anything_runs(tmp_path: Path) -> None:
