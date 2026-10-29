@@ -1201,6 +1201,7 @@ async def _agent_create_submission(request: Request) -> Response:
                     max_inflight=config.agent_max_inflight_jobs,
                     max_daily_bytes=config.agent_max_daily_bytes,
                     request_bytes=request_bytes,
+                    request_jobs=len(pdfs),
                 )
             except ValueError as exc:
                 code = str(exc)
@@ -1241,18 +1242,23 @@ async def _agent_create_submission(request: Request) -> Response:
                     input_digest=request_digest, result_code="accepted"
                 )
             except (ValueError, OSError):
-                state.fail_agent_submission(submission_id, "invalid_upload")
+                if state.get_agent_submission(submission_id, principal_id)["status"] == "pending":
+                    state.fail_agent_submission(submission_id, "invalid_upload")
                 state.record_agent_event(
                     "submission.failed", principal_id, submission_id=submission_id,
                     input_digest=request_digest, result_code="invalid_upload"
                 )
                 return _agent_error("invalid_upload", "uploaded PDF or BibTeX is invalid", 422)
             except Exception:
-                state.fail_agent_submission(submission_id, "internal_error")
-                state.record_agent_event(
-                    "submission.failed", principal_id, submission_id=submission_id,
-                    input_digest=request_digest, result_code="internal_error"
-                )
+                if state.get_agent_submission(submission_id, principal_id)["status"] == "pending":
+                    state.fail_agent_submission(submission_id, "internal_error")
+                try:
+                    state.record_agent_event(
+                        "submission.failed", principal_id, submission_id=submission_id,
+                        input_digest=request_digest, result_code="internal_error"
+                    )
+                except Exception:
+                    logger.exception("agent submission audit failed")
                 logger.exception("agent submission failed")
                 return _agent_error("internal_error", "submission failed", 500)
     except (ValueError, MultiPartException) as exc:

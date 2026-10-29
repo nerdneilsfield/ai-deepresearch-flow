@@ -9,10 +9,10 @@ from click.testing import CliRunner
 from deepresearch_flow.agent.cli import agent
 
 
-def test_agent_cli_exposes_submit_status_retry_and_cancel() -> None:
+def test_agent_cli_exposes_submit_status_retry_cancel_and_review() -> None:
     result = CliRunner().invoke(agent, ["--help"])
     assert result.exit_code == 0
-    for command in ("submit", "status", "submission", "retry", "cancel"):
+    for command in ("submit", "status", "submission", "retry", "cancel", "review"):
         assert command in result.output
 
 

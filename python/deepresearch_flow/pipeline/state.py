@@ -236,7 +236,6 @@ class PipelineState:
         )
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
-        self.recover_pending_agent_submissions()
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.db_path, timeout=30, isolation_level=None)
@@ -260,7 +259,8 @@ class PipelineState:
                     preview_digest TEXT, bundle_digest TEXT, preview_error TEXT,
                     publication_manifest_json TEXT, cleanup_completed_at TEXT,
                     cleanup_next_attempt_at TEXT, cleanup_error TEXT,
-                    preview_generation TEXT,
+                     preview_generation TEXT,
+                     agent_retry_count INTEGER NOT NULL DEFAULT 0,
                     selected_models TEXT NOT NULL DEFAULT '{}',
                     config_fingerprint TEXT NOT NULL DEFAULT '',
                     FOREIGN KEY(batch_id) REFERENCES batches(id)
@@ -317,6 +317,8 @@ class PipelineState:
                      idempotency_key TEXT NOT NULL, parameter_digest TEXT NOT NULL,
                      request_digest TEXT, status TEXT NOT NULL,
                      batch_id TEXT, request_bytes INTEGER NOT NULL DEFAULT 0,
+                     request_jobs INTEGER NOT NULL DEFAULT 1,
+                     reservation_expires_at TEXT,
                      error_code TEXT, created_at TEXT NOT NULL,
                      updated_at TEXT NOT NULL,
                      UNIQUE(principal_id, idempotency_key)
@@ -355,9 +357,15 @@ class PipelineState:
                 db.execute("ALTER TABLE jobs ADD COLUMN cleanup_next_attempt_at TEXT")
             if "cleanup_error" not in job_columns:
                 db.execute("ALTER TABLE jobs ADD COLUMN cleanup_error TEXT")
+            if "agent_retry_count" not in job_columns:
+                db.execute("ALTER TABLE jobs ADD COLUMN agent_retry_count INTEGER NOT NULL DEFAULT 0")
             submission_columns = {row["name"] for row in db.execute("PRAGMA table_info(agent_submissions)").fetchall()}
             if "request_bytes" not in submission_columns:
                 db.execute("ALTER TABLE agent_submissions ADD COLUMN request_bytes INTEGER NOT NULL DEFAULT 0")
+            if "reservation_expires_at" not in submission_columns:
+                db.execute("ALTER TABLE agent_submissions ADD COLUMN reservation_expires_at TEXT")
+            if "request_jobs" not in submission_columns:
+                db.execute("ALTER TABLE agent_submissions ADD COLUMN request_jobs INTEGER NOT NULL DEFAULT 1")
             result_columns = {row["name"] for row in db.execute("PRAGMA table_info(batch_match_results)").fetchall()}
             if "revision" not in result_columns:
                 db.execute("ALTER TABLE batch_match_results ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
@@ -590,6 +598,7 @@ class PipelineState:
         max_inflight: int | None = None,
         max_daily_bytes: int | None = None,
         request_bytes: int = 0,
+        request_jobs: int = 1,
     ) -> tuple[str, str, str | None, str | None, str | None, bool]:
         """Reserve one agent command before consuming uploaded content.
 
@@ -618,35 +627,33 @@ class PipelineState:
                 )
             if max_inflight is not None:
                 count = db.execute(
-                    "SELECT COUNT(*) AS count FROM agent_submissions "
-                    "WHERE principal_id=? AND status IN ('pending','accepted')",
+                    "SELECT COUNT(*) AS count FROM agent_job_owners o JOIN jobs j ON j.id=o.job_id "
+                    "WHERE o.principal_id=? AND j.status NOT IN ('published','published_with_warning','cancelled','rejected')",
                     (principal_id,),
                 ).fetchone()["count"]
-                if int(count) >= max_inflight:
+                pending_count = db.execute(
+                    "SELECT COALESCE(SUM(request_jobs),0) AS count "
+                    "FROM agent_submissions WHERE principal_id=? AND status='pending'",
+                    (principal_id,),
+                ).fetchone()["count"]
+                if int(count) + int(pending_count) + int(request_jobs) > max_inflight:
                     db.rollback()
                     raise ValueError("agent_inflight_limit")
             if max_daily_bytes is not None:
                 today = _utc().date().isoformat()
                 used = db.execute(
-                    "SELECT COALESCE(SUM(i.size),0) AS bytes FROM agent_job_owners o "
-                    "JOIN job_inputs i ON i.job_id=o.job_id "
-                    "JOIN agent_submissions s ON s.id=o.submission_id "
-                    "WHERE o.principal_id=? AND substr(s.created_at,1,10)=?",
-                    (principal_id, today),
-                ).fetchone()["bytes"]
-                pending = db.execute(
                     "SELECT COALESCE(SUM(request_bytes),0) AS bytes FROM agent_submissions "
-                    "WHERE principal_id=? AND status='pending' AND substr(created_at,1,10)=?",
+                    "WHERE principal_id=? AND status IN ('pending','accepted') AND substr(created_at,1,10)=?",
                     (principal_id, today),
                 ).fetchone()["bytes"]
-                if int(used) + int(pending) + int(request_bytes) > max_daily_bytes:
+                if int(used) + int(request_bytes) > max_daily_bytes:
                     db.rollback()
                     raise ValueError("agent_daily_bytes_limit")
             db.execute(
                 "INSERT INTO agent_submissions "
-                "(id,principal_id,idempotency_key,parameter_digest,request_digest,status,request_bytes,created_at,updated_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?)",
-                (submission_id, principal_id, idempotency_key, parameter_digest, request_digest, "pending", request_bytes, now, now),
+                "(id,principal_id,idempotency_key,parameter_digest,request_digest,status,request_bytes,request_jobs,reservation_expires_at,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (submission_id, principal_id, idempotency_key, parameter_digest, request_digest, "pending", request_bytes, request_jobs, _stamp(_utc() + timedelta(minutes=15)), now, now),
             )
             db.commit()
         return submission_id, "pending", None, parameter_digest, request_digest, True
@@ -719,13 +726,23 @@ class PipelineState:
         """Reclaim interrupted Agent ingestions before workers can consume them."""
         with self._connect() as db:
             rows = db.execute(
-                "SELECT id,batch_id FROM agent_submissions WHERE status='pending'"
+                "SELECT id,batch_id FROM agent_submissions WHERE status='pending' "
+                "AND reservation_expires_at IS NOT NULL AND reservation_expires_at <= ?",
+                (_stamp(_utc()),),
             ).fetchall()
         recovered = 0
         for row in rows:
             batch_id = row["batch_id"]
+            job_ids: list[str] = []
             if batch_id:
+                with self._connect() as db:
+                    job_ids = [str(item["id"]) for item in db.execute(
+                        "SELECT id FROM jobs WHERE batch_id=?", (batch_id,)
+                    ).fetchall()]
                 self.discard_batch(str(batch_id))
+                if self.artifact_store is not None:
+                    for job_id in job_ids:
+                        self.artifact_store.discard_job(job_id)
             with self._connect() as db:
                 db.execute(
                     "UPDATE agent_submissions SET status='failed',error_code='interrupted',batch_id=NULL,updated_at=? WHERE id=? AND status='pending'",
@@ -812,20 +829,17 @@ class PipelineState:
             if row["status"] not in {"failed", "needs_attention"}:
                 db.rollback()
                 raise ValueError("job is not retryable")
-            attempts = int(db.execute(
-                "SELECT COUNT(*) AS count FROM step_attempts WHERE job_id=? AND status='failed'",
-                (job_id,),
-            ).fetchone()["count"])
-            if attempts >= max_retries:
+            retry_count = int(row["agent_retry_count"] or 0)
+            if retry_count >= max_retries:
                 db.rollback()
                 raise ValueError("agent retry limit exceeded")
             previous = json.loads(row["selected_models"])
             next_models = dict(previous)
             failed_row = db.execute(
-                "SELECT step FROM step_attempts WHERE job_id=? AND status='failed' ORDER BY id DESC LIMIT 1",
+                "SELECT name FROM steps WHERE job_id=? AND status='failed' ORDER BY rowid LIMIT 1",
                 (job_id,),
             ).fetchone()
-            failed_name = str(failed_row["step"]) if failed_row else None
+            failed_name = str(failed_row["name"]) if failed_row else None
             if failed_name in PROCESSING_STEP_NAMES:
                 start = PROCESSING_STEP_NAMES.index(failed_name)
                 suffix = PROCESSING_STEP_NAMES[start:]
@@ -840,7 +854,7 @@ class PipelineState:
                 if failed_name in {"ocr", "extract"} and row["batch_id"]:
                     self._invalidate_batch_matching(db, str(row["batch_id"]))
             db.execute(
-                "UPDATE jobs SET selected_models=?,status='queued',terminal_at=NULL,cleanup_completed_at=NULL,cleanup_next_attempt_at=NULL,cleanup_error=NULL,cancel_requested=0,lease_owner=NULL,lease_token=NULL,preview_error=NULL,updated_at=?,revision=revision+1 WHERE id=?",
+                "UPDATE jobs SET selected_models=?,agent_retry_count=agent_retry_count+1,status='queued',terminal_at=NULL,cleanup_completed_at=NULL,cleanup_next_attempt_at=NULL,cleanup_error=NULL,cancel_requested=0,lease_owner=NULL,lease_token=NULL,preview_error=NULL,updated_at=?,revision=revision+1 WHERE id=?",
                 (json.dumps(next_models, sort_keys=True), _stamp(_utc()), job_id),
             )
             db.commit()
@@ -861,6 +875,9 @@ class PipelineState:
             if row["status"] in {"publish_queued", "publishing", "indexing", "published", "published_with_warning", "rejected"}:
                 db.rollback()
                 raise ValueError("job is outside the Agent cancellation boundary")
+            if row["status"] == "review_ready":
+                db.rollback()
+                raise ValueError("review_ready jobs require administrator review")
             now = _stamp(_utc())
             if row["status"] == "queued":
                 self._invalidate_batch_matching(db, str(row["batch_id"]) if row["batch_id"] else None)

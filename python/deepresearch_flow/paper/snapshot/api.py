@@ -1386,7 +1386,8 @@ def _llms_txt(request: Request) -> Response:
         "- https://github.com/nerdneilsfield/ai-deepresearch-flow/blob/main/docs/en/pipeline.md\n"
         "- https://github.com/nerdneilsfield/ai-deepresearch-flow/blob/main/docs/en/deployment.md\n\n"
         "## Agent API\n\n"
-        "The Agent API is mounted at /api/v1/agent when enabled. It accepts multipart PDF uploads with an Idempotency-Key and supports owner-scoped status, retry, cancellation, and review requests. Agents cannot publish papers or access Admin routes.\n",
+        "The Agent API is mounted at /api/v1/agent when enabled. It accepts multipart PDF uploads with an Idempotency-Key and supports owner-scoped status, retry, cancellation, and review requests. Agents cannot publish papers or access Admin routes.\n\n"
+        "The CLI exposes submit, status, submission, retry, cancel, and review commands. Phase 1 does not support URL downloads, local inbox ingestion, Webhooks, MCP write tools, or automatic publication.\n",
         media_type="text/plain",
     )
 
@@ -1548,6 +1549,7 @@ def create_app(
                 artifact_store=pipeline_artifacts,
                 publication_cache_root=pipeline_config.static_root,
             )
+        pipeline_state.recover_pending_agent_submissions()
         pipeline_app = create_pipeline_admin_app(
             config=pipeline_config,
             state=pipeline_state,

@@ -137,3 +137,16 @@ def cancel(job_id: str, api_url: str, token: str) -> None:
     if response.is_error:
         raise _request_error(response)
     _emit(response.json())
+
+
+@agent.command("review")
+@click.argument("job_id")
+@click.option("--api", "api_url", envvar="PAPER_DB_AGENT_API", required=True)
+@click.option("--token", envvar="PAPER_DB_AGENT_TOKEN", required=True)
+def review(job_id: str, api_url: str, token: str) -> None:
+    """Request human review for an owned review-ready job."""
+    with _client(api_url, token) as client:
+        response = client.post(f"/jobs/{job_id}/review")
+    if response.is_error:
+        raise _request_error(response)
+    _emit(response.json())

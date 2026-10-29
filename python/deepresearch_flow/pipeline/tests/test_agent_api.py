@@ -195,3 +195,20 @@ def test_worker_cannot_claim_pending_agent_batch(tmp_path: Path) -> None:
     batch_id = state.create_agent_batch(submission_id)
     job_id = state.create_job(batch_id)
     assert state.acquire_lease(job_id, "worker") is None
+
+
+def test_agent_admission_counts_all_jobs_in_multi_pdf_submission(tmp_path: Path) -> None:
+    app = _make_app(tmp_path)
+    config = app.state.pipeline_config
+    app.state.pipeline_config = config.__class__(**{**config.__dict__, "agent_max_inflight_jobs": 1})
+    response = _request(
+        app,
+        "POST",
+        "/submissions",
+        headers=_headers("multi"),
+        files=[
+            ("pdfs", ("one.pdf", b"%PDF-1.7 one", "application/pdf")),
+            ("pdfs", ("two.pdf", b"%PDF-1.7 two", "application/pdf")),
+        ],
+    )
+    assert response.status_code == 429
