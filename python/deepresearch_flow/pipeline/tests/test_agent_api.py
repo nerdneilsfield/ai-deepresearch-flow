@@ -112,3 +112,39 @@ def test_agent_retry_rejects_model_override_and_non_retryable_job(tmp_path: Path
     )
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "invalid_body"
+
+
+def test_agent_principals_cannot_read_each_others_jobs(tmp_path: Path) -> None:
+    config = PipelineConfig(
+        enabled=True,
+        work_dir=str(tmp_path / "work"),
+        preview_root=str(tmp_path / "previews"),
+        queue_db=str(tmp_path / "queue.sqlite3"),
+        static_root=str(tmp_path / "formal"),
+        ocr=ModelAllowlist(("ocr-a",), "ocr-a"),
+        extract=ModelAllowlist(("extract-a",), "extract-a"),
+        translate=ModelAllowlist(("translate-a",), "translate-a"),
+    )
+    artifacts = ArtifactStore(config.work_dir, config.preview_root)
+    state = PipelineState(config.queue_db, artifact_store=artifacts)
+    app = create_pipeline_agent_app(
+        config=config,
+        state=state,
+        artifacts=artifacts,
+        agent_token={"hermes": "hermes-token", "grok": "grok-token"},
+    )
+    created = _request(
+        app,
+        "POST",
+        "/submissions",
+        headers={"Authorization": "Bearer hermes-token", "Idempotency-Key": "owned"},
+        files={"pdfs": ("paper.pdf", b"%PDF-1.7 paper", "application/pdf")},
+    )
+    job_id = created.json()["submission"]["jobs"][0]
+    other = _request(
+        app,
+        "GET",
+        f"/jobs/{job_id}",
+        headers={"Authorization": "Bearer grok-token"},
+    )
+    assert other.status_code == 404

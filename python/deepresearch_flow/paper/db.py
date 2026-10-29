@@ -1541,7 +1541,15 @@ def register_db_commands(db_group: click.Group) -> None:
             ),
             search_auth_mode=search_auth_mode,
             admin_token=admin_token,
-            agent_token=agent_token,
+            agent_token=(
+                {
+                    item.split("=", 1)[0].strip(): item.split("=", 1)[1].strip()
+                    for item in agent_token.split(",")
+                    if "=" in item and item.split("=", 1)[0].strip() and item.split("=", 1)[1].strip()
+                }
+                if agent_token and "=" in agent_token
+                else agent_token
+            ),
             admin_embed_db=admin_embed_db,
             admin_embed_dimensions=admin_embed_dimensions,
             pipeline_config=pipeline_config,

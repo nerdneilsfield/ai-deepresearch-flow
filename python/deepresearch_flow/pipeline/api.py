@@ -8,6 +8,7 @@ leases, work paths, and provider configuration never cross this boundary.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import inspect
 import json
 import logging
@@ -1296,30 +1297,48 @@ async def _agent_review(request: Request) -> Response:
     return JSONResponse({"job": _agent_job_payload(job), "review_requested": True})
 
 
-def _with_agent_auth(handler: Callable[[Request], Any], token: str) -> Callable[[Request], Any]:
+def _with_agent_auth(
+    handler: Callable[[Request], Any], tokens: Mapping[str, str]
+) -> Callable[[Request], Any]:
     async def wrapped(request: Request) -> Response:
-        if not _agent_authorized(request, token):
+        authorization = request.headers.get("authorization") or ""
+        if not authorization.startswith("Bearer "):
             return _auth_error()
-        request.scope["agent_principal"] = "static-agent"
+        supplied = authorization[7:]
+        principal_id = next(
+            (principal for principal, token in tokens.items() if hmac.compare_digest(supplied, token)),
+            None,
+        )
+        if principal_id is None:
+            return _auth_error()
+        request.scope["agent_principal"] = principal_id
         return await handler(request)
 
     return wrapped
 
 
 def create_pipeline_agent_app(
-    *, config: PipelineConfig, state: PipelineState, artifacts: ArtifactStore, agent_token: str
+    *,
+    config: PipelineConfig,
+    state: PipelineState,
+    artifacts: ArtifactStore,
+    agent_token: str | Mapping[str, str],
 ) -> Starlette:
     """Create the narrow Agent submission/status API."""
     if not config.enabled or not agent_token:
         return Starlette(routes=[])
+    tokens = {"static-agent": agent_token} if isinstance(agent_token, str) else dict(agent_token)
+    tokens = {str(principal): str(token) for principal, token in tokens.items() if str(token)}
+    if not tokens:
+        return Starlette(routes=[])
     app = Starlette(
         routes=[
-            Route("/submissions", _with_agent_auth(_agent_create_submission, agent_token), methods=["POST"]),
-            Route("/submissions/{submission_id:str}", _with_agent_auth(_agent_get_submission, agent_token), methods=["GET"]),
-            Route("/jobs/{job_id:str}", _with_agent_auth(_agent_get_job, agent_token), methods=["GET"]),
-            Route("/jobs/{job_id:str}/retry", _with_agent_auth(_agent_retry, agent_token), methods=["POST"]),
-            Route("/jobs/{job_id:str}/cancel", _with_agent_auth(_agent_cancel, agent_token), methods=["POST"]),
-            Route("/jobs/{job_id:str}/review", _with_agent_auth(_agent_review, agent_token), methods=["POST"]),
+            Route("/submissions", _with_agent_auth(_agent_create_submission, tokens), methods=["POST"]),
+            Route("/submissions/{submission_id:str}", _with_agent_auth(_agent_get_submission, tokens), methods=["GET"]),
+            Route("/jobs/{job_id:str}", _with_agent_auth(_agent_get_job, tokens), methods=["GET"]),
+            Route("/jobs/{job_id:str}/retry", _with_agent_auth(_agent_retry, tokens), methods=["POST"]),
+            Route("/jobs/{job_id:str}/cancel", _with_agent_auth(_agent_cancel, tokens), methods=["POST"]),
+            Route("/jobs/{job_id:str}/review", _with_agent_auth(_agent_review, tokens), methods=["POST"]),
         ]
     )
     app.state.pipeline_config = config
