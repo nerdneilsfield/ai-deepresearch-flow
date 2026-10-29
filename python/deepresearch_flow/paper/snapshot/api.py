@@ -1391,6 +1391,7 @@ def create_app(
     mcp_oauth_client_cache_path: Path | None = None,
     search_auth_mode: str = "static",
     admin_token: str | None = None,
+    agent_token: str | None = None,
     admin_embed_db: Path | None = None,
     admin_embed_dimensions: int | None = None,
     pipeline_config: Any | None = None,
@@ -1542,6 +1543,15 @@ def create_app(
         # This mount precedes the legacy /api/v1/admin mount: Starlette
         # considers a matching Mount terminal even when its child returns 404.
         routes.append(Mount("/api/v1/admin/pipeline", app=pipeline_app))
+        from deepresearch_flow.pipeline.api import create_pipeline_agent_app
+
+        agent_app = create_pipeline_agent_app(
+            config=pipeline_config,
+            state=pipeline_state,
+            artifacts=pipeline_artifacts,
+            agent_token=agent_token or "",
+        )
+        routes.append(Mount("/api/v1/agent", app=agent_app))
 
     if admin_token:
         from deepresearch_flow.paper.snapshot.admin import create_admin_app

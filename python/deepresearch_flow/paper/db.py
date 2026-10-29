@@ -1283,6 +1283,13 @@ def register_db_commands(db_group: click.Group) -> None:
         help="Bearer token for /api/v1/admin endpoints (or set PAPER_DB_ADMIN_TOKEN)",
     )
     @click.option(
+        "--agent-token",
+        "agent_token",
+        default=None,
+        envvar="PAPER_DB_AGENT_TOKEN",
+        help="Bearer token for /api/v1/agent endpoints (or set PAPER_DB_AGENT_TOKEN)",
+    )
+    @click.option(
         "--mcp-access-token",
         "mcp_access_token",
         default=None,
@@ -1348,6 +1355,7 @@ def register_db_commands(db_group: click.Group) -> None:
         search_auth_mode: str,
         config_path: str,
         admin_token: str | None,
+        agent_token: str | None,
         mcp_access_token: str | None,
         mcp_auth_mode: str,
         mcp_public_base_url: str | None,
@@ -1533,6 +1541,7 @@ def register_db_commands(db_group: click.Group) -> None:
             ),
             search_auth_mode=search_auth_mode,
             admin_token=admin_token,
+            agent_token=agent_token,
             admin_embed_db=admin_embed_db,
             admin_embed_dimensions=admin_embed_dimensions,
             pipeline_config=pipeline_config,

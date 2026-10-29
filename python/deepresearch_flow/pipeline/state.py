@@ -308,9 +308,23 @@ class PipelineState:
                     FOREIGN KEY(batch_id) REFERENCES batches(id)
                 );
                 CREATE TABLE IF NOT EXISTS job_bibtex (
-                    job_id TEXT PRIMARY KEY, entry_key TEXT, FOREIGN KEY(job_id) REFERENCES jobs(id)
-                );
-                """
+                     job_id TEXT PRIMARY KEY, entry_key TEXT, FOREIGN KEY(job_id) REFERENCES jobs(id)
+                 );
+                 CREATE TABLE IF NOT EXISTS agent_submissions (
+                     id TEXT PRIMARY KEY, principal_id TEXT NOT NULL,
+                     idempotency_key TEXT NOT NULL, parameter_digest TEXT NOT NULL,
+                     request_digest TEXT, status TEXT NOT NULL,
+                     batch_id TEXT, error_code TEXT, created_at TEXT NOT NULL,
+                     updated_at TEXT NOT NULL,
+                     UNIQUE(principal_id, idempotency_key)
+                 );
+                 CREATE TABLE IF NOT EXISTS agent_job_owners (
+                     job_id TEXT PRIMARY KEY, submission_id TEXT NOT NULL,
+                     principal_id TEXT NOT NULL,
+                     FOREIGN KEY(job_id) REFERENCES jobs(id),
+                     FOREIGN KEY(submission_id) REFERENCES agent_submissions(id)
+                 );
+                 """
             )
             columns = {row["name"] for row in db.execute("PRAGMA table_info(step_attempts)").fetchall()}
             if "duration_ms" not in columns:
@@ -554,6 +568,115 @@ class PipelineState:
         with self._connect() as db:
             db.execute("INSERT INTO batches(id, created_at) VALUES (?, ?)", (batch_id, now))
         return batch_id
+
+    def reserve_agent_submission(
+        self,
+        principal_id: str,
+        idempotency_key: str,
+        parameter_digest: str,
+        request_digest: str,
+    ) -> tuple[str, str, str | None, str | None, str | None, bool]:
+        """Reserve one agent command before consuming uploaded content.
+
+        The reservation is durable and unique.  It deliberately remains
+        separate from the legacy ingestion transaction until ingestion is
+        refactored to share one connection.
+        """
+        submission_id = str(uuid.uuid4())
+        now = _stamp(_utc())
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT id,parameter_digest,request_digest,status,batch_id FROM agent_submissions "
+                "WHERE principal_id=? AND idempotency_key=?",
+                (principal_id, idempotency_key),
+            ).fetchone()
+            if row is not None:
+                db.commit()
+                return (
+                    str(row["id"]),
+                    str(row["status"]),
+                    str(row["batch_id"]) if row["batch_id"] else None,
+                    str(row["parameter_digest"]),
+                    str(row["request_digest"]) if row["request_digest"] else None,
+                    False,
+                )
+            db.execute(
+                "INSERT INTO agent_submissions "
+                "(id,principal_id,idempotency_key,parameter_digest,request_digest,status,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                (submission_id, principal_id, idempotency_key, parameter_digest, request_digest, "pending", now, now),
+            )
+            db.commit()
+        return submission_id, "pending", None, parameter_digest, request_digest, True
+
+    def complete_agent_submission(
+        self,
+        submission_id: str,
+        *,
+        request_digest: str,
+        batch_id: str,
+        job_ids: Iterable[str],
+    ) -> None:
+        now = _stamp(_utc())
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT principal_id,status FROM agent_submissions WHERE id=?",
+                (submission_id,),
+            ).fetchone()
+            if row is None:
+                db.rollback()
+                raise KeyError(submission_id)
+            if str(row["status"]) not in {"pending", "accepted"}:
+                db.rollback()
+                raise ValueError("agent submission is not writable")
+            db.execute(
+                "UPDATE agent_submissions SET request_digest=?,status='accepted',batch_id=?,updated_at=? WHERE id=?",
+                (request_digest, batch_id, now, submission_id),
+            )
+            db.executemany(
+                "INSERT OR REPLACE INTO agent_job_owners(job_id,submission_id,principal_id) VALUES(?,?,?)",
+                [(str(job_id), submission_id, str(row["principal_id"])) for job_id in job_ids],
+            )
+            db.commit()
+
+    def fail_agent_submission(self, submission_id: str, error_code: str) -> None:
+        with self._connect() as db:
+            db.execute(
+                "UPDATE agent_submissions SET status='failed',error_code=?,updated_at=? WHERE id=?",
+                (error_code, _stamp(_utc()), submission_id),
+            )
+
+    def get_agent_submission(self, submission_id: str, principal_id: str) -> dict[str, Any]:
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT * FROM agent_submissions WHERE id=? AND principal_id=?",
+                (submission_id, principal_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError(submission_id)
+            result = dict(row)
+            result["jobs"] = [
+                str(item["job_id"])
+                for item in db.execute(
+                    "SELECT job_id FROM agent_job_owners WHERE submission_id=? ORDER BY job_id",
+                    (submission_id,),
+                ).fetchall()
+            ]
+        return result
+
+    def get_agent_job(self, job_id: str, principal_id: str) -> dict[str, Any]:
+        with self._connect() as db:
+            owner = db.execute(
+                "SELECT submission_id FROM agent_job_owners WHERE job_id=? AND principal_id=?",
+                (job_id, principal_id),
+            ).fetchone()
+        if owner is None:
+            raise KeyError(job_id)
+        result = self.get_job_details(job_id)
+        result["submission_id"] = str(owner["submission_id"])
+        return result
 
     def create_job(
         self,

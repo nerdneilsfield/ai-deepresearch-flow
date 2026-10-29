@@ -31,6 +31,9 @@ from .state import PipelineState, PreviewGenerationConflict
 from .steps import PreviewArtifacts
 
 logger = logging.getLogger(__name__)
+_AGENT_PREVIEW_ARTIFACT_KINDS = frozenset(
+    {"preview_pdf", "preview_source_md", "preview_summary_json", "preview_translated_md"}
+)
 
 _PAGE_DEFAULT = 20
 _PAGE_MAX = 100
@@ -1088,6 +1091,241 @@ def _with_auth(handler: Callable[[Request], Any], token: str) -> Callable[[Reque
         return await handler(request)
 
     return wrapped
+
+
+def _agent_authorized(request: Request, token: str) -> bool:
+    return _authorized(request, token)
+
+
+def _agent_error(code: str, message: str, status: int) -> JSONResponse:
+    return _json_error(code, message, status)
+
+
+def _agent_job_payload(job: Mapping[str, Any]) -> dict[str, Any]:
+    status = str(job.get("status") or "")
+    retryable = status in {"failed", "needs_attention"}
+    return {
+        "job_id": str(job["id"]),
+        "submission_id": job.get("submission_id"),
+        "status": status,
+        "current_step": next(
+            (
+                str(step["name"])
+                for step in job.get("steps") or []
+                if str(step.get("status")) in {"running", "failed"}
+            ),
+            None,
+        ),
+        "attempts": len(job.get("attempts") or []),
+        "retryable": retryable,
+        "error_code": next(
+            (str(attempt.get("error_type")) for attempt in reversed(job.get("attempts") or []) if attempt.get("error_type")),
+            None,
+        ),
+        "needs_human": status == "review_ready",
+        "approval_state": "pending" if status == "review_ready" else None,
+        "artifact_digests": [
+            {"kind": str(item["kind"]), "digest": str(item["digest"])}
+            for item in job.get("artifacts") or []
+            if str(item.get("kind")) in _AGENT_PREVIEW_ARTIFACT_KINDS
+        ],
+        "next_actions": (
+            ["request_review"]
+            if status == "review_ready"
+            else ["retry"]
+            if retryable
+            else ["poll"]
+            if status not in {"published", "published_with_warning", "rejected", "cancelled"}
+            else [],
+        ),
+    }
+
+
+async def _agent_create_submission(request: Request) -> Response:
+    config, state, artifacts = _ctx(request)
+    principal_id = str(request.scope.get("agent_principal") or "agent")
+    idempotency_key = str(request.headers.get("idempotency-key") or "").strip()
+    if not idempotency_key or len(idempotency_key) > 200:
+        return _agent_error("missing_idempotency_key", "Idempotency-Key is required", 400)
+    try:
+        async with request.form(
+            max_files=config.pdfs_per_batch + 1,
+            max_fields=16,
+            max_part_size=max(config.max_pdf_bytes, config.bibtex_max_bytes),
+        ) as form:
+            pdf_values = form.getlist("pdfs[]") + form.getlist("pdfs")
+            pdfs = [value for value in pdf_values if isinstance(value, UploadFile)]
+            if len(pdfs) != len(pdf_values) or not pdfs:
+                return _agent_error("invalid_upload", "at least one PDF upload is required", 422)
+            bib_value = form.get("bibtex") or form.get("bib")
+            bibtex = bib_value if isinstance(bib_value, UploadFile) else None
+            if bib_value is not None and bibtex is None:
+                return _agent_error("invalid_upload", "bibtex must be an uploaded file", 422)
+            values: dict[str, Any] = {}
+            for name in ("ocr", "extract", "translate"):
+                for field in (f"{name}_model", f"{name}_model_key", name):
+                    candidate = form.get(field)
+                    if isinstance(candidate, str) and candidate.strip():
+                        values[name] = candidate.strip()
+                        break
+            try:
+                models = _safe_model_selection(config, values)
+            except ValueError:
+                return _agent_error("invalid_model", "model selection is outside allowlist", 422)
+            content_hash = hashlib.sha256()
+            for file in pdfs:
+                content = file.file.read()
+                file.file.seek(0)
+                content_hash.update(hashlib.sha256(content).digest())
+            if bibtex is not None:
+                content = bibtex.file.read()
+                bibtex.file.seek(0)
+                content_hash.update(hashlib.sha256(content).digest())
+            parameter_digest = hashlib.sha256(
+                json.dumps({"models": models, "actions": "full_pipeline"}, sort_keys=True).encode()
+            ).hexdigest()
+            request_digest = hashlib.sha256(
+                (parameter_digest + ":" + content_hash.hexdigest()).encode()
+            ).hexdigest()
+            submission_id, existing_status, existing_batch, existing_parameter, existing_request, created = state.reserve_agent_submission(
+                principal_id, idempotency_key, parameter_digest, request_digest
+            )
+            if existing_parameter != parameter_digest:
+                return _agent_error("idempotency_conflict", "Idempotency-Key was used for another request", 409)
+            if not created and existing_request and existing_request != request_digest:
+                return _agent_error("idempotency_conflict", "Idempotency-Key was used for another request", 409)
+            if existing_status == "accepted":
+                submission = state.get_agent_submission(submission_id, principal_id)
+                return JSONResponse({"submission": submission, "replayed": True})
+            if existing_status == "pending" and not created:
+                return _agent_error("submission_pending", "submission is already being processed", 409)
+            if existing_status == "failed":
+                return _agent_error("submission_failed", "Idempotency-Key refers to a failed submission", 409)
+            try:
+                result = BatchIngestor(config, state, artifacts).ingest(
+                    [UploadPart(str(file.filename or ""), file.file) for file in pdfs],
+                    bibtex=(UploadPart(str(bibtex.filename or ""), bibtex.file) if bibtex else None),
+                    selected_models=models,
+                )
+                state.complete_agent_submission(
+                    submission_id,
+                    request_digest=request_digest,
+                    batch_id=result.batch_id,
+                    job_ids=result.jobs,
+                )
+            except (ValueError, OSError):
+                state.fail_agent_submission(submission_id, "invalid_upload")
+                return _agent_error("invalid_upload", "uploaded PDF or BibTeX is invalid", 422)
+            except Exception:
+                state.fail_agent_submission(submission_id, "internal_error")
+                logger.exception("agent submission failed")
+                return _agent_error("internal_error", "submission failed", 500)
+    except (ValueError, MultiPartException) as exc:
+        return _upload_error(exc)
+    submission = state.get_agent_submission(submission_id, principal_id)
+    return JSONResponse({"submission": submission, "replayed": False}, status_code=202)
+
+
+async def _agent_get_submission(request: Request) -> Response:
+    _config_value, state, _artifacts = _ctx(request)
+    principal_id = str(request.scope.get("agent_principal") or "agent")
+    try:
+        submission = state.get_agent_submission(str(request.path_params["submission_id"]), principal_id)
+    except KeyError:
+        return _agent_error("not_found", "submission not found", 404)
+    jobs = []
+    for job_id in submission["jobs"]:
+        try:
+            jobs.append(_agent_job_payload(state.get_agent_job(job_id, principal_id)))
+        except KeyError:
+            continue
+    return JSONResponse({"submission": submission, "jobs": jobs})
+
+
+async def _agent_get_job(request: Request) -> Response:
+    _config_value, state, _artifacts = _ctx(request)
+    principal_id = str(request.scope.get("agent_principal") or "agent")
+    try:
+        job = state.get_agent_job(str(request.path_params["job_id"]), principal_id)
+    except KeyError:
+        return _agent_error("not_found", "job not found", 404)
+    return JSONResponse({"job": _agent_job_payload(job)})
+
+
+async def _agent_retry(request: Request) -> Response:
+    _config_value, state, _artifacts = _ctx(request)
+    principal_id = str(request.scope.get("agent_principal") or "agent")
+    body = await _json_body(request, allow_empty=True)
+    if isinstance(body, JSONResponse) or body:
+        return _agent_error("invalid_body", "agent retry accepts an empty JSON body", 422)
+    try:
+        job = state.get_agent_job(str(request.path_params["job_id"]), principal_id)
+        if str(job.get("status")) not in {"failed", "needs_attention"}:
+            return _agent_error("not_retryable", "job is not retryable", 409)
+        result = state.retry_job(str(request.path_params["job_id"]), selected_models=None)
+    except KeyError:
+        return _agent_error("not_found", "job not found", 404)
+    except ValueError as exc:
+        return _agent_error("conflict", str(exc), 409)
+    return JSONResponse({"result": result})
+
+
+async def _agent_cancel(request: Request) -> Response:
+    _config_value, state, _artifacts = _ctx(request)
+    principal_id = str(request.scope.get("agent_principal") or "agent")
+    try:
+        state.get_agent_job(str(request.path_params["job_id"]), principal_id)
+        changed = state.request_cancel(str(request.path_params["job_id"]))
+        job = state.get_agent_job(str(request.path_params["job_id"]), principal_id)
+    except KeyError:
+        return _agent_error("not_found", "job not found", 404)
+    except ValueError as exc:
+        return _agent_error("conflict", str(exc), 409)
+    return JSONResponse({"job": _agent_job_payload(job), "cancel_requested": bool(changed)})
+
+
+async def _agent_review(request: Request) -> Response:
+    _config_value, state, _artifacts = _ctx(request)
+    principal_id = str(request.scope.get("agent_principal") or "agent")
+    try:
+        job = state.get_agent_job(str(request.path_params["job_id"]), principal_id)
+    except KeyError:
+        return _agent_error("not_found", "job not found", 404)
+    if str(job.get("status")) != "review_ready":
+        return _agent_error("not_ready", "job is not ready for review", 409)
+    return JSONResponse({"job": _agent_job_payload(job), "review_requested": True})
+
+
+def _with_agent_auth(handler: Callable[[Request], Any], token: str) -> Callable[[Request], Any]:
+    async def wrapped(request: Request) -> Response:
+        if not _agent_authorized(request, token):
+            return _auth_error()
+        request.scope["agent_principal"] = "static-agent"
+        return await handler(request)
+
+    return wrapped
+
+
+def create_pipeline_agent_app(
+    *, config: PipelineConfig, state: PipelineState, artifacts: ArtifactStore, agent_token: str
+) -> Starlette:
+    """Create the narrow Agent submission/status API."""
+    if not config.enabled or not agent_token:
+        return Starlette(routes=[])
+    app = Starlette(
+        routes=[
+            Route("/submissions", _with_agent_auth(_agent_create_submission, agent_token), methods=["POST"]),
+            Route("/submissions/{submission_id:str}", _with_agent_auth(_agent_get_submission, agent_token), methods=["GET"]),
+            Route("/jobs/{job_id:str}", _with_agent_auth(_agent_get_job, agent_token), methods=["GET"]),
+            Route("/jobs/{job_id:str}/retry", _with_agent_auth(_agent_retry, agent_token), methods=["POST"]),
+            Route("/jobs/{job_id:str}/cancel", _with_agent_auth(_agent_cancel, agent_token), methods=["POST"]),
+            Route("/jobs/{job_id:str}/review", _with_agent_auth(_agent_review, agent_token), methods=["POST"]),
+        ]
+    )
+    app.state.pipeline_config = config
+    app.state.pipeline_state = state
+    app.state.pipeline_artifacts = artifacts
+    return app
 
 
 def create_pipeline_admin_app(
