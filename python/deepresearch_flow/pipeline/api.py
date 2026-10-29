@@ -1230,6 +1230,7 @@ async def _agent_create_submission(request: Request) -> Response:
                     bibtex=(UploadPart(str(bibtex.filename or ""), bibtex.file) if bibtex else None),
                     selected_models=models,
                     batch_id=batch_id,
+                    agent_submission_id=submission_id,
                 )
                 state.complete_agent_submission(
                     submission_id,

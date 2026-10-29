@@ -57,6 +57,7 @@ class BatchIngestor:
         bibtex: UploadPart | None = None,
         selected_models: dict[str, str] | None = None,
         batch_id: str | None = None,
+        agent_submission_id: str | None = None,
     ) -> IngestionResult:
         models = self._validate_models(selected_models)
         batch_id = batch_id or self.state.create_batch()
@@ -76,6 +77,8 @@ class BatchIngestor:
                 size = 0
                 digest = hashlib.sha256()
                 while True:
+                    if agent_submission_id:
+                        self.state.touch_agent_submission(agent_submission_id)
                     chunk = part.stream.read(1024 * 1024)
                     if not chunk:
                         break

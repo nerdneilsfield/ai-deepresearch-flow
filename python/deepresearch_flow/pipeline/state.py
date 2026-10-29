@@ -364,6 +364,10 @@ class PipelineState:
                 db.execute("ALTER TABLE agent_submissions ADD COLUMN request_bytes INTEGER NOT NULL DEFAULT 0")
             if "reservation_expires_at" not in submission_columns:
                 db.execute("ALTER TABLE agent_submissions ADD COLUMN reservation_expires_at TEXT")
+            db.execute(
+                "UPDATE agent_submissions SET reservation_expires_at=datetime(created_at, '+15 minutes') "
+                "WHERE status='pending' AND reservation_expires_at IS NULL"
+            )
             if "request_jobs" not in submission_columns:
                 db.execute("ALTER TABLE agent_submissions ADD COLUMN request_jobs INTEGER NOT NULL DEFAULT 1")
             result_columns = {row["name"] for row in db.execute("PRAGMA table_info(batch_match_results)").fetchall()}
@@ -720,6 +724,14 @@ class PipelineState:
             db.execute(
                 "UPDATE agent_submissions SET batch_id=NULL,updated_at=? WHERE id=? AND status='pending'",
                 (_stamp(_utc()), submission_id),
+            )
+
+    def touch_agent_submission(self, submission_id: str) -> None:
+        with self._connect() as db:
+            db.execute(
+                "UPDATE agent_submissions SET reservation_expires_at=?,updated_at=? "
+                "WHERE id=? AND status='pending'",
+                (_stamp(_utc() + timedelta(minutes=15)), _stamp(_utc()), submission_id),
             )
 
     def recover_pending_agent_submissions(self) -> int:
