@@ -72,6 +72,20 @@ A full run has three stages:
 
 `embed`, `api push`, and `api update` are not in the script. Run them by hand.
 
+### Checkpoints, interruption, and recovery
+
+Model requests can stop because of timeouts, provider quotas, process crashes, or power loss. The flow saves checkpoints at task boundaries and processes only work that is not confirmed as successful after a restart:
+
+- `paper extract` saves successful paper results. `deep_read` writes stage state under `paper_stage_outputs/`.
+- Extraction results and stage state use a temporary file, file `fsync`, an atomic replacement, and a parent-directory `fsync`. This guarantee depends on correct `fsync` behavior from the local filesystem and hardware.
+- Successfully translated nodes are written to `.translate_cache/`. The program removes the cache only after every node passes validation and the complete translation is safely published.
+- If translation still has failed nodes, the program does not publish a normal translation, does not overwrite an existing normal output, and returns partial failure. A later run keeps and reuses the successful node cache.
+- When a provider does not support an idempotency key, the client cannot remove the risk of duplicate requests or billing in the window where the provider may have accepted a request but the result was not persisted. Persisted successful tasks are not automatically requested again because the outer flow was interrupted.
+
+Quota checks and waits belong to the individual step programs. `run.sh` does not provide a global quota scheduler across steps or processes, and in-memory quota state is not preserved across restarts.
+
+`run.sh` owns step order, logs, notifications, and tmux chains. The individual programs own retries, fallback, quota waits, caches, and checkpoints. `logs/<step>.done` records only that the step most recently returned success; it does not prove that input contents, configuration contents, or prompt files are unchanged.
+
 The script starts tmux only after the `ocr` chain finishes. To watch the parallel chains:
 
 ```bash
@@ -103,13 +117,13 @@ To stop the whole run from another terminal:
 ./myproj/run.sh stop
 ```
 
-It kills the tmux session and the running step. `kill` (SIGTERM) works as well. Do not use `kill -INT`: bash ignores SIGINT while it waits for a foreground command.
+It stops the parallel chains and their child processes in this project's tmux session. OCR and `build` run in the foreground, so this command cannot stop them from another terminal. `kill` (SIGTERM) works for the main process as well. Do not use `kill -INT`: bash ignores SIGINT while it waits for a foreground command.
 
 ## Stopping the run
 
 Ctrl-C, Ctrl-Z, and `kill` all stop the whole run, including the three tmux chains. The script:
 
-- kills the tmux session, the chain processes, and the process groups the current step started;
+- stops the tmux session's chain processes and the process groups the current step started;
 - marks the current step as failed (`logs/<step>.failed`), so a rerun resumes at that step;
 - sends an interrupted notification.
 
@@ -161,17 +175,18 @@ The batch commands (`extract`, `translate`, `ocr`, `fix-math`, `fix-mermaid`) sh
 |---|---|---|
 | 0 | Everything succeeded | The step succeeds |
 | 1 | The command itself failed; retrying will not help | The step fails |
-| 3 | Outputs and the error report were written, but some items failed | Runs the step again in its retry mode, up to `ROUNDS` times |
+| 3 | Outputs and the error report were written, but some items failed | The step fails and does not write `.done`; fix the cause and run it again |
 
 Any other non-zero code counts as a failure.
 
-Each step command starts with one of three retry modes. They match what the commands actually accept:
+Each step command starts with one of four retry modes. They match what the commands actually accept:
 
 - `retry` runs the same command again with `--retry-failed`, which processes only the failed items. Only `paper extract`, `recognize fix-math`, and `recognize fix-mermaid` accept that option.
+- `retry_stages` runs `deep_read` again with `--retry-failed-stages`, which processes only failed stages.
 - `rerun` runs exactly the same command again. `recognize ocr` and `translator translate` have no `--retry-failed`, but they already skip finished files, so running them again is enough.
 - `once` only prints a warning and does not retry. `recognize fix` and `recognize organize` cannot retry.
 
-If failed items remain after the last round, the script prints a warning and continues. Look in the error reports under `logs/` to see which items failed.
+`run.sh` does not convert partial failure into success and does not write `.done` for it. `paper extract`, `fix-math`, and `fix-mermaid` use their error reports to select failed items; `deep_read` uses `--retry-failed-stages` and retries only failed stages. When translation fails, the program keeps the node cache and returns partial failure; rerun the same command to continue.
 
 ## Notifications
 
@@ -196,7 +211,7 @@ In the table, "Input" and "Output" are paths relative to the project directory. 
 | `simple` | `paper extract` | Yes | `md_simple/` | `simple.json`; errors `logs/simple-errors.json` | `retry` |
 | `fix-simple` | `recognize fix` | No | `simple.json` | modified in place | `once` |
 | `fix-math-simple` | `recognize fix-math` | Yes | `simple.json` | modified in place; report `logs/fix-math-simple.json` | `retry` |
-| `deep_read` | `paper extract` | Yes | `md_simple/` | `deep_read.json`; errors `logs/deep_read-errors.json` | `retry` |
+| `deep_read` | `paper extract` | Yes | `md_simple/` | `deep_read.json`; errors `logs/deep_read-errors.json` | `retry_stages` |
 | `fix-deep_read` | `recognize fix` | No | `deep_read.json` | modified in place | `once` |
 | `fix-math-deep_read` | `recognize fix-math` | Yes | `deep_read.json` | modified in place; report `logs/fix-math-deep_read.json` | `retry` |
 | `fix-mermaid-deep_read` | `recognize fix-mermaid` | Yes | `deep_read.json` | modified in place; report `logs/fix-mermaid-deep_read.json` | `retry` |

@@ -72,6 +72,20 @@ uv run deepresearch-flow utils init-run ./myproj
 
 `embed`、`api push`、`api update` 不在脚本里，需要手动执行。
 
+### 检查点、中断与恢复
+
+模型请求可能因超时、provider 额度、进程崩溃或机器断电而中断。流程按任务边界保存检查点，重新运行时只处理尚未确认成功的任务：
+
+- `paper extract` 会保存已成功处理的论文结果。`deep_read` 会把 stage 状态写入 `paper_stage_outputs/`。
+- 抽取结果和 stage 状态使用临时文件、文件 `fsync`、原子替换和父目录 `fsync` 写入。该保证依赖本地文件系统和硬件正确实现 `fsync`。
+- 翻译成功的 node 写入 `.translate_cache/`。只有所有 node 通过校验并安全发布完整译文后，程序才删除 cache。
+- 翻译仍有失败 node 时，不发布正常译文，不覆盖已有正常输出，并返回部分失败。下次运行会保留并使用成功 node 的 cache。
+- provider 不支持 idempotency key 时，客户端无法消除“请求可能已被 provider 接收、但结果尚未落盘”窗口中的重复请求或重复计费风险。已落盘的成功任务不会因为外层流程中断而自动重跑。
+
+额度检查和等待由单步程序负责。`run.sh` 不提供跨步骤、跨进程的全局 quota 调度；重启后，内存中的额度状态也不会保留。
+
+`run.sh` 只负责步骤顺序、日志、通知和 tmux 链。步骤内部的重试、fallback、额度等待、缓存和检查点由对应程序负责。`logs/<步骤>.done` 只表示该步骤最近一次返回成功，不能证明输入、配置内容或 prompt 文件没有变化。
+
 脚本只在 `ocr` 链完成之后才启动 tmux。查看并行链的进度：
 
 ```bash
@@ -103,13 +117,13 @@ tmux -L drflow-myproj attach -t run
 ./myproj/run.sh stop
 ```
 
-它会杀掉 tmux 会话和正在跑的步骤。用 `kill`（SIGTERM）结束也可以；不要用 `kill -INT`，bash 在等前台命令时会忽略 SIGINT。
+它只停止本项目专用 tmux 会话中的并行链及其子进程。OCR 和 `build` 在前台运行，不能从另一个终端通过该命令停止。用 `kill`（SIGTERM）结束主流程也可以；不要用 `kill -INT`，bash 在等前台命令时会忽略 SIGINT。
 
 ## 停止运行
 
 Ctrl-C、Ctrl-Z 或 `kill` 都会停止整个流程，包括 tmux 里的三条链。脚本会：
 
-- 杀掉 tmux 会话和所有链进程，以及当前步骤启动的进程组；
+- 停止 tmux 会话中的链进程，以及当前步骤启动的进程组；
 - 把当前步骤标记为失败（`logs/<步骤>.failed`），所以重跑会从这一步继续；
 - 发一条 interrupted 通知。
 
@@ -161,17 +175,18 @@ Ctrl-C、Ctrl-Z 或 `kill` 都会停止整个流程，包括 tmux 里的三条�
 |---|---|---|
 | 0 | 全部成功 | 步骤成功 |
 | 1 | 命令自身出错，重试没有意义 | 步骤失败 |
-| 3 | 输出和错误报告已写出，但部分条目失败 | 按步骤的重试方式再运行，最多 `ROUNDS` 轮 |
+| 3 | 输出和错误报告已写出，但部分条目失败 | 步骤失败，不写 `.done`；修复原因后重新运行 |
 
 其他非零退出码按失败处理。
 
-重试方式有三种，写在每个步骤命令的前面。它们对应各命令真正支持的能力：
+重试方式有四种，写在每个步骤命令的前面。它们对应各命令真正支持的能力：
 
 - `retry`：再运行同一条命令，并加上 `--retry-failed`，只处理失败的条目。只有 `paper extract`、`recognize fix-math` 和 `recognize fix-mermaid` 接受这个选项。
+- `retry_stages`：再运行 `deep_read`，并加上 `--retry-failed-stages`，只处理失败的 stage。
 - `rerun`：再运行完全相同的命令。`recognize ocr` 和 `translator translate` 没有 `--retry-failed`，但它们本来就会跳过已完成的文件，所以直接重跑即可。
 - `once`：只打印警告，不重试。`recognize fix` 和 `recognize organize` 没有重试能力。
 
-重试用尽后仍有失败条目时，脚本打印警告并继续。这时到 `logs/` 下的错误报告里查看失败的条目。
+`run.sh` 不会把部分失败转换为成功，也不会为该步骤写入 `.done`。`paper extract`、`fix-math` 和 `fix-mermaid` 使用错误报告定位失败条目；`deep_read` 使用 `--retry-failed-stages`，只重试失败 stage。翻译失败时，程序保留 node cache 并返回部分失败，外层重新运行同一命令即可继续。
 
 ## 通知
 
@@ -196,7 +211,7 @@ export NOTIFY_URL='https://<通知服务>/api/<uuid>/get'
 | `simple` | `paper extract` | 是 | `md_simple/` | `simple.json`，错误 `logs/simple-errors.json` | `retry` |
 | `fix-simple` | `recognize fix` | 否 | `simple.json` | 原地修改 | `once` |
 | `fix-math-simple` | `recognize fix-math` | 是 | `simple.json` | 原地修改，报告 `logs/fix-math-simple.json` | `retry` |
-| `deep_read` | `paper extract` | 是 | `md_simple/` | `deep_read.json`，错误 `logs/deep_read-errors.json` | `retry` |
+| `deep_read` | `paper extract` | 是 | `md_simple/` | `deep_read.json`，错误 `logs/deep_read-errors.json` | `retry_stages` |
 | `fix-deep_read` | `recognize fix` | 否 | `deep_read.json` | 原地修改 | `once` |
 | `fix-math-deep_read` | `recognize fix-math` | 是 | `deep_read.json` | 原地修改，报告 `logs/fix-math-deep_read.json` | `retry` |
 | `fix-mermaid-deep_read` | `recognize fix-mermaid` | 是 | `deep_read.json` | 原地修改，报告 `logs/fix-mermaid-deep_read.json` | `retry` |

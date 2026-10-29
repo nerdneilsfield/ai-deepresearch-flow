@@ -242,7 +242,7 @@ uv run deepresearch-flow paper db snapshot build ...
 # Or use snapshot supplement if only adding translations
 ```
 
-After an interruption, run the same translate command again to resume. Each node's translation is saved to `.translate_cache/<output file name>.json` in the output directory as soon as it succeeds. On the next run, cached nodes are not sent to the model again. The cache is deleted once the document's translation is written. Entries match on source text, source language and target language, so a different language never reuses them. `--force` ignores the cache and translates the whole document again.
+After an interruption, run the same translate command again to resume. Each node's translation is saved to `.translate_cache/<output file name>.json` in the output directory as soon as it succeeds. On the next run, cached nodes are not sent to the model again. The program deletes the cache only after every node passes validation and the complete translation is safely written. If nodes still fail, the program does not publish a normal translation, does not overwrite an existing normal output, and returns partial failure. Entries match on source text, source language and target language, so a different language never reuses them. `--force` ignores the cache and translates the whole document again.
 
 Useful export types for `paper db snapshot export-missing`:
 
