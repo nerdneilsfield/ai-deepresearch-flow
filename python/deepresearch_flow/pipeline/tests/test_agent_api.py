@@ -161,3 +161,37 @@ def test_agent_submission_records_audit_event(tmp_path: Path) -> None:
         ).fetchone()
     assert event is not None
     assert tuple(event) == ("submission.created", "static-agent", "accepted")
+
+
+def test_agent_cannot_cancel_publication_domain_job(tmp_path: Path) -> None:
+    app = _make_app(tmp_path)
+    created = _upload(app, "publish-boundary")
+    job_id = created.json()["submission"]["jobs"][0]
+    state = app.state.pipeline_state
+    state.admin_transition(job_id, "running")
+    state.admin_transition(job_id, "review_ready")
+    state.queue_publication(job_id, state.get_job_details(job_id)["revision"])
+    response = _request(app, "POST", f"/jobs/{job_id}/cancel", headers=_headers())
+    assert response.status_code == 409
+
+
+def test_agent_admission_rejects_second_inflight_submission(tmp_path: Path) -> None:
+    app = _make_app(tmp_path)
+    app.state.pipeline_config = app.state.pipeline_config.__class__(
+        **{**app.state.pipeline_config.__dict__, "agent_max_inflight_jobs": 1}
+    )
+    assert _upload(app, "admission-1").status_code == 202
+    response = _upload(app, "admission-2")
+    assert response.status_code == 429
+    assert response.json()["error"]["code"] == "agent_inflight_limit"
+
+
+def test_worker_cannot_claim_pending_agent_batch(tmp_path: Path) -> None:
+    app = _make_app(tmp_path)
+    state = app.state.pipeline_state
+    submission_id, *_ = state.reserve_agent_submission(
+        "static-agent", "pending-worker", "params", "request", request_bytes=10
+    )
+    batch_id = state.create_agent_batch(submission_id)
+    job_id = state.create_job(batch_id)
+    assert state.acquire_lease(job_id, "worker") is None

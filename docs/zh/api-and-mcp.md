@@ -230,7 +230,7 @@ deepresearch-flow agent status <job-id> \
 
 Agent API 返回异步 submission 和 job ID。Agent 应轮询任务状态并使用返回的 `next_actions`，不能解析 Worker 日志。Agent retry 只允许处理失败或需要关注的任务，并复用已有 checkpoint。正式发布仍受人工 `review_ready` 闸门控制。
 
-服务会记录 Agent 命令事件，但不会保存 Bearer token、provider key、完整 prompt 或论文正文。上传继续使用现有 pipeline 的文件大小和批次大小限制。后续可以增加按 principal 的 quota；当前 API 不承诺精确费用统计。
+服务会记录 Agent 命令事件，但不会保存 Bearer token、provider key、完整 prompt 或论文正文。上传继续使用现有 pipeline 的文件大小和批次大小限制，并增加按 principal 的在途任务数和每日字节数限制。当前 API 不承诺精确费用统计。
 
 ### 概览
 

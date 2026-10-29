@@ -1174,23 +1174,39 @@ async def _agent_create_submission(request: Request) -> Response:
             except ValueError:
                 return _agent_error("invalid_model", "model selection is outside allowlist", 422)
             content_hash = hashlib.sha256()
+            request_bytes = 0
             for file in pdfs:
-                content = file.file.read()
+                file_hash = hashlib.sha256()
+                while chunk := file.file.read(1024 * 1024):
+                    file_hash.update(chunk)
+                    request_bytes += len(chunk)
                 file.file.seek(0)
-                content_hash.update(hashlib.sha256(content).digest())
+                content_hash.update(file_hash.digest())
             if bibtex is not None:
-                content = bibtex.file.read()
+                bib_hash = hashlib.sha256()
+                while chunk := bibtex.file.read(1024 * 1024):
+                    bib_hash.update(chunk)
+                    request_bytes += len(chunk)
                 bibtex.file.seek(0)
-                content_hash.update(hashlib.sha256(content).digest())
+                content_hash.update(bib_hash.digest())
             parameter_digest = hashlib.sha256(
                 json.dumps({"models": models, "actions": "full_pipeline"}, sort_keys=True).encode()
             ).hexdigest()
             request_digest = hashlib.sha256(
                 (parameter_digest + ":" + content_hash.hexdigest()).encode()
             ).hexdigest()
-            submission_id, existing_status, existing_batch, existing_parameter, existing_request, created = state.reserve_agent_submission(
-                principal_id, idempotency_key, parameter_digest, request_digest
-            )
+            try:
+                submission_id, existing_status, existing_batch, existing_parameter, existing_request, created = state.reserve_agent_submission(
+                    principal_id, idempotency_key, parameter_digest, request_digest,
+                    max_inflight=config.agent_max_inflight_jobs,
+                    max_daily_bytes=config.agent_max_daily_bytes,
+                    request_bytes=request_bytes,
+                )
+            except ValueError as exc:
+                code = str(exc)
+                if code in {"agent_inflight_limit", "agent_daily_bytes_limit"}:
+                    return _agent_error(code, "Agent admission limit exceeded", 429)
+                raise
             if existing_parameter != parameter_digest:
                 return _agent_error("idempotency_conflict", "Idempotency-Key was used for another request", 409)
             if not created and existing_request and existing_request != request_digest:
@@ -1207,10 +1223,12 @@ async def _agent_create_submission(request: Request) -> Response:
             if existing_status == "failed":
                 return _agent_error("submission_failed", "Idempotency-Key refers to a failed submission", 409)
             try:
+                batch_id = state.create_agent_batch(submission_id)
                 result = BatchIngestor(config, state, artifacts).ingest(
                     [UploadPart(str(file.filename or ""), file.file) for file in pdfs],
                     bibtex=(UploadPart(str(bibtex.filename or ""), bibtex.file) if bibtex else None),
                     selected_models=models,
+                    batch_id=batch_id,
                 )
                 state.complete_agent_submission(
                     submission_id,
@@ -1279,7 +1297,10 @@ async def _agent_retry(request: Request) -> Response:
         job = state.get_agent_job(str(request.path_params["job_id"]), principal_id)
         if str(job.get("status")) not in {"failed", "needs_attention"}:
             return _agent_error("not_retryable", "job is not retryable", 409)
-        result = state.retry_job(str(request.path_params["job_id"]), selected_models=None)
+        result = state.agent_retry(
+            str(request.path_params["job_id"]), principal_id,
+            max_retries=_ctx(request)[0].agent_max_retries,
+        )
         state.record_agent_event(
             "job.retry_requested", principal_id, job_id=str(request.path_params["job_id"]),
             submission_id=str(job["submission_id"]), result_code="queued"
@@ -1295,8 +1316,7 @@ async def _agent_cancel(request: Request) -> Response:
     _config_value, state, _artifacts = _ctx(request)
     principal_id = str(request.scope.get("agent_principal") or "agent")
     try:
-        state.get_agent_job(str(request.path_params["job_id"]), principal_id)
-        changed = state.request_cancel(str(request.path_params["job_id"]))
+        changed = state.agent_cancel(str(request.path_params["job_id"]), principal_id)
         job = state.get_agent_job(str(request.path_params["job_id"]), principal_id)
         state.record_agent_event(
             "job.cancel_requested", principal_id, job_id=str(request.path_params["job_id"]),

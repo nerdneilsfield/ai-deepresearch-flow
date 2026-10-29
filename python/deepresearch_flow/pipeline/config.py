@@ -75,6 +75,9 @@ class PipelineConfig:
     max_batch_bytes: int = 500 * 1024 * 1024
     bibtex_max_bytes: int = 1024 * 1024
     max_concurrent_jobs: int = 2
+    agent_max_inflight_jobs: int = 20
+    agent_max_daily_bytes: int = 2 * 1024 * 1024 * 1024
+    agent_max_retries: int = 3
     retention_days: int = 7
     work_dir: str = "pipeline-work/work"
     preview_root: str = "pipeline-work/previews"
@@ -235,6 +238,9 @@ def load_pipeline_config(path: str | Path) -> PipelineConfig:
         max_batch_bytes=_positive(raw.get("max_batch_bytes"), "max_batch_bytes", 500 * 1024 * 1024),
         bibtex_max_bytes=_positive(raw.get("bibtex_max_bytes"), "bibtex_max_bytes", 1024 * 1024),
         max_concurrent_jobs=_positive(raw.get("max_concurrent_jobs"), "max_concurrent_jobs", 2),
+        agent_max_inflight_jobs=_positive(raw.get("agent_max_inflight_jobs"), "agent_max_inflight_jobs", 20),
+        agent_max_daily_bytes=_positive(raw.get("agent_max_daily_bytes"), "agent_max_daily_bytes", 2 * 1024 * 1024 * 1024),
+        agent_max_retries=_positive(raw.get("agent_max_retries"), "agent_max_retries", 3),
         retention_days=_positive(raw.get("retention_days"), "retention_days", 7),
         work_dir=work_dir,
         preview_root=_path(preview_raw, "pipeline-work/previews"),

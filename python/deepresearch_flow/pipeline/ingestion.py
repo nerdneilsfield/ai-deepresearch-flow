@@ -56,9 +56,10 @@ class BatchIngestor:
         *,
         bibtex: UploadPart | None = None,
         selected_models: dict[str, str] | None = None,
+        batch_id: str | None = None,
     ) -> IngestionResult:
         models = self._validate_models(selected_models)
-        batch_id = self.state.create_batch()
+        batch_id = batch_id or self.state.create_batch()
         jobs: list[str] = []
         seen: set[str] = set()
         total = 0

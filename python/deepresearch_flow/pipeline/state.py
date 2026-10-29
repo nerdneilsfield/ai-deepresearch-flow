@@ -236,12 +236,14 @@ class PipelineState:
         )
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
+        self.recover_pending_agent_submissions()
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.db_path, timeout=30, isolation_level=None)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA busy_timeout=30000")
         connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("PRAGMA foreign_keys=ON")
         return connection
 
     def _initialize(self) -> None:
@@ -314,7 +316,8 @@ class PipelineState:
                      id TEXT PRIMARY KEY, principal_id TEXT NOT NULL,
                      idempotency_key TEXT NOT NULL, parameter_digest TEXT NOT NULL,
                      request_digest TEXT, status TEXT NOT NULL,
-                     batch_id TEXT, error_code TEXT, created_at TEXT NOT NULL,
+                     batch_id TEXT, request_bytes INTEGER NOT NULL DEFAULT 0,
+                     error_code TEXT, created_at TEXT NOT NULL,
                      updated_at TEXT NOT NULL,
                      UNIQUE(principal_id, idempotency_key)
                  );
@@ -352,6 +355,9 @@ class PipelineState:
                 db.execute("ALTER TABLE jobs ADD COLUMN cleanup_next_attempt_at TEXT")
             if "cleanup_error" not in job_columns:
                 db.execute("ALTER TABLE jobs ADD COLUMN cleanup_error TEXT")
+            submission_columns = {row["name"] for row in db.execute("PRAGMA table_info(agent_submissions)").fetchall()}
+            if "request_bytes" not in submission_columns:
+                db.execute("ALTER TABLE agent_submissions ADD COLUMN request_bytes INTEGER NOT NULL DEFAULT 0")
             result_columns = {row["name"] for row in db.execute("PRAGMA table_info(batch_match_results)").fetchall()}
             if "revision" not in result_columns:
                 db.execute("ALTER TABLE batch_match_results ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
@@ -581,6 +587,9 @@ class PipelineState:
         idempotency_key: str,
         parameter_digest: str,
         request_digest: str,
+        max_inflight: int | None = None,
+        max_daily_bytes: int | None = None,
+        request_bytes: int = 0,
     ) -> tuple[str, str, str | None, str | None, str | None, bool]:
         """Reserve one agent command before consuming uploaded content.
 
@@ -607,11 +616,37 @@ class PipelineState:
                     str(row["request_digest"]) if row["request_digest"] else None,
                     False,
                 )
+            if max_inflight is not None:
+                count = db.execute(
+                    "SELECT COUNT(*) AS count FROM agent_submissions "
+                    "WHERE principal_id=? AND status IN ('pending','accepted')",
+                    (principal_id,),
+                ).fetchone()["count"]
+                if int(count) >= max_inflight:
+                    db.rollback()
+                    raise ValueError("agent_inflight_limit")
+            if max_daily_bytes is not None:
+                today = _utc().date().isoformat()
+                used = db.execute(
+                    "SELECT COALESCE(SUM(i.size),0) AS bytes FROM agent_job_owners o "
+                    "JOIN job_inputs i ON i.job_id=o.job_id "
+                    "JOIN agent_submissions s ON s.id=o.submission_id "
+                    "WHERE o.principal_id=? AND substr(s.created_at,1,10)=?",
+                    (principal_id, today),
+                ).fetchone()["bytes"]
+                pending = db.execute(
+                    "SELECT COALESCE(SUM(request_bytes),0) AS bytes FROM agent_submissions "
+                    "WHERE principal_id=? AND status='pending' AND substr(created_at,1,10)=?",
+                    (principal_id, today),
+                ).fetchone()["bytes"]
+                if int(used) + int(pending) + int(request_bytes) > max_daily_bytes:
+                    db.rollback()
+                    raise ValueError("agent_daily_bytes_limit")
             db.execute(
                 "INSERT INTO agent_submissions "
-                "(id,principal_id,idempotency_key,parameter_digest,request_digest,status,created_at,updated_at) "
-                "VALUES(?,?,?,?,?,?,?,?)",
-                (submission_id, principal_id, idempotency_key, parameter_digest, request_digest, "pending", now, now),
+                "(id,principal_id,idempotency_key,parameter_digest,request_digest,status,request_bytes,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?)",
+                (submission_id, principal_id, idempotency_key, parameter_digest, request_digest, "pending", request_bytes, now, now),
             )
             db.commit()
         return submission_id, "pending", None, parameter_digest, request_digest, True
@@ -646,6 +681,58 @@ class PipelineState:
                 [(str(job_id), submission_id, str(row["principal_id"])) for job_id in job_ids],
             )
             db.commit()
+
+    def create_agent_batch(self, submission_id: str) -> str:
+        """Create and bind the durable batch used by an Agent submission."""
+        batch_id = str(uuid.uuid4())
+        now = _stamp(_utc())
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT status,batch_id FROM agent_submissions WHERE id=?", (submission_id,)
+            ).fetchone()
+            if row is None:
+                db.rollback()
+                raise KeyError(submission_id)
+            if row["status"] != "pending":
+                db.rollback()
+                raise ValueError("agent submission is not pending")
+            if row["batch_id"]:
+                db.commit()
+                return str(row["batch_id"])
+            db.execute("INSERT INTO batches(id,created_at) VALUES(?,?)", (batch_id, now))
+            db.execute(
+                "UPDATE agent_submissions SET batch_id=?,updated_at=? WHERE id=?",
+                (batch_id, now, submission_id),
+            )
+            db.commit()
+        return batch_id
+
+    def reset_agent_submission_batch(self, submission_id: str) -> None:
+        with self._connect() as db:
+            db.execute(
+                "UPDATE agent_submissions SET batch_id=NULL,updated_at=? WHERE id=? AND status='pending'",
+                (_stamp(_utc()), submission_id),
+            )
+
+    def recover_pending_agent_submissions(self) -> int:
+        """Reclaim interrupted Agent ingestions before workers can consume them."""
+        with self._connect() as db:
+            rows = db.execute(
+                "SELECT id,batch_id FROM agent_submissions WHERE status='pending'"
+            ).fetchall()
+        recovered = 0
+        for row in rows:
+            batch_id = row["batch_id"]
+            if batch_id:
+                self.discard_batch(str(batch_id))
+            with self._connect() as db:
+                db.execute(
+                    "UPDATE agent_submissions SET status='failed',error_code='interrupted',batch_id=NULL,updated_at=? WHERE id=? AND status='pending'",
+                    (_stamp(_utc()), str(row["id"])),
+                )
+            recovered += 1
+        return recovered
 
     def fail_agent_submission(self, submission_id: str, error_code: str) -> None:
         with self._connect() as db:
@@ -683,6 +770,113 @@ class PipelineState:
         result = self.get_job_details(job_id)
         result["submission_id"] = str(owner["submission_id"])
         return result
+
+    def agent_admission(self, principal_id: str, *, max_inflight: int, max_daily_bytes: int) -> tuple[bool, str]:
+        """Check principal admission before creating a paid pipeline job."""
+        today = _utc().date().isoformat()
+        with self._connect() as db:
+            inflight = db.execute(
+                "SELECT COUNT(*) AS count FROM agent_job_owners o "
+                "JOIN jobs j ON j.id=o.job_id WHERE o.principal_id=? "
+                "AND j.status NOT IN ('published','published_with_warning','cancelled','rejected')",
+                (principal_id,),
+            ).fetchone()["count"]
+            usage = db.execute(
+                "SELECT COALESCE(SUM(i.size),0) AS bytes FROM agent_job_owners o "
+                "JOIN jobs j ON j.id=o.job_id JOIN job_inputs i ON i.job_id=j.id "
+                "JOIN agent_submissions s ON s.id=o.submission_id "
+                "WHERE o.principal_id=? AND substr(s.created_at,1,10)=?",
+                (principal_id, today),
+            ).fetchone()["bytes"]
+        if int(inflight) >= max_inflight:
+            return False, "agent_inflight_limit"
+        if int(usage) >= max_daily_bytes:
+            return False, "agent_daily_bytes_limit"
+        return True, "ok"
+
+    def agent_retry(self, job_id: str, principal_id: str, *, max_retries: int) -> dict[str, Any]:
+        """Atomically retry an owned failed job without crossing review/publish state."""
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            owner = db.execute(
+                "SELECT submission_id FROM agent_job_owners WHERE job_id=? AND principal_id=?",
+                (job_id, principal_id),
+            ).fetchone()
+            if owner is None:
+                db.rollback()
+                raise KeyError(job_id)
+            row = db.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if row is None:
+                db.rollback()
+                raise KeyError(job_id)
+            if row["status"] not in {"failed", "needs_attention"}:
+                db.rollback()
+                raise ValueError("job is not retryable")
+            attempts = int(db.execute(
+                "SELECT COUNT(*) AS count FROM step_attempts WHERE job_id=? AND status='failed'",
+                (job_id,),
+            ).fetchone()["count"])
+            if attempts >= max_retries:
+                db.rollback()
+                raise ValueError("agent retry limit exceeded")
+            previous = json.loads(row["selected_models"])
+            next_models = dict(previous)
+            failed_row = db.execute(
+                "SELECT step FROM step_attempts WHERE job_id=? AND status='failed' ORDER BY id DESC LIMIT 1",
+                (job_id,),
+            ).fetchone()
+            failed_name = str(failed_row["step"]) if failed_row else None
+            if failed_name in PROCESSING_STEP_NAMES:
+                start = PROCESSING_STEP_NAMES.index(failed_name)
+                suffix = PROCESSING_STEP_NAMES[start:]
+                db.executemany(
+                    "UPDATE steps SET status='missing',artifact_digest=NULL,artifact_size=NULL WHERE job_id=? AND name=?",
+                    [(job_id, step) for step in suffix],
+                )
+                db.executemany(
+                    "DELETE FROM artifacts WHERE job_id=? AND kind=?",
+                    [(job_id, step) for step in suffix],
+                )
+                if failed_name in {"ocr", "extract"} and row["batch_id"]:
+                    self._invalidate_batch_matching(db, str(row["batch_id"]))
+            db.execute(
+                "UPDATE jobs SET selected_models=?,status='queued',terminal_at=NULL,cleanup_completed_at=NULL,cleanup_next_attempt_at=NULL,cleanup_error=NULL,cancel_requested=0,lease_owner=NULL,lease_token=NULL,preview_error=NULL,updated_at=?,revision=revision+1 WHERE id=?",
+                (json.dumps(next_models, sort_keys=True), _stamp(_utc()), job_id),
+            )
+            db.commit()
+        return {"job_id": job_id, "status": "queued", "selected_models": next_models}
+
+    def agent_cancel(self, job_id: str, principal_id: str) -> bool:
+        """Cancel an owned job only before it enters the publication domain."""
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            owner = db.execute(
+                "SELECT 1 FROM agent_job_owners WHERE job_id=? AND principal_id=?",
+                (job_id, principal_id),
+            ).fetchone()
+            row = db.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if owner is None or row is None:
+                db.rollback()
+                raise KeyError(job_id)
+            if row["status"] in {"publish_queued", "publishing", "indexing", "published", "published_with_warning", "rejected"}:
+                db.rollback()
+                raise ValueError("job is outside the Agent cancellation boundary")
+            now = _stamp(_utc())
+            if row["status"] == "queued":
+                self._invalidate_batch_matching(db, str(row["batch_id"]) if row["batch_id"] else None)
+                db.execute(
+                    "UPDATE jobs SET status='cancelled',terminal_at=?,cancel_requested=1,revision=revision+1,updated_at=? WHERE id=?",
+                    (now, now, job_id),
+                )
+                changed = True
+            else:
+                db.execute(
+                    "UPDATE jobs SET cancel_requested=1,revision=revision+1,updated_at=? WHERE id=?",
+                    (now, job_id),
+                )
+                changed = not bool(row["cancel_requested"])
+            db.commit()
+        return changed
 
     def record_agent_event(
         self,
@@ -1849,8 +2043,12 @@ class PipelineState:
             if db.execute("SELECT 1 FROM batches WHERE id=?", (batch_id,)).fetchone() is None:
                 db.rollback()
                 return []
-            for table, column in (("job_inputs", "job_id"), ("job_summaries", "job_id"), ("job_bibtex", "job_id"), ("steps", "job_id"), ("artifacts", "job_id"), ("heartbeats", "job_id"), ("step_attempts", "job_id"), ("jobs", "id")):
+            for table, column in (("agent_job_owners", "job_id"), ("job_inputs", "job_id"), ("job_summaries", "job_id"), ("job_bibtex", "job_id"), ("steps", "job_id"), ("artifacts", "job_id"), ("heartbeats", "job_id"), ("step_attempts", "job_id"), ("jobs", "id")):
                 db.executemany(f"DELETE FROM {table} WHERE {column}=?", [(job_id,) for job_id in jobs])
+            db.execute(
+                "UPDATE agent_submissions SET status='failed',error_code='interrupted',batch_id=NULL,updated_at=? WHERE batch_id=? AND status='pending'",
+                (_stamp(_utc()), batch_id),
+            )
             db.execute("DELETE FROM bibtex_entries WHERE batch_id=?", (batch_id,))
             db.execute("DELETE FROM batch_match_results WHERE batch_id=?", (batch_id,))
             db.execute("DELETE FROM batches WHERE id=?", (batch_id,))
@@ -1888,6 +2086,12 @@ class PipelineState:
             if row is None:
                 db.rollback()
                 raise KeyError(job_id)
+            if row["batch_id"] and db.execute(
+                "SELECT 1 FROM agent_submissions WHERE batch_id=? AND status='pending'",
+                (row["batch_id"],),
+            ).fetchone() is not None:
+                db.rollback()
+                return None
             old_expiry = row["lease_expires_at"]
             if old_expiry and old_expiry > _stamp(now_value):
                 db.rollback()

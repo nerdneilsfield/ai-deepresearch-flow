@@ -244,7 +244,8 @@ boundary.
 The service records Agent command events without storing bearer tokens, provider
 keys, full prompts, or paper bodies. Existing pipeline file-size and batch-size
 limits apply to uploads. A future quota layer may add principal-level limits;
-the current API does not promise exact cost accounting.
+the current API applies principal-level inflight and daily byte admission limits
+and does not promise exact provider cost accounting.
 
 ### Overview
 

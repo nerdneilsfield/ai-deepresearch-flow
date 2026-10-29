@@ -1,0 +1,22 @@
+# DeepResearch Flow
+
+> Workflow tools for paper extraction, review, translation, semantic search, and research automation.
+
+## Product
+
+- [README](https://github.com/nerdneilsfield/ai-deepresearch-flow/blob/main/README.md): project overview and installation.
+- [中文 README](https://github.com/nerdneilsfield/ai-deepresearch-flow/blob/main/README_ZH.md): Chinese overview and usage.
+- [Pipeline guide](https://github.com/nerdneilsfield/ai-deepresearch-flow/blob/main/docs/en/pipeline.md): OCR, extraction, translation, recovery, and publication workflow.
+- [API and MCP](https://github.com/nerdneilsfield/ai-deepresearch-flow/blob/main/docs/en/api-and-mcp.md): read APIs, MCP tools, authentication, and Agent submission API.
+- [Deployment](https://github.com/nerdneilsfield/ai-deepresearch-flow/blob/main/docs/en/deployment.md): service deployment and configuration.
+
+## Agent API
+
+The Agent API is mounted at `/api/v1/agent` when enabled. It accepts multipart PDF submissions with an `Idempotency-Key`, returns asynchronous submission and job IDs, and supports owner-scoped status, retry, cancellation, and review requests. Agents cannot publish papers or access Admin routes.
+
+Phase 1 does not support URL downloads, local inbox ingestion, Webhooks, MCP write tools, or automatic publication. Publication remains behind the human `review_ready` gate.
+
+## Source
+
+- [Repository](https://github.com/nerdneilsfield/ai-deepresearch-flow)
+- [Releases](https://github.com/nerdneilsfield/ai-deepresearch-flow/releases)

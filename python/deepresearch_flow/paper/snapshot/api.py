@@ -14,7 +14,7 @@ from urllib.parse import parse_qsl, quote, urlencode
 from starlette.applications import Starlette
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.routing import Mount, Route
 
 from deepresearch_flow.paper.snapshot.common import (
@@ -1376,6 +1376,21 @@ def _api_config(request: Request) -> Response:
     )
 
 
+def _llms_txt(request: Request) -> Response:
+    return PlainTextResponse(
+        "# DeepResearch Flow\n\n"
+        "> Workflow tools for paper extraction, review, translation, semantic search, and research automation.\n\n"
+        "## Documentation\n\n"
+        "- https://github.com/nerdneilsfield/ai-deepresearch-flow\n"
+        "- https://github.com/nerdneilsfield/ai-deepresearch-flow/blob/main/docs/en/api-and-mcp.md\n"
+        "- https://github.com/nerdneilsfield/ai-deepresearch-flow/blob/main/docs/en/pipeline.md\n"
+        "- https://github.com/nerdneilsfield/ai-deepresearch-flow/blob/main/docs/en/deployment.md\n\n"
+        "## Agent API\n\n"
+        "The Agent API is mounted at /api/v1/agent when enabled. It accepts multipart PDF uploads with an Idempotency-Key and supports owner-scoped status, retry, cancellation, and review requests. Agents cannot publish papers or access Admin routes.\n",
+        media_type="text/plain",
+    )
+
+
 def create_app(
     *,
     snapshot_db: Path,
@@ -1481,6 +1496,7 @@ def create_app(
     mcp_apps, mcp_lifespan = create_mcp_apps(mcp_config)
 
     routes = [
+        Route("/llms.txt", _llms_txt, methods=["GET", "HEAD"]),
         Route("/api/v1/config", _api_config, methods=["GET"]),
         Route("/api/v1/search", _api_search, methods=["GET"]),
         Route("/api/v1/stats", _api_stats, methods=["GET"]),
