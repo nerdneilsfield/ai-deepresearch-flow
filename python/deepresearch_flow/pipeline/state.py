@@ -365,7 +365,7 @@ class PipelineState:
             if "reservation_expires_at" not in submission_columns:
                 db.execute("ALTER TABLE agent_submissions ADD COLUMN reservation_expires_at TEXT")
             db.execute(
-                "UPDATE agent_submissions SET reservation_expires_at=datetime(created_at, '+15 minutes') "
+                "UPDATE agent_submissions SET reservation_expires_at=replace(datetime(created_at, '+15 minutes'), ' ', 'T') || '+00:00' "
                 "WHERE status='pending' AND reservation_expires_at IS NULL"
             )
             if "request_jobs" not in submission_columns:
@@ -736,12 +736,22 @@ class PipelineState:
 
     def recover_pending_agent_submissions(self) -> int:
         """Reclaim interrupted Agent ingestions before workers can consume them."""
+        rows: list[sqlite3.Row] = []
         with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            now = _stamp(_utc())
             rows = db.execute(
                 "SELECT id,batch_id FROM agent_submissions WHERE status='pending' "
                 "AND reservation_expires_at IS NOT NULL AND reservation_expires_at <= ?",
-                (_stamp(_utc()),),
+                (now,),
             ).fetchall()
+            for row in rows:
+                db.execute(
+                    "UPDATE agent_submissions SET status='failed',error_code='interrupted',updated_at=? "
+                    "WHERE id=? AND status='pending' AND reservation_expires_at <= ?",
+                    (now, str(row["id"]), now),
+                )
+            db.commit()
         recovered = 0
         for row in rows:
             batch_id = row["batch_id"]
@@ -755,11 +765,6 @@ class PipelineState:
                 if self.artifact_store is not None:
                     for job_id in job_ids:
                         self.artifact_store.discard_job(job_id)
-            with self._connect() as db:
-                db.execute(
-                    "UPDATE agent_submissions SET status='failed',error_code='interrupted',batch_id=NULL,updated_at=? WHERE id=? AND status='pending'",
-                    (_stamp(_utc()), str(row["id"])),
-                )
             recovered += 1
         return recovered
 
