@@ -241,6 +241,11 @@ logs. Agent retry is limited to failed or attention-required jobs and reuses
 existing checkpoints. Publication remains behind the human `review_ready`
 boundary.
 
+The service records Agent command events without storing bearer tokens, provider
+keys, full prompts, or paper bodies. Existing pipeline file-size and batch-size
+limits apply to uploads. A future quota layer may add principal-level limits;
+the current API does not promise exact cost accounting.
+
 ### Overview
 
 The project exposes MCP tools for AI agent access via FastMCP. The recommended public surface is tool-based and bounded: discover metadata, discover outlines or summary keys, then read specific line windows or specific summary values.

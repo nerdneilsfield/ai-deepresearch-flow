@@ -318,11 +318,17 @@ class PipelineState:
                      updated_at TEXT NOT NULL,
                      UNIQUE(principal_id, idempotency_key)
                  );
-                 CREATE TABLE IF NOT EXISTS agent_job_owners (
+                CREATE TABLE IF NOT EXISTS agent_job_owners (
                      job_id TEXT PRIMARY KEY, submission_id TEXT NOT NULL,
                      principal_id TEXT NOT NULL,
                      FOREIGN KEY(job_id) REFERENCES jobs(id),
                      FOREIGN KEY(submission_id) REFERENCES agent_submissions(id)
+                 );
+                 CREATE TABLE IF NOT EXISTS agent_audit_events (
+                     event_id TEXT PRIMARY KEY, event_type TEXT NOT NULL,
+                     principal_id TEXT NOT NULL, command_id TEXT,
+                     submission_id TEXT, job_id TEXT, timestamp TEXT NOT NULL,
+                     input_digest TEXT, output_digest TEXT, result_code TEXT
                  );
                  """
             )
@@ -677,6 +683,39 @@ class PipelineState:
         result = self.get_job_details(job_id)
         result["submission_id"] = str(owner["submission_id"])
         return result
+
+    def record_agent_event(
+        self,
+        event_type: str,
+        principal_id: str,
+        *,
+        command_id: str | None = None,
+        submission_id: str | None = None,
+        job_id: str | None = None,
+        input_digest: str | None = None,
+        output_digest: str | None = None,
+        result_code: str | None = None,
+    ) -> str:
+        event_id = str(uuid.uuid4())
+        with self._connect() as db:
+            db.execute(
+                "INSERT INTO agent_audit_events "
+                "(event_id,event_type,principal_id,command_id,submission_id,job_id,timestamp,input_digest,output_digest,result_code) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (
+                    event_id,
+                    event_type,
+                    principal_id,
+                    command_id,
+                    submission_id,
+                    job_id,
+                    _stamp(_utc()),
+                    input_digest,
+                    output_digest,
+                    result_code,
+                ),
+            )
+        return event_id
 
     def create_job(
         self,

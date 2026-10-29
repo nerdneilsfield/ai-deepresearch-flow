@@ -1197,6 +1197,10 @@ async def _agent_create_submission(request: Request) -> Response:
                 return _agent_error("idempotency_conflict", "Idempotency-Key was used for another request", 409)
             if existing_status == "accepted":
                 submission = state.get_agent_submission(submission_id, principal_id)
+                state.record_agent_event(
+                    "submission.replayed", principal_id, submission_id=submission_id,
+                    input_digest=request_digest, result_code="replayed"
+                )
                 return JSONResponse({"submission": submission, "replayed": True})
             if existing_status == "pending" and not created:
                 return _agent_error("submission_pending", "submission is already being processed", 409)
@@ -1214,11 +1218,23 @@ async def _agent_create_submission(request: Request) -> Response:
                     batch_id=result.batch_id,
                     job_ids=result.jobs,
                 )
+                state.record_agent_event(
+                    "submission.created", principal_id, submission_id=submission_id,
+                    input_digest=request_digest, result_code="accepted"
+                )
             except (ValueError, OSError):
                 state.fail_agent_submission(submission_id, "invalid_upload")
+                state.record_agent_event(
+                    "submission.failed", principal_id, submission_id=submission_id,
+                    input_digest=request_digest, result_code="invalid_upload"
+                )
                 return _agent_error("invalid_upload", "uploaded PDF or BibTeX is invalid", 422)
             except Exception:
                 state.fail_agent_submission(submission_id, "internal_error")
+                state.record_agent_event(
+                    "submission.failed", principal_id, submission_id=submission_id,
+                    input_digest=request_digest, result_code="internal_error"
+                )
                 logger.exception("agent submission failed")
                 return _agent_error("internal_error", "submission failed", 500)
     except (ValueError, MultiPartException) as exc:
@@ -1264,6 +1280,10 @@ async def _agent_retry(request: Request) -> Response:
         if str(job.get("status")) not in {"failed", "needs_attention"}:
             return _agent_error("not_retryable", "job is not retryable", 409)
         result = state.retry_job(str(request.path_params["job_id"]), selected_models=None)
+        state.record_agent_event(
+            "job.retry_requested", principal_id, job_id=str(request.path_params["job_id"]),
+            submission_id=str(job["submission_id"]), result_code="queued"
+        )
     except KeyError:
         return _agent_error("not_found", "job not found", 404)
     except ValueError as exc:
@@ -1278,6 +1298,10 @@ async def _agent_cancel(request: Request) -> Response:
         state.get_agent_job(str(request.path_params["job_id"]), principal_id)
         changed = state.request_cancel(str(request.path_params["job_id"]))
         job = state.get_agent_job(str(request.path_params["job_id"]), principal_id)
+        state.record_agent_event(
+            "job.cancel_requested", principal_id, job_id=str(request.path_params["job_id"]),
+            submission_id=str(job["submission_id"]), result_code="requested" if changed else "noop"
+        )
     except KeyError:
         return _agent_error("not_found", "job not found", 404)
     except ValueError as exc:
@@ -1294,6 +1318,10 @@ async def _agent_review(request: Request) -> Response:
         return _agent_error("not_found", "job not found", 404)
     if str(job.get("status")) != "review_ready":
         return _agent_error("not_ready", "job is not ready for review", 409)
+    state.record_agent_event(
+        "approval.requested", principal_id, job_id=str(request.path_params["job_id"]),
+        submission_id=str(job["submission_id"]), result_code="pending"
+    )
     return JSONResponse({"job": _agent_job_payload(job), "review_requested": True})
 
 

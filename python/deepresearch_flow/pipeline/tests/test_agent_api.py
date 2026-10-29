@@ -148,3 +148,16 @@ def test_agent_principals_cannot_read_each_others_jobs(tmp_path: Path) -> None:
         headers={"Authorization": "Bearer grok-token"},
     )
     assert other.status_code == 404
+
+
+def test_agent_submission_records_audit_event(tmp_path: Path) -> None:
+    app = _make_app(tmp_path)
+    response = _upload(app, "audit-request")
+    assert response.status_code == 202
+
+    with app.state.pipeline_state._connect() as db:
+        event = db.execute(
+            "SELECT event_type,principal_id,result_code FROM agent_audit_events"
+        ).fetchone()
+    assert event is not None
+    assert tuple(event) == ("submission.created", "static-agent", "accepted")
