@@ -198,6 +198,49 @@ Writes use the lock file in the target and queue behind semantic writes from a r
 
 ## MCP (FastMCP Streamable HTTP + SSE)
 
+## Agent paper submission API
+
+The optional Agent API provides a narrow asynchronous submission surface for
+trusted Agent clients. It is available only when the pipeline is enabled and
+its existing storage and worker prerequisites pass.
+
+Start the server with a separate Agent bearer token:
+
+```bash
+export PAPER_DB_AGENT_TOKEN="<agent-token>"
+uv run deepresearch-flow paper db api serve \
+  --config config.toml \
+  --admin-token "$PAPER_DB_ADMIN_TOKEN" \
+  --agent-token "$PAPER_DB_AGENT_TOKEN"
+```
+
+The Agent API is mounted at `/api/v1/agent`. It is separate from the Admin API;
+the Agent token cannot publish, reject, bind final BibTeX matches, or access
+Admin routes.
+
+Phase 1 accepts multipart PDF uploads only. URL downloads and local inbox
+adapters are not part of this phase. Every submission requires an
+`Idempotency-Key` header. Reusing the same key with a different request returns
+`409 Conflict`.
+
+```bash
+deepresearch-flow agent submit \
+  --api https://papers.example.com/api/v1/agent \
+  --token "$PAPER_DB_AGENT_TOKEN" \
+  --pdf ./paper.pdf \
+  --idempotency-key hermes-2026-10-30-paper-001
+
+deepresearch-flow agent status <job-id> \
+  --api https://papers.example.com/api/v1/agent \
+  --token "$PAPER_DB_AGENT_TOKEN"
+```
+
+The Agent API returns asynchronous submission and job identifiers. Agents must
+poll job status and use the returned `next_actions`; they must not parse worker
+logs. Agent retry is limited to failed or attention-required jobs and reuses
+existing checkpoints. Publication remains behind the human `review_ready`
+boundary.
+
 ### Overview
 
 The project exposes MCP tools for AI agent access via FastMCP. The recommended public surface is tool-based and bounded: discover metadata, discover outlines or summary keys, then read specific line windows or specific summary values.

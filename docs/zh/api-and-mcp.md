@@ -198,6 +198,38 @@ uv run deepresearch-flow paper db api merge-embed \
 
 ## MCP（FastMCP Streamable HTTP + SSE）
 
+## Agent 论文提交 API
+
+可选的 Agent API 为受信任的 Agent 客户端提供窄范围的异步提交接口。只有在 pipeline 已启用，并且现有存储和 Worker 前置检查通过时，服务才挂载该接口。
+
+使用独立的 Agent Bearer token 启动服务：
+
+```bash
+export PAPER_DB_AGENT_TOKEN='<agent-token>'
+uv run deepresearch-flow paper db api serve \
+  --config config.toml \
+  --admin-token "$PAPER_DB_ADMIN_TOKEN" \
+  --agent-token "$PAPER_DB_AGENT_TOKEN"
+```
+
+Agent API 挂载在 `/api/v1/agent`。它与 Admin API 分离。Agent token 不能发布、拒绝任务、绑定最终 BibTeX，也不能访问 Admin 路由。
+
+Phase 1 只接受 multipart PDF 上传，不支持 URL 下载和本地 inbox。每次提交都必须带 `Idempotency-Key`。使用同一个 key 提交不同请求时，服务返回 `409 Conflict`。
+
+```bash
+deepresearch-flow agent submit \
+  --api https://papers.example.com/api/v1/agent \
+  --token "$PAPER_DB_AGENT_TOKEN" \
+  --pdf ./paper.pdf \
+  --idempotency-key hermes-2026-10-30-paper-001
+
+deepresearch-flow agent status <job-id> \
+  --api https://papers.example.com/api/v1/agent \
+  --token "$PAPER_DB_AGENT_TOKEN"
+```
+
+Agent API 返回异步 submission 和 job ID。Agent 应轮询任务状态并使用返回的 `next_actions`，不能解析 Worker 日志。Agent retry 只允许处理失败或需要关注的任务，并复用已有 checkpoint。正式发布仍受人工 `review_ready` 闸门控制。
+
 ### 概览
 
 项目通过 FastMCP 暴露 MCP 工具，供 AI agent 调用。推荐的 public surface 是有边界的工具工作流：先发现 metadata、outline 或 summary keys，再读取具体行窗口或具体 summary 值。
