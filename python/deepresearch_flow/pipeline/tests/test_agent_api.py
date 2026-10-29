@@ -232,3 +232,15 @@ def test_expired_agent_recovery_clears_batch_reference(tmp_path: Path) -> None:
     assert submission["batch_id"] is None
     with state._connect() as db:
         assert db.execute("SELECT 1 FROM batches WHERE id=?", (batch_id,)).fetchone() is None
+
+
+def test_agent_cancel_terminates_failed_job(tmp_path: Path) -> None:
+    app = _make_app(tmp_path)
+    created = _upload(app, "cancel-failed")
+    job_id = created.json()["submission"]["jobs"][0]
+    state = app.state.pipeline_state
+    state.admin_transition(job_id, "running")
+    state.admin_transition(job_id, "failed")
+    response = _request(app, "POST", f"/jobs/{job_id}/cancel", headers=_headers())
+    assert response.status_code == 200
+    assert response.json()["job"]["status"] == "cancelled"

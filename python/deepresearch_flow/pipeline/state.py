@@ -896,7 +896,7 @@ class PipelineState:
                 db.rollback()
                 raise ValueError("review_ready jobs require administrator review")
             now = _stamp(_utc())
-            if row["status"] == "queued":
+            if row["status"] in {"queued", "failed", "needs_attention"}:
                 self._invalidate_batch_matching(db, str(row["batch_id"]) if row["batch_id"] else None)
                 db.execute(
                     "UPDATE jobs SET status='cancelled',terminal_at=?,cancel_requested=1,revision=revision+1,updated_at=? WHERE id=?",
