@@ -747,7 +747,7 @@ class PipelineState:
             ).fetchall()
             for row in rows:
                 db.execute(
-                    "UPDATE agent_submissions SET status='failed',error_code='interrupted',updated_at=? "
+                    "UPDATE agent_submissions SET status='failed',error_code='interrupted',batch_id=NULL,updated_at=? "
                     "WHERE id=? AND status='pending' AND reservation_expires_at <= ?",
                     (now, str(row["id"]), now),
                 )

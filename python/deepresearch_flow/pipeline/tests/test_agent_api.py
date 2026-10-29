@@ -212,3 +212,23 @@ def test_agent_admission_counts_all_jobs_in_multi_pdf_submission(tmp_path: Path)
         ],
     )
     assert response.status_code == 429
+
+
+def test_expired_agent_recovery_clears_batch_reference(tmp_path: Path) -> None:
+    app = _make_app(tmp_path)
+    state = app.state.pipeline_state
+    submission_id, *_ = state.reserve_agent_submission(
+        "static-agent", "recovery", "params", "request", request_bytes=10
+    )
+    batch_id = state.create_agent_batch(submission_id)
+    with state._connect() as db:
+        db.execute(
+            "UPDATE agent_submissions SET reservation_expires_at='2000-01-01T00:00:00+00:00' WHERE id=?",
+            (submission_id,),
+        )
+    assert state.recover_pending_agent_submissions() == 1
+    submission = state.get_agent_submission(submission_id, "static-agent")
+    assert submission["status"] == "failed"
+    assert submission["batch_id"] is None
+    with state._connect() as db:
+        assert db.execute("SELECT 1 FROM batches WHERE id=?", (batch_id,)).fetchone() is None
